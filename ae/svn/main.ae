@@ -61,6 +61,11 @@ extern svnae_stdout_write(buf: string, n: int) -> int
 
 // WC operations (Phase 5+).
 extern svnae_wc_checkout(base_url: string, repo_name: string, dest: string, rev: int) -> int
+extern svnae_wc_status(wc_root: string) -> ptr
+extern svnae_wc_statuslist_count(L: ptr) -> int
+extern svnae_wc_statuslist_path(L: ptr, i: int) -> string
+extern svnae_wc_statuslist_code(L: ptr, i: int) -> int
+extern svnae_wc_statuslist_free(L: ptr)
 
 // --- URL parsing ----------------------------------------------------------
 //
@@ -337,6 +342,44 @@ cmd_commit(argv_start: int) {
     return 0
 }
 
+cmd_status(argv_start: int) {
+    // `svn status` takes an optional WC path argument; defaults to '.'.
+    wc = "."
+    if aether_args_count() > argv_start {
+        candidate = aether_args_get(argv_start)
+        if string.length(candidate) > 0 {
+            if string.char_at(candidate, 0) != 45 {
+                wc = candidate
+            }
+        }
+    }
+
+    L = svnae_wc_status(wc)
+    if L == 0 {
+        println("svn status: cannot read WC at ${wc}")
+        return 1
+    }
+    n = svnae_wc_statuslist_count(L)
+    i = 0
+    while i < n {
+        code = svnae_wc_statuslist_code(L, i)
+        path = svnae_wc_statuslist_path(L, i)
+        // Format: "<code> <spaces> <path>" matching reference svn's layout.
+        // We don't fill the inline columns yet — just "<code>       <path>".
+        // Build the code char from its int.
+        ch = "?"
+        if code == 65 { ch = "A" }       // 'A'
+        if code == 68 { ch = "D" }       // 'D'
+        if code == 77 { ch = "M" }       // 'M'
+        if code == 33 { ch = "!" }       // '!'
+        if code == 63 { ch = "?" }       // '?'
+        println("${ch}       ${path}")
+        i = i + 1
+    }
+    svnae_wc_statuslist_free(L)
+    return 0
+}
+
 cmd_checkout(argv_start: int) {
     url = aether_args_get(argv_start)
     rev_str = find_flag("--rev", argv_start)
@@ -379,6 +422,7 @@ print_usage() {
     println("  cat      URL [--rev N] PATH")
     println("  commit   URL --author A --log M [--add-file P=C] [--mkdir P] [--delete P]")
     println("  checkout URL [DEST] [--rev N]")
+    println("  status   [WC_PATH]")
     return 0
 }
 
@@ -397,6 +441,8 @@ main() {
     if string.equals(sub, "commit") == 1   { exit(cmd_commit(2)) }
     if string.equals(sub, "checkout") == 1 { exit(cmd_checkout(2)) }
     if string.equals(sub, "co") == 1       { exit(cmd_checkout(2)) }
+    if string.equals(sub, "status") == 1   { exit(cmd_status(2)) }
+    if string.equals(sub, "st") == 1       { exit(cmd_status(2)) }
     if string.equals(sub, "--help") == 1   { print_usage(); exit(0) }
     if string.equals(sub, "help") == 1     { print_usage(); exit(0) }
 
