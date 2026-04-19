@@ -15,3 +15,10 @@ path = "ae/svnadmin/main.ae"
 [[bin]]
 name = "aether-svnserver"
 path = "ae/svnserver/main.ae"
+
+# --- test binaries -----------------------------------------------------------
+
+[[bin]]
+name = "test_error"
+path = "ae/subr/test_error.ae"
+extra_sources = ["ae/subr/error/shim.c"]
