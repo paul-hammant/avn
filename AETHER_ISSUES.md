@@ -331,7 +331,74 @@ file being run has an unparseable `extra_sources`.
 
 ---
 
-## 13. `!` unary-negation only works on already-boolean values
+## 13. Return-type inference breaks for recursive functions returning string
+
+**Severity: blocker for any recursive algorithm that builds string output.**
+
+A recursive user function whose return type is string (via `write_blob_text`
+and similar) fails to type-check. Aether picks `int` for the not-yet-seen
+recursive call, then the generated C tries to pass the int through a
+`const char*` parameter. End result: compile warnings everywhere, runtime
+segfault.
+
+**Repro:**
+
+```aether
+rebuild(path: string) {
+    if some_cond() {
+        return rebuild(child_path)   // Aether picks int here
+    }
+    return "leaf"
+}
+
+main() {
+    r = rebuild("/")
+    println(r)
+}
+```
+
+**Workaround in port:** we moved the recursive `rebuild_dir` into C
+(ae/fs_fs/txn_shim.c) and expose a single non-recursive Aether entry point.
+`string.concat("", recursive_result)` is a partial workaround at individual
+call sites but doesn't actually fix the wrong C-level type.
+
+**Request:** forward-declare recursive functions' return types from their
+leaf (base-case) returns, or infer in a fixpoint pass.
+
+---
+
+## 14. Return-type inference poisons subsequent call sites of the same extern
+
+**Severity: blocker.**
+
+```aether
+extern svnae_count(repo: string) -> int
+
+main() {
+    a = svnae_count(repo)    // prints 11 — int
+    call_something_else()    // returns string
+    b = svnae_count(repo)    // ??? prints empty/0; the type at THIS call
+                             //     got coerced to something that drops
+                             //     the int return
+}
+```
+
+The first call works. Something inside `call_something_else` (in our case
+`commit_txn` which routes through a recursive `string`-returning extern)
+makes the second call to `svnae_count` produce a wrong value at the
+interpolation site.
+
+**Workaround:** wrap the call in integer arithmetic: `b = 0 + svnae_count(repo)`.
+That forces Aether to generate the int-valued temporary and the int value
+flows correctly.
+
+**Request:** extern signatures are declared once — they should always carry
+their declared types at every call site, regardless of what other functions
+have been inferred in between.
+
+---
+
+## 15. `!` unary-negation only works on already-boolean values
 
 **Severity: minor.**
 
