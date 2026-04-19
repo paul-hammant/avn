@@ -277,7 +277,61 @@ generated code (which points into a temp file users never see).
 
 ---
 
-## 11. `!` unary-negation only works on already-boolean values
+## 11. `string.concat("", s)` for binary-safe copy is strlen-based
+
+**Severity: documentation / missing API.**
+
+The only obvious idiom for "copy this raw C `char*` into an Aether-managed
+string" is `string.concat("", s)`. But `string_concat` uses `strlen` on
+plain-ptr inputs (via `str_len`), so copied strings can't carry embedded
+NULs, and any trailing bytes past the caller's intended length leak in
+until the next NUL.
+
+Specifically, if the source buffer at `s` contains N real bytes followed
+by a NUL, but the source's internal length field says N-k or N+k, strlen
+reads whatever's in memory until the first NUL — could be too few, could
+be too many. We caught this in the FSFS port when `buf_new` in
+`ae/subr/compress/shim.c` didn't NUL-terminate its output buffer: strlen
+walked past the 10000-byte payload into neighbouring heap memory and
+returned 10011.
+
+**Requests:**
+- Add `string.from_bytes(p: ptr, len: int) -> string` that explicitly
+  respects a caller-provided length. This is the obvious missing API.
+- Document that `string.concat("", p)` is strlen-based and unsafe for
+  binary data, so nobody else relearns this the hard way.
+
+**Workaround used in port:** for binary payloads, keep them in an opaque
+buf handle (svnae_buf) and pass the handle through `ptr`. Only turn the
+bytes into an Aether string when they're known to be text, and always
+NUL-terminate when crossing a boundary (every buf_new/buf_from in our
+shims now does `data[n] = '\0'`).
+
+---
+
+## 12. `extra_sources` array must be single-line in aether.toml
+
+**Severity: minor.**
+
+A multi-line TOML array like
+
+```toml
+extra_sources = [
+    "a.c",
+    "b.c",
+]
+```
+
+silently fails to be picked up by `ae run <file>` — the linker then complains
+about undefined symbols. Single-line `extra_sources = ["a.c", "b.c"]` works.
+
+**Request:** fix the TOML parser to accept the multi-line form (which is
+standard TOML), or emit a clear error when the `[[bin]]` entry for the
+file being run has an unparseable `extra_sources`.
+
+---
+
+## 13. `!` unary-negation only works on already-boolean values
 
 **Severity: minor.**
 

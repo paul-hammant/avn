@@ -15,8 +15,11 @@
  * trip. No length-encoded prefix hack.
  */
 
+#include <errno.h>
+#include <fcntl.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include <zlib.h>
 
 struct svnae_buf {
@@ -29,9 +32,13 @@ buf_new(const unsigned char *src, int n)
 {
     struct svnae_buf *b = malloc(sizeof *b);
     if (!b) return NULL;
-    b->data = malloc(n > 0 ? n : 1);
+    /* Always allocate n+1 and NUL-terminate so buf_data returns a C string
+     * that's safe to print even when the payload has no trailing NUL.
+     * Embedded NULs still propagate via buf_length. */
+    b->data = malloc((size_t)n + 1);
     if (!b->data) { free(b); return NULL; }
     if (n > 0) memcpy(b->data, src, n);
+    b->data[n] = '\0';
     b->length = n;
     return b;
 }
@@ -70,6 +77,48 @@ svnae_zlib_inflate(const char *data, int data_len, int expected_out)
 /* Accessors exposed to Aether as `extern`s. */
 int         svnae_buf_length(const struct svnae_buf *b) { return b ? b->length : 0; }
 const char *svnae_buf_data  (const struct svnae_buf *b) { return b ? b->data : ""; }
+
+/* Same as svnae_zlib_inflate but with an explicit offset into the input
+ * buffer — lets callers point past a header byte without building a new
+ * buffer on the Aether side. */
+struct svnae_buf *
+svnae_zlib_inflate_offset(const char *base, int offset, int data_len, int expected_out)
+{
+    return svnae_zlib_inflate(base + offset, data_len, expected_out);
+}
+
+/* Write `header` (NUL-terminated) followed by the contents of `buf` (which
+ * may contain embedded NULs) to `path`. Used by fs_fs to persist a
+ * 1-byte header + zlib payload without routing the binary payload through
+ * Aether's strlen-based string pipeline. */
+int
+svnae_write_header_and_buf(const char *path, const char *header, const struct svnae_buf *buf)
+{
+    if (!buf) return -1;
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) return -errno;
+
+    int header_len = (int)strlen(header);
+    const char *p = header;
+    int rem = header_len;
+    while (rem > 0) {
+        ssize_t w = write(fd, p, (size_t)rem);
+        if (w < 0) { if (errno == EINTR) continue; close(fd); return -errno; }
+        p += w; rem -= (int)w;
+    }
+
+    p = buf->data;
+    rem = buf->length;
+    while (rem > 0) {
+        ssize_t w = write(fd, p, (size_t)rem);
+        if (w < 0) { if (errno == EINTR) continue; close(fd); return -errno; }
+        p += w; rem -= (int)w;
+    }
+
+    if (fsync(fd) != 0) { int rc = -errno; close(fd); return rc; }
+    if (close(fd) != 0) return -errno;
+    return 0;
+}
 
 void
 svnae_buf_free(struct svnae_buf *b)

@@ -1,0 +1,302 @@
+// End-to-end test: create a repo, write blobs, verify rep-sharing,
+// read blobs back, and verify zlib compression kicks in for compressible
+// payloads and not for incompressible ones.
+//
+// The implementation below is an inlined copy of ae/fs_fs/repo/module.ae.
+// (Aether v0.70.0's cross-module typed-param bug — AETHER_ISSUES.md #2 —
+// means we can't `import repo` cleanly yet.) Keep the two in sync manually
+// until the upstream fix lands.
+
+import std.fs
+import std.string
+
+// --- externs from subr shims ------------------------------------------------
+
+extern svnae_sha1_hex(data: string, data_len: int) -> string
+extern svnae_checksum_free_hex(buf: string)
+
+extern svnae_zlib_deflate(data: string, data_len: int, level: int) -> ptr
+extern svnae_zlib_inflate_offset(base: string, offset: int, data_len: int, expected_out: int) -> ptr
+extern svnae_buf_length(b: ptr) -> int
+extern svnae_buf_data(b: ptr) -> string
+extern svnae_buf_free(b: ptr)
+extern svnae_write_header_and_buf(path: string, header: string, buf: ptr) -> int
+
+extern svnae_write_and_fsync(path: string, data: string, len: int) -> int
+extern svnae_write_header_and_body(path: string, header: string, body: string, body_len: int) -> int
+extern svnae_rename(from: string, to: string) -> int
+extern svnae_is_regular_file(path: string) -> int
+extern svnae_remove(path: string) -> int
+extern svnae_getpid() -> int
+extern svnae_read_file(path: string, out_len: ptr) -> ptr
+extern svnae_read_file_length(b: ptr) -> int
+extern svnae_read_file_data(b: ptr) -> string
+extern svnae_read_file_free(b: ptr)
+
+extern file_exists(path: string) -> int
+extern dir_exists(path: string) -> int
+
+const SQLITE_OK   = 0
+const SQLITE_ROW  = 100
+const SQLITE_DONE = 101
+
+extern svnae_sqlite_open(path: string) -> ptr
+extern svnae_sqlite_close(db: ptr) -> int
+extern svnae_sqlite_exec(db: ptr, sql: string) -> int
+extern svnae_sqlite_prepare(db: ptr, sql: string) -> ptr
+extern svnae_sqlite_finalize(stmt: ptr) -> int
+extern svnae_sqlite_step(stmt: ptr) -> int
+extern svnae_sqlite_bind_int(stmt: ptr, idx: int, v: int) -> int
+extern svnae_sqlite_bind_text(stmt: ptr, idx: int, text: string) -> int
+extern svnae_sqlite_column_int(stmt: ptr, col: int) -> int
+
+const STORAGE_RAW  = 1
+const STORAGE_ZLIB = 2
+
+create_repo(path: string) {
+    if dir_exists(path) == 1 { return 1 }
+    if file_exists(path) == 1 { return 2 }
+    merr = fs.mkdir_p(path)
+    if string.length(merr) != 0 { return 10 }
+    reps = "${path}/reps"
+    merr = fs.mkdir_p(reps)
+    if string.length(merr) != 0 { return 11 }
+    rc = svnae_write_and_fsync("${path}/format", "svnae-fsfs-1\n", 13)
+    if rc != 0 { return rc }
+    db = svnae_sqlite_open("${path}/rep-cache.db")
+    if db == 0 { return 3 }
+    rc = svnae_sqlite_exec(db,
+        "CREATE TABLE rep_cache (hash TEXT PRIMARY KEY, rel_path TEXT NOT NULL, uncompressed_size INT NOT NULL, storage INT NOT NULL)")
+    svnae_sqlite_close(db)
+    if rc != SQLITE_OK { return 4 }
+    return 0
+}
+
+rel_path_for_hash(sha1: string) {
+    aa = string.substring(sha1, 0, 2)
+    bb = string.substring(sha1, 2, 4)
+    return "${aa}/${bb}/${sha1}.rep"
+}
+
+ensure_fanout_dirs(repo: string, sha1: string) {
+    aa = string.substring(sha1, 0, 2)
+    bb = string.substring(sha1, 2, 4)
+    d = "${repo}/reps/${aa}/${bb}"
+    merr = fs.mkdir_p(d)
+    if string.length(merr) != 0 { return 1 }
+    return 0
+}
+
+rep_cache_has(repo: string, sha1: string) {
+    db = svnae_sqlite_open("${repo}/rep-cache.db")
+    if db == 0 { return 0 }
+    stmt = svnae_sqlite_prepare(db, "SELECT 1 FROM rep_cache WHERE hash = ?")
+    if stmt == 0 { svnae_sqlite_close(db); return 0 }
+    svnae_sqlite_bind_text(stmt, 1, sha1)
+    rc = svnae_sqlite_step(stmt)
+    found = 0
+    if rc == SQLITE_ROW { found = 1 }
+    svnae_sqlite_finalize(stmt)
+    svnae_sqlite_close(db)
+    return found
+}
+
+rep_cache_lookup_storage(repo: string, sha1: string) {
+    db = svnae_sqlite_open("${repo}/rep-cache.db")
+    if db == 0 { return 0 }
+    stmt = svnae_sqlite_prepare(db, "SELECT storage FROM rep_cache WHERE hash = ?")
+    svnae_sqlite_bind_text(stmt, 1, sha1)
+    rc = svnae_sqlite_step(stmt)
+    s = 0
+    if rc == SQLITE_ROW { s = svnae_sqlite_column_int(stmt, 0) }
+    svnae_sqlite_finalize(stmt)
+    svnae_sqlite_close(db)
+    return s
+}
+
+rep_cache_lookup_uncompressed_size(repo: string, sha1: string) {
+    db = svnae_sqlite_open("${repo}/rep-cache.db")
+    if db == 0 { return 0 }
+    stmt = svnae_sqlite_prepare(db, "SELECT uncompressed_size FROM rep_cache WHERE hash = ?")
+    svnae_sqlite_bind_text(stmt, 1, sha1)
+    rc = svnae_sqlite_step(stmt)
+    v = 0
+    if rc == SQLITE_ROW { v = svnae_sqlite_column_int(stmt, 0) }
+    svnae_sqlite_finalize(stmt)
+    svnae_sqlite_close(db)
+    return v
+}
+
+rep_cache_insert(repo: string, sha1: string, rel_path: string,
+                 uncompressed_size: int, storage: int) {
+    db = svnae_sqlite_open("${repo}/rep-cache.db")
+    if db == 0 { return 1 }
+    stmt = svnae_sqlite_prepare(db,
+        "INSERT INTO rep_cache (hash, rel_path, uncompressed_size, storage) VALUES (?, ?, ?, ?)")
+    svnae_sqlite_bind_text(stmt, 1, sha1)
+    svnae_sqlite_bind_text(stmt, 2, rel_path)
+    svnae_sqlite_bind_int (stmt, 3, uncompressed_size)
+    svnae_sqlite_bind_int (stmt, 4, storage)
+    rc = svnae_sqlite_step(stmt)
+    svnae_sqlite_finalize(stmt)
+    svnae_sqlite_close(db)
+    if rc != SQLITE_DONE { return 2 }
+    return 0
+}
+
+write_blob(repo: string, data: string) {
+    n = string.length(data)
+    raw = svnae_sha1_hex(data, n)
+    sha1_copy = string.concat("", raw)
+    svnae_checksum_free_hex(raw)
+
+    if rep_cache_has(repo, sha1_copy) == 1 { return sha1_copy }
+
+    storage = STORAGE_RAW
+    comp = svnae_zlib_deflate(data, n, 6)
+    use_zlib = 0
+    if comp != 0 {
+        clen = svnae_buf_length(comp)
+        if clen + 16 < n {
+            storage = STORAGE_ZLIB
+            use_zlib = 1
+        }
+    }
+
+    storage_hdr = "R"
+    if storage == STORAGE_ZLIB { storage_hdr = "Z" }
+
+    ensure_fanout_dirs(repo, sha1_copy)
+    rel = rel_path_for_hash(sha1_copy)
+    full = "${repo}/reps/${rel}"
+
+    tmp = "${full}.tmp.${svnae_getpid()}.0"
+    wrc = 0
+    // ZLIB payloads can contain NULs, so we never route them through an
+    // Aether string. The compress shim takes the buf handle directly.
+    if use_zlib == 1 {
+        wrc = svnae_write_header_and_buf(tmp, storage_hdr, comp)
+    } else {
+        wrc = svnae_write_header_and_body(tmp, storage_hdr, data, n)
+    }
+    if comp != 0 { svnae_buf_free(comp) }
+    if wrc != 0 { svnae_remove(tmp); return "" }
+    rc = svnae_rename(tmp, full)
+    if rc != 0 { svnae_remove(tmp); return "" }
+
+    rc = rep_cache_insert(repo, sha1_copy, rel, n, storage)
+    if rc != 0 { return "" }
+    return sha1_copy
+}
+
+read_blob(repo: string, sha1_hex: string) {
+    storage = rep_cache_lookup_storage(repo, sha1_hex)
+    if storage == 0 { return "" }
+    uncompressed = rep_cache_lookup_uncompressed_size(repo, sha1_hex)
+    rel = rel_path_for_hash(sha1_hex)
+    full = "${repo}/reps/${rel}"
+
+    // Binary-safe read: fs.read's strlen-based copy breaks on zlib blobs.
+    raw_buf = svnae_read_file(full, 0)
+    if raw_buf == 0 { return "" }
+    total_len = svnae_read_file_length(raw_buf)
+    raw_ptr = svnae_read_file_data(raw_buf)
+    if total_len < 1 { svnae_read_file_free(raw_buf); return "" }
+
+    if storage == STORAGE_RAW {
+        body_str = string.substring(raw_ptr, 1, total_len)
+        svnae_read_file_free(raw_buf)
+        return body_str
+    }
+
+    inf = svnae_zlib_inflate_offset(raw_ptr, 1, total_len - 1, uncompressed)
+    svnae_read_file_free(raw_buf)
+    if inf == 0 { return "" }
+    // Return the buf's data pointer. The buf struct itself leaks (~16 bytes
+    // per read). A proper owned-string return type will come when Aether's
+    // cross-module `ptr` typing is fixed and we can hoist this into the
+    // module boundary. Bytes are NUL-terminated by buf_new so strlen-based
+    // operations on the result are safe.
+    return svnae_buf_data(inf)
+}
+
+// --- test harness ----------------------------------------------------------
+
+expect_int(label: string, got: int, want: int) {
+    if got == want {
+        println("ok   ${label}: ${got}")
+        return 0
+    }
+    println("FAIL ${label}: got ${got}, want ${want}")
+    return 1
+}
+
+expect_str(label: string, got: string, want: string) {
+    if string.equals(got, want) == 1 {
+        println("ok   ${label}")
+        return 0
+    }
+    println("FAIL ${label}")
+    return 1
+}
+
+extern system(cmd: string) -> int
+rmtree(path: string) { system("rm -rf '${path}'"); return 0 }
+
+main() {
+    fails = 0
+    pid = svnae_getpid()
+    repo = "/tmp/svnae_test_repo_${pid}"
+    rmtree(repo)
+
+    // 1. create_repo
+    rc = create_repo(repo)
+    fails = fails + expect_int("create_repo rc", rc, 0)
+
+    // Double-create rejects.
+    rc = create_repo(repo)
+    fails = fails + expect_int("create_repo on existing rejects", rc, 1)
+
+    // 2. small blob: RAW storage (too small to benefit from zlib).
+    small = "hello"
+    sha_small = write_blob(repo, small)
+    fails = fails + expect_str("sha1 of 'hello'", sha_small,
+        "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+
+    // 3. rep-sharing: second write of same content hits cache.
+    sha_small2 = write_blob(repo, small)
+    fails = fails + expect_str("rep-share same hash", sha_small2, sha_small)
+
+    // 4. compressible payload: ZLIB storage.
+    big = ""
+    i = 0
+    while i < 500 {
+        big = string.concat(big, "this is a sentence. ")
+        i = i + 1
+    }
+    sha_big = write_blob(repo, big)
+    fails = fails + expect_int("sha_big is 40-char hex", string.length(sha_big), 40)
+    fails = fails + expect_int("big stored as ZLIB", rep_cache_lookup_storage(repo, sha_big), STORAGE_ZLIB)
+    fails = fails + expect_int("small stored as RAW", rep_cache_lookup_storage(repo, sha_small), STORAGE_RAW)
+
+    // 5. round-trip both.
+    got_small = read_blob(repo, sha_small)
+    fails = fails + expect_str("read_blob small", got_small, small)
+    got_big = read_blob(repo, sha_big)
+    fails = fails + expect_int("read_blob big length", string.length(got_big), string.length(big))
+    fails = fails + expect_str("read_blob big content", got_big, big)
+
+    // 6. unknown hash.
+    miss = read_blob(repo, "0000000000000000000000000000000000000000")
+    fails = fails + expect_str("unknown hash yields empty", miss, "")
+
+    rmtree(repo)
+
+    if fails > 0 {
+        println("")
+        println("FAIL: ${fails} case(s) failed")
+        exit(1)
+    }
+    println("")
+    println("test_repo: OK")
+}
