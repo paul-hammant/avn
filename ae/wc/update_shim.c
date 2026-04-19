@@ -1,0 +1,393 @@
+/* ae/wc/update_shim.c — svn update.
+ *
+ * Pulls remote state at target rev into a checked-out WC:
+ *   svnae_wc_update(wc_root, target_rev)
+ *     target_rev == -1 means "use server's current head".
+ *   Returns target_rev on success, -1 on error, -2 on conflict.
+ *
+ * Algorithm (non-incremental — we fetch the full tree listing):
+ *   1. Pull the full remote tree listing recursively at target_rev.
+ *      Yields a set of (path, kind, sha1 [for files]).
+ *   2. For each local node:
+ *        - if remote has it at same sha1 → just refresh base_rev
+ *        - if remote has it at different sha1 AND local is clean → overwrite
+ *        - if remote has it at different sha1 AND local is modified → CONFLICT
+ *        - if remote doesn't have it:
+ *            - local state=normal → delete it locally (remote deleted)
+ *            - local state=added → keep (user's work in progress)
+ *   3. For each remote node not locally tracked:
+ *        - fetch via RA cat, write to disk, pristine, db row.
+ *
+ * We scan conflicts in a dry-run pass before applying any changes, so
+ * a conflict leaves the WC unchanged.
+ */
+
+#include <dirent.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <limits.h>
+#include <openssl/evp.h>
+#include <sqlite3.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <unistd.h>
+
+#ifndef PATH_MAX
+#define PATH_MAX 4096
+#endif
+
+/* Externs from neighbouring shims. */
+sqlite3 *svnae_wc_db_open(const char *wc_root);
+void     svnae_wc_db_close(sqlite3 *db);
+int      svnae_wc_db_upsert_node(sqlite3 *db, const char *path, int kind, int base_rev, const char *sha1, int state);
+int      svnae_wc_db_delete_node(sqlite3 *db, const char *path);
+int      svnae_wc_db_set_info(sqlite3 *db, const char *key, const char *value);
+
+struct svnae_wc_nodelist;
+struct svnae_wc_nodelist *svnae_wc_db_list_nodes(sqlite3 *db);
+int         svnae_wc_nodelist_count(const struct svnae_wc_nodelist *L);
+const char *svnae_wc_nodelist_path(const struct svnae_wc_nodelist *L, int i);
+int         svnae_wc_nodelist_kind(const struct svnae_wc_nodelist *L, int i);
+const char *svnae_wc_nodelist_base_sha1(const struct svnae_wc_nodelist *L, int i);
+int         svnae_wc_nodelist_state(const struct svnae_wc_nodelist *L, int i);
+void        svnae_wc_nodelist_free(struct svnae_wc_nodelist *L);
+
+char *svnae_wc_db_get_info(sqlite3 *db, const char *key);
+void  svnae_wc_info_free(char *s);
+
+const char *svnae_wc_pristine_put(const char *wc_root, const char *data, int len);
+
+int   svnae_ra_head_rev(const char *base_url, const char *repo_name);
+struct svnae_ra_list;
+struct svnae_ra_list *svnae_ra_list(const char *base_url, const char *repo_name, int rev, const char *path);
+int         svnae_ra_list_count(const struct svnae_ra_list *L);
+const char *svnae_ra_list_name(const struct svnae_ra_list *L, int i);
+const char *svnae_ra_list_kind(const struct svnae_ra_list *L, int i);
+void        svnae_ra_list_free(struct svnae_ra_list *L);
+char       *svnae_ra_cat(const char *base_url, const char *repo_name, int rev, const char *path);
+void        svnae_ra_free(char *p);
+
+/* --- small helpers ---------------------------------------------------- */
+
+static int
+sha1_of_file(const char *path, char out[41])
+{
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) return -1;
+    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+    EVP_DigestInit_ex(ctx, EVP_sha1(), NULL);
+    char buf[8192];
+    for (;;) {
+        ssize_t n = read(fd, buf, sizeof buf);
+        if (n < 0) { if (errno == EINTR) continue; EVP_MD_CTX_free(ctx); close(fd); return -1; }
+        if (n == 0) break;
+        EVP_DigestUpdate(ctx, buf, (size_t)n);
+    }
+    close(fd);
+    unsigned char dig[EVP_MAX_MD_SIZE]; unsigned int dlen = 0;
+    EVP_DigestFinal_ex(ctx, dig, &dlen);
+    EVP_MD_CTX_free(ctx);
+    static const char hex[] = "0123456789abcdef";
+    for (unsigned int i = 0; i < 20; i++) {
+        out[i*2]   = hex[dig[i] >> 4];
+        out[i*2+1] = hex[dig[i] & 0xf];
+    }
+    out[40] = '\0';
+    return 0;
+}
+
+static void
+sha1_of_bytes(const char *data, int len, char out[41])
+{
+    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+    unsigned char dig[EVP_MAX_MD_SIZE]; unsigned int dlen = 0;
+    EVP_DigestInit_ex(ctx, EVP_sha1(), NULL);
+    EVP_DigestUpdate(ctx, data, (size_t)len);
+    EVP_DigestFinal_ex(ctx, dig, &dlen);
+    EVP_MD_CTX_free(ctx);
+    static const char hex[] = "0123456789abcdef";
+    for (unsigned int i = 0; i < 20; i++) {
+        out[i*2]   = hex[dig[i] >> 4];
+        out[i*2+1] = hex[dig[i] & 0xf];
+    }
+    out[40] = '\0';
+}
+
+static int
+mkdir_p(const char *path)
+{
+    char tmp[PATH_MAX]; snprintf(tmp, sizeof tmp, "%s", path);
+    for (char *p = tmp + 1; *p; p++) {
+        if (*p == '/') {
+            *p = '\0';
+            if (mkdir(tmp, 0755) != 0 && errno != EEXIST) return -1;
+            *p = '/';
+        }
+    }
+    if (mkdir(tmp, 0755) != 0 && errno != EEXIST) return -1;
+    return 0;
+}
+
+static int
+write_file_atomic(const char *path, const char *data, int len)
+{
+    char tmp[PATH_MAX];
+    snprintf(tmp, sizeof tmp, "%s.tmp.%d", path, (int)getpid());
+    int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) return -errno;
+    const char *p = data;
+    int rem = len;
+    while (rem > 0) {
+        ssize_t w = write(fd, p, (size_t)rem);
+        if (w < 0) { if (errno == EINTR) continue; close(fd); unlink(tmp); return -errno; }
+        p += w; rem -= (int)w;
+    }
+    if (fsync(fd) != 0) { int rc = -errno; close(fd); unlink(tmp); return rc; }
+    close(fd);
+    if (rename(tmp, path) != 0) { unlink(tmp); return -errno; }
+    return 0;
+}
+
+/* --- remote tree map --------------------------------------------------- *
+ *
+ * We accumulate the remote tree into a small "remote node" list, keyed by
+ * the repo-relative path. Files get their sha1 filled in from a ra_cat →
+ * sha1_of_bytes; directories leave sha1 empty. We keep the fetched bytes
+ * alongside so the apply pass can reuse them without re-fetching.
+ */
+
+struct remote_node {
+    char *path;
+    int   kind;    /* 0=file 1=dir */
+    char  sha1[41];
+    char *data;    /* malloc'd, only for files */
+    int   data_len;
+};
+
+struct remote_tree {
+    struct remote_node *items;
+    int n, cap;
+};
+
+static void
+rtree_add(struct remote_tree *rt,
+          const char *path, int kind,
+          const char *data, int data_len)
+{
+    if (rt->n == rt->cap) {
+        int nc = rt->cap ? rt->cap * 2 : 16;
+        rt->items = realloc(rt->items, (size_t)nc * sizeof *rt->items);
+        rt->cap = nc;
+    }
+    struct remote_node *e = &rt->items[rt->n++];
+    e->path = strdup(path);
+    e->kind = kind;
+    e->sha1[0] = '\0';
+    if (kind == 0 && data) {
+        e->data = malloc((size_t)data_len + 1);
+        memcpy(e->data, data, (size_t)data_len);
+        e->data[data_len] = '\0';
+        e->data_len = data_len;
+        sha1_of_bytes(data, data_len, e->sha1);
+    } else {
+        e->data = NULL;
+        e->data_len = 0;
+    }
+}
+
+static void
+rtree_free(struct remote_tree *rt)
+{
+    for (int i = 0; i < rt->n; i++) {
+        free(rt->items[i].path);
+        free(rt->items[i].data);
+    }
+    free(rt->items);
+}
+
+static const struct remote_node *
+rtree_find(const struct remote_tree *rt, const char *path)
+{
+    for (int i = 0; i < rt->n; i++)
+        if (strcmp(rt->items[i].path, path) == 0) return &rt->items[i];
+    return NULL;
+}
+
+/* Recursive walk of the remote tree. Prefix is relative to repo root;
+ * "" for root. */
+static int
+walk_remote(const char *base_url, const char *repo, int rev,
+            const char *prefix, struct remote_tree *rt)
+{
+    struct svnae_ra_list *L = svnae_ra_list(base_url, repo, rev, prefix);
+    if (!L) return -1;
+    int n = svnae_ra_list_count(L);
+    for (int i = 0; i < n; i++) {
+        const char *name = svnae_ra_list_name(L, i);
+        const char *kind = svnae_ra_list_kind(L, i);
+        char rel[PATH_MAX];
+        if (*prefix) snprintf(rel, sizeof rel, "%s/%s", prefix, name);
+        else         snprintf(rel, sizeof rel, "%s", name);
+
+        if (strcmp(kind, "dir") == 0) {
+            rtree_add(rt, rel, 1, NULL, 0);
+            if (walk_remote(base_url, repo, rev, rel, rt) != 0) {
+                svnae_ra_list_free(L); return -1;
+            }
+        } else {
+            char *data = svnae_ra_cat(base_url, repo, rev, rel);
+            if (!data) { svnae_ra_list_free(L); return -1; }
+            int len = (int)strlen(data);
+            rtree_add(rt, rel, 0, data, len);
+            svnae_ra_free(data);
+        }
+    }
+    svnae_ra_list_free(L);
+    return 0;
+}
+
+/* --- conflict detection + apply --------------------------------------- */
+
+int
+svnae_wc_update(const char *wc_root, int target_rev)
+{
+    sqlite3 *db = svnae_wc_db_open(wc_root);
+    if (!db) return -1;
+
+    char *base_url = svnae_wc_db_get_info(db, "base_url");
+    char *repo     = svnae_wc_db_get_info(db, "repo");
+    if (!base_url || !repo) {
+        svnae_wc_db_close(db);
+        svnae_wc_info_free(base_url); svnae_wc_info_free(repo);
+        return -1;
+    }
+
+    if (target_rev < 0) {
+        target_rev = svnae_ra_head_rev(base_url, repo);
+        if (target_rev < 0) {
+            svnae_wc_info_free(base_url); svnae_wc_info_free(repo);
+            svnae_wc_db_close(db); return -1;
+        }
+    }
+
+    /* 1. Pull full remote tree at target_rev. */
+    struct remote_tree rt = {0};
+    if (walk_remote(base_url, repo, target_rev, "", &rt) != 0) {
+        rtree_free(&rt);
+        svnae_wc_info_free(base_url); svnae_wc_info_free(repo);
+        svnae_wc_db_close(db);
+        return -1;
+    }
+
+    /* 2. Snapshot local nodes. */
+    struct svnae_wc_nodelist *L = svnae_wc_db_list_nodes(db);
+    int n_local = svnae_wc_nodelist_count(L);
+
+    /* 3. Conflict pre-scan. For every local file in state=normal whose
+     *    remote sha1 differs from base_sha1 AND whose disk sha1 differs
+     *    from base_sha1 too, that's a conflict — bail without touching
+     *    anything. */
+    for (int i = 0; i < n_local; i++) {
+        const char *rel      = svnae_wc_nodelist_path(L, i);
+        int         kind     = svnae_wc_nodelist_kind(L, i);
+        int         state    = svnae_wc_nodelist_state(L, i);
+        const char *base_sha = svnae_wc_nodelist_base_sha1(L, i);
+        if (kind != 0) continue;
+        if (state != 0) continue;
+
+        const struct remote_node *r = rtree_find(&rt, rel);
+        if (!r || r->kind != 0) continue;
+
+        if (strcmp(r->sha1, base_sha) == 0) continue;  /* remote unchanged */
+
+        char disk[PATH_MAX];
+        snprintf(disk, sizeof disk, "%s/%s", wc_root, rel);
+        char disk_sha[41];
+        if (sha1_of_file(disk, disk_sha) != 0) continue;
+
+        if (strcmp(disk_sha, base_sha) != 0) {
+            /* Local modified AND remote modified → conflict. */
+            svnae_wc_nodelist_free(L);
+            rtree_free(&rt);
+            svnae_wc_info_free(base_url); svnae_wc_info_free(repo);
+            svnae_wc_db_close(db);
+            fprintf(stderr, "conflict: %s was modified locally and on the remote\n", rel);
+            return -2;
+        }
+    }
+
+    /* 4. Apply. Pass A: handle local-only and overlap. */
+    for (int i = 0; i < n_local; i++) {
+        const char *rel      = svnae_wc_nodelist_path(L, i);
+        int         kind     = svnae_wc_nodelist_kind(L, i);
+        int         state    = svnae_wc_nodelist_state(L, i);
+        const char *base_sha = svnae_wc_nodelist_base_sha1(L, i);
+
+        if (state == 1 || state == 2) continue;  /* added/deleted — user's work */
+
+        const struct remote_node *r = rtree_find(&rt, rel);
+        if (!r) {
+            /* Remote removed it. Delete locally (only safe if clean,
+             * which we verified above). */
+            char disk[PATH_MAX];
+            snprintf(disk, sizeof disk, "%s/%s", wc_root, rel);
+            if (kind == 0) unlink(disk); else rmdir(disk);
+            svnae_wc_db_delete_node(db, rel);
+            continue;
+        }
+        if (kind != r->kind) {
+            /* Kind switched (file became dir or vice versa). Reference
+             * svn treats this as a tree-conflict; we just skip for this
+             * phase. Log it and move on. */
+            fprintf(stderr, "warning: kind change not handled: %s\n", rel);
+            continue;
+        }
+        if (kind == 0 && strcmp(r->sha1, base_sha) != 0) {
+            /* Remote newer. Write new content (clean by pre-scan). */
+            char disk[PATH_MAX];
+            snprintf(disk, sizeof disk, "%s/%s", wc_root, rel);
+            if (write_file_atomic(disk, r->data, r->data_len) != 0) continue;
+            svnae_wc_pristine_put(wc_root, r->data, r->data_len);
+            svnae_wc_db_upsert_node(db, rel, 0, target_rev, r->sha1, 0);
+        } else {
+            /* Unchanged — just bump base_rev. */
+            svnae_wc_db_upsert_node(db, rel, kind, target_rev, base_sha, 0);
+        }
+    }
+
+    /* Pass B: remote-only additions. */
+    for (int i = 0; i < rt.n; i++) {
+        const struct remote_node *r = &rt.items[i];
+        /* Skip if already present locally (handled in pass A). */
+        int found = 0;
+        for (int j = 0; j < n_local; j++) {
+            if (strcmp(svnae_wc_nodelist_path(L, j), r->path) == 0) { found = 1; break; }
+        }
+        if (found) continue;
+
+        char disk[PATH_MAX];
+        snprintf(disk, sizeof disk, "%s/%s", wc_root, r->path);
+        if (r->kind == 1) {
+            if (mkdir_p(disk) != 0) continue;
+            svnae_wc_db_upsert_node(db, r->path, 1, target_rev, "", 0);
+        } else {
+            if (write_file_atomic(disk, r->data, r->data_len) != 0) continue;
+            svnae_wc_pristine_put(wc_root, r->data, r->data_len);
+            svnae_wc_db_upsert_node(db, r->path, 0, target_rev, r->sha1, 0);
+        }
+    }
+
+    /* 5. Bump base_rev in info. */
+    char buf[16]; snprintf(buf, sizeof buf, "%d", target_rev);
+    svnae_wc_db_set_info(db, "base_rev", buf);
+
+    svnae_wc_nodelist_free(L);
+    rtree_free(&rt);
+    svnae_wc_info_free(base_url);
+    svnae_wc_info_free(repo);
+    svnae_wc_db_close(db);
+    return target_rev;
+}
