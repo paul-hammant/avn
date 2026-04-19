@@ -59,6 +59,9 @@ extern svnae_ra_commit_finish(cb: ptr, base_url: string, repo_name: string) -> i
 extern svnae_stderr_write(buf: string, n: int) -> int
 extern svnae_stdout_write(buf: string, n: int) -> int
 
+// WC operations (Phase 5+).
+extern svnae_wc_checkout(base_url: string, repo_name: string, dest: string, rev: int) -> int
+
 // --- URL parsing ----------------------------------------------------------
 //
 // "http://host:port/reponame" -> ("http://host:port", "reponame").
@@ -334,15 +337,48 @@ cmd_commit(argv_start: int) {
     return 0
 }
 
+cmd_checkout(argv_start: int) {
+    url = aether_args_get(argv_start)
+    rev_str = find_flag("--rev", argv_start)
+    dest = first_positional(argv_start + 1)
+    if string.length(dest) == 0 {
+        // Default: last segment of URL.
+        dest = url_repo(url)
+    }
+
+    base = url_base(url)
+    repo = url_repo(url)
+
+    rev = 0
+    if string.length(rev_str) > 0 {
+        if string.try_int(rev_str) == 1 { rev = string.get_int(rev_str) }
+    } else {
+        rev = svnae_ra_head_rev(base, repo)
+        if rev < 0 {
+            println("svn checkout: could not contact server")
+            return 1
+        }
+    }
+
+    rc = svnae_wc_checkout(base, repo, dest, rev)
+    if rc != 0 {
+        println("svn checkout: failed (rc=${rc})")
+        return 1
+    }
+    println("Checked out revision ${rev} into ${dest}")
+    return 0
+}
+
 print_usage() {
     println("usage: svn <subcommand> URL [options]")
     println("")
     println("subcommands:")
-    println("  info   URL [--rev N]")
-    println("  log    URL")
-    println("  ls     URL [--rev N] [PATH]")
-    println("  cat    URL [--rev N] PATH")
-    println("  commit URL --author A --log M [--add-file P=C] [--mkdir P] [--delete P]")
+    println("  info     URL [--rev N]")
+    println("  log      URL")
+    println("  ls       URL [--rev N] [PATH]")
+    println("  cat      URL [--rev N] PATH")
+    println("  commit   URL --author A --log M [--add-file P=C] [--mkdir P] [--delete P]")
+    println("  checkout URL [DEST] [--rev N]")
     return 0
 }
 
@@ -354,13 +390,15 @@ main() {
     sub = aether_args_get(1)
     // URL is at argv[2]. Flags/positionals after that.
 
-    if string.equals(sub, "info") == 1   { exit(cmd_info(2)) }
-    if string.equals(sub, "log") == 1    { exit(cmd_log(2)) }
-    if string.equals(sub, "ls") == 1     { exit(cmd_ls(2)) }
-    if string.equals(sub, "cat") == 1    { exit(cmd_cat(2)) }
-    if string.equals(sub, "commit") == 1 { exit(cmd_commit(2)) }
-    if string.equals(sub, "--help") == 1 { print_usage(); exit(0) }
-    if string.equals(sub, "help") == 1   { print_usage(); exit(0) }
+    if string.equals(sub, "info") == 1     { exit(cmd_info(2)) }
+    if string.equals(sub, "log") == 1      { exit(cmd_log(2)) }
+    if string.equals(sub, "ls") == 1       { exit(cmd_ls(2)) }
+    if string.equals(sub, "cat") == 1      { exit(cmd_cat(2)) }
+    if string.equals(sub, "commit") == 1   { exit(cmd_commit(2)) }
+    if string.equals(sub, "checkout") == 1 { exit(cmd_checkout(2)) }
+    if string.equals(sub, "co") == 1       { exit(cmd_checkout(2)) }
+    if string.equals(sub, "--help") == 1   { print_usage(); exit(0) }
+    if string.equals(sub, "help") == 1     { print_usage(); exit(0) }
 
     println("svn: unknown subcommand: ${sub}")
     print_usage()
