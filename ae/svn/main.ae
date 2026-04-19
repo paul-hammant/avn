@@ -63,6 +63,7 @@ extern svnae_stdout_write(buf: string, n: int) -> int
 extern svnae_wc_checkout(base_url: string, repo_name: string, dest: string, rev: int) -> int
 extern svnae_wc_add(wc_root: string, rel_path: string) -> int
 extern svnae_wc_rm (wc_root: string, rel_path: string) -> int
+extern svnae_wc_commit(wc_root: string, author: string, logmsg: string) -> int
 extern svnae_wc_status(wc_root: string) -> ptr
 extern svnae_wc_statuslist_count(L: ptr) -> int
 extern svnae_wc_statuslist_path(L: ptr, i: int) -> string
@@ -280,7 +281,45 @@ cmd_cat(argv_start: int) {
 }
 
 cmd_commit(argv_start: int) {
-    url = aether_args_get(argv_start)
+    // Two modes:
+    //   stateless:  svn commit URL --author A --log M --add-file P=C ...
+    //   WC-backed:  svn commit      --author A --log M   (uses $PWD/.svn/wc.db)
+    // We detect stateless mode by checking if argv[argv_start] starts with
+    // "http". Otherwise we're WC-backed.
+
+    // Check the first arg (if any) to decide mode.
+    first = ""
+    if aether_args_count() > argv_start { first = aether_args_get(argv_start) }
+
+    is_stateless = 0
+    if string.length(first) >= 4 {
+        prefix = string.substring(first, 0, 4)
+        if string.equals(prefix, "http") == 1 { is_stateless = 1 }
+    }
+
+    if is_stateless == 0 {
+        // WC-backed.
+        author = find_flag("--author", argv_start)
+        logmsg = find_flag("--log", argv_start)
+        if string.length(author) == 0 || string.length(logmsg) == 0 {
+            println("svn commit: --author and --log required")
+            return 2
+        }
+        new_rev = svnae_wc_commit(".", author, logmsg)
+        if new_rev == -2 {
+            println("No changes to commit.")
+            return 0
+        }
+        if new_rev < 0 {
+            println("svn commit: failed")
+            return 1
+        }
+        println("Committed revision ${new_rev}.")
+        return 0
+    }
+
+    // Stateless mode (original Phase 10 behaviour).
+    url = first
     base = url_base(url)
     repo = url_repo(url)
 
