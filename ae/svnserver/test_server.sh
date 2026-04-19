@@ -100,6 +100,62 @@ check "r3 cat LICENSE"      "404" "$code"
 code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/repos/nosuch/info")
 check "unknown repo"        "404" "$code"
 
+# --- POST /commit (read/write loop) ---
+# Seeded repo is at head=3. Commit rev 4 adding a new file and
+# deleting src/main.c.
+
+COMMIT_JSON=$(python3 -c '
+import base64, json
+content = b"// added by HTTP client\n"
+body = {
+    "base_rev": 3,
+    "author":   "http-client",
+    "log":      "via POST /commit",
+    "edits": [
+        {"op":"add-file", "path":"CHANGELOG", "content": base64.b64encode(content).decode()},
+        {"op":"delete",   "path":"src/main.c"},
+    ],
+}
+print(json.dumps(body))
+')
+
+r=$(curl -sf -X POST \
+    -H 'Content-Type: application/json' \
+    -d "$COMMIT_JSON" \
+    "http://127.0.0.1:$PORT/repos/demo/commit")
+new_rev=$(echo "$r" | python3 -c 'import sys,json; print(json.load(sys.stdin)["rev"])')
+check "commit returned rev" "4" "$new_rev"
+
+# Head should now be 4.
+head=$(curl -sf "http://127.0.0.1:$PORT/repos/demo/info" | python3 -c 'import sys,json; print(json.load(sys.stdin)["head"])')
+check "head after commit"   "4" "$head"
+
+# CHANGELOG should have the new bytes.
+c=$(curl -sf "http://127.0.0.1:$PORT/repos/demo/rev/4/cat/CHANGELOG")
+check "cat r4 CHANGELOG"    "// added by HTTP client" "$c"
+
+# src/main.c should be gone from rev 4.
+code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/repos/demo/rev/4/cat/src/main.c")
+check "r4 main.c gone"      "404" "$code"
+
+# But rev 3 should still have it (immutability).
+c=$(curl -sf "http://127.0.0.1:$PORT/repos/demo/rev/3/cat/src/main.c")
+check "r3 main.c preserved" "int main() { return 42; }" "$c"
+
+# Log should now have 5 entries.
+count=$(curl -sf "http://127.0.0.1:$PORT/repos/demo/log" | python3 -c 'import sys,json; print(len(json.load(sys.stdin)["entries"]))')
+check "log count after commit" "5" "$count"
+
+# Malformed JSON -> 400.
+code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+    -d 'not valid json' "http://127.0.0.1:$PORT/repos/demo/commit")
+check "malformed commit 400" "400" "$code"
+
+# Commit against a missing repo -> 404.
+code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+    -d "$COMMIT_JSON" "http://127.0.0.1:$PORT/repos/nosuch/commit")
+check "commit missing repo" "404" "$code"
+
 kill "$SRV" 2>/dev/null || true
 wait "$SRV" 2>/dev/null || true
 rm -rf "$REPO"

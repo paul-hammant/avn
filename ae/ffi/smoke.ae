@@ -13,6 +13,7 @@ extern sqlite3_libversion() -> string
 extern zlibVersion() -> string
 extern utf8proc_version() -> string
 extern OpenSSL_version(t: int) -> string
+extern cJSON_Version() -> string
 
 main() {
     print("sqlite3  ")
@@ -27,4 +28,7 @@ main() {
     // OpenSSL_version(0) == OPENSSL_VERSION — the full version string.
     print("openssl  ")
     println(OpenSSL_version(0))
+
+    print("cjson    ")
+    println(cJSON_Version())
 }

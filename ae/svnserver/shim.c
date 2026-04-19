@@ -18,7 +18,9 @@
  * as \uXXXX).
  */
 
+#include <cjson/cJSON.h>
 #include <errno.h>
+#include <openssl/evp.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -28,6 +30,16 @@
 struct svnae_log;
 struct svnae_list;
 struct svnae_info;
+struct svnae_txn;
+
+struct svnae_txn *svnae_txn_new(int base_rev);
+int  svnae_txn_add_file(struct svnae_txn *t, const char *path, const char *content, int len);
+int  svnae_txn_mkdir(struct svnae_txn *t, const char *path);
+int  svnae_txn_delete(struct svnae_txn *t, const char *path);
+void svnae_txn_free(struct svnae_txn *t);
+
+int  svnae_commit_finalise(const char *repo, struct svnae_txn *txn,
+                           const char *author, const char *logmsg);
 
 int          svnae_repos_head_rev(const char *repo);
 
@@ -55,16 +67,18 @@ const char       *svnae_repos_info_date(const struct svnae_info *I);
 const char       *svnae_repos_info_msg(const struct svnae_info *I);
 void              svnae_repos_info_free(struct svnae_info *I);
 
-/* Aether HTTP server types we reach into. */
+/* Aether HTTP server types we reach into. Must match the layout in
+ * aether/std/net/aether_http_server.h exactly. */
 typedef struct {
     char* method;
     char* path;
+    char* query_string;
+    char* http_version;
     char** header_keys;
     char** header_values;
     int header_count;
     char* body;
     size_t body_length;
-    char* query_string;
     char** param_keys;
     char** param_values;
     int param_count;
@@ -409,6 +423,147 @@ handle_repo_rev(HttpRequest *req, HttpServerResponse *res, void *user_data)
  * Each returns a void* so Aether's ptr type system can carry it.
  */
 
+/* --- base64 decode (OpenSSL) -----------------------------------------
+ *
+ * For the commit endpoint, file content travels as base64 inside JSON.
+ * OpenSSL's EVP_DecodeBlock is the simplest one-shot decoder. It writes
+ * at most 3n/4 bytes for n input bytes (minus padding). */
+
+static int
+b64_decode(const char *src, int src_len, unsigned char **out, int *out_len)
+{
+    /* EVP_DecodeBlock pads output; strip trailing '=' to compute true length. */
+    int raw_len = src_len;
+    int pad = 0;
+    while (raw_len > 0 && src[raw_len - 1] == '=') { raw_len--; pad++; }
+    int expected = (src_len / 4) * 3 - pad;
+    unsigned char *buf = malloc((size_t)expected + 1);
+    if (!buf) return -1;
+    int n = EVP_DecodeBlock(buf, (const unsigned char *)src, src_len);
+    if (n < 0) { free(buf); return -1; }
+    /* EVP_DecodeBlock's returned length includes padding-bytes as zeros;
+     * the real length is n - pad. */
+    n -= pad;
+    if (n < 0) n = 0;
+    buf[n] = '\0';
+    *out = buf;
+    *out_len = n;
+    return 0;
+}
+
+/* --- commit handler --------------------------------------------------- *
+ *
+ *   POST /repos/{r}/commit
+ *   Body: {
+ *     "base_rev": N,
+ *     "author":   "...",
+ *     "log":      "...",
+ *     "edits": [
+ *       {"op": "add-file", "path": "...", "content": "<base64>"},
+ *       {"op": "mkdir",    "path": "..."},
+ *       {"op": "delete",   "path": "..."}
+ *     ]
+ *   }
+ *   → 200 {"rev": N+1}
+ *   → 400 on malformed body
+ *   → 500 on txn rebuild failure
+ */
+
+static void
+handle_repo_commit(HttpRequest *req, HttpServerResponse *res, void *user_data)
+{
+    (void)user_data;
+    char name[128];
+    const char *tail = parse_repo_and_tail(req->path, name, sizeof name);
+    if (!tail || strcmp(tail, "/commit") != 0) {
+        respond_error(res, 404, "not found");
+        return;
+    }
+    const char *repo = find_repo_path(name);
+    if (!repo) { respond_error(res, 404, "no such repo"); return; }
+
+    if (!req->body || req->body_length == 0) {
+        respond_error(res, 400, "empty body");
+        return;
+    }
+
+    cJSON *root = cJSON_ParseWithLength(req->body, req->body_length);
+    if (!root) { respond_error(res, 400, "malformed JSON"); return; }
+
+    cJSON *jbase   = cJSON_GetObjectItemCaseSensitive(root, "base_rev");
+    cJSON *jauthor = cJSON_GetObjectItemCaseSensitive(root, "author");
+    cJSON *jlog    = cJSON_GetObjectItemCaseSensitive(root, "log");
+    cJSON *jedits  = cJSON_GetObjectItemCaseSensitive(root, "edits");
+    if (!cJSON_IsNumber(jbase) || !cJSON_IsString(jauthor) ||
+        !cJSON_IsString(jlog)  || !cJSON_IsArray(jedits)) {
+        cJSON_Delete(root);
+        respond_error(res, 400, "missing or wrong-typed field");
+        return;
+    }
+
+    int base_rev = jbase->valueint;
+    /* Copy out — we cJSON_Delete before calling finalise. */
+    char *author = strdup(jauthor->valuestring);
+    char *logmsg = strdup(jlog->valuestring);
+
+    struct svnae_txn *txn = svnae_txn_new(base_rev);
+    if (!txn) { cJSON_Delete(root); respond_error(res, 500, "oom"); return; }
+
+    cJSON *e;
+    cJSON_ArrayForEach(e, jedits) {
+        cJSON *jop   = cJSON_GetObjectItemCaseSensitive(e, "op");
+        cJSON *jpath = cJSON_GetObjectItemCaseSensitive(e, "path");
+        if (!cJSON_IsString(jop) || !cJSON_IsString(jpath)) {
+            svnae_txn_free(txn); cJSON_Delete(root);
+            respond_error(res, 400, "edit missing op/path");
+            return;
+        }
+        const char *op   = jop->valuestring;
+        const char *path = jpath->valuestring;
+
+        if (strcmp(op, "add-file") == 0) {
+            cJSON *jcontent = cJSON_GetObjectItemCaseSensitive(e, "content");
+            if (!cJSON_IsString(jcontent)) {
+                svnae_txn_free(txn); cJSON_Delete(root);
+                respond_error(res, 400, "add-file missing content");
+                return;
+            }
+            const char *b64 = jcontent->valuestring;
+            unsigned char *raw = NULL;
+            int raw_len = 0;
+            if (b64_decode(b64, (int)strlen(b64), &raw, &raw_len) != 0) {
+                svnae_txn_free(txn); cJSON_Delete(root);
+                respond_error(res, 400, "base64 decode failed");
+                return;
+            }
+            svnae_txn_add_file(txn, path, (const char *)raw, raw_len);
+            free(raw);
+        } else if (strcmp(op, "mkdir") == 0) {
+            svnae_txn_mkdir(txn, path);
+        } else if (strcmp(op, "delete") == 0) {
+            svnae_txn_delete(txn, path);
+        } else {
+            svnae_txn_free(txn); cJSON_Delete(root);
+            respond_error(res, 400, "unknown op");
+            return;
+        }
+    }
+    cJSON_Delete(root);
+
+    int new_rev = svnae_commit_finalise(repo, txn, author, logmsg);
+    svnae_txn_free(txn);
+    free(author);
+    free(logmsg);
+    if (new_rev < 0) {
+        respond_error(res, 500, "commit failed");
+        return;
+    }
+
+    char buf[64];
+    snprintf(buf, sizeof buf, "{\"rev\":%d}", new_rev);
+    respond_json(res, 200, buf);
+}
+
 void *svnae_svnserver_handler_info(void) { return (void *)handle_repo_info; }
 void *svnae_svnserver_handler_log (void) { return (void *)handle_repo_log;  }
 void *svnae_svnserver_handler_rev (void) { return (void *)handle_repo_rev;  }
@@ -416,13 +571,25 @@ void *svnae_svnserver_handler_rev (void) { return (void *)handle_repo_rev;  }
 /* Unified dispatcher — examines the path and picks the right handler.
  * Needed because std.http's wildcard is end-of-pattern-greedy, so
  * we can't distinguish sub-routes at the route layer — they all
- * match the same pattern. Dispatcher re-parses the URL tail. */
+ * match the same pattern. Dispatcher re-parses the URL tail.
+ *
+ * GET  /info, /log, /rev/N/*     -> read handlers above
+ * POST /commit                    -> handle_repo_commit
+ *
+ * std.http routes POST and GET separately; we register two routes both
+ * pointing at this dispatcher. It looks at req->method to disambiguate. */
 static void
 dispatch(HttpRequest *req, HttpServerResponse *res, void *user_data)
 {
     char name[128];
     const char *tail = parse_repo_and_tail(req->path, name, sizeof name);
     if (!tail) { respond_error(res, 404, "not found"); return; }
+
+    if (strcmp(req->method, "POST") == 0) {
+        if (strcmp(tail, "/commit") == 0) { handle_repo_commit(req, res, user_data); return; }
+        respond_error(res, 404, "unknown POST route");
+        return;
+    }
 
     if (strcmp(tail, "/info") == 0)      { handle_repo_info(req, res, user_data); return; }
     if (strcmp(tail, "/log") == 0)       { handle_repo_log (req, res, user_data); return; }

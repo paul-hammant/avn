@@ -20,6 +20,7 @@ extern svnae_svnserver_handler_dispatch() -> ptr
 // Aether stdlib externs the nice wrappers don't cover.
 extern http_server_create(port: int) -> ptr
 extern http_server_get(server: ptr, path: string, handler: ptr, user_data: ptr)
+extern http_server_post(server: ptr, path: string, handler: ptr, user_data: ptr)
 
 main() {
     argc = aether_args_count()
@@ -45,8 +46,10 @@ main() {
 
     // std.http's `*` wildcard is end-of-pattern-greedy — we can't
     // distinguish /repos/*/info from /repos/*/log at the route layer.
-    // Single catch-all route → C-side dispatcher parses the tail.
-    http_server_get(server, "/repos/*", svnae_svnserver_handler_dispatch(), 0)
+    // Single catch-all route for GET, another for POST → C-side
+    // dispatcher looks at method + tail.
+    http_server_get (server, "/repos/*", svnae_svnserver_handler_dispatch(), 0)
+    http_server_post(server, "/repos/*", svnae_svnserver_handler_dispatch(), 0)
 
     // http_server_start_raw calls bind_raw itself in fallback mode, so
     // skipping the explicit server_bind here. The stdlib's `server_start`
