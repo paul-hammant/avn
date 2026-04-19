@@ -1,0 +1,368 @@
+// svn — stateless CLI for svn-aether. Talks to aether-svnserver via the
+// Phase 7 RA. No working copy in this phase; every command hits the
+// remote directly.
+//
+// Usage:
+//   svn info   URL [--rev N]
+//   svn log    URL
+//   svn ls     URL [--rev N] [PATH]
+//   svn cat    URL [--rev N] PATH
+//   svn commit URL --author A --log M [--add-file PATH=CONTENT]...
+//                                     [--mkdir PATH]...
+//                                     [--delete PATH]...
+//
+// URL is http://host:port/reponame. We split on the last '/' to get
+// (base_url, repo_name). No HTTPS yet — that's Phase 0 item 5 still
+// deferred. No auth.
+
+import std.string
+
+extern aether_args_count() -> int
+extern aether_args_get(index: int) -> string
+
+// --- RA externs (same as test_ra.ae) --------------------------------------
+
+extern svnae_ra_head_rev(base_url: string, repo_name: string) -> int
+
+extern svnae_ra_log(base_url: string, repo_name: string) -> ptr
+extern svnae_ra_log_count(lg: ptr) -> int
+extern svnae_ra_log_rev(lg: ptr, i: int) -> int
+extern svnae_ra_log_author(lg: ptr, i: int) -> string
+extern svnae_ra_log_date(lg: ptr, i: int) -> string
+extern svnae_ra_log_msg(lg: ptr, i: int) -> string
+extern svnae_ra_log_free(lg: ptr)
+
+extern svnae_ra_info_rev(base_url: string, repo_name: string, rev: int) -> ptr
+extern svnae_ra_info_rev_num(I: ptr) -> int
+extern svnae_ra_info_author(I: ptr) -> string
+extern svnae_ra_info_date(I: ptr) -> string
+extern svnae_ra_info_msg(I: ptr) -> string
+extern svnae_ra_info_free(I: ptr)
+
+extern svnae_ra_cat(base_url: string, repo_name: string, rev: int, path: string) -> string
+extern svnae_ra_free(p: string)
+
+extern svnae_ra_list(base_url: string, repo_name: string, rev: int, path: string) -> ptr
+extern svnae_ra_list_count(L: ptr) -> int
+extern svnae_ra_list_name(L: ptr, i: int) -> string
+extern svnae_ra_list_kind(L: ptr, i: int) -> string
+extern svnae_ra_list_free(L: ptr)
+
+extern svnae_ra_commit_begin(base_rev: int, author: string, logmsg: string) -> ptr
+extern svnae_ra_commit_add_file(cb: ptr, path: string, content: string, len: int) -> int
+extern svnae_ra_commit_mkdir(cb: ptr, path: string) -> int
+extern svnae_ra_commit_delete(cb: ptr, path: string) -> int
+extern svnae_ra_commit_finish(cb: ptr, base_url: string, repo_name: string) -> int
+
+// Writer for binary-safe cat output (println would strlen-truncate
+// though our content is currently NUL-terminated text in all tests).
+extern svnae_stderr_write(buf: string, n: int) -> int
+extern svnae_stdout_write(buf: string, n: int) -> int
+
+// --- URL parsing ----------------------------------------------------------
+//
+// "http://host:port/reponame" -> ("http://host:port", "reponame").
+// We scan for the last '/' whose position is > 7 (past "http://").
+// Aether v0.70.0 note: recursive/nested functions that return string
+// are hazardous (AETHER_ISSUES.md #13), so this is a single pass.
+
+url_base(url: string) {
+    n = string.length(url)
+    i = n - 1
+    while i >= 0 {
+        c = string.char_at(url, i)
+        if c == 47 { return string.substring(url, 0, i) }
+        i = i - 1
+    }
+    return url
+}
+
+url_repo(url: string) {
+    n = string.length(url)
+    i = n - 1
+    while i >= 0 {
+        c = string.char_at(url, i)
+        if c == 47 { return string.substring(url, i + 1, n) }
+        i = i - 1
+    }
+    return ""
+}
+
+// --- options parsing ------------------------------------------------------
+//
+// We scan argv linearly; no getopt. Each subcommand has its own parser
+// because the options per subcommand differ.
+
+// Find a --flag's argument in argv starting from `from`. Returns "" if
+// absent.
+find_flag(flag: string, from_idx: int) {
+    n = aether_args_count()
+    i = from_idx
+    while i < n {
+        a = aether_args_get(i)
+        if string.equals(a, flag) == 1 {
+            if i + 1 < n { return aether_args_get(i + 1) }
+            return ""
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// Find the first non-option argument after `after_idx` (skips --foo BAR
+// pairs; returns the first arg whose previous arg wasn't a flag).
+first_positional(after_idx: int) {
+    n = aether_args_count()
+    i = after_idx
+    while i < n {
+        a = aether_args_get(i)
+        if string.length(a) > 0 {
+            if string.char_at(a, 0) != 45 { return a }
+            // Is a flag — skip it and its value.
+            i = i + 2
+            continue
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// --- subcommands ----------------------------------------------------------
+
+cmd_info(argv_start: int) {
+    url = aether_args_get(argv_start)
+    rev_str = find_flag("--rev", argv_start)
+    base = url_base(url)
+    repo = url_repo(url)
+
+    rev = 0
+    if string.length(rev_str) > 0 {
+        if string.try_int(rev_str) == 1 { rev = string.get_int(rev_str) }
+        else {
+            println("svn info: bad --rev value")
+            return 2
+        }
+    } else {
+        rev = svnae_ra_head_rev(base, repo)
+        if rev < 0 {
+            println("svn info: could not contact server")
+            return 1
+        }
+    }
+
+    I = svnae_ra_info_rev(base, repo, rev)
+    if I == 0 {
+        println("svn info: no such revision")
+        return 1
+    }
+    println("URL:         ${url}")
+    println("Revision:    ${svnae_ra_info_rev_num(I)}")
+    println("Author:      ${svnae_ra_info_author(I)}")
+    println("Date:        ${svnae_ra_info_date(I)}")
+    println("Log:         ${svnae_ra_info_msg(I)}")
+    svnae_ra_info_free(I)
+    return 0
+}
+
+cmd_log(argv_start: int) {
+    url = aether_args_get(argv_start)
+    base = url_base(url)
+    repo = url_repo(url)
+
+    lg = svnae_ra_log(base, repo)
+    if lg == 0 {
+        println("svn log: could not contact server")
+        return 1
+    }
+    n = svnae_ra_log_count(lg)
+    // Print newest first (reverse), matching reference svn log's default.
+    i = n - 1
+    while i >= 0 {
+        println("------------------------------------------------------------")
+        rev = svnae_ra_log_rev(lg, i)
+        au  = svnae_ra_log_author(lg, i)
+        dt  = svnae_ra_log_date(lg, i)
+        println("r${rev} | ${au} | ${dt}")
+        println("")
+        println(svnae_ra_log_msg(lg, i))
+        i = i - 1
+    }
+    println("------------------------------------------------------------")
+    svnae_ra_log_free(lg)
+    return 0
+}
+
+cmd_ls(argv_start: int) {
+    url = aether_args_get(argv_start)
+    rev_str = find_flag("--rev", argv_start)
+    path = first_positional(argv_start + 1)  // skip the URL itself
+
+    base = url_base(url)
+    repo = url_repo(url)
+
+    rev = 0
+    if string.length(rev_str) > 0 {
+        if string.try_int(rev_str) == 1 { rev = string.get_int(rev_str) }
+    } else {
+        rev = svnae_ra_head_rev(base, repo)
+        if rev < 0 {
+            println("svn ls: could not contact server")
+            return 1
+        }
+    }
+
+    L = svnae_ra_list(base, repo, rev, path)
+    if L == 0 {
+        println("svn ls: not a directory (or revision missing)")
+        return 1
+    }
+    c = svnae_ra_list_count(L)
+    i = 0
+    while i < c {
+        name = svnae_ra_list_name(L, i)
+        kind = svnae_ra_list_kind(L, i)
+        if string.equals(kind, "dir") == 1 {
+            println("${name}/")
+        } else {
+            println(name)
+        }
+        i = i + 1
+    }
+    svnae_ra_list_free(L)
+    return 0
+}
+
+cmd_cat(argv_start: int) {
+    url = aether_args_get(argv_start)
+    rev_str = find_flag("--rev", argv_start)
+    path = first_positional(argv_start + 1)
+    if string.length(path) == 0 {
+        println("svn cat: missing PATH")
+        return 2
+    }
+
+    base = url_base(url)
+    repo = url_repo(url)
+
+    rev = 0
+    if string.length(rev_str) > 0 {
+        if string.try_int(rev_str) == 1 { rev = string.get_int(rev_str) }
+    } else {
+        rev = svnae_ra_head_rev(base, repo)
+        if rev < 0 {
+            println("svn cat: could not contact server")
+            return 1
+        }
+    }
+
+    data = svnae_ra_cat(base, repo, rev, path)
+    if data == 0 {
+        println("svn cat: not found")
+        return 1
+    }
+    // Use the binary-safe stdout writer. For ASCII text this is the same
+    // as println minus the trailing newline; for binary bytes it's
+    // correct. We don't append a newline — files already include their
+    // own trailing newline when they want one.
+    svnae_stdout_write(data, string.length(data))
+    svnae_ra_free(data)
+    return 0
+}
+
+cmd_commit(argv_start: int) {
+    url = aether_args_get(argv_start)
+    base = url_base(url)
+    repo = url_repo(url)
+
+    author = find_flag("--author", argv_start)
+    logmsg = find_flag("--log", argv_start)
+    if string.length(author) == 0 || string.length(logmsg) == 0 {
+        println("svn commit: --author and --log required")
+        return 2
+    }
+
+    base_rev = svnae_ra_head_rev(base, repo)
+    if base_rev < 0 {
+        println("svn commit: could not contact server")
+        return 1
+    }
+
+    cb = svnae_ra_commit_begin(base_rev, author, logmsg)
+
+    // Scan argv for --add-file / --mkdir / --delete and add edits.
+    n = aether_args_count()
+    i = argv_start
+    while i < n {
+        a = aether_args_get(i)
+        if string.equals(a, "--add-file") == 1 {
+            if i + 1 < n {
+                spec = aether_args_get(i + 1)
+                // "path=content" — split at first '='.
+                eq = string.index_of(spec, "=")
+                if eq >= 0 {
+                    path = string.substring(spec, 0, eq)
+                    content = string.substring(spec, eq + 1, string.length(spec))
+                    svnae_ra_commit_add_file(cb, path, content, string.length(content))
+                }
+            }
+            i = i + 2
+            continue
+        }
+        if string.equals(a, "--mkdir") == 1 {
+            if i + 1 < n {
+                svnae_ra_commit_mkdir(cb, aether_args_get(i + 1))
+            }
+            i = i + 2
+            continue
+        }
+        if string.equals(a, "--delete") == 1 {
+            if i + 1 < n {
+                svnae_ra_commit_delete(cb, aether_args_get(i + 1))
+            }
+            i = i + 2
+            continue
+        }
+        i = i + 1
+    }
+
+    new_rev = svnae_ra_commit_finish(cb, base, repo)
+    if new_rev < 0 {
+        println("svn commit: server rejected commit")
+        return 1
+    }
+    println("Committed revision ${new_rev}.")
+    return 0
+}
+
+print_usage() {
+    println("usage: svn <subcommand> URL [options]")
+    println("")
+    println("subcommands:")
+    println("  info   URL [--rev N]")
+    println("  log    URL")
+    println("  ls     URL [--rev N] [PATH]")
+    println("  cat    URL [--rev N] PATH")
+    println("  commit URL --author A --log M [--add-file P=C] [--mkdir P] [--delete P]")
+    return 0
+}
+
+main() {
+    if aether_args_count() < 3 {
+        print_usage()
+        exit(2)
+    }
+    sub = aether_args_get(1)
+    // URL is at argv[2]. Flags/positionals after that.
+
+    if string.equals(sub, "info") == 1   { exit(cmd_info(2)) }
+    if string.equals(sub, "log") == 1    { exit(cmd_log(2)) }
+    if string.equals(sub, "ls") == 1     { exit(cmd_ls(2)) }
+    if string.equals(sub, "cat") == 1    { exit(cmd_cat(2)) }
+    if string.equals(sub, "commit") == 1 { exit(cmd_commit(2)) }
+    if string.equals(sub, "--help") == 1 { print_usage(); exit(0) }
+    if string.equals(sub, "help") == 1   { print_usage(); exit(0) }
+
+    println("svn: unknown subcommand: ${sub}")
+    print_usage()
+    exit(2)
+}

@@ -67,6 +67,12 @@ int svnae_stderr_write(const char *buf, int n) {
     return (int)w;
 }
 
+/* Same for stdout, for the CLI's binary-safe cat output. */
+int svnae_stdout_write(const char *buf, int n) {
+    ssize_t w = write(1, buf, (size_t)n);
+    return (int)w;
+}
+
 int svnae_stderr_write_int(int v) {
     char buf[32];
     int n = snprintf(buf, sizeof buf, "%d\n", v);
