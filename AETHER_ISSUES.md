@@ -190,7 +190,58 @@ also returned "File not found" — the command didn't resolve the bin name.
 
 ---
 
-## 8. `!` unary-negation only works on already-boolean values
+## 8. Two calls to the same extern in one comparison hang at runtime
+
+**Severity: blocker** — silently broken, no compile error.
+
+**Repro:**
+
+```aether
+import std.string
+
+f(a: string, b: string) {
+    i = 0
+    while i < 3 {
+        if string.char_at(a, i) != string.char_at(b, i) { return 0 }
+        i = i + 1
+    }
+    return 1
+}
+
+main() {
+    println("before")
+    r = f("abc", "abc")
+    println("r=${r}")
+}
+```
+
+**Observed:** program hangs indefinitely (we SIGTERM it). Stdout is buffered,
+so even "before" never reaches the terminal.
+
+**Workaround:** hoist each call into a variable first:
+
+```aether
+while i < 3 {
+    x = string.char_at(a, i)
+    y = string.char_at(b, i)
+    if x != y { return 0 }
+    i = i + 1
+}
+```
+
+With the hoist, the same program prints `before` / `r=1` as expected.
+
+**Possible cause:** looks like the generated C for the compound condition
+does something wrong with double-evaluating the extern call, possibly
+re-entering the runtime or looping on the scheduler. Needs a codegen look.
+
+**Impact on port:** pervasive. Any byte-by-byte comparison (path walking,
+checksum compare, diff) naturally wants `s1[i] != s2[i]`. We now have to
+hoist every one of those.
+
+---
+
+## 9. `!` unary-negation only works on already-boolean values
 
 **Severity: minor.**
 
