@@ -69,6 +69,11 @@ path = "ae/fs_fs/test_txn.ae"
 extra_sources = ["ae/subr/sqlite/shim.c", "ae/subr/io/shim.c", "ae/subr/checksum/shim.c", "ae/subr/compress/shim.c", "ae/fs_fs/shim.c", "ae/fs_fs/txn_shim.c", "ae/fs_fs/rep_store_shim.c"]
 
 [[bin]]
+name = "test_repos"
+path = "ae/repos/test_repos.ae"
+extra_sources = ["ae/subr/sqlite/shim.c", "ae/subr/io/shim.c", "ae/subr/checksum/shim.c", "ae/subr/compress/shim.c", "ae/fs_fs/shim.c", "ae/fs_fs/txn_shim.c", "ae/fs_fs/rep_store_shim.c", "ae/repos/shim.c"]
+
+[[bin]]
 name = "test_xdelta"
 path = "ae/delta/test_xdelta.ae"
 extra_sources = ["ae/delta/svndiff/shim.c", "ae/delta/xdelta/shim.c"]
