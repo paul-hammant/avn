@@ -15,6 +15,12 @@ path = "ae/svnadmin/main.ae"
 [[bin]]
 name = "aether-svnserver"
 path = "ae/svnserver/main.ae"
+extra_sources = ["ae/subr/sqlite/shim.c", "ae/subr/io/shim.c", "ae/subr/checksum/shim.c", "ae/subr/compress/shim.c", "ae/fs_fs/shim.c", "ae/fs_fs/txn_shim.c", "ae/fs_fs/rep_store_shim.c", "ae/repos/shim.c", "ae/svnserver/shim.c"]
+
+[[bin]]
+name = "svnae-seed"
+path = "ae/svnserver/seed.ae"
+extra_sources = ["ae/subr/sqlite/shim.c", "ae/subr/io/shim.c", "ae/subr/checksum/shim.c", "ae/subr/compress/shim.c", "ae/fs_fs/shim.c", "ae/fs_fs/txn_shim.c", "ae/fs_fs/rep_store_shim.c"]
 
 # --- test binaries -----------------------------------------------------------
 
