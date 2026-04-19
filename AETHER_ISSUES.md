@@ -402,6 +402,30 @@ have been inferred in between.
 
 **Severity: minor.**
 
+---
+
+## 16. `extern` declarations with 6 or more params drop the last param
+
+**Severity: blocker for wide APIs.**
+
+**Repro:**
+
+```aether
+extern my_fn(a: ptr, b: string, c: int, d: int, e: string, f: int) -> int
+```
+
+**Observed:** the generated C forward-declaration has only 5 params:
+`int my_fn(void*, const char*, int, int, const char*);`. The 6th
+parameter is silently dropped at Aether's extern parsing stage. Calls
+with 6 arguments then fail with "too many arguments" from gcc.
+
+**Workaround used in port:** pack two ints into one (e.g., `state << 4 |
+kind`) or split into two C functions.
+
+**Request:** fix extern param parsing to accept any arity. If there's a
+hard limit in the runtime, raise it or document it; the current
+behaviour is silent data loss.
+
 
 ```aether
 if !some_fn_returning_int() { ... }
