@@ -241,9 +241,46 @@ hoist every one of those.
 
 ---
 
-## 9. `!` unary-negation only works on already-boolean values
+## 9. Build cache doesn't invalidate on `extra_sources` C file changes
+
+**Severity: minor, but bites debugging badly.**
+
+Editing a C file listed in `[[bin]].extra_sources` does NOT cause `ae run`
+to rebuild. The test keeps running against the stale shim. `ae cache clear`
+fixes it, but it's easy to chase the wrong bug for 20 minutes first.
+
+**Request:** hash the `extra_sources` contents (not just the `.ae` file)
+when computing the cache key.
+
+---
+
+## 10. Block-local `{ }` scoping leaks into enclosing scope
+
+**Severity: minor** — surprising, worth documenting.
+
+```aether
+main() {
+    { src = "a"; ... }   // scope 1
+    { src = "b"; ... }   // scope 2 — error: `src` redeclared
+}
+```
+
+Each brace-block's locals live in the enclosing function's namespace.
+Two sibling blocks that each bind the same local name get a
+"redeclaration" error from the C compiler.
+
+**Workaround:** extract each block into its own function.
+
+**Request:** either give `{ }` lexical scope, or error at the Aether
+level with a clearer message than a gcc "undeclared identifier" in
+generated code (which points into a temp file users never see).
+
+---
+
+## 11. `!` unary-negation only works on already-boolean values
 
 **Severity: minor.**
+
 
 ```aether
 if !some_fn_returning_int() { ... }

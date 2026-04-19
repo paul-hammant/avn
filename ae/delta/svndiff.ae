@@ -1,0 +1,39 @@
+// svndiff.ae — svndiff1 encode / decode.
+//
+// The encoder takes a source buffer, a target length, a list of operations
+// that reconstruct the target from the source + new-data, and a new-data
+// blob. It emits a single-window svndiff1 stream.
+//
+// Operations are a flat int array, 3 ints per op: [action, length, offset].
+//   action 0 = source copy (length bytes from source[offset..])
+//   action 1 = target self-copy (length bytes from target[offset..])
+//   action 2 = new-data copy (length bytes from new_data[next...])
+// For action 2, `offset` is ignored (pass 0).
+//
+// The decoder takes the svndiff bytes and the source; returns the target
+// as an svnae_buf handle.
+
+import std.string
+
+extern svnae_svndiff_encode_window(
+    source_len: int, target_len: int,
+    ops: ptr, nops: int,
+    new_data: string, new_data_len: int) -> ptr
+
+extern svnae_svndiff_decode_apply(
+    diff: string, diff_len: int,
+    source: string, source_len: int) -> ptr
+
+extern svnae_svndiff_encoder_new(source_len: int, target_len: int) -> ptr
+extern svnae_svndiff_encoder_add_op(enc: ptr, action: int, length: int, offset: int) -> int
+extern svnae_svndiff_encoder_finish(enc: ptr, new_data: string, new_data_len: int) -> ptr
+extern svnae_svndiff_encoder_free(enc: ptr)
+
+extern svnae_svndiff_buf_length(b: ptr) -> int
+extern svnae_svndiff_buf_data(b: ptr) -> string
+extern svnae_svndiff_buf_free(b: ptr)
+
+// Convenience wrappers — callers pass source and target strings directly.
+decode_apply(diff_data: string, diff_len: int, source: string) {
+    return svnae_svndiff_decode_apply(diff_data, diff_len, source, string.length(source))
+}

@@ -42,3 +42,8 @@ extra_sources = ["ae/subr/io/shim.c"]
 name = "test_utf8"
 path = "ae/subr/test_utf8.ae"
 extra_sources = ["ae/subr/utf8/shim.c"]
+
+[[bin]]
+name = "test_svndiff"
+path = "ae/delta/test_svndiff.ae"
+extra_sources = ["ae/delta/svndiff/shim.c"]
