@@ -22,3 +22,13 @@ path = "ae/svnserver/main.ae"
 name = "test_error"
 path = "ae/subr/test_error.ae"
 extra_sources = ["ae/subr/error/shim.c"]
+
+[[bin]]
+name = "test_checksum"
+path = "ae/subr/test_checksum.ae"
+extra_sources = ["ae/subr/checksum/shim.c"]
+
+[[bin]]
+name = "test_compress"
+path = "ae/subr/test_compress.ae"
+extra_sources = ["ae/subr/compress/shim.c"]

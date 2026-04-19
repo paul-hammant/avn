@@ -1,0 +1,44 @@
+// compress.ae — zlib DEFLATE / INFLATE of byte buffers.
+//
+// Used by:
+//   - libsvn_delta (svndiff windows — each window's data section is DEFLATE'd)
+//   - libsvn_fs_fs (representation storage can be compressed)
+//
+// Phase 0.4 ships whole-buffer compress / decompress. Streaming (matching
+// svn's svndiff window-by-window output) will be added when we actually port
+// libsvn_delta in Phase 2.
+//
+// API: Both operations return an opaque `ptr` handle pointing to
+// `{bytes, length}`. Aether code uses buf_data / buf_length to pull the
+// values out. Compressed bytes can contain NULs so we can't round-trip them
+// through Aether strings; the handle is the contract.
+
+import std.string
+
+// --- FFI to ae/subr/compress/shim.c ----------------------------------------
+
+extern svnae_zlib_deflate(data: string, data_len: int, level: int) -> ptr
+extern svnae_zlib_inflate(data: string, data_len: int, expected_out: int) -> ptr
+extern svnae_buf_length(b: ptr) -> int
+extern svnae_buf_data(b: ptr) -> string
+extern svnae_buf_free(b: ptr)
+
+// deflate(data, level): returns an opaque handle. Caller must buf_free().
+deflate(data: string, level: int) {
+    n = string.length(data)
+    return svnae_zlib_deflate(data, n, level)
+}
+
+// inflate(compressed_handle, expected_size): returns an opaque handle of the
+// decompressed bytes. `expected_size` must equal the original uncompressed
+// length (svn always tracks this — it's stored alongside the compressed data
+// in both svndiff windows and fs_fs representations). Caller must buf_free().
+inflate(comp: ptr, expected_size: int) {
+    data = svnae_buf_data(comp)
+    n = svnae_buf_length(comp)
+    return svnae_zlib_inflate(data, n, expected_size)
+}
+
+buf_length(b: ptr)       { return svnae_buf_length(b) }
+buf_data(b: ptr)         { return svnae_buf_data(b) }
+buf_free(b: ptr)         { svnae_buf_free(b) }
