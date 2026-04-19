@@ -12,6 +12,7 @@ extra_sources = ["ae/ra/shim.c", "ae/subr/io/shim.c", "ae/wc/db_shim.c", "ae/wc/
 [[bin]]
 name = "svnadmin"
 path = "ae/svnadmin/main.ae"
+extra_sources = ["ae/subr/sqlite/shim.c", "ae/subr/io/shim.c", "ae/subr/checksum/shim.c", "ae/subr/compress/shim.c", "ae/fs_fs/shim.c", "ae/fs_fs/txn_shim.c", "ae/fs_fs/rep_store_shim.c", "ae/fs_fs/commit_shim.c", "ae/repos/shim.c", "ae/svnadmin/shim.c"]
 
 [[bin]]
 name = "aether-svnserver"

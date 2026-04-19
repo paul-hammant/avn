@@ -73,6 +73,18 @@ int svnae_stdout_write(const char *buf, int n) {
     return (int)w;
 }
 
+/* File-descriptor helpers for CLI tools that need to pass fd numbers to
+ * shim functions (e.g. svnadmin dump --file OUT, load --file IN). */
+int open_file_for_write(const char *path) {
+    return open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+}
+int open_file_for_read(const char *path) {
+    return open(path, O_RDONLY);
+}
+int close_fd(int fd) {
+    return close(fd);
+}
+
 int svnae_stderr_write_int(int v) {
     char buf[32];
     int n = snprintf(buf, sizeof buf, "%d\n", v);

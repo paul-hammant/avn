@@ -1,0 +1,127 @@
+// svnadmin — admin CLI for svn-aether repositories.
+//
+// Usage:
+//   svnadmin create PATH
+//   svnadmin dump   PATH [--file OUT]    -- default stdout
+//   svnadmin load   PATH [--file IN]     -- default stdin
+//
+// Dump/load stream format is our own (see ae/svnadmin/shim.c) — not
+// compatible with reference svn's svnadmin dump.
+
+import std.string
+
+extern aether_args_count() -> int
+extern aether_args_get(index: int) -> string
+
+extern svnae_svnadmin_create(repo: string) -> int
+extern svnae_svnadmin_dump  (repo: string, out_fd: int) -> int
+extern svnae_svnadmin_load  (repo: string, in_fd: int) -> int
+
+// File I/O for --file flag.
+extern open_file_for_write(path: string) -> int
+extern open_file_for_read (path: string) -> int
+extern close_fd(fd: int) -> int
+
+find_flag(flag: string, from_idx: int) {
+    n = aether_args_count()
+    i = from_idx
+    while i < n {
+        a = aether_args_get(i)
+        if string.equals(a, flag) == 1 {
+            if i + 1 < n { return aether_args_get(i + 1) }
+            return ""
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+cmd_create(argv_start: int) {
+    if aether_args_count() <= argv_start {
+        println("svnadmin create: missing PATH")
+        return 2
+    }
+    path = aether_args_get(argv_start)
+    rc = svnae_svnadmin_create(path)
+    if rc != 0 {
+        println("svnadmin create: failed (rc=${rc})")
+        return 1
+    }
+    return 0
+}
+
+cmd_dump(argv_start: int) {
+    if aether_args_count() <= argv_start {
+        println("svnadmin dump: missing PATH")
+        return 2
+    }
+    path = aether_args_get(argv_start)
+    out_file = find_flag("--file", argv_start)
+
+    fd = 1
+    if string.length(out_file) > 0 {
+        fd = open_file_for_write(out_file)
+        if fd < 0 {
+            println("svnadmin dump: cannot open ${out_file}")
+            return 1
+        }
+    }
+    rc = svnae_svnadmin_dump(path, fd)
+    if fd != 1 { close_fd(fd) }
+    if rc != 0 {
+        println("svnadmin dump: failed (rc=${rc})")
+        return 1
+    }
+    return 0
+}
+
+cmd_load(argv_start: int) {
+    if aether_args_count() <= argv_start {
+        println("svnadmin load: missing PATH")
+        return 2
+    }
+    path = aether_args_get(argv_start)
+    in_file = find_flag("--file", argv_start)
+
+    fd = 0
+    if string.length(in_file) > 0 {
+        fd = open_file_for_read(in_file)
+        if fd < 0 {
+            println("svnadmin load: cannot open ${in_file}")
+            return 1
+        }
+    }
+    rc = svnae_svnadmin_load(path, fd)
+    if fd != 0 { close_fd(fd) }
+    if rc != 0 {
+        println("svnadmin load: failed (rc=${rc})")
+        return 1
+    }
+    return 0
+}
+
+print_usage() {
+    println("usage: svnadmin <subcommand> PATH [options]")
+    println("")
+    println("subcommands:")
+    println("  create PATH")
+    println("  dump   PATH [--file OUT]")
+    println("  load   PATH [--file IN]")
+    return 0
+}
+
+main() {
+    if aether_args_count() < 2 {
+        print_usage()
+        exit(2)
+    }
+    sub = aether_args_get(1)
+    if string.equals(sub, "create") == 1 { exit(cmd_create(2)) }
+    if string.equals(sub, "dump") == 1   { exit(cmd_dump(2)) }
+    if string.equals(sub, "load") == 1   { exit(cmd_load(2)) }
+    if string.equals(sub, "--help") == 1 { print_usage(); exit(0) }
+    if string.equals(sub, "help") == 1   { print_usage(); exit(0) }
+    println("svnadmin: unknown subcommand: ${sub}")
+    print_usage()
+    exit(2)
+}
