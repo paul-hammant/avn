@@ -1,0 +1,137 @@
+// Tests for the sqlite binding. Exercises open, schema, bind, step,
+// column read (text, int, i64 hi/lo pair, blob), and error paths.
+//
+// Schema below mirrors svn's rep-cache.db with simplified columns.
+
+import std.string
+
+const SQLITE_OK   = 0
+const SQLITE_ROW  = 100
+const SQLITE_DONE = 101
+
+extern svnae_sqlite_open(path: string) -> ptr
+extern svnae_sqlite_last_open_err() -> string
+extern svnae_sqlite_close(db: ptr) -> int
+extern svnae_sqlite_exec(db: ptr, sql: string) -> int
+extern svnae_sqlite_errmsg(db: ptr) -> string
+
+extern svnae_sqlite_prepare(db: ptr, sql: string) -> ptr
+extern svnae_sqlite_finalize(stmt: ptr) -> int
+extern svnae_sqlite_reset(stmt: ptr) -> int
+extern svnae_sqlite_step(stmt: ptr) -> int
+
+extern svnae_sqlite_bind_int(stmt: ptr, idx: int, v: int) -> int
+extern svnae_sqlite_bind_i64(stmt: ptr, idx: int, hi: int, lo: int) -> int
+extern svnae_sqlite_bind_text(stmt: ptr, idx: int, text: string) -> int
+extern svnae_sqlite_bind_blob(stmt: ptr, idx: int, data: string, len: int) -> int
+
+extern svnae_sqlite_column_int(stmt: ptr, col: int) -> int
+extern svnae_sqlite_column_i64_hi(stmt: ptr, col: int) -> int
+extern svnae_sqlite_column_i64_lo(stmt: ptr, col: int) -> int
+extern svnae_sqlite_column_text(stmt: ptr, col: int) -> string
+extern svnae_sqlite_column_blob_buf(stmt: ptr, col: int) -> ptr
+
+extern svnae_sqlite_buf_length(b: ptr) -> int
+extern svnae_sqlite_buf_data(b: ptr) -> string
+extern svnae_sqlite_buf_free(b: ptr)
+
+extern svnae_getpid() -> int
+extern svnae_remove(path: string) -> int
+
+expect_int(label: string, got: int, want: int) {
+    if got == want { return 0 }
+    println("FAIL ${label}: got ${got}, want ${want}")
+    return 1
+}
+
+expect_str(label: string, got: string, want: string) {
+    if string.equals(got, want) == 1 { return 0 }
+    println("FAIL ${label}:")
+    println("  got:  ${got}")
+    println("  want: ${want}")
+    return 1
+}
+
+main() {
+    fails = 0
+    pid = svnae_getpid()
+    dbpath = "/tmp/svnae_test_sqlite_${pid}.db"
+    svnae_remove(dbpath)
+
+    db = svnae_sqlite_open(dbpath)
+    if db == 0 {
+        println("FAIL open: ${svnae_sqlite_last_open_err()}")
+        exit(1)
+    }
+    println("ok   open ${dbpath}")
+
+    // Schema: a minimal rep-cache-ish table.
+    rc = svnae_sqlite_exec(db,
+        "CREATE TABLE rep_cache (hash TEXT PRIMARY KEY, revision INT, offset INT8, size INT8, data BLOB)")
+    fails = fails + expect_int("create table rc", rc, SQLITE_OK)
+
+    // Insert a row with an i64 value that exceeds 32 bits.
+    //   offset = 5_000_000_000  -> hi=1 lo=705032704  (5e9 == 0x12A05F200)
+    //   size   = 42
+    ins = svnae_sqlite_prepare(db,
+        "INSERT INTO rep_cache (hash, revision, offset, size, data) VALUES (?, ?, ?, ?, ?)")
+    if ins == 0 {
+        println("FAIL prepare insert: ${svnae_sqlite_errmsg(db)}")
+        exit(1)
+    }
+    svnae_sqlite_bind_text(ins, 1, "a9993e364706816aba3e25717850c26c9cd0d89d")  // sha1("abc")
+    svnae_sqlite_bind_int (ins, 2, 17)
+    svnae_sqlite_bind_i64 (ins, 3, 1, 705032704)
+    svnae_sqlite_bind_i64 (ins, 4, 0, 42)
+    svnae_sqlite_bind_blob(ins, 5, "seventeen-chars.", 17)
+    rc = svnae_sqlite_step(ins)
+    fails = fails + expect_int("insert step DONE", rc, SQLITE_DONE)
+    svnae_sqlite_finalize(ins)
+
+    // Read it back.
+    sel = svnae_sqlite_prepare(db,
+        "SELECT hash, revision, offset, size, data FROM rep_cache WHERE hash = ?")
+    if sel == 0 {
+        println("FAIL prepare select: ${svnae_sqlite_errmsg(db)}")
+        exit(1)
+    }
+    svnae_sqlite_bind_text(sel, 1, "a9993e364706816aba3e25717850c26c9cd0d89d")
+    rc = svnae_sqlite_step(sel)
+    fails = fails + expect_int("select step ROW", rc, SQLITE_ROW)
+
+    fails = fails + expect_str("hash col",  svnae_sqlite_column_text(sel, 0),
+        "a9993e364706816aba3e25717850c26c9cd0d89d")
+    fails = fails + expect_int("revision col", svnae_sqlite_column_int(sel, 1), 17)
+
+    // Read i64 as (hi, lo): hi() first (stashes), then lo().
+    off_hi = svnae_sqlite_column_i64_hi(sel, 2)
+    off_lo = svnae_sqlite_column_i64_lo(sel, 2)
+    fails = fails + expect_int("offset hi", off_hi, 1)
+    fails = fails + expect_int("offset lo", off_lo, 705032704)
+
+    size_hi = svnae_sqlite_column_i64_hi(sel, 3)
+    size_lo = svnae_sqlite_column_i64_lo(sel, 3)
+    fails = fails + expect_int("size hi", size_hi, 0)
+    fails = fails + expect_int("size lo", size_lo, 42)
+
+    blob = svnae_sqlite_column_blob_buf(sel, 4)
+    bl = svnae_sqlite_buf_length(blob)
+    fails = fails + expect_int("blob length", bl, 17)
+    svnae_sqlite_buf_free(blob)
+
+    // No more rows.
+    rc = svnae_sqlite_step(sel)
+    fails = fails + expect_int("no more rows DONE", rc, SQLITE_DONE)
+    svnae_sqlite_finalize(sel)
+
+    svnae_sqlite_close(db)
+    svnae_remove(dbpath)
+
+    if fails > 0 {
+        println("")
+        println("FAIL: ${fails} case(s) failed")
+        exit(1)
+    }
+    println("")
+    println("test_sqlite: OK")
+}

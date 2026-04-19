@@ -49,6 +49,11 @@ path = "ae/delta/test_svndiff.ae"
 extra_sources = ["ae/delta/svndiff/shim.c"]
 
 [[bin]]
+name = "test_sqlite"
+path = "ae/subr/test_sqlite.ae"
+extra_sources = ["ae/subr/sqlite/shim.c", "ae/subr/io/shim.c"]
+
+[[bin]]
 name = "test_xdelta"
 path = "ae/delta/test_xdelta.ae"
 extra_sources = ["ae/delta/svndiff/shim.c", "ae/delta/xdelta/shim.c"]
