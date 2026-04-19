@@ -32,3 +32,8 @@ extra_sources = ["ae/subr/checksum/shim.c"]
 name = "test_compress"
 path = "ae/subr/test_compress.ae"
 extra_sources = ["ae/subr/compress/shim.c"]
+
+[[bin]]
+name = "test_io"
+path = "ae/subr/test_io.ae"
+extra_sources = ["ae/subr/io/shim.c"]

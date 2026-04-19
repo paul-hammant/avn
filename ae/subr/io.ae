@@ -1,0 +1,56 @@
+// io.ae — atomic file writes for svn's on-disk formats.
+//
+// svn writes revisions, pristines, and rep-cache blobs using the same
+// durable-write pattern:
+//     1. pick a temp path in the target directory (same filesystem → rename
+//        is atomic; cross-FS renames would fall back to copy+unlink, which
+//        is NOT atomic, so we keep the temp alongside the final).
+//     2. write all bytes, fsync.
+//     3. rename(tmp → final) — atomic replace from the reader's POV.
+//     4. (optional) fsync the containing directory to persist the rename.
+//        Phase 0 skips the directory fsync; Phase 3 fs_fs will want it.
+//
+// The temp name is "${path}.tmp.${pid}.${counter}". Counter is thread-local
+// and monotonic within a process; pid is cheap uniqueness across processes.
+
+import std.fs
+import std.string
+
+extern svnae_rename(from: string, to: string) -> int
+extern svnae_write_and_fsync(path: string, data: string, len: int) -> int
+extern svnae_getpid() -> int
+extern svnae_is_regular_file(path: string) -> int
+extern svnae_remove(path: string) -> int
+
+// Monotonically growing counter to avoid colliding temp files when the
+// same process writes several atomically in quick succession. Module-level
+// mutable state isn't supported (AETHER_ISSUES.md — see test_path), so we
+// take `seq` as an input for now; callers that don't care can pass 0.
+
+// Build a temp path next to `final_path`.
+tmp_path_for(final_path: string, seq: int) {
+    pid = svnae_getpid()
+    return "${final_path}.tmp.${pid}.${seq}"
+}
+
+// Atomically write `data` to `final_path`. Returns 0 on success, non-zero
+// (a negated errno from the shim) on failure.
+atomic_write(final_path: string, data: string, seq: int) {
+    tmp = tmp_path_for(final_path, seq)
+    n = string.length(data)
+    rc = svnae_write_and_fsync(tmp, data, n)
+    if rc != 0 {
+        svnae_remove(tmp)
+        return rc
+    }
+    rc = svnae_rename(tmp, final_path)
+    if rc != 0 {
+        svnae_remove(tmp)
+        return rc
+    }
+    return 0
+}
+
+// Accessors re-exported for callers that don't want to extern directly.
+is_regular_file(path: string)   { return svnae_is_regular_file(path) }
+remove_if_present(path: string) { return svnae_remove(path) }
