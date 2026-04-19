@@ -33,6 +33,11 @@ name = "test_wc_db"
 path = "ae/wc/test_db.ae"
 extra_sources = ["ae/wc/db_shim.c", "ae/subr/io/shim.c"]
 
+[[bin]]
+name = "test_wc_pristine"
+path = "ae/wc/test_pristine.ae"
+extra_sources = ["ae/wc/db_shim.c", "ae/wc/pristine_shim.c", "ae/subr/io/shim.c"]
+
 # --- test binaries -----------------------------------------------------------
 
 [[bin]]

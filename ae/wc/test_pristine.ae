@@ -1,0 +1,102 @@
+// Tests for ae/wc/pristine_shim.c — content-addressable WC pristine store.
+
+import std.string
+
+extern svnae_getpid() -> int
+extern system(cmd: string) -> int
+
+extern svnae_wc_db_open(wc_root: string) -> ptr
+extern svnae_wc_db_close(db: ptr)
+
+extern svnae_wc_pristine_put(wc_root: string, data: string, len: int) -> string
+extern svnae_wc_pristine_get(wc_root: string, sha1: string) -> string
+extern svnae_wc_pristine_free(p: string)
+extern svnae_wc_pristine_has(wc_root: string, sha1: string) -> int
+extern svnae_wc_pristine_size(wc_root: string, sha1: string) -> int
+
+expect_int(label: string, got: int, want: int) {
+    if got == want { println("ok   ${label}: ${got}"); return 0 }
+    println("FAIL ${label}: got ${got}, want ${want}")
+    return 1
+}
+
+expect_str(label: string, got: string, want: string) {
+    if string.equals(got, want) == 1 { println("ok   ${label}"); return 0 }
+    println("FAIL ${label}: got [${got}] want [${want}]")
+    return 1
+}
+
+main() {
+    fails = 0
+    pid = svnae_getpid()
+    wc = "/tmp/svnae_test_pristine_${pid}"
+    system("rm -rf ${wc}")
+    system("mkdir -p ${wc}")
+
+    // Open db so .svn dirs exist.
+    db = svnae_wc_db_open(wc)
+    svnae_wc_db_close(db)
+
+    // Small text blob — stored RAW (too small to benefit from zlib).
+    small = "hello\n"
+    sha = svnae_wc_pristine_put(wc, small, 6)
+    sha_copy = string.concat("", sha)
+    fails = fails + expect_int("sha length 40", string.length(sha_copy), 40)
+    // sha1sum "hello\n" => f572d396fae9206628714fb2ce00f72e94f2258f
+    fails = fails + expect_str("sha of 'hello\\n'", sha_copy,
+                               "f572d396fae9206628714fb2ce00f72e94f2258f")
+
+    fails = fails + expect_int("has() = 1",  svnae_wc_pristine_has (wc, sha_copy), 1)
+    fails = fails + expect_int("size() = 6", svnae_wc_pristine_size(wc, sha_copy), 6)
+
+    got = svnae_wc_pristine_get(wc, sha_copy)
+    fails = fails + expect_str("round-trip small", got, small)
+    svnae_wc_pristine_free(got)
+
+    // Large compressible blob — stored ZLIB.
+    big = ""
+    i = 0
+    while i < 200 {
+        big = string.concat(big, "the quick brown fox ")
+        i = i + 1
+    }
+    big_len = string.length(big)
+    fails = fails + expect_int("big len 4000", big_len, 4000)
+
+    sha_big = svnae_wc_pristine_put(wc, big, big_len)
+    sha_big_copy = string.concat("", sha_big)
+
+    fails = fails + expect_int("big has()",          svnae_wc_pristine_has (wc, sha_big_copy), 1)
+    fails = fails + expect_int("big size() = 4000",  svnae_wc_pristine_size(wc, sha_big_copy), 4000)
+
+    got_big = svnae_wc_pristine_get(wc, sha_big_copy)
+    fails = fails + expect_int("big round-trip len", string.length(got_big), 4000)
+    fails = fails + expect_str("big round-trip content", got_big, big)
+    svnae_wc_pristine_free(got_big)
+
+    // Dedup.
+    sha2 = svnae_wc_pristine_put(wc, small, 6)
+    fails = fails + expect_str("dedup same sha", string.concat("", sha2), sha_copy)
+
+    // Missing sha → null.
+    miss = svnae_wc_pristine_get(wc, "0000000000000000000000000000000000000000")
+    if miss != 0 {
+        println("FAIL get missing: expected null")
+        fails = fails + 1
+        svnae_wc_pristine_free(miss)
+    } else {
+        println("ok   get missing returns null")
+    }
+    fails = fails + expect_int("has missing = 0",
+        svnae_wc_pristine_has(wc, "0000000000000000000000000000000000000000"), 0)
+
+    system("rm -rf ${wc}")
+
+    if fails > 0 {
+        println("")
+        println("FAIL: ${fails} case(s)")
+        exit(1)
+    }
+    println("")
+    println("test_wc_pristine: OK")
+}
