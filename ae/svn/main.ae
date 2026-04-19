@@ -67,6 +67,8 @@ extern svnae_wc_commit(wc_root: string, author: string, logmsg: string) -> int
 extern svnae_wc_update(wc_root: string, target_rev: int) -> int
 extern svnae_wc_revert(wc_root: string, rel_path: string) -> int
 extern svnae_wc_diff(wc_root: string, rel_path_or_empty: string) -> int
+extern svnae_wc_cp(wc_root: string, src: string, dst: string) -> int
+extern svnae_wc_mv(wc_root: string, src: string, dst: string) -> int
 extern svnae_wc_status(wc_root: string) -> ptr
 extern svnae_wc_statuslist_count(L: ptr) -> int
 extern svnae_wc_statuslist_path(L: ptr, i: int) -> string
@@ -433,6 +435,39 @@ cmd_rm(argv_start: int) {
     return 0
 }
 
+cmd_cp(argv_start: int) {
+    if aether_args_count() < argv_start + 2 {
+        println("svn cp: usage: svn cp SRC DST")
+        return 2
+    }
+    src = aether_args_get(argv_start)
+    dst = aether_args_get(argv_start + 1)
+    rc = svnae_wc_cp(".", src, dst)
+    if rc != 0 {
+        println("svn cp: failed (rc=${rc})")
+        return 1
+    }
+    println("A         ${dst}")
+    return 0
+}
+
+cmd_mv(argv_start: int) {
+    if aether_args_count() < argv_start + 2 {
+        println("svn mv: usage: svn mv SRC DST")
+        return 2
+    }
+    src = aether_args_get(argv_start)
+    dst = aether_args_get(argv_start + 1)
+    rc = svnae_wc_mv(".", src, dst)
+    if rc != 0 {
+        println("svn mv: failed (rc=${rc})")
+        return 1
+    }
+    println("A         ${dst}")
+    println("D         ${src}")
+    return 0
+}
+
 cmd_revert(argv_start: int) {
     n = aether_args_count()
     if argv_start >= n {
@@ -574,6 +609,8 @@ print_usage() {
     println("  update   [--rev N]")
     println("  revert   PATH [PATH...]")
     println("  diff     [PATH]")
+    println("  cp       SRC DST")
+    println("  mv       SRC DST")
     return 0
 }
 
@@ -597,6 +634,11 @@ main() {
     if string.equals(sub, "revert") == 1   { exit(cmd_revert(2)) }
     if string.equals(sub, "diff") == 1     { exit(cmd_diff(2)) }
     if string.equals(sub, "di") == 1       { exit(cmd_diff(2)) }
+    if string.equals(sub, "cp") == 1       { exit(cmd_cp(2)) }
+    if string.equals(sub, "copy") == 1     { exit(cmd_cp(2)) }
+    if string.equals(sub, "mv") == 1       { exit(cmd_mv(2)) }
+    if string.equals(sub, "move") == 1     { exit(cmd_mv(2)) }
+    if string.equals(sub, "rename") == 1   { exit(cmd_mv(2)) }
     if string.equals(sub, "status") == 1   { exit(cmd_status(2)) }
     if string.equals(sub, "st") == 1       { exit(cmd_status(2)) }
     if string.equals(sub, "add") == 1      { exit(cmd_add(2)) }
