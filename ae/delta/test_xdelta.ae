@@ -1,0 +1,121 @@
+// End-to-end test: (source, target) -> xdelta -> svndiff -> apply -> ==target?
+//
+// This is the Phase 2 exit criterion: "can round-trip a file through
+// delta→apply and recover the original."
+
+import std.string
+
+extern svnae_xdelta_compute(source: string, source_len: int,
+                            target: string, target_len: int) -> ptr
+
+extern svnae_svndiff_decode_apply(diff: string, diff_len: int,
+                                  source: string, source_len: int) -> ptr
+
+extern svnae_svndiff_buf_length(b: ptr) -> int
+extern svnae_svndiff_buf_data(b: ptr) -> string
+extern svnae_svndiff_buf_free(b: ptr)
+
+expect_str(label: string, got: string, want: string) {
+    if string.equals(got, want) == 1 {
+        return 0
+    }
+    println("FAIL ${label}:")
+    println("  got:  ${got}")
+    println("  want: ${want}")
+    return 1
+}
+
+// One round-trip. Prints a one-line summary with compression ratio.
+round_trip(label: string, source: string, target: string) {
+    slen = string.length(source)
+    tlen = string.length(target)
+    diff = svnae_xdelta_compute(source, slen, target, tlen)
+    if diff == 0 {
+        println("FAIL ${label}: xdelta_compute returned null")
+        return 1
+    }
+    dlen = svnae_svndiff_buf_length(diff)
+    ddata = svnae_svndiff_buf_data(diff)
+
+    applied = svnae_svndiff_decode_apply(ddata, dlen, source, slen)
+    if applied == 0 {
+        svnae_svndiff_buf_free(diff)
+        println("FAIL ${label}: decode_apply returned null")
+        return 1
+    }
+    got = svnae_svndiff_buf_data(applied)
+    got_len = svnae_svndiff_buf_length(applied)
+
+    rc = 0
+    if got_len != tlen {
+        println("FAIL ${label}: length ${got_len} != ${tlen}")
+        rc = 1
+    } else {
+        rc = expect_str(label, got, target)
+    }
+
+    if rc == 0 {
+        // Report compression: diff bytes / target bytes * 100.
+        ratio = 0
+        if tlen > 0 { ratio = (dlen * 100) / tlen }
+        println("ok   ${label} (src ${slen}B, tgt ${tlen}B, diff ${dlen}B = ${ratio}% of tgt)")
+    }
+
+    svnae_svndiff_buf_free(diff)
+    svnae_svndiff_buf_free(applied)
+    return rc
+}
+
+build_repeated(s: string, n: int) {
+    out = ""
+    i = 0
+    while i < n {
+        out = string.concat(out, s)
+        i = i + 1
+    }
+    return out
+}
+
+case_identity()     { return round_trip("identity",       "Hello, world!", "Hello, world!") }
+case_empty_source() { return round_trip("empty source",   "",              "brand new content") }
+case_empty_target() { return round_trip("empty target",   "some source",   "") }
+case_one_word()     { return round_trip("one word swap",  "The quick brown fox", "The slow brown fox") }
+case_insert()       { return round_trip("insertion",      "abcdefgh",      "abcXYZdefgh") }
+case_delete()       { return round_trip("deletion",       "abcdefgh",      "abcgh") }
+case_swap_sections() { return round_trip("swap",           "section-A+section-B", "section-B+section-A") }
+
+case_large_similar() {
+    // 2KB base, target has a 20-byte patch in the middle.
+    base = build_repeated("The rain in Spain falls mainly on the plain. ", 45)
+    // base is ~2070 bytes. Splice at byte 1000.
+    left = string.substring(base, 0, 1000)
+    right = string.substring(base, 1000, string.length(base))
+    target = string.concat(left, string.concat(" <<INSERTED>> ", right))
+    return round_trip("large similar (2KB + tiny patch)", base, target)
+}
+
+case_no_source_matches() {
+    // Target shares no 4-byte prefix with source → all new-data.
+    return round_trip("no overlap", "aaaaaaaa", "bbbbbbbb")
+}
+
+main() {
+    fails = 0
+    fails = fails + case_identity()
+    fails = fails + case_empty_source()
+    fails = fails + case_empty_target()
+    fails = fails + case_one_word()
+    fails = fails + case_insert()
+    fails = fails + case_delete()
+    fails = fails + case_swap_sections()
+    fails = fails + case_large_similar()
+    fails = fails + case_no_source_matches()
+
+    if fails > 0 {
+        println("")
+        println("FAIL: ${fails} case(s) failed")
+        exit(1)
+    }
+    println("")
+    println("test_xdelta: OK")
+}
