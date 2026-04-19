@@ -2,7 +2,7 @@
 name = "svn-aether"
 
 [build]
-link_flags = "-lsqlite3 -lz -lutf8proc -lssl -lcrypto -lcjson"
+link_flags = "-lsqlite3 -lz -lutf8proc -lssl -lcrypto -lcjson -lcurl"
 
 [[bin]]
 name = "svn"
@@ -21,6 +21,11 @@ extra_sources = ["ae/subr/sqlite/shim.c", "ae/subr/io/shim.c", "ae/subr/checksum
 name = "svnae-seed"
 path = "ae/svnserver/seed.ae"
 extra_sources = ["ae/subr/sqlite/shim.c", "ae/subr/io/shim.c", "ae/subr/checksum/shim.c", "ae/subr/compress/shim.c", "ae/fs_fs/shim.c", "ae/fs_fs/txn_shim.c", "ae/fs_fs/rep_store_shim.c"]
+
+[[bin]]
+name = "test_ra"
+path = "ae/ra/test_ra.ae"
+extra_sources = ["ae/ra/shim.c"]
 
 # --- test binaries -----------------------------------------------------------
 
