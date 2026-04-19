@@ -1,0 +1,121 @@
+name: Linux
+
+on:
+  push:
+    branches: [ "*" ]
+    tags: [ "*" ]
+  pull_request:
+    branches: [ "trunk" ]
+
+env:
+  MARGS: "-j2"
+
+jobs:
+
+  build:
+    strategy:
+      matrix:
+        include: 
+          - name: Default
+            os: ubuntu-latest
+            # Check default shm decision logic for Linux:
+            config-output: APR_USE_SHMEM_MMAP_SHM APR_USE_SHMEM_MMAP_ANON
+            # Check various defaults for Linux
+            config-private: >-
+              HAVE_EPOLL HAVE_C_VARARRAYS HAVE_CALLOC HAVE_EXPAT_H HAVE_FLOCK HAVE_FORK
+              HAVE_GAI_ADDRCONFIG HAVE_GAI_STRERROR GETSERVBYNAME_R_GLIBC2
+          - name: Default (arm64)
+            os: ubuntu-22.04-arm
+            # Check default shm decision logic for Linux:
+            config-output: APR_USE_SHMEM_MMAP_SHM APR_USE_SHMEM_MMAP_ANON
+          - name: Static
+            os: ubuntu-latest
+            config: --enable-static
+          - name: Maintainer-mode
+            os: ubuntu-latest
+            config: --enable-maintainer-mode
+          - name: Named SHM - SysV, Maintainer-mode
+            os: ubuntu-latest
+            config: --enable-maintainer-mode --enable-sysv-shm
+            config-output: APR_USE_SHMEM_SHMGET
+          - name: Named SHM - Classic mmap, Maintainer-mode
+            os: ubuntu-latest
+            config: --enable-maintainer-mode ac_cv_func_shm_open=no ac_cv_func_shmget=no
+            config-output: APR_USE_SHMEM_MMAP_TMP
+          - name: Pool-debug
+            os: ubuntu-latest
+            config: --enable-pool-debug
+          - name: Pool-debug, maintainer-mode
+            os: ubuntu-latest
+            config: --enable-pool-debug --enable-maintainer-mode
+          - name: Thread-debug, maintainer-mode
+            os: ubuntu-latest
+            config: --enable-thread-debug --enable-maintainer-mode
+          - name: Maintainer-mode, no IPv6
+            os: ubuntu-latest
+            config: --enable-maintainer-mode --disable-ipv6
+          - name: Maintainer-mode, -Werror
+            os: ubuntu-latest
+            notest-cflags: -Werror
+            config: --enable-maintainer-mode
+          - name: With crypto
+            os: ubuntu-latest
+            config: --with-crypto=yes --with-openssl=yes
+            config-output: APU_HAVE_CRYPTO APU_HAVE_OPENSSL
+          - name: ASan
+            os: ubuntu-latest
+            # w/o ODBC since DSO unload leaks memory and fails the tests
+            notest-cflags: -fsanitize=address -fno-sanitize-recover=address -fno-omit-frame-pointer -Werror -O2
+            config: --with-odbc=no
+          - name: ASan, pool-debug
+            os: ubuntu-latest
+            # w/o ODBC since DSO unload leaks memory and fails the tests
+            notest-cflags: -fsanitize=address -fno-sanitize-recover=address -fno-omit-frame-pointer -Werror -O2
+            config: --enable-pool-debug --with-odbc=no
+          - name: UBsan
+            os: ubuntu-latest
+            notest-cflags: -fsanitize=undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer -Werror -O2
+          - name: LMDB
+            os: ubuntu-latest
+            packages: liblmdb-dev
+            notest-cflags: -Werror
+            config: --enable-maintainer-mode --with-lmdb --with-dbm=lmdb
+            config-output: APU_HAVE_LMDB
+          - name: Berkeley DB v5.3
+            os: ubuntu-latest
+            packages: libdb5.3-dev
+            notest-cflags: -Werror
+            config: --enable-maintainer-mode --with-berkeley-db --with-dbm=db5
+            config-output: APU_HAVE_DB
+          - name: Auto-var-init
+            os: ubuntu-latest  # requires gcc 12 or higher
+            notest-cflags: -ftrivial-auto-var-init=zero
+      fail-fast: false
+
+    runs-on: ${{ matrix.os }}
+    env:
+      NOTEST_CFLAGS: ${{ matrix.notest-cflags }}
+    name: ${{ matrix.name }}
+    steps:
+    - name: Install prerequisites
+      run: sudo apt-get install libtool libtool-bin ${{ matrix.packages }}
+    - uses: actions/checkout@v4
+    # https://github.com/actions/runner-images/issues/9491#issuecomment-1989718917
+    - name: Workaround ASAN issue in Ubuntu 22.04 runners
+      run: sudo sysctl vm.mmap_rnd_bits=28
+    - name: buildconf
+      run: ./buildconf
+    - name: configure
+      run: ./configure --prefix=/tmp/apr ${{ matrix.config }}
+    - if: ${{ matrix.config-output != '' }}
+      name: check for expected apr.h definitions ${{ matrix.config-output }}
+      run: for var in ${{ matrix.config-output }}; do grep "^#define *${var} *1" include/apr.h; done
+    - if: ${{ matrix.config-private != '' }}
+      name: check for expected apr_private.h definitions ${{ matrix.config-private }}
+      run: for var in ${{ matrix.config-private }}; do grep "^#define *${var} *1" include/arch/unix/apr_private.h; done
+    - name: make
+      run: make $MARGS
+    - name: install
+      run: make install
+    - name: check
+      run: make check

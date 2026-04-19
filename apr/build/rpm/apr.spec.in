@@ -1,0 +1,205 @@
+
+%define aprver 2
+
+Summary: Apache Portable Runtime library
+Name: apr
+Version: APR_VERSION
+Release: APR_RELEASE%{?dist}
+License: Apache-2.0 AND (Beerware AND LicenseRef-Fedora-Public-Domain AND OLDAP-2.7 AND BSD-4.3RENO)
+URL: http://apr.apache.org/
+Source0: https://www.apache.org/dist/apr/%{name}-%{version}.tar.bz2
+BuildRequires: gcc
+BuildRequires: autoconf
+BuildRequires: pkgconfig(expat), pkgconfig(uuid)
+BuildRequires: pkgconfig(libxcrypt)
+Recommends: apr-openssl%{_isa} = %{version}-%{release}
+Recommends: apr-lmdb%{_isa} = %{version}-%{release}
+
+%description
+The mission of the Apache Portable Runtime (APR) is to provide a
+free library of C data structures and routines, forming a system
+portability layer to as many operating systems as possible,
+including Unices, MS Win32, BeOS and OS/2.
+
+%package devel
+Summary: APR library development kit
+Requires: apr%{?_isa} = %{version}-%{release}, pkgconfig
+
+%description devel
+This package provides the support files which can be used to 
+build applications using the APR library.  The mission 
+of the Apache Portable Runtime (APR) is to provide a free 
+library of C data structures and routines.
+
+%package lmdb
+Summary: APR library LMDB driver
+BuildRequires: pkgconfig(lmdb)
+Requires: apr%{?_isa} = %{version}-%{release}
+Provides: apr-%{aprver}(lmdb) = %{version}-%{release}
+
+%description lmdb
+This package provides the LMDB driver for the apr
+DBM (database abstraction) interface.
+
+%package pgsql
+Summary: APR library PostgreSQL DBD driver
+BuildRequires: pkgconfig(libpq)
+Requires: apr%{?_isa} = %{version}-%{release}
+Provides: apr-%{aprver}(pgsql) = %{version}-%{release}
+
+%description pgsql
+This package provides the PostgreSQL driver for the apr
+DBD (database abstraction) interface.
+
+%package mysql
+Summary: APR library MySQL DBD driver
+BuildRequires: pkgconfig(mariadb)
+Requires: apr%{?_isa} = %{version}-%{release}
+Provides: apr-%{aprver}(mysql) = %{version}-%{release}
+
+%description mysql
+This package provides the MySQL driver for the apr DBD
+(database abstraction) interface.
+
+%package sqlite
+Summary: APR library SQLite DBD driver
+BuildRequires: pkgconfig(sqlite3)
+Requires: apr%{?_isa} = %{version}-%{release}
+Provides: apr-%{aprver}(sqlite) = %{version}-%{release}
+
+%description sqlite
+This package provides the SQLite driver for the apr DBD
+(database abstraction) interface.
+
+%package odbc
+Summary: APR library ODBC DBD driver
+BuildRequires: pkgconfig(odbc)
+Requires: apr%{?_isa} = %{version}-%{release}
+Provides: apr-%{aprver}(odbc) = %{version}-%{release}
+
+%description odbc
+This package provides the ODBC driver for the apr DBD
+(database abstraction) interface.
+
+%package ldap
+Summary: APR library LDAP support
+BuildRequires: pkgconfig(ldap)
+Requires: apr%{?_isa} = %{version}-%{release}
+Provides: apr-%{aprver}(ldap) = %{version}-%{release}
+
+%description ldap
+This package provides the LDAP support for the apr.
+
+%package openssl
+Summary: APR library OpenSSL crypto support
+BuildRequires: pkgconfig(libcrypto)
+Requires: apr%{?_isa} = %{version}-%{release}
+Provides: apr-%{aprver}(openssl) = %{version}-%{release}
+
+%description openssl
+This package provides the OpenSSL crypto support for the apr.
+
+%package nss
+Summary: APR library NSS crypto support
+BuildRequires: pkgconfig(nss)
+Requires: apr%{?_isa} = %{version}-%{release}
+Provides: apr-%{aprver}(nss) = %{version}-%{release}
+
+%description nss
+This package provides the NSS crypto support for the apr.
+
+%prep
+%setup -q
+
+%build
+# regenerate configure script etc.
+autoheader && autoconf
+%configure \
+        --prefix=/usr \
+        --includedir=%{_includedir}/apr-%{aprver} \
+        --with-installbuilddir=%{_libdir}/apr/build-%{aprver} \
+        --with-devrandom=/dev/urandom \
+        --without-gdbm \
+        --with-sqlite3 --with-pgsql --with-mysql --with-odbc \
+        --with-lmdb \
+        --with-crypto --with-openssl --with-nss \
+        --with-ldap \
+        --without-sqlite2 \
+   || { cat config.log; exit 1; }
+%{make_build}
+
+%install
+rm -rf $RPM_BUILD_ROOT
+%{make_install}
+
+mkdir -p $RPM_BUILD_ROOT/%{_datadir}/aclocal
+install -m 644 build/find_apr.m4 $RPM_BUILD_ROOT/%{_datadir}/aclocal
+
+# Unpackaged files; remove the static libapr
+rm -f $RPM_BUILD_ROOT%{_libdir}/apr.exp \
+      $RPM_BUILD_ROOT%{_libdir}/libapr*.a \
+      $RPM_BUILD_ROOT%{_libdir}/libapr-%{aprver}.la
+
+# Remove build directory
+rm -rf $RPM_BUILD_ROOT%{_libdir}/apr
+
+%check
+# Run the less verbose test suites
+export MALLOC_CHECK_=2 MALLOC_PERTURB_=$(($RANDOM % 255 + 1))
+cd test
+%{make_build}
+export LD_LIBRARY_PATH=%{buildroot}/%{_libdir}/apr-%{aprver}
+./testall -v -q
+
+%ldconfig_scriptlets
+
+%files
+%doc CHANGES LICENSE NOTICE
+%{_libdir}/libapr-%{aprver}.so.*
+%dir %{_libdir}/apr-%{aprver}
+
+%files lmdb
+%{_libdir}/apr-%{aprver}/apr_dbm_lmdb*
+
+%files pgsql
+%{_libdir}/apr-%{aprver}/apr_dbd_pgsql*
+
+%files mysql
+%{_libdir}/apr-%{aprver}/apr_dbd_mysql*
+
+%files sqlite
+%{_libdir}/apr-%{aprver}/apr_dbd_sqlite*
+
+%files odbc
+%{_libdir}/apr-%{aprver}/apr_dbd_odbc*
+
+%files ldap
+%{_libdir}/apr-%{aprver}/apr_ldap*
+
+%files openssl
+%{_libdir}/apr-%{aprver}/apr_crypto_openssl*
+
+%files nss
+%{_libdir}/apr-%{aprver}/apr_crypto_nss*
+
+%files devel
+%{_bindir}/apr-%{aprver}-config
+%{_libdir}/libapr-%{aprver}.so
+%{_includedir}/apr-%{aprver}/*.h
+%{_libdir}/pkgconfig/*.pc
+%{_datadir}/aclocal/*.m4
+
+%changelog
+* Tue Mar 18 2025 Graham Leggett <minfrin@sharp.fm> 2.0.0
+- update to support v2.0.0 of APR
+
+* Sat Aug 30 2008 Graham Leggett <minfrin@sharp.fm> 1.3.3
+- update to depend on the bzip2 binary
+- build depends on python
+
+* Tue Jun 22 2004 Graham Leggett <minfrin@sharp.fm> 1.0.0-1
+- update to support v1.0.0 of APR
+
+* Tue Jun 22 2004 Graham Leggett <minfrin@sharp.fm> 1.0.0-1
+- derived from Fedora Core apr.spec
+

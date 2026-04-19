@@ -1,0 +1,348 @@
+/* Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#include "apr_thread_proc.h"
+#include "apr_errno.h"
+#include "apr_general.h"
+#include "apr_lib.h"
+#include "apr_strings.h"
+#include "testutil.h"
+
+#define TESTSTR "This is a test"
+
+#define PROC_CHILD_NAME TESTBINPATH "proc_child" EXTENSION
+
+static char *proc_child;
+
+static apr_proc_t newproc;
+
+static void test_create_proc(abts_case *tc, void *data)
+{
+    const char *args[2];
+    apr_procattr_t *attr;
+    apr_file_t *testfile = NULL;
+    apr_status_t rv;
+    apr_size_t length;
+    char *buf;
+
+    rv = apr_procattr_create(&attr, p);
+    ABTS_INT_EQUAL(tc, APR_SUCCESS, rv);
+
+    rv = apr_procattr_io_set(attr, APR_FULL_BLOCK, APR_FULL_BLOCK,
+                             APR_NO_PIPE);
+    ABTS_INT_EQUAL(tc, APR_SUCCESS, rv);
+
+    rv = apr_procattr_dir_set(attr, "data");
+    ABTS_INT_EQUAL(tc, APR_SUCCESS, rv);
+
+    rv = apr_procattr_cmdtype_set(attr, APR_PROGRAM_ENV);
+    ABTS_INT_EQUAL(tc, APR_SUCCESS, rv);
+
+    args[0] = "proc_child" EXTENSION;
+    args[1] = NULL;
+
+    rv = apr_proc_create(&newproc, proc_child, args, NULL,
+                         attr, p);
+    ABTS_INT_EQUAL(tc, APR_SUCCESS, rv);
+
+    testfile = newproc.in;
+
+    length = strlen(TESTSTR);
+    rv = apr_file_write(testfile, TESTSTR, &length);
+    ABTS_INT_EQUAL(tc, APR_SUCCESS, rv);
+    ABTS_SIZE_EQUAL(tc, strlen(TESTSTR), length);
+
+    rv = apr_file_close(testfile);
+    ABTS_INT_EQUAL(tc, APR_SUCCESS, rv);
+
+    testfile = newproc.out;
+    length = 256;
+    buf = apr_pcalloc(p, length);
+    rv = apr_file_read(testfile, buf, &length);
+    ABTS_INT_EQUAL(tc, APR_SUCCESS, rv);
+    ABTS_STR_EQUAL(tc, TESTSTR, buf);
+}
+
+static void test_proc_wait(abts_case *tc, void *data)
+{
+    apr_status_t rv;
+
+    rv = apr_proc_wait(&newproc, NULL, NULL, APR_WAIT);
+    ABTS_INT_EQUAL(tc, APR_CHILD_DONE, rv);
+}
+
+static void test_file_redir(abts_case *tc, void *data)
+{
+    apr_file_t *testout = NULL;
+    apr_file_t *testerr = NULL;
+    apr_off_t offset;
+    apr_status_t rv;
+    const char *args[2];
+    apr_procattr_t *attr;
+    apr_file_t *testfile = NULL;
+    apr_size_t length;
+    char *buf;
+
+    testfile = NULL;
+    rv = apr_file_open(&testfile, "data/stdin",
+                       APR_FOPEN_READ | APR_FOPEN_WRITE | APR_FOPEN_CREATE | APR_FOPEN_EXCL,
+                       APR_FPROT_OS_DEFAULT, p);
+    ABTS_INT_EQUAL(tc, APR_SUCCESS, rv);
+    rv = apr_file_open(&testout, "data/stdout",
+                       APR_FOPEN_READ | APR_FOPEN_WRITE | APR_FOPEN_CREATE | APR_FOPEN_EXCL,
+                       APR_FPROT_OS_DEFAULT, p);
+    ABTS_INT_EQUAL(tc, APR_SUCCESS, rv);
+    rv = apr_file_open(&testerr, "data/stderr",
+                       APR_FOPEN_READ | APR_FOPEN_WRITE | APR_FOPEN_CREATE | APR_FOPEN_EXCL,
+                       APR_FPROT_OS_DEFAULT, p);
+    ABTS_INT_EQUAL(tc, APR_SUCCESS, rv);
+
+    length = strlen(TESTSTR);
+    apr_file_write(testfile, TESTSTR, &length);
+    offset = 0;
+    rv = apr_file_seek(testfile, APR_SET, &offset);
+    ABTS_INT_EQUAL(tc, APR_SUCCESS, rv);
+    ABTS_ASSERT(tc, "File position mismatch, expected 0", offset == 0);
+
+    rv = apr_procattr_create(&attr, p);
+    ABTS_INT_EQUAL(tc, APR_SUCCESS, rv);
+    rv = apr_procattr_child_in_set(attr, testfile, NULL);
+    ABTS_INT_EQUAL(tc, APR_SUCCESS, rv);
+    rv = apr_procattr_child_out_set(attr, testout, NULL);
+    ABTS_INT_EQUAL(tc, APR_SUCCESS, rv);
+    rv = apr_procattr_child_err_set(attr, testerr, NULL);
+    ABTS_INT_EQUAL(tc, APR_SUCCESS, rv);
+    rv = apr_procattr_dir_set(attr, "data");
+    ABTS_INT_EQUAL(tc, APR_SUCCESS, rv);
+    rv = apr_procattr_cmdtype_set(attr, APR_PROGRAM_ENV);
+    ABTS_INT_EQUAL(tc, APR_SUCCESS, rv);
+
+    args[0] = "proc_child";
+    args[1] = NULL;
+
+    rv = apr_proc_create(&newproc, proc_child, args, NULL,
+                         attr, p);
+    ABTS_INT_EQUAL(tc, APR_SUCCESS, rv);
+
+    rv = apr_proc_wait(&newproc, NULL, NULL, APR_WAIT);
+    ABTS_INT_EQUAL(tc, APR_CHILD_DONE, rv);
+
+    offset = 0;
+    rv = apr_file_seek(testout, APR_SET, &offset);
+    ABTS_INT_EQUAL(tc, APR_SUCCESS, rv);
+
+    length = 256;
+    buf = apr_pcalloc(p, length);
+    rv = apr_file_read(testout, buf, &length);
+    ABTS_INT_EQUAL(tc, APR_SUCCESS, rv);
+    ABTS_STR_EQUAL(tc, TESTSTR, buf);
+
+
+    apr_file_close(testfile);
+    apr_file_close(testout);
+    apr_file_close(testerr);
+
+    rv = apr_file_remove("data/stdin", p);;
+    ABTS_INT_EQUAL(tc, APR_SUCCESS, rv);
+    rv = apr_file_remove("data/stdout", p);;
+    ABTS_INT_EQUAL(tc, APR_SUCCESS, rv);
+    rv = apr_file_remove("data/stderr", p);;
+    ABTS_INT_EQUAL(tc, APR_SUCCESS, rv);
+}
+
+static void test_proc_args(abts_case* tc, void* data)
+{
+    const char* args[10];
+    apr_procattr_t* attr;
+    apr_status_t rv;
+    char *progname;
+    const char *expected;
+    const char *actual;
+
+    apr_filepath_merge(&progname, NULL, TESTBINPATH "echoargs" EXTENSION, 0, p);
+
+    rv = apr_procattr_create(&attr, p);
+    ABTS_INT_EQUAL(tc, APR_SUCCESS, rv);
+
+    rv = apr_procattr_io_set(attr, APR_NO_PIPE, APR_FULL_BLOCK, APR_NO_PIPE);
+    ABTS_INT_EQUAL(tc, APR_SUCCESS, rv);
+
+    rv = apr_procattr_cmdtype_set(attr, APR_PROGRAM_ENV);
+    ABTS_INT_EQUAL(tc, APR_SUCCESS, rv);
+
+    args[0] = progname;
+    args[1] = "1";
+    args[2] = "";
+    args[3] = "\"te st";
+    args[4] = " a\\b";
+    args[5] = " a\\\\b";
+    args[6] = " \\";
+    args[7] = "new\nline";
+    args[8] = " \\\\";
+    args[9] = NULL;
+
+    rv = apr_proc_create(&newproc, progname, args, NULL, attr, p);
+    ABTS_INT_EQUAL(tc, APR_SUCCESS, rv);
+
+    actual = "";
+    while (1)
+    {
+        char buf[1024];
+        apr_size_t length = sizeof(buf);
+
+        rv = apr_file_read(newproc.out, buf, &length);
+        if (APR_STATUS_IS_EOF(rv)) {
+            break;
+        }
+        else if (rv != APR_SUCCESS)
+        {
+            ABTS_INT_EQUAL(tc, APR_SUCCESS, rv);
+            break;
+        }
+
+        buf[length] = 0;
+        actual = apr_pstrcat(p, actual, buf, NULL);
+    }
+
+    expected =
+        "1: [1]" "\n"
+        "2: []" "\n"
+        "3: [\"te st]" "\n"
+        "4: [ a\\b]" "\n"
+        "5: [ a\\\\b]" "\n"
+        "6: [ \\]" "\n"
+        "7: [new\nline]" "\n"
+        "8: [ \\\\]" "\n";
+
+    ABTS_STR_EQUAL(tc, expected, actual);
+}
+
+#ifdef WIN32
+static void test_proc_args_winbatch(abts_case* tc, void* data)
+{
+    const char* args[10];
+    apr_procattr_t* attr;
+    apr_status_t rv;
+    char *progname;
+    const char *expected;
+    const char *actual;
+
+    apr_filepath_merge(&progname, NULL, "echoargs.bat", 0, p);
+
+    rv = apr_procattr_create(&attr, p);
+    ABTS_INT_EQUAL(tc, APR_SUCCESS, rv);
+
+    rv = apr_procattr_io_set(attr, APR_NO_PIPE, APR_FULL_BLOCK, APR_NO_PIPE);
+    ABTS_INT_EQUAL(tc, APR_SUCCESS, rv);
+
+    rv = apr_procattr_cmdtype_set(attr, APR_PROGRAM_ENV);
+    ABTS_INT_EQUAL(tc, APR_SUCCESS, rv);
+
+    args[0] = progname;
+    args[1] = "arg1";
+    args[2] = "arg2";
+    args[3] = "arg3";
+    args[4] = "arg4";
+    args[5] = "arg5";
+    args[6] = "arg6";
+    args[7] = "arg7";
+    args[8] = "arg8";
+    args[9] = NULL;
+
+    rv = apr_proc_create(&newproc, progname, args, NULL, attr, p);
+    ABTS_INT_EQUAL(tc, APR_SUCCESS, rv);
+
+    actual = "";
+    while (1)
+    {
+        char buf[1024];
+        apr_size_t length = sizeof(buf);
+
+        rv = apr_file_read(newproc.out, buf, &length);
+        if (APR_STATUS_IS_EOF(rv)) {
+            break;
+        }
+        else if (rv != APR_SUCCESS)
+        {
+            ABTS_INT_EQUAL(tc, APR_SUCCESS, rv);
+            break;
+        }
+
+        buf[length] = 0;
+        actual = apr_pstrcat(p, actual, buf, NULL);
+    }
+
+    abts_log_message("Invoked command line: %s\n", newproc.invoked);
+
+    expected =
+        "1: [arg1]" "\r\n"
+        "2: [arg2]" "\r\n"
+        "3: [arg3]" "\r\n"
+        "4: [arg4]" "\r\n"
+        "5: [arg5]" "\r\n"
+        "6: [arg6]" "\r\n"
+        "7: [arg7]" "\r\n"
+        "8: [arg8]" "\r\n"
+        "9: []" "\r\n";
+
+    ABTS_STR_EQUAL(tc, expected, actual);
+}
+
+static void test_proc_unclosed_quote1(abts_case *tc, void *data)
+{
+    apr_procattr_t *attr;
+    apr_status_t rv;
+    const char *args[] = { NULL };
+
+    rv = apr_procattr_create(&attr, p);
+    ABTS_INT_EQUAL(tc, APR_SUCCESS, rv);
+
+    rv = apr_proc_create(&newproc, "\"", args, NULL, attr, p);
+    ABTS_INT_EQUAL(tc, APR_EINVAL, rv);
+}
+
+static void test_proc_unclosed_quote2(abts_case *tc, void *data)
+{
+    apr_procattr_t *attr;
+    apr_status_t rv;
+    const char *args[] = { NULL };
+
+    rv = apr_procattr_create(&attr, p);
+    ABTS_INT_EQUAL(tc, APR_SUCCESS, rv);
+
+    rv = apr_proc_create(&newproc, "\"abc", args, NULL, attr, p);
+    ABTS_INT_EQUAL(tc, APR_EINVAL, rv);
+}
+#endif
+
+abts_suite *testproc(abts_suite *suite)
+{
+    suite = ADD_SUITE(suite)
+
+    apr_filepath_merge(&proc_child, NULL, PROC_CHILD_NAME, 0, p);
+    abts_run_test(suite, test_create_proc, NULL);
+    abts_run_test(suite, test_proc_wait, NULL);
+    abts_run_test(suite, test_file_redir, NULL);
+    abts_run_test(suite, test_proc_args, NULL);
+#ifdef WIN32
+    abts_run_test(suite, test_proc_args_winbatch, NULL);
+    abts_run_test(suite, test_proc_unclosed_quote1, NULL);
+    abts_run_test(suite, test_proc_unclosed_quote2, NULL);
+#endif
+
+    return suite;
+}
+

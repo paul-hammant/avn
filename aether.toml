@@ -1,0 +1,17 @@
+[project]
+name = "svn-aether"
+
+[build]
+link_flags = "-lsqlite3 -lz -lutf8proc -lssl -lcrypto"
+
+[[bin]]
+name = "svn"
+path = "ae/svn/main.ae"
+
+[[bin]]
+name = "svnadmin"
+path = "ae/svnadmin/main.ae"
+
+[[bin]]
+name = "aether-svnserver"
+path = "ae/svnserver/main.ae"

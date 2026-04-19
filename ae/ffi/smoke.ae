@@ -1,0 +1,30 @@
+// Phase 0.1 smoke test — verify all four FFI libraries link and can be called.
+//   libsqlite3  — working-copy DB, FSFS rep-cache
+//   libz        — svndiff compression
+//   libutf8proc — Unicode normalization for paths
+//   libssl + libcrypto — TLS transport (via digest, which exercises libcrypto)
+//
+// This is deliberately minimal: one call per library, enough to prove the link
+// line in aether.toml is correct and the system headers agree with our signatures.
+//
+// Run from repo root:  ae run ae/ffi/smoke.ae
+
+extern sqlite3_libversion() -> string
+extern zlibVersion() -> string
+extern utf8proc_version() -> string
+extern OpenSSL_version(t: int) -> string
+
+main() {
+    print("sqlite3  ")
+    println(sqlite3_libversion())
+
+    print("zlib     ")
+    println(zlibVersion())
+
+    print("utf8proc ")
+    println(utf8proc_version())
+
+    // OpenSSL_version(0) == OPENSSL_VERSION — the full version string.
+    print("openssl  ")
+    println(OpenSSL_version(0))
+}
