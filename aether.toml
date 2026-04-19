@@ -37,3 +37,8 @@ extra_sources = ["ae/subr/compress/shim.c"]
 name = "test_io"
 path = "ae/subr/test_io.ae"
 extra_sources = ["ae/subr/io/shim.c"]
+
+[[bin]]
+name = "test_utf8"
+path = "ae/subr/test_utf8.ae"
+extra_sources = ["ae/subr/utf8/shim.c"]

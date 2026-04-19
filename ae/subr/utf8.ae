@@ -1,0 +1,27 @@
+// utf8.ae — NFC normalization for svn's internal path representation.
+//
+// Why: macOS stores filenames decomposed (NFD) on HFS+/APFS; Linux and
+// Windows leave whatever bytes you wrote. To keep repository-internal
+// paths consistent regardless of the filesystem the working copy lives
+// on, svn normalises them to NFC at the boundary.
+//
+// Scope: Phase 1-lite only ships normalize_nfc. Case folding, width, and
+// category classification come later when libsvn_wc needs them.
+
+import std.string
+
+extern svnae_utf8_nfc(s: string) -> string
+extern svnae_utf8_free(p: string)
+
+// Returns the NFC form of `s`. Empty string in → empty string out.
+// Falls back to returning `s` unchanged if utf8proc signals allocation
+// failure (a malloc returned NULL); that's rare and keeps the signature
+// simple without an error channel.
+normalize_nfc(s: string) {
+    if string.length(s) == 0 { return "" }
+    raw = svnae_utf8_nfc(s)
+    if raw == 0 { return s }
+    copy = string.concat("", raw)
+    svnae_utf8_free(raw)
+    return copy
+}
