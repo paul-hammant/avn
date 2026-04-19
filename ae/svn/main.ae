@@ -65,6 +65,8 @@ extern svnae_wc_add(wc_root: string, rel_path: string) -> int
 extern svnae_wc_rm (wc_root: string, rel_path: string) -> int
 extern svnae_wc_commit(wc_root: string, author: string, logmsg: string) -> int
 extern svnae_wc_update(wc_root: string, target_rev: int) -> int
+extern svnae_wc_revert(wc_root: string, rel_path: string) -> int
+extern svnae_wc_diff(wc_root: string, rel_path_or_empty: string) -> int
 extern svnae_wc_status(wc_root: string) -> ptr
 extern svnae_wc_statuslist_count(L: ptr) -> int
 extern svnae_wc_statuslist_path(L: ptr, i: int) -> string
@@ -431,6 +433,42 @@ cmd_rm(argv_start: int) {
     return 0
 }
 
+cmd_revert(argv_start: int) {
+    n = aether_args_count()
+    if argv_start >= n {
+        println("svn revert: requires at least one PATH")
+        return 2
+    }
+    fails = 0
+    i = argv_start
+    while i < n {
+        p = aether_args_get(i)
+        rc = svnae_wc_revert(".", p)
+        if rc == 0 {
+            println("Reverted '${p}'")
+        } else {
+            println("svn revert: ${p} failed (rc=${rc})")
+            fails = fails + 1
+        }
+        i = i + 1
+    }
+    if fails > 0 { return 1 }
+    return 0
+}
+
+cmd_diff(argv_start: int) {
+    // Optional single PATH. If none given, diff everything modified.
+    target = ""
+    if aether_args_count() > argv_start {
+        candidate = aether_args_get(argv_start)
+        if string.length(candidate) > 0 {
+            if string.char_at(candidate, 0) != 45 { target = candidate }
+        }
+    }
+    svnae_wc_diff(".", target)
+    return 0
+}
+
 cmd_update(argv_start: int) {
     rev_str = find_flag("--rev", argv_start)
     target = -1  // -1 means "head" to the shim
@@ -534,6 +572,8 @@ print_usage() {
     println("  add      PATH [PATH...]")
     println("  rm       PATH [PATH...]")
     println("  update   [--rev N]")
+    println("  revert   PATH [PATH...]")
+    println("  diff     [PATH]")
     return 0
 }
 
@@ -554,6 +594,9 @@ main() {
     if string.equals(sub, "co") == 1       { exit(cmd_checkout(2)) }
     if string.equals(sub, "update") == 1   { exit(cmd_update(2)) }
     if string.equals(sub, "up") == 1       { exit(cmd_update(2)) }
+    if string.equals(sub, "revert") == 1   { exit(cmd_revert(2)) }
+    if string.equals(sub, "diff") == 1     { exit(cmd_diff(2)) }
+    if string.equals(sub, "di") == 1       { exit(cmd_diff(2)) }
     if string.equals(sub, "status") == 1   { exit(cmd_status(2)) }
     if string.equals(sub, "st") == 1       { exit(cmd_status(2)) }
     if string.equals(sub, "add") == 1      { exit(cmd_add(2)) }

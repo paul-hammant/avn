@@ -44,6 +44,8 @@ struct svnae_wc_node;
 struct svnae_wc_node *svnae_wc_db_get_node(sqlite3 *db, const char *path);
 int         svnae_wc_node_kind    (const struct svnae_wc_node *n);
 int         svnae_wc_node_state   (const struct svnae_wc_node *n);
+int         svnae_wc_node_base_rev(const struct svnae_wc_node *n);
+const char *svnae_wc_node_base_sha1(const struct svnae_wc_node *n);
 void        svnae_wc_node_free    (struct svnae_wc_node *n);
 
 /* Return 0 on success, -1 if path already tracked, -2 if not on disk,
@@ -88,6 +90,10 @@ svnae_wc_rm(const char *wc_root, const char *rel_path)
 
     int state = svnae_wc_node_state(n);
     int kind  = svnae_wc_node_kind(n);
+    int base_rev = svnae_wc_node_base_rev(n);
+    char base_sha[41] = {0};
+    const char *bs = svnae_wc_node_base_sha1(n);
+    strncpy(base_sha, bs ? bs : "", sizeof base_sha - 1);
     svnae_wc_node_free(n);
 
     if (state == 1 /*added*/) {
@@ -98,8 +104,9 @@ svnae_wc_rm(const char *wc_root, const char *rel_path)
         return rc == 0 ? 0 : -2;
     }
 
-    /* Normal or already-deleted: mark deleted (idempotent on already-deleted). */
-    int rc = svnae_wc_db_upsert_node(db, rel_path, kind, 0, "", 2 /*deleted*/);
+    /* Normal or already-deleted: mark deleted — but KEEP the base_rev
+     * and base_sha1 so `svn revert` can restore from pristine later. */
+    int rc = svnae_wc_db_upsert_node(db, rel_path, kind, base_rev, base_sha, 2 /*deleted*/);
     svnae_wc_db_close(db);
     if (rc != 0) return -2;
 
