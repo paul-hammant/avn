@@ -69,6 +69,15 @@ extern svnae_wc_revert(wc_root: string, rel_path: string) -> int
 extern svnae_wc_diff(wc_root: string, rel_path_or_empty: string) -> int
 extern svnae_wc_cp(wc_root: string, src: string, dst: string) -> int
 extern svnae_wc_mv(wc_root: string, src: string, dst: string) -> int
+extern svnae_wc_propset(wc_root: string, path: string, name: string, value: string) -> int
+extern svnae_wc_propget(wc_root: string, path: string, name: string) -> string
+extern svnae_wc_propdel(wc_root: string, path: string, name: string) -> int
+extern svnae_wc_props_free(s: string)
+extern svnae_wc_proplist(wc_root: string, path: string) -> ptr
+extern svnae_wc_proplist_count(L: ptr) -> int
+extern svnae_wc_proplist_name(L: ptr, i: int) -> string
+extern svnae_wc_proplist_value(L: ptr, i: int) -> string
+extern svnae_wc_proplist_free(L: ptr)
 extern svnae_wc_status(wc_root: string) -> ptr
 extern svnae_wc_statuslist_count(L: ptr) -> int
 extern svnae_wc_statuslist_path(L: ptr, i: int) -> string
@@ -435,6 +444,88 @@ cmd_rm(argv_start: int) {
     return 0
 }
 
+cmd_propset(argv_start: int) {
+    if aether_args_count() < argv_start + 3 {
+        println("svn propset: usage: svn propset NAME VALUE PATH")
+        return 2
+    }
+    name  = aether_args_get(argv_start)
+    value = aether_args_get(argv_start + 1)
+    path  = aether_args_get(argv_start + 2)
+    rc = svnae_wc_propset(".", path, name, value)
+    if rc == -2 {
+        println("svn propset: ${path} is not tracked")
+        return 1
+    }
+    if rc != 0 {
+        println("svn propset: failed (rc=${rc})")
+        return 1
+    }
+    println("property '${name}' set on '${path}'")
+    return 0
+}
+
+cmd_propget(argv_start: int) {
+    if aether_args_count() < argv_start + 2 {
+        println("svn propget: usage: svn propget NAME PATH")
+        return 2
+    }
+    name = aether_args_get(argv_start)
+    path = aether_args_get(argv_start + 1)
+    v = svnae_wc_propget(".", path, name)
+    if v == 0 {
+        return 1
+    }
+    println(v)
+    svnae_wc_props_free(v)
+    return 0
+}
+
+cmd_propdel(argv_start: int) {
+    if aether_args_count() < argv_start + 2 {
+        println("svn propdel: usage: svn propdel NAME PATH")
+        return 2
+    }
+    name = aether_args_get(argv_start)
+    path = aether_args_get(argv_start + 1)
+    rc = svnae_wc_propdel(".", path, name)
+    if rc != 0 {
+        println("svn propdel: failed (rc=${rc})")
+        return 1
+    }
+    println("property '${name}' deleted from '${path}'")
+    return 0
+}
+
+cmd_proplist(argv_start: int) {
+    if aether_args_count() < argv_start + 1 {
+        println("svn proplist: usage: svn proplist PATH")
+        return 2
+    }
+    path = aether_args_get(argv_start)
+    L = svnae_wc_proplist(".", path)
+    if L == 0 {
+        println("svn proplist: could not read properties")
+        return 1
+    }
+    n = svnae_wc_proplist_count(L)
+    if n == 0 {
+        svnae_wc_proplist_free(L)
+        return 0
+    }
+    println("Properties on '${path}':")
+    i = 0
+    while i < n {
+        name  = svnae_wc_proplist_name(L, i)
+        value = svnae_wc_proplist_value(L, i)
+        println("  ${name}")
+        println("    ${value}")
+        i = i + 1
+    }
+    svnae_wc_proplist_free(L)
+    return 0
+}
+
 cmd_cp(argv_start: int) {
     if aether_args_count() < argv_start + 2 {
         println("svn cp: usage: svn cp SRC DST")
@@ -611,6 +702,10 @@ print_usage() {
     println("  diff     [PATH]")
     println("  cp       SRC DST")
     println("  mv       SRC DST")
+    println("  propset  NAME VALUE PATH")
+    println("  propget  NAME PATH")
+    println("  propdel  NAME PATH")
+    println("  proplist PATH")
     return 0
 }
 
@@ -639,6 +734,14 @@ main() {
     if string.equals(sub, "mv") == 1       { exit(cmd_mv(2)) }
     if string.equals(sub, "move") == 1     { exit(cmd_mv(2)) }
     if string.equals(sub, "rename") == 1   { exit(cmd_mv(2)) }
+    if string.equals(sub, "propset") == 1  { exit(cmd_propset(2)) }
+    if string.equals(sub, "ps") == 1       { exit(cmd_propset(2)) }
+    if string.equals(sub, "propget") == 1  { exit(cmd_propget(2)) }
+    if string.equals(sub, "pg") == 1       { exit(cmd_propget(2)) }
+    if string.equals(sub, "propdel") == 1  { exit(cmd_propdel(2)) }
+    if string.equals(sub, "pd") == 1       { exit(cmd_propdel(2)) }
+    if string.equals(sub, "proplist") == 1 { exit(cmd_proplist(2)) }
+    if string.equals(sub, "pl") == 1       { exit(cmd_proplist(2)) }
     if string.equals(sub, "status") == 1   { exit(cmd_status(2)) }
     if string.equals(sub, "st") == 1       { exit(cmd_status(2)) }
     if string.equals(sub, "add") == 1      { exit(cmd_add(2)) }
