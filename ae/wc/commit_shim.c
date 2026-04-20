@@ -46,6 +46,7 @@ const char *svnae_wc_nodelist_path(const struct svnae_wc_nodelist *L, int i);
 int         svnae_wc_nodelist_kind(const struct svnae_wc_nodelist *L, int i);
 const char *svnae_wc_nodelist_base_sha1(const struct svnae_wc_nodelist *L, int i);
 int         svnae_wc_nodelist_state(const struct svnae_wc_nodelist *L, int i);
+int         svnae_wc_nodelist_conflicted(const struct svnae_wc_nodelist *L, int i);
 void        svnae_wc_nodelist_free(struct svnae_wc_nodelist *L);
 
 char *svnae_wc_db_get_info(sqlite3 *db, const char *key);
@@ -136,6 +137,20 @@ svnae_wc_commit(const char *wc_root, const char *author, const char *logmsg)
      * so we can redo the db writes after a successful commit. */
     struct svnae_wc_nodelist *L = svnae_wc_db_list_nodes(db);
     int n = svnae_wc_nodelist_count(L);
+
+    /* Refuse to commit if any node is conflicted. The user must resolve
+     * first. Match reference svn's behaviour. */
+    for (int i = 0; i < n; i++) {
+        if (svnae_wc_nodelist_conflicted(L, i)) {
+            fprintf(stderr,
+                "svn: commit failed: '%s' remains in conflict; run svn resolve first\n",
+                svnae_wc_nodelist_path(L, i));
+            svnae_wc_nodelist_free(L);
+            svnae_wc_db_close(db);
+            svnae_wc_info_free(base_url); svnae_wc_info_free(repo);
+            return -3;   /* -3 = conflicted paths present */
+        }
+    }
 
     /* Two-pass: first build the RA commit, then if it succeeds, walk the
      * same list again and update rows. We keep the rows' roles in a

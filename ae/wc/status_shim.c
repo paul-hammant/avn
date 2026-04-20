@@ -57,6 +57,7 @@ const char *svnae_wc_nodelist_path(const struct svnae_wc_nodelist *L, int i);
 int         svnae_wc_nodelist_kind(const struct svnae_wc_nodelist *L, int i);
 const char *svnae_wc_nodelist_base_sha1(const struct svnae_wc_nodelist *L, int i);
 int         svnae_wc_nodelist_state(const struct svnae_wc_nodelist *L, int i);
+int         svnae_wc_nodelist_conflicted(const struct svnae_wc_nodelist *L, int i);
 void        svnae_wc_nodelist_free(struct svnae_wc_nodelist *L);
 
 /* ---- helpers ---------------------------------------------------------- */
@@ -199,6 +200,25 @@ walk_unversioned(const char *wc_root, const char *rel,
             || (e->d_name[1] == '.' && e->d_name[2] == '\0'))) continue;
         if (strcmp(e->d_name, ".svn") == 0) continue;
 
+        /* Skip conflict sidecars — .mine and .r<N>. They'll be cleaned
+         * up by `svn resolve`. */
+        {
+            size_t nl = strlen(e->d_name);
+            if (nl > 5 && strcmp(e->d_name + nl - 5, ".mine") == 0) continue;
+            if (nl > 2 && e->d_name[nl - 2] == '.' && e->d_name[nl - 1] == 'r') {
+                /* just ".r" — probably not a sidecar; let through */
+            }
+            /* Pattern: name ends in ".rN" where N is all digits. */
+            const char *dot = strrchr(e->d_name, '.');
+            if (dot && dot[1] == 'r' && dot[2]) {
+                int all_digits = 1;
+                for (const char *q = dot + 2; *q; q++) {
+                    if (*q < '0' || *q > '9') { all_digits = 0; break; }
+                }
+                if (all_digits) continue;
+            }
+        }
+
         char child_rel[PATH_MAX];
         if (*rel) snprintf(child_rel, sizeof child_rel, "%s/%s", rel, e->d_name);
         else      snprintf(child_rel, sizeof child_rel, "%s", e->d_name);
@@ -248,6 +268,7 @@ svnae_wc_status(const char *wc_root)
         const char *rel = svnae_wc_nodelist_path(L, i);
         int kind  = svnae_wc_nodelist_kind(L, i);
         int state = svnae_wc_nodelist_state(L, i);
+        int conflicted = svnae_wc_nodelist_conflicted(L, i);
         const char *base_sha = svnae_wc_nodelist_base_sha1(L, i);
 
         strset_add(&tracked, rel);
@@ -258,14 +279,14 @@ svnae_wc_status(const char *wc_root)
         struct stat st;
         int on_disk = (lstat(disk, &st) == 0);
 
+        /* Conflicted trumps other states — show 'C' regardless. */
+        if (conflicted) { add_entry(out, rel, 'C'); continue; }
+
         if (state == 1 /*added*/) { add_entry(out, rel, 'A'); continue; }
         if (state == 2 /*deleted*/) { add_entry(out, rel, 'D'); continue; }
         /* Normal: compare. */
         if (!on_disk) { add_entry(out, rel, '!'); continue; }
-        if (kind == 1 /*dir*/) {
-            /* Tracked directory that exists — nothing to say. */
-            continue;
-        }
+        if (kind == 1 /*dir*/) { continue; }
         /* Tracked file: hash it. */
         char cur[41];
         if (sha1_of_file(disk, cur) != 0) { add_entry(out, rel, '!'); continue; }

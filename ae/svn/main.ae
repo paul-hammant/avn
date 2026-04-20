@@ -71,6 +71,7 @@ extern svnae_wc_cp(wc_root: string, src: string, dst: string) -> int
 extern svnae_wc_mv(wc_root: string, src: string, dst: string) -> int
 extern svnae_ra_server_copy(base_url: string, repo_name: string, base_rev: int, from_path: string, to_path: string, author: string, logmsg: string) -> int
 extern svnae_wc_merge(wc_root: string, source_path: string, rev_a: int, rev_b: int, target_path: string) -> int
+extern svnae_wc_resolve(wc_root: string, rel_path: string, accept: int) -> int
 
 extern svnae_wc_propset(wc_root: string, path: string, name: string, value: string) -> int
 extern svnae_wc_propget(wc_root: string, path: string, name: string) -> string
@@ -424,6 +425,10 @@ cmd_commit(argv_start: int) {
             println("No changes to commit.")
             return 0
         }
+        if new_rev == -3 {
+            // conflicted paths present — error already printed by shim.
+            return 1
+        }
         if new_rev < 0 {
             println("svn commit: failed")
             return 1
@@ -537,6 +542,49 @@ cmd_rm(argv_start: int) {
         } else {
             println("svn rm: ${p} failed (rc=${rc})")
             fails = fails + 1
+        }
+        i = i + 1
+    }
+    if fails > 0 { return 1 }
+    return 0
+}
+
+cmd_resolve(argv_start: int) {
+    if aether_args_count() <= argv_start {
+        println("svn resolve: usage: svn resolve PATH [--accept mine|theirs|working]")
+        return 2
+    }
+    accept_str = find_flag("--accept", argv_start)
+    accept = 0  // working
+    if string.length(accept_str) > 0 {
+        if string.equals(accept_str, "working") == 1 { accept = 0 }
+        else if string.equals(accept_str, "mine-full") == 1 { accept = 1 }
+        else if string.equals(accept_str, "mine") == 1      { accept = 1 }
+        else if string.equals(accept_str, "theirs-full") == 1 { accept = 2 }
+        else if string.equals(accept_str, "theirs") == 1      { accept = 2 }
+        else {
+            println("svn resolve: unknown --accept value '${accept_str}'")
+            return 2
+        }
+    }
+    fails = 0
+    n = aether_args_count()
+    i = argv_start
+    while i < n {
+        p = aether_args_get(i)
+        if string.length(p) > 0 {
+            if string.char_at(p, 0) == 45 {
+                // a flag — skip it and its value
+                i = i + 2
+                continue
+            }
+        }
+        rc = svnae_wc_resolve(".", p, accept)
+        if rc != 0 {
+            println("svn resolve: '${p}' is not in conflict")
+            fails = fails + 1
+        } else {
+            println("Resolved conflicted state of '${p}'")
         }
         i = i + 1
     }
@@ -864,6 +912,7 @@ cmd_status(argv_start: int) {
         // Build the code char from its int.
         ch = "?"
         if code == 65 { ch = "A" }       // 'A'
+        if code == 67 { ch = "C" }       // 'C' conflicted
         if code == 68 { ch = "D" }       // 'D'
         if code == 77 { ch = "M" }       // 'M'
         if code == 33 { ch = "!" }       // '!'
@@ -926,6 +975,7 @@ print_usage() {
     println("  cp       SRC DST | URL@REV URL --author A --log M")
     println("  mv       SRC DST")
     println("  merge    URL@REVA:REVB [TARGET_DIR]")
+    println("  resolve  PATH [--accept mine|theirs|working]")
     println("  propset  NAME VALUE PATH")
     println("  propget  NAME PATH")
     println("  propdel  NAME PATH")
@@ -959,6 +1009,8 @@ main() {
     if string.equals(sub, "move") == 1     { exit(cmd_mv(2)) }
     if string.equals(sub, "rename") == 1   { exit(cmd_mv(2)) }
     if string.equals(sub, "merge") == 1    { exit(cmd_merge(2)) }
+    if string.equals(sub, "resolve") == 1  { exit(cmd_resolve(2)) }
+    if string.equals(sub, "resolved") == 1 { exit(cmd_resolve(2)) }
     if string.equals(sub, "propset") == 1  { exit(cmd_propset(2)) }
     if string.equals(sub, "ps") == 1       { exit(cmd_propset(2)) }
     if string.equals(sub, "propget") == 1  { exit(cmd_propget(2)) }

@@ -78,7 +78,8 @@ out=$("$SVN_BIN" status)
 check "wc2 clean after update" "" "$out"
 
 # --- conflict scenario: edit README in wc2, commit a new README in wc1,
-#     then `svn update` in wc2 should report conflict and leave wc2 as-is. ---
+#     then `svn update` in wc2 should produce a 3-way merge with
+#     conflict markers, mark the node C, and refuse the next commit. ---
 cd "$WC1"
 echo "wc1 second change" > README
 out=$("$SVN_BIN" commit --author alice --log "conflict setter")
@@ -87,26 +88,56 @@ check "wc1 conflict-setter rev" "5" "$rev_c"
 
 cd "$WC2"
 echo "wc2 divergent change" > README
-# Expect update to fail with conflict.
-if "$SVN_BIN" update 2>/tmp/upd_err; then
-    echo "  FAIL update should have returned nonzero"
+# Update succeeds — applies a 3-way merge with markers for README.
+out=$("$SVN_BIN" update 2>&1)
+check "update succeeded"      "At revision 5." "$(echo "$out" | grep '^At revision')"
+
+# README should have conflict markers from diff3 -m.
+grep -q '<<<<<<< MINE' README && grep -q '>>>>>>> THEIRS' README && m=yes || m=no
+check "README has conflict markers" "yes" "$m"
+
+# base_rev advanced despite conflict.
+b2_after=$(sqlite3 "$WC2/.svn/wc.db" "SELECT value FROM info WHERE key='base_rev'")
+check "wc2 base_rev advanced to 5" "5" "$b2_after"
+
+# Sidecars exist.
+check ".mine sidecar"          "present" "$(test -f README.mine && echo present || echo absent)"
+check ".r4 sidecar (BASE)"     "present" "$(test -f README.r4 && echo present || echo absent)"
+check ".r5 sidecar (THEIRS)"   "present" "$(test -f README.r5 && echo present || echo absent)"
+
+# status shows C.
+out=$("$SVN_BIN" status)
+check "status shows C README"  "1" "$(echo "$out" | grep -c '^C.*README' || true)"
+
+# Sidecars must NOT show as ? in status.
+check "no ? entries"           "0" "$(echo "$out" | grep -c '^?' || true)"
+
+# commit is refused while the conflict stands.
+if "$SVN_BIN" commit --author alice --log "try anyway" 2>/tmp/commit_err; then
+    echo "  FAIL commit with conflict should fail"
     FAILS=$((FAILS+1))
 else
-    echo "  ok   update returns nonzero on conflict"
+    echo "  ok   commit with conflict refused"
 fi
 
-# Nothing should have changed in wc2: README is still our divergent version.
-check "wc2 README unchanged on conflict" "wc2 divergent change" "$(cat README)"
-b2_after=$(sqlite3 "$WC2/.svn/wc.db" "SELECT value FROM info WHERE key='base_rev'")
-check "wc2 base_rev unchanged on conflict" "4" "$b2_after"
+# --- svn resolve --accept working: accept user's hand-edit ---
+echo "reconciled" > README
+"$SVN_BIN" resolve --accept working README > /tmp/res.out
+check "resolve prints Resolved" "Resolved conflicted state of 'README'" "$(cat /tmp/res.out)"
+check "sidecar .mine gone"     "absent" "$(test -f README.mine && echo present || echo absent)"
+check "sidecar .r4 gone"       "absent" "$(test -f README.r4 && echo present || echo absent)"
+check "sidecar .r5 gone"       "absent" "$(test -f README.r5 && echo present || echo absent)"
 
-# --- resolve by reverting our edit, then update succeeds ---
-echo "updated from wc1" > README   # restore to rev 4 content
-out=$("$SVN_BIN" update)
-check "update succeeds after resolve" "At revision 5." "$out"
-check "wc2 README is the rev-5 version" "wc1 second change" "$(cat README)"
+# Status: README is now M (resolved content differs from pristine).
+out=$("$SVN_BIN" status)
+check "resolved shows M"       "1" "$(echo "$out" | grep -c '^M.*README' || true)"
 
-# --- --rev N selector: go back down to rev 4 ---
+# Commit now succeeds.
+out=$("$SVN_BIN" commit --author alice --log "resolve to reconciled")
+rev=$(echo "$out" | awk -F'[ .]' '/^Committed/{print $3}')
+check "commit after resolve"   "6" "$rev"
+
+# --- --rev N selector still works ---
 out=$("$SVN_BIN" update --rev 4)
 check "update --rev 4"        "At revision 4."   "$out"
 check "wc2 README is rev-4"   "updated from wc1" "$(cat README)"

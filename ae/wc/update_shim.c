@@ -45,6 +45,15 @@ void     svnae_wc_db_close(sqlite3 *db);
 int      svnae_wc_db_upsert_node(sqlite3 *db, const char *path, int kind, int base_rev, const char *sha1, int state);
 int      svnae_wc_db_delete_node(sqlite3 *db, const char *path);
 int      svnae_wc_db_set_info(sqlite3 *db, const char *key, const char *value);
+int      svnae_wc_db_set_conflicted(sqlite3 *db, const char *path, int conflicted);
+
+int      svnae_merge3_apply(const char *wc_path,
+                            const char *base, int base_len, int base_rev,
+                            const char *theirs, int theirs_len, int theirs_rev);
+
+char    *svnae_wc_pristine_get(const char *wc_root, const char *sha1);
+int      svnae_wc_pristine_size(const char *wc_root, const char *sha1);
+void     svnae_wc_pristine_free(char *p);
 
 struct svnae_wc_nodelist;
 struct svnae_wc_nodelist *svnae_wc_db_list_nodes(sqlite3 *db);
@@ -286,38 +295,15 @@ svnae_wc_update(const char *wc_root, int target_rev)
     struct svnae_wc_nodelist *L = svnae_wc_db_list_nodes(db);
     int n_local = svnae_wc_nodelist_count(L);
 
-    /* 3. Conflict pre-scan. For every local file in state=normal whose
-     *    remote sha1 differs from base_sha1 AND whose disk sha1 differs
-     *    from base_sha1 too, that's a conflict — bail without touching
-     *    anything. */
-    for (int i = 0; i < n_local; i++) {
-        const char *rel      = svnae_wc_nodelist_path(L, i);
-        int         kind     = svnae_wc_nodelist_kind(L, i);
-        int         state    = svnae_wc_nodelist_state(L, i);
-        const char *base_sha = svnae_wc_nodelist_base_sha1(L, i);
-        if (kind != 0) continue;
-        if (state != 0) continue;
 
-        const struct remote_node *r = rtree_find(&rt, rel);
-        if (!r || r->kind != 0) continue;
-
-        if (strcmp(r->sha1, base_sha) == 0) continue;  /* remote unchanged */
-
-        char disk[PATH_MAX];
-        snprintf(disk, sizeof disk, "%s/%s", wc_root, rel);
-        char disk_sha[41];
-        if (sha1_of_file(disk, disk_sha) != 0) continue;
-
-        if (strcmp(disk_sha, base_sha) != 0) {
-            /* Local modified AND remote modified → conflict. */
-            svnae_wc_nodelist_free(L);
-            rtree_free(&rt);
-            svnae_wc_info_free(base_url); svnae_wc_info_free(repo);
-            svnae_wc_db_close(db);
-            fprintf(stderr, "conflict: %s was modified locally and on the remote\n", rel);
-            return -2;
-        }
-    }
+    /* 3. Scan for files where both local and remote changed. For each
+     *    such file we'll attempt a 3-way text merge when we apply.
+     *    Collect the list here so the apply pass knows which paths to
+     *    route through merge3 instead of straight overwrite. */
+    /* (No pre-scan rejection anymore — that's Phase 5.7 behaviour.
+     *  The apply pass decides per-file: clean overwrite vs 3-way merge
+     *  vs conflict.) */
+    int had_conflict = 0;
 
     /* 4. Apply. Pass A: handle local-only and overlap. */
     for (int i = 0; i < n_local; i++) {
@@ -346,12 +332,52 @@ svnae_wc_update(const char *wc_root, int target_rev)
             continue;
         }
         if (kind == 0 && strcmp(r->sha1, base_sha) != 0) {
-            /* Remote newer. Write new content (clean by pre-scan). */
+            /* Remote newer. Decide: clean overwrite, or 3-way merge. */
             char disk[PATH_MAX];
             snprintf(disk, sizeof disk, "%s/%s", wc_root, rel);
-            if (write_file_atomic(disk, r->data, r->data_len) != 0) continue;
-            svnae_wc_pristine_put(wc_root, r->data, r->data_len);
-            svnae_wc_db_upsert_node(db, rel, 0, target_rev, r->sha1, 0);
+            char disk_sha[41];
+            int local_clean = (sha1_of_file(disk, disk_sha) == 0
+                               && strcmp(disk_sha, base_sha) == 0);
+
+            if (local_clean) {
+                /* Straight overwrite. */
+                if (write_file_atomic(disk, r->data, r->data_len) != 0) continue;
+                svnae_wc_pristine_put(wc_root, r->data, r->data_len);
+                svnae_wc_db_upsert_node(db, rel, 0, target_rev, r->sha1, 0);
+            } else {
+                /* Local modified. 3-way merge: base = pristine,
+                 * theirs = remote, mine = disk. */
+                int base_len = svnae_wc_pristine_size(wc_root, base_sha);
+                char *base_buf = svnae_wc_pristine_get(wc_root, base_sha);
+                if (!base_buf) {
+                    /* Can't get base — fall back to rejecting this path. */
+                    svnae_wc_db_upsert_node(db, rel, kind, target_rev, base_sha, 0);
+                    continue;
+                }
+                int m3rc = svnae_merge3_apply(disk,
+                                              base_buf, base_len,
+                                              svnae_wc_nodelist_base_rev(L, i),
+                                              r->data, r->data_len, target_rev);
+                svnae_wc_pristine_free(base_buf);
+                if (m3rc == 0) {
+                    /* Clean merge. Pristine becomes remote; base_rev advances;
+                     * disk contains the merged text (now equal to remote). */
+                    svnae_wc_pristine_put(wc_root, r->data, r->data_len);
+                    svnae_wc_db_upsert_node(db, rel, 0, target_rev, r->sha1, 0);
+                } else if (m3rc == 1) {
+                    /* Conflict. Pristine advances to remote (so the file's
+                     * "base" for next operations is the new remote), but we
+                     * flag the node conflicted so status/commit know. The
+                     * disk file currently holds marker-annotated text. */
+                    svnae_wc_pristine_put(wc_root, r->data, r->data_len);
+                    svnae_wc_db_upsert_node(db, rel, 0, target_rev, r->sha1, 0);
+                    svnae_wc_db_set_conflicted(db, rel, 1);
+                    had_conflict = 1;
+                    fprintf(stderr, "C    %s\n", rel);
+                } else {
+                    fprintf(stderr, "error merging %s; left alone\n", rel);
+                }
+            }
         } else {
             /* Unchanged — just bump base_rev. */
             svnae_wc_db_upsert_node(db, rel, kind, target_rev, base_sha, 0);
@@ -389,5 +415,9 @@ svnae_wc_update(const char *wc_root, int target_rev)
     svnae_wc_info_free(base_url);
     svnae_wc_info_free(repo);
     svnae_wc_db_close(db);
+    /* Update applied (possibly with conflicts — the conflicted flag is
+     * set on each such node for status/commit). We return target_rev
+     * either way; callers can check status to see what needs resolving. */
+    (void)had_conflict;
     return target_rev;
 }

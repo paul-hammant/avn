@@ -1,0 +1,222 @@
+/* ae/wc/merge3_shim.c — three-way text merge via diff3(1).
+ *
+ * The three inputs are buffers in memory (mine / base / theirs). We write
+ * them to temp files, shell out to `diff3 -m` with appropriate --label
+ * args, capture stdout, and return:
+ *
+ *   0  = clean merge (output has no conflict markers)
+ *   1  = conflicts in output (caller writes the conflicted file,
+ *        preserves the three inputs as sidecars, marks the node)
+ *   -1 = error running diff3
+ *
+ * The merged bytes are returned via an out-param allocated with malloc;
+ * the caller frees with svnae_merge3_free. Length via out_len.
+ *
+ * Labels used in markers so users see who's who:
+ *   MINE    = the working-copy version (left side)
+ *   BASE    = the common ancestor (middle)
+ *   THEIRS  = the incoming version (right)
+ *
+ * For update:  mine=disk, base=pristine, theirs=remote-at-target.
+ * For merge:   mine=disk-in-target, base=remote-source-at-A,
+ *              theirs=remote-source-at-B.
+ */
+
+#include <errno.h>
+#include <fcntl.h>
+#include <limits.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
+#ifndef PATH_MAX
+#define PATH_MAX 4096
+#endif
+
+static int
+write_tmp(const char *data, int len, char *out_path, size_t out_sz)
+{
+    static int seq = 0;
+    snprintf(out_path, out_sz, "/tmp/svnae_m3_%d_%d.tmp", (int)getpid(), seq++);
+    int fd = open(out_path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd < 0) return -1;
+    const char *p = data; int rem = len;
+    while (rem > 0) {
+        ssize_t w = write(fd, p, (size_t)rem);
+        if (w < 0) { if (errno == EINTR) continue; close(fd); unlink(out_path); return -1; }
+        p += w; rem -= (int)w;
+    }
+    close(fd);
+    return 0;
+}
+
+/* Slurp a file into malloc'd memory. Returns buf, sets *out_len. */
+static char *
+slurp(const char *path, int *out_len)
+{
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) return NULL;
+    struct stat st;
+    if (fstat(fd, &st) != 0) { close(fd); return NULL; }
+    char *buf = malloc((size_t)st.st_size + 1);
+    int got = 0;
+    while (got < st.st_size) {
+        ssize_t n = read(fd, buf + got, (size_t)(st.st_size - got));
+        if (n < 0) { if (errno == EINTR) continue; free(buf); close(fd); return NULL; }
+        if (n == 0) break;
+        got += (int)n;
+    }
+    close(fd);
+    buf[got] = '\0';
+    *out_len = got;
+    return buf;
+}
+
+/* Run `diff3 -m --label MINE --label BASE --label THEIRS mine base theirs`
+ * and capture stdout into a malloc'd buffer. Returns diff3's exit status
+ * (0 clean, 1 conflicts, >1 error), or -1 on fork/wait failure. */
+static int
+run_diff3(const char *mine_path, const char *base_path, const char *theirs_path,
+          char **out_merged, int *out_len)
+{
+    int pipefd[2];
+    if (pipe(pipefd) != 0) return -1;
+
+    pid_t pid = fork();
+    if (pid < 0) { close(pipefd[0]); close(pipefd[1]); return -1; }
+    if (pid == 0) {
+        /* Child: redirect stdout to the write end; exec diff3. */
+        close(pipefd[0]);
+        dup2(pipefd[1], 1);
+        close(pipefd[1]);
+        /* We don't need stderr unless diff3 explodes; let it through. */
+        execlp("diff3", "diff3", "-m",
+               "--label", "MINE",
+               "--label", "BASE",
+               "--label", "THEIRS",
+               mine_path, base_path, theirs_path, (char *)NULL);
+        _exit(127);
+    }
+    close(pipefd[1]);
+
+    /* Parent: drain pipe into a growable buf. */
+    char *buf = NULL;
+    int   cap = 0, len = 0;
+    for (;;) {
+        if (len + 4096 > cap) {
+            int nc = cap ? cap * 2 : 8192;
+            while (len + 4096 > nc) nc *= 2;
+            buf = realloc(buf, (size_t)nc);
+            cap = nc;
+        }
+        ssize_t n = read(pipefd[0], buf + len, 4096);
+        if (n < 0) { if (errno == EINTR) continue; break; }
+        if (n == 0) break;
+        len += (int)n;
+    }
+    close(pipefd[0]);
+
+    int status = 0;
+    waitpid(pid, &status, 0);
+    int ex = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+
+    if (ex < 0 || ex > 2) {
+        free(buf);
+        return -1;
+    }
+    if (!buf) buf = malloc(1);
+    buf[len] = '\0';
+    *out_merged = buf;
+    *out_len = len;
+    return ex;
+}
+
+/* Public entry point.
+ *   mine/base/theirs — three buffers
+ *   out_merged       — receives malloc'd merge result
+ *   out_len          — its length
+ * Returns 0 clean, 1 conflicts, -1 error. */
+int
+svnae_merge3(const char *mine,   int mine_len,
+             const char *base,   int base_len,
+             const char *theirs, int theirs_len,
+             char **out_merged,  int *out_len)
+{
+    char mp[PATH_MAX], bp[PATH_MAX], tp[PATH_MAX];
+    if (write_tmp(mine,   mine_len,   mp, sizeof mp)   != 0) return -1;
+    if (write_tmp(base,   base_len,   bp, sizeof bp)   != 0) { unlink(mp); return -1; }
+    if (write_tmp(theirs, theirs_len, tp, sizeof tp)   != 0) { unlink(mp); unlink(bp); return -1; }
+
+    int rc = run_diff3(mp, bp, tp, out_merged, out_len);
+
+    unlink(mp); unlink(bp); unlink(tp);
+    return rc;
+}
+
+void svnae_merge3_free(char *p) { free(p); }
+
+/* Convenience: apply 3-way merge to an on-disk WC file.
+ *
+ * Called when an update or merge operation wants to apply an incoming
+ * `theirs` buffer against the WC file at `wc_path`, given a known base
+ * content `base`. On a clean merge the file is overwritten with the
+ * merged result. On conflicts the file is still overwritten (with the
+ * marker-annotated text) and the three inputs are kept as sidecars:
+ *
+ *   <wc_path>.mine         — user's local version before the merge
+ *   <wc_path>.r<base_rev>  — common-ancestor
+ *   <wc_path>.r<theirs_rev>— incoming
+ *
+ * Caller is expected to flip wc.db's `conflicted` column on the node
+ * when we return 1 so status/commit behave correctly.
+ *
+ * Returns 0 clean, 1 conflicts, -1 error. */
+int
+svnae_merge3_apply(const char *wc_path,
+                   const char *base, int base_len, int base_rev,
+                   const char *theirs, int theirs_len, int theirs_rev)
+{
+    int mine_len = 0;
+    char *mine = slurp(wc_path, &mine_len);
+    if (!mine) return -1;
+
+    char *merged = NULL;
+    int   merged_len = 0;
+    int rc = svnae_merge3(mine, mine_len, base, base_len,
+                          theirs, theirs_len, &merged, &merged_len);
+    if (rc < 0) { free(mine); return -1; }
+
+    /* Write merged back to wc_path, atomically. */
+    char tmp[PATH_MAX];
+    snprintf(tmp, sizeof tmp, "%s.svnmerge.%d", wc_path, (int)getpid());
+    int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) { free(mine); free(merged); return -1; }
+    ssize_t w = write(fd, merged, (size_t)merged_len);
+    close(fd);
+    if (w != merged_len || rename(tmp, wc_path) != 0) {
+        unlink(tmp);
+        free(mine); free(merged);
+        return -1;
+    }
+
+    if (rc == 1) {
+        /* Conflicts — drop sidecars for svn resolve to use. */
+        char side[PATH_MAX];
+        snprintf(side, sizeof side, "%s.mine", wc_path);
+        int sfd = open(side, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (sfd >= 0) { (void)write(sfd, mine, (size_t)mine_len); close(sfd); }
+        snprintf(side, sizeof side, "%s.r%d", wc_path, base_rev);
+        sfd = open(side, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (sfd >= 0) { (void)write(sfd, base, (size_t)base_len); close(sfd); }
+        snprintf(side, sizeof side, "%s.r%d", wc_path, theirs_rev);
+        sfd = open(side, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (sfd >= 0) { (void)write(sfd, theirs, (size_t)theirs_len); close(sfd); }
+    }
+
+    free(mine); free(merged);
+    return rc;
+}

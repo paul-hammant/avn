@@ -83,19 +83,38 @@ out=$("$SVN_BIN" commit --author alice --log "merge trunk r5 into branch")
 rev=$(echo "$out" | awk -F'[ .]' '/^Committed/{print $3}')
 check "merge commit rev"        "6" "$rev"
 
-# Conflict: local edit on the target file, then merge — should refuse.
+# Conflict scenario: local edit on the target file, then merge — now
+# produces a 3-way merge with conflict markers + C status (Phase 5.13).
 cd /
 rm -rf "$WC"
 "$SVN_BIN" checkout "$URL" "$WC" --rev 4 >/dev/null
 cd "$WC"
 echo "local divergent" > src-branch/main.c
-if "$SVN_BIN" merge "$URL/src@4:5" src-branch 2>/tmp/mrg_err; then
-    echo "  FAIL merge with local mod should fail"
+# Merge runs (no fatal abort). It should report C and leave markers.
+"$SVN_BIN" merge "$URL/src@4:5" src-branch 2>/tmp/mrg_err || true
+
+# File has conflict markers.
+grep -q '<<<<<<< MINE' src-branch/main.c && grep -q '>>>>>>> THEIRS' src-branch/main.c && m=yes || m=no
+check "merge produced markers" "yes" "$m"
+
+# status shows C.
+out=$("$SVN_BIN" status)
+check "status shows C"         "1" "$(echo "$out" | grep -c '^C.*src-branch/main.c' || true)"
+
+# Commit refuses.
+if "$SVN_BIN" commit --author alice --log "try" 2>/tmp/commit_err; then
+    echo "  FAIL commit-with-conflict should fail"
     FAILS=$((FAILS+1))
 else
-    echo "  ok   merge with local mod rejected"
+    echo "  ok   commit-with-conflict refused"
 fi
-check "local edit preserved"    "local divergent" "$(cat src-branch/main.c)"
+
+# Resolve with --accept mine (keep local edit) and commit.
+"$SVN_BIN" resolve src-branch/main.c --accept mine > /dev/null
+check "resolved to mine"       "local divergent" "$(cat src-branch/main.c)"
+out=$("$SVN_BIN" status)
+# After resolve-mine the file sha differs from pristine (pristine = THEIRS).
+check "resolved shows M"       "1" "$(echo "$out" | grep -c '^M.*src-branch/main.c' || true)"
 
 cd /
 kill "$SRV" 2>/dev/null || true

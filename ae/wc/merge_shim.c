@@ -71,6 +71,11 @@ int   svnae_wc_propset(const char *wc_root, const char *path, const char *name, 
 char *svnae_wc_propget(const char *wc_root, const char *path, const char *name);
 void  svnae_wc_props_free(char *s);
 
+int   svnae_wc_db_set_conflicted(sqlite3 *db, const char *path, int conflicted);
+int   svnae_merge3_apply(const char *wc_path,
+                         const char *base, int base_len, int base_rev,
+                         const char *theirs, int theirs_len, int theirs_rev);
+
 /* --- tiny helpers ---------------------------------------------------- */
 
 static int
@@ -309,34 +314,8 @@ svnae_wc_merge(const char *wc_root, const char *source_path, int rev_a, int rev_
         else              snprintf(out, PATH_MAX, "%s", p); \
     } while (0)
 
-    /* Pre-scan: local-modification conflicts on files that will change. */
-    for (int i = 0; i < A.n; i++) {
-        const struct rnode *ra = &A.items[i];
-        if (ra->kind != 0) continue;
-        const struct rnode *rb = rt_find(&B, ra->path);
-        if (rb && strcmp(ra->sha1, rb->sha1) == 0) continue;  /* unchanged on remote */
-
-        char wc_rel[PATH_MAX]; MAP_WC_REL(ra->path, wc_rel);
-        char disk[PATH_MAX]; snprintf(disk, sizeof disk, "%s/%s", wc_root, wc_rel);
-        struct stat st;
-        if (stat(disk, &st) != 0) continue;
-
-        struct svnae_wc_node *n = svnae_wc_db_get_node(db, wc_rel);
-        if (!n) continue;
-        char base_sha[41] = {0};
-        const char *bs = svnae_wc_node_base_sha1(n);
-        if (bs) strncpy(base_sha, bs, 40);
-        char disk_sha[41];
-        int has_disk_sha = (sha1_of_file(disk, disk_sha) == 0);
-        svnae_wc_node_free(n);
-        if (has_disk_sha && strcmp(disk_sha, base_sha) != 0) {
-            svnae_wc_db_close(db);
-            rt_free(&A); rt_free(&B);
-            svnae_wc_info_free(base_url); svnae_wc_info_free(repo);
-            fprintf(stderr, "conflict: local modification on %s\n", wc_rel);
-            return -2;
-        }
-    }
+    /* Phase 5.13: no pre-scan abort. Per-file, the apply pass decides
+     * clean overwrite vs 3-way merge. */
 
     /* Apply deletions (A has it, B doesn't). */
     for (int i = 0; i < A.n; i++) {
@@ -378,11 +357,58 @@ svnae_wc_merge(const char *wc_root, const char *source_path, int rev_a, int rev_
 
         if (ra && ra->kind == 0 && strcmp(ra->sha1, rb->sha1) == 0) continue;
 
-        if (write_file_atomic(disk, rb->data, rb->data_len) != 0) continue;
-        svnae_wc_pristine_put(wc_root, rb->data, rb->data_len);
+        /* Does the local file already exist? If yes and it's clean
+         * against its pristine, straight overwrite (the change from A
+         * to B is safe to apply). If dirty locally, 3-way merge using
+         * A as base and B as theirs. If not present locally, straight
+         * add. */
+        int exists_on_disk = 0;
+        {
+            struct stat st;
+            exists_on_disk = (stat(disk, &st) == 0);
+        }
+        if (!exists_on_disk || !svnae_wc_db_node_exists(db, wc_rel)) {
+            /* Not tracked yet — new add-file. */
+            if (write_file_atomic(disk, rb->data, rb->data_len) != 0) continue;
+            svnae_wc_pristine_put(wc_root, rb->data, rb->data_len);
+            if (!svnae_wc_db_node_exists(db, wc_rel))
+                svnae_wc_db_upsert_node(db, wc_rel, 0, 0, "", 1);
+            continue;
+        }
 
-        if (!svnae_wc_db_node_exists(db, wc_rel)) {
-            svnae_wc_db_upsert_node(db, wc_rel, 0, 0, "", 1);
+        /* Tracked. Check for local modification. */
+        char disk_sha[41];
+        int has_disk_sha = (sha1_of_file(disk, disk_sha) == 0);
+        struct svnae_wc_node *n = svnae_wc_db_get_node(db, wc_rel);
+        char local_base_sha[41] = {0};
+        int  local_base_rev = 0;
+        if (n) {
+            const char *bs = svnae_wc_node_base_sha1(n);
+            if (bs) strncpy(local_base_sha, bs, 40);
+            local_base_rev = svnae_wc_node_base_rev(n);
+            svnae_wc_node_free(n);
+        }
+        int local_clean = (has_disk_sha && strcmp(disk_sha, local_base_sha) == 0);
+
+        if (local_clean) {
+            /* Safe overwrite — WC file was untouched. */
+            if (write_file_atomic(disk, rb->data, rb->data_len) != 0) continue;
+            svnae_wc_pristine_put(wc_root, rb->data, rb->data_len);
+        } else {
+            /* 3-way merge: mine=disk, base=source@A, theirs=source@B. */
+            int m3rc = svnae_merge3_apply(disk,
+                                          ra ? ra->data : "", ra ? ra->data_len : 0, rev_a,
+                                          rb->data, rb->data_len, rev_b);
+            if (m3rc == 0) {
+                svnae_wc_pristine_put(wc_root, rb->data, rb->data_len);
+            } else if (m3rc == 1) {
+                svnae_wc_pristine_put(wc_root, rb->data, rb->data_len);
+                svnae_wc_db_set_conflicted(db, wc_rel, 1);
+                fprintf(stderr, "C    %s\n", wc_rel);
+            } else {
+                fprintf(stderr, "error merging %s; left alone\n", wc_rel);
+            }
+            (void)local_base_rev;
         }
     }
 

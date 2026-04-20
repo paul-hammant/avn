@@ -80,11 +80,12 @@ svnae_wc_db_open(const char *wc_root)
      * idempotent across re-opens. */
     const char *schema =
         "CREATE TABLE IF NOT EXISTS nodes ("
-        "  path      TEXT PRIMARY KEY,"
-        "  kind      INT NOT NULL,"
-        "  base_rev  INT NOT NULL,"
-        "  base_sha1 TEXT NOT NULL,"
-        "  state     INT NOT NULL"
+        "  path       TEXT PRIMARY KEY,"
+        "  kind       INT NOT NULL,"
+        "  base_rev   INT NOT NULL,"
+        "  base_sha1  TEXT NOT NULL,"
+        "  state      INT NOT NULL,"
+        "  conflicted INT NOT NULL DEFAULT 0"
         ");"
         "CREATE TABLE IF NOT EXISTS info ("
         "  key   TEXT PRIMARY KEY,"
@@ -93,6 +94,23 @@ svnae_wc_db_open(const char *wc_root)
     if (sqlite3_exec(db, schema, NULL, NULL, NULL) != SQLITE_OK) {
         sqlite3_close(db);
         return NULL;
+    }
+    /* Migration for wc.db files created before Phase 5.13: if the
+     * `conflicted` column is missing, add it with a default of 0.
+     * ALTER TABLE ADD COLUMN fails if the column already exists — we
+     * check pragma table_info rather than trusting the error. */
+    sqlite3_stmt *pc = NULL;
+    int has_conflicted = 0;
+    if (sqlite3_prepare_v2(db, "PRAGMA table_info(nodes)", -1, &pc, NULL) == SQLITE_OK) {
+        while (sqlite3_step(pc) == SQLITE_ROW) {
+            const unsigned char *nm = sqlite3_column_text(pc, 1);
+            if (nm && strcmp((const char *)nm, "conflicted") == 0) { has_conflicted = 1; break; }
+        }
+        sqlite3_finalize(pc);
+    }
+    if (!has_conflicted) {
+        sqlite3_exec(db, "ALTER TABLE nodes ADD COLUMN conflicted INT NOT NULL DEFAULT 0",
+                     NULL, NULL, NULL);
     }
     return db;
 }
@@ -176,6 +194,7 @@ struct svnae_wc_node {
     int   base_rev;
     char *base_sha1;
     int   state;
+    int   conflicted;
 };
 
 struct svnae_wc_node *
@@ -183,7 +202,8 @@ svnae_wc_db_get_node(sqlite3 *db, const char *path)
 {
     sqlite3_stmt *st = NULL;
     const char *sql =
-        "SELECT path, kind, base_rev, base_sha1, state FROM nodes WHERE path = ?";
+        "SELECT path, kind, base_rev, base_sha1, state, conflicted"
+        "  FROM nodes WHERE path = ?";
     if (sqlite3_prepare_v2(db, sql, -1, &st, NULL) != SQLITE_OK) return NULL;
     sqlite3_bind_text(st, 1, path, -1, SQLITE_TRANSIENT);
     if (sqlite3_step(st) != SQLITE_ROW) { sqlite3_finalize(st); return NULL; }
@@ -195,6 +215,7 @@ svnae_wc_db_get_node(sqlite3 *db, const char *path)
     const char *s = (const char *)sqlite3_column_text(st, 3);
     n->base_sha1 = strdup(s ? s : "");
     n->state     = sqlite3_column_int(st, 4);
+    n->conflicted = sqlite3_column_int(st, 5);
     sqlite3_finalize(st);
     return n;
 }
@@ -204,6 +225,7 @@ int         svnae_wc_node_kind    (const struct svnae_wc_node *n) { return n ? n
 int         svnae_wc_node_base_rev(const struct svnae_wc_node *n) { return n ? n->base_rev : -1; }
 const char *svnae_wc_node_base_sha1(const struct svnae_wc_node *n){ return n && n->base_sha1 ? n->base_sha1 : ""; }
 int         svnae_wc_node_state   (const struct svnae_wc_node *n) { return n ? n->state : -1; }
+int         svnae_wc_node_conflicted(const struct svnae_wc_node *n) { return n ? n->conflicted : 0; }
 
 void
 svnae_wc_node_free(struct svnae_wc_node *n)
@@ -219,6 +241,21 @@ svnae_wc_node_free(struct svnae_wc_node *n)
  * Returns a snapshot of all rows as an array handle + indexed accessors.
  * Ordered by path for deterministic iteration.
  */
+
+/* Set the conflicted flag on a node without touching other fields.
+ * Returns 0 on success. */
+int
+svnae_wc_db_set_conflicted(sqlite3 *db, const char *path, int conflicted)
+{
+    sqlite3_stmt *st = NULL;
+    const char *sql = "UPDATE nodes SET conflicted = ? WHERE path = ?";
+    if (sqlite3_prepare_v2(db, sql, -1, &st, NULL) != SQLITE_OK) return -1;
+    sqlite3_bind_int (st, 1, conflicted);
+    sqlite3_bind_text(st, 2, path, -1, SQLITE_TRANSIENT);
+    int rc = sqlite3_step(st);
+    sqlite3_finalize(st);
+    return rc == SQLITE_DONE ? 0 : -1;
+}
 
 struct svnae_wc_nodelist {
     struct svnae_wc_node *items;
@@ -240,18 +277,20 @@ svnae_wc_db_list_nodes(sqlite3 *db)
     L->items = calloc((size_t)n, sizeof *L->items);
 
     const char *sql =
-        "SELECT path, kind, base_rev, base_sha1, state FROM nodes ORDER BY path";
+        "SELECT path, kind, base_rev, base_sha1, state, conflicted"
+        "  FROM nodes ORDER BY path";
     if (sqlite3_prepare_v2(db, sql, -1, &st, NULL) != SQLITE_OK) {
         free(L->items); free(L); return NULL;
     }
     int i = 0;
     while (sqlite3_step(st) == SQLITE_ROW && i < n) {
-        L->items[i].path      = strdup((const char *)sqlite3_column_text(st, 0));
-        L->items[i].kind      = sqlite3_column_int(st, 1);
-        L->items[i].base_rev  = sqlite3_column_int(st, 2);
-        const char *s         = (const char *)sqlite3_column_text(st, 3);
-        L->items[i].base_sha1 = strdup(s ? s : "");
-        L->items[i].state     = sqlite3_column_int(st, 4);
+        L->items[i].path       = strdup((const char *)sqlite3_column_text(st, 0));
+        L->items[i].kind       = sqlite3_column_int(st, 1);
+        L->items[i].base_rev   = sqlite3_column_int(st, 2);
+        const char *s          = (const char *)sqlite3_column_text(st, 3);
+        L->items[i].base_sha1  = strdup(s ? s : "");
+        L->items[i].state      = sqlite3_column_int(st, 4);
+        L->items[i].conflicted = sqlite3_column_int(st, 5);
         i++;
     }
     L->n = i;   /* in case count raced with stepping */
@@ -266,6 +305,7 @@ int         svnae_wc_nodelist_kind    (const struct svnae_wc_nodelist *L, int i)
 int         svnae_wc_nodelist_base_rev(const struct svnae_wc_nodelist *L, int i) { return (L && i >= 0 && i < L->n) ? L->items[i].base_rev : -1; }
 const char *svnae_wc_nodelist_base_sha1(const struct svnae_wc_nodelist *L, int i){ return (L && i >= 0 && i < L->n && L->items[i].base_sha1) ? L->items[i].base_sha1 : ""; }
 int         svnae_wc_nodelist_state   (const struct svnae_wc_nodelist *L, int i) { return (L && i >= 0 && i < L->n) ? L->items[i].state : -1; }
+int         svnae_wc_nodelist_conflicted(const struct svnae_wc_nodelist *L, int i) { return (L && i >= 0 && i < L->n) ? L->items[i].conflicted : 0; }
 
 void
 svnae_wc_nodelist_free(struct svnae_wc_nodelist *L)
