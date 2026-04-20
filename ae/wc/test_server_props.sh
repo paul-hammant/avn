@@ -66,10 +66,15 @@ check "prop change observed"  "application/octet-stream" \
     "$("$SVN_BIN" propget svn:mime-type README)"
 check "new prop observed"     "alice" \
     "$("$SVN_BIN" propget owner README)"
-# propdel propagation isn't yet implemented in update (prop-delete on
-# server → delete in WC2 would need an explicit "remove-missing" pass in
-# ingest_props). Skip this assertion for now — it stays on the deferred
-# list until the update/prop-merge pass is fleshed out.
+# Phase 5.18: propdel on the server now propagates through update.
+# WC2 had build:label=prod on src from the first commit; after the
+# second commit deleted that prop and WC2 updated, propget should fail.
+if "$SVN_BIN" propget build:label src 2>/dev/null; then
+    echo "  FAIL propdel did not propagate"
+    FAILS=$((FAILS+1))
+else
+    echo "  ok   propdel propagated"
+fi
 
 cd /
 kill "$SRV" 2>/dev/null || true

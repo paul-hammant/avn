@@ -241,13 +241,242 @@ walk_remote(const char *base_url, const char *repo, int rev,
     return 0;
 }
 
-/* --- mergeinfo plumbing ---------------------------------------------- */
+/* --- mergeinfo plumbing ---------------------------------------------- *
+ *
+ * svn:mergeinfo is a line-oriented property. Each line is:
+ *   <source-path>:<range>[,<range>...]
+ * where <range> is either "A-B" (forward merge of revs A..B inclusive)
+ * or "-A-B" (reverse merge of revs A..B inclusive).
+ *
+ * We canonicalise each source-path's ranges by expanding to per-rev
+ * bitmaps (forward_set, reverse_set), cancelling any rev in both
+ * (forward+reverse = no-op), then re-serialising as the minimum number
+ * of contiguous ranges.
+ *
+ * The bitmaps are sparse-friendly: we track a sorted int array per set.
+ * Revs fit in int because we never go past HEAD of the repo.
+ */
 
-/* Append a range to the WC's svn:mergeinfo property on path "".
- * `reverse` == 0 appends "source:A+1-B" (forward merge of A..B).
- * `reverse` == 1 appends "source:-A-B+1" using svn's convention for
- * reverse merges (leading '-' on the range). We don't attempt range
- * arithmetic / cancellation — that stays on the deferred list. */
+#include <ctype.h>
+
+struct revset { int *v; int n, cap; };
+
+static void
+rs_add(struct revset *s, int rev)
+{
+    /* Keep sorted + unique via insertion. O(n) per add but n is tiny
+     * in practice (a handful per source). */
+    int lo = 0, hi = s->n;
+    while (lo < hi) {
+        int m = (lo + hi) >> 1;
+        if (s->v[m] < rev) lo = m + 1;
+        else               hi = m;
+    }
+    if (lo < s->n && s->v[lo] == rev) return;
+    if (s->n == s->cap) {
+        s->cap = s->cap ? s->cap * 2 : 8;
+        s->v = realloc(s->v, (size_t)s->cap * sizeof *s->v);
+    }
+    memmove(s->v + lo + 1, s->v + lo, (size_t)(s->n - lo) * sizeof *s->v);
+    s->v[lo] = rev;
+    s->n++;
+}
+
+static int
+rs_remove(struct revset *s, int rev)
+{
+    int lo = 0, hi = s->n;
+    while (lo < hi) {
+        int m = (lo + hi) >> 1;
+        if (s->v[m] < rev) lo = m + 1;
+        else               hi = m;
+    }
+    if (lo < s->n && s->v[lo] == rev) {
+        memmove(s->v + lo, s->v + lo + 1, (size_t)(s->n - lo - 1) * sizeof *s->v);
+        s->n--;
+        return 1;
+    }
+    return 0;
+}
+
+static void rs_free(struct revset *s) { free(s->v); s->v = NULL; s->n = s->cap = 0; }
+
+/* Per-source aggregation. */
+struct src_entry {
+    char         *source;
+    struct revset fwd;   /* forward-merged revs   */
+    struct revset rev;   /* reverse-merged revs   */
+};
+
+struct mi_table {
+    struct src_entry *items;
+    int               n, cap;
+};
+
+static struct src_entry *
+mi_find_or_add(struct mi_table *t, const char *source)
+{
+    for (int i = 0; i < t->n; i++)
+        if (strcmp(t->items[i].source, source) == 0) return &t->items[i];
+    if (t->n == t->cap) {
+        t->cap = t->cap ? t->cap * 2 : 8;
+        t->items = realloc(t->items, (size_t)t->cap * sizeof *t->items);
+    }
+    memset(&t->items[t->n], 0, sizeof t->items[t->n]);
+    t->items[t->n].source = strdup(source);
+    return &t->items[t->n++];
+}
+
+static void
+mi_free(struct mi_table *t)
+{
+    for (int i = 0; i < t->n; i++) {
+        free(t->items[i].source);
+        rs_free(&t->items[i].fwd);
+        rs_free(&t->items[i].rev);
+    }
+    free(t->items);
+}
+
+/* Parse one comma-separated range-list like "5-5,7-9,-3-4" into the
+ * given forward/reverse revsets. */
+static void
+parse_ranges_into(const char *list, struct revset *fwd, struct revset *rev)
+{
+    const char *p = list;
+    while (*p) {
+        while (*p == ',' || *p == ' ') p++;
+        if (!*p) break;
+        int is_reverse = 0;
+        if (*p == '-') { is_reverse = 1; p++; }
+        if (!isdigit((unsigned char)*p)) { while (*p && *p != ',') p++; continue; }
+        int a = 0;
+        while (isdigit((unsigned char)*p)) { a = a * 10 + (*p - '0'); p++; }
+        int b = a;
+        if (*p == '-') {
+            p++;
+            if (isdigit((unsigned char)*p)) {
+                b = 0;
+                while (isdigit((unsigned char)*p)) { b = b * 10 + (*p - '0'); p++; }
+            }
+        }
+        struct revset *target = is_reverse ? rev : fwd;
+        /* Range is inclusive on both ends. */
+        int lo = a < b ? a : b;
+        int hi = a < b ? b : a;
+        for (int r = lo; r <= hi; r++) rs_add(target, r);
+        while (*p && *p != ',') p++;
+    }
+}
+
+/* Parse the full "source:list\nsource:list\n" blob into the table. */
+static void
+parse_mergeinfo(const char *text, struct mi_table *out)
+{
+    if (!text || !*text) return;
+    const char *line = text;
+    while (*line) {
+        const char *eol = strchr(line, '\n');
+        size_t llen = eol ? (size_t)(eol - line) : strlen(line);
+        if (llen > 0) {
+            const char *colon = memchr(line, ':', llen);
+            if (colon) {
+                size_t src_len = (size_t)(colon - line);
+                char src[512];
+                if (src_len < sizeof src) {
+                    memcpy(src, line, src_len);
+                    src[src_len] = '\0';
+                    char list[1024];
+                    size_t list_len = llen - src_len - 1;
+                    if (list_len < sizeof list) {
+                        memcpy(list, colon + 1, list_len);
+                        list[list_len] = '\0';
+                        struct src_entry *e = mi_find_or_add(out, src);
+                        parse_ranges_into(list, &e->fwd, &e->rev);
+                    }
+                }
+            }
+        }
+        if (!eol) break;
+        line = eol + 1;
+    }
+}
+
+/* After union, cancel revs that appear in both fwd and rev. */
+static void
+cancel_pairs(struct src_entry *e)
+{
+    /* Walk both sorted arrays in parallel. */
+    int i = 0, j = 0;
+    while (i < e->fwd.n && j < e->rev.n) {
+        if      (e->fwd.v[i] == e->rev.v[j]) {
+            int r = e->fwd.v[i];
+            rs_remove(&e->fwd, r);
+            rs_remove(&e->rev, r);
+            /* indices may have shifted; restart from same i */
+        } else if (e->fwd.v[i] < e->rev.v[j]) {
+            i++;
+        } else {
+            j++;
+        }
+    }
+}
+
+/* Serialize a revset as contiguous-range list. Revs are already sorted. */
+static void
+emit_ranges(const struct revset *s, int is_reverse, char *buf, size_t cap, int *first)
+{
+    if (s->n == 0) return;
+    int i = 0;
+    while (i < s->n) {
+        int lo = s->v[i];
+        int hi = lo;
+        while (i + 1 < s->n && s->v[i+1] == hi + 1) { hi++; i++; }
+        i++;
+        char tmp[64];
+        if (is_reverse) snprintf(tmp, sizeof tmp, "-%d-%d", lo, hi);
+        else            snprintf(tmp, sizeof tmp, "%d-%d",  lo, hi);
+        size_t n = strlen(buf);
+        size_t t = strlen(tmp);
+        if (n + t + 2 >= cap) return;
+        if (!*first) buf[n++] = ',';
+        memcpy(buf + n, tmp, t);
+        buf[n + t] = '\0';
+        *first = 0;
+    }
+}
+
+/* Render the whole table back to a line-oriented string. Returns
+ * malloc'd — caller frees. Empty entries (fwd and rev both empty)
+ * are dropped. The table's source order is preserved, which keeps
+ * output stable between runs. */
+static char *
+serialize_mergeinfo(const struct mi_table *t)
+{
+    size_t cap = 1024;
+    char *out = malloc(cap);
+    out[0] = '\0';
+    for (int i = 0; i < t->n; i++) {
+        const struct src_entry *e = &t->items[i];
+        if (e->fwd.n == 0 && e->rev.n == 0) continue;
+        char line[1024];
+        snprintf(line, sizeof line, "%s:", e->source);
+        int first = 1;
+        emit_ranges(&e->fwd, 0, line, sizeof line, &first);
+        emit_ranges(&e->rev, 1, line, sizeof line, &first);
+        size_t need = strlen(out) + strlen(line) + 2;
+        if (need >= cap) {
+            cap = need * 2;
+            out = realloc(out, cap);
+        }
+        if (out[0]) strcat(out, "\n");
+        strcat(out, line);
+    }
+    return out;
+}
+
+/* Merge a new range into existing svn:mergeinfo on the WC root,
+ * cancelling against reverse entries and collapsing adjacent ones. */
 static int
 mergeinfo_add_range(const char *wc_root, const char *source,
                     int lo, int hi, int reverse)
@@ -260,22 +489,34 @@ mergeinfo_add_range(const char *wc_root, const char *source,
     svnae_wc_db_close(db);
 
     char *existing = svnae_wc_propget(wc_root, "", "svn:mergeinfo");
-    char line[256];
-    if (reverse) {
-        snprintf(line, sizeof line, "%s:-%d-%d", source, hi, lo + 1);
-    } else {
-        snprintf(line, sizeof line, "%s:%d-%d", source, lo + 1, hi);
-    }
-    char *new_val;
-    if (existing && *existing) {
-        size_t n = strlen(existing) + 1 + strlen(line) + 1;
-        new_val = malloc(n);
-        snprintf(new_val, n, "%s\n%s", existing, line);
-    } else {
-        new_val = strdup(line);
-    }
+
+    struct mi_table t = {0};
+    if (existing && *existing) parse_mergeinfo(existing, &t);
     svnae_wc_props_free(existing);
-    int rc = svnae_wc_propset(wc_root, "", "svn:mergeinfo", new_val);
+
+    struct src_entry *e = mi_find_or_add(&t, source);
+    /* Caller's (lo, hi) uses half-open lower bound: forward-merge of
+     * rev-range (lo, hi] means revs lo+1..hi inclusive. Reverse-merge
+     * of (lo, hi] (as recorded by svnae_wc_merge) also covers revs
+     * lo+1..hi inclusive. So both kinds span the same rev numbers.
+     * Expand into the appropriate set. */
+    struct revset *set = reverse ? &e->rev : &e->fwd;
+    for (int r = lo + 1; r <= hi; r++) rs_add(set, r);
+
+    cancel_pairs(e);
+
+    char *new_val = serialize_mergeinfo(&t);
+    mi_free(&t);
+
+    int rc;
+    if (new_val && *new_val) {
+        rc = svnae_wc_propset(wc_root, "", "svn:mergeinfo", new_val);
+    } else {
+        /* Empty result — delete the property entirely. */
+        extern int svnae_wc_propdel(const char *wc_root, const char *path, const char *name);
+        svnae_wc_propdel(wc_root, "", "svn:mergeinfo");
+        rc = 0;
+    }
     free(new_val);
     return rc;
 }

@@ -117,7 +117,7 @@ cd "$WC"
 "$SVN_BIN" merge -r 6:4 "$URL/src" src >/tmp/rmrg.out 2>&1
 check_file "reverse -r 6:4 content"   "$R4"  src/main.c
 mi=$("$SVN_BIN" propget svn:mergeinfo . 2>/dev/null || echo "")
-check "range reverse mergeinfo"  "src:-6-5"                             "$mi"
+check "range reverse mergeinfo"  "src:-5-6"                             "$mi"
 
 cd /
 kill "$SRV" 2>/dev/null || true

@@ -89,6 +89,14 @@ void        svnae_ra_props_free (struct svnae_ra_props *P);
 
 int svnae_wc_propset(const char *wc_root, const char *path,
                      const char *name, const char *value);
+int svnae_wc_propdel(const char *wc_root, const char *path, const char *name);
+
+struct svnae_wc_proplist;
+struct svnae_wc_proplist *svnae_wc_proplist(const char *wc_root, const char *path);
+int         svnae_wc_proplist_count(const struct svnae_wc_proplist *L);
+const char *svnae_wc_proplist_name (const struct svnae_wc_proplist *L, int i);
+const char *svnae_wc_proplist_value(const struct svnae_wc_proplist *L, int i);
+void        svnae_wc_proplist_free (struct svnae_wc_proplist *L);
 
 /* --- small helpers ---------------------------------------------------- */
 
@@ -269,22 +277,43 @@ walk_remote(const char *base_url, const char *repo, int rev,
     return 0;
 }
 
-/* Pull props for `rel` from the server at `rev` and re-apply them via
- * svnae_wc_propset. We don't currently delete removed props — reference
- * svn's prop merge is more subtle; for this phase we only overwrite /
- * add, which covers propset and propchange. */
+/* Pull props for `rel` from the server at `rev`, overwriting any that
+ * changed and removing any local props that the server no longer has.
+ * Set of keys we're told about = "remote". We (a) propset each remote
+ * key/value, then (b) propdel any local key not in the remote set.
+ *
+ * The WC proplist query is per-path; empty remote set means "server
+ * has no props for this path", in which case every local prop on
+ * this path gets deleted. */
 static void
 ingest_props(const char *base_url, const char *repo, int rev,
              const char *wc_root, const char *rel)
 {
     struct svnae_ra_props *P = svnae_ra_get_props(base_url, repo, rev, rel);
-    if (!P) return;
-    int pn = svnae_ra_props_count(P);
-    for (int j = 0; j < pn; j++) {
+    int rn = P ? svnae_ra_props_count(P) : 0;
+
+    /* (a) overwrite / add from remote. */
+    for (int j = 0; j < rn; j++) {
         svnae_wc_propset(wc_root, rel, svnae_ra_props_name(P, j),
                                         svnae_ra_props_value(P, j));
     }
-    svnae_ra_props_free(P);
+
+    /* (b) for each local prop that isn't in the remote set, delete it. */
+    struct svnae_wc_proplist *L = svnae_wc_proplist(wc_root, rel);
+    if (L) {
+        int ln = svnae_wc_proplist_count(L);
+        for (int i = 0; i < ln; i++) {
+            const char *lname = svnae_wc_proplist_name(L, i);
+            int found = 0;
+            for (int j = 0; j < rn; j++) {
+                if (strcmp(lname, svnae_ra_props_name(P, j)) == 0) { found = 1; break; }
+            }
+            if (!found) svnae_wc_propdel(wc_root, rel, lname);
+        }
+        svnae_wc_proplist_free(L);
+    }
+
+    if (P) svnae_ra_props_free(P);
 }
 
 /* --- conflict detection + apply --------------------------------------- */

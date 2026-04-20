@@ -11,8 +11,8 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
 
 ## Headline
 
-- **42 commits.** Each phase is its own commit, reviewable in isolation.
-- **34 test suites** (added `test_log_verbose.sh`), ~350 assertions, all green.
+- **43 commits.** Each phase is its own commit, reviewable in isolation.
+- **35 test suites** (added `test_mergeinfo_arith.sh`), ~358 assertions, all green.
   Mix of in-language `.ae` tests and end-to-end shell harnesses that
   spin up a real HTTP server and drive it with curl and the built
   `svn` CLI.
@@ -86,7 +86,8 @@ Named after the plan's Phase N. Plan: `../svn-to-aether.md`.
 | 5.14 | Server-side properties (propset round-trips through commit/checkout/update) | ✅ | (prev commit) |
 | 5.15 | `svn switch` — relocate WC to a different branch URL, reusing update pipeline | ✅ | (prev commit) |
 | 5.16 | `svn merge -c N` cherry-pick + reverse merge (`-r A:B` with A>B or `-c -N`) | ✅ | (prev commit) |
-| 5.17 | `svn log -v` — per-rev A/M/D path list via new /rev/N/paths endpoint | ✅ | (this commit) |
+| 5.17 | `svn log -v` — per-rev A/M/D path list via new /rev/N/paths endpoint | ✅ | (prev commit) |
+| 5.18 | mergeinfo arithmetic (cancel/collapse) + prop-delete propagation on update | ✅ | (this commit) |
 | 12 | svnadmin create/dump/load | ✅ | `52380a5` |
 
 ## Phases not yet done (from the plan)
@@ -111,23 +112,22 @@ Implemented:
   cherry-pick (`-c N` or `-c -N` for reverse). Classic `URL@A:B` form
   still supported. Always uses 3-way merge so cherry-pick onto a tree
   the source never saw does the right thing.
-- `svn:mergeinfo` recorded (append-only; reverse ranges written with
-  leading '-'). Range arithmetic / cancellation still deferred.
+- `svn:mergeinfo` recorded with range arithmetic: adjacent/overlapping
+  ranges collapse (`src:5-5` + `src:6-6` → `src:5-6`), forward and
+  reverse ranges of the same rev cancel out, empty results remove the
+  property entirely.
 - `svnadmin create/dump/load` with portable dump round-trip
 
 Not implemented (items the plan calls out or that reference svn has):
 
 - HTTPS / TLS transport
 - Authentication + authz
-- Mergeinfo range arithmetic (cancel forward/reverse of same range)
 - `svn blame`
 - Hooks (pre/post-commit scripts)
 - Path-based authz
 - Locks (`svn lock`/`unlock`)
 - `svn externals` (svn:externals property pulling sub-WCs)
 - `svn cleanup` (WC crash recovery)
-- Prop-delete propagation on update (prop-add/change works; prop-remove
-  does not currently remove the WC-local entry — deferred)
 - Pre-1.7 WC compatibility (intentionally dropped)
 - Reference-svn dump-format compatibility (intentionally dropped;
   we have our own portable format)
