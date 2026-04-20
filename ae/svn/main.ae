@@ -593,61 +593,109 @@ cmd_resolve(argv_start: int) {
     return 0
 }
 
+// Parse a revision range from three possible sources, in order of
+// precedence: --rev/-r A:B, -c N (cherry-pick), or URL@A:B suffix.
+// Returns 0 on success with rev_a/rev_b written via globals, or -1.
+//
+// Aether v0.70.0 has no out-parameters, so we return a packed int
+// (rev_a << 32) | rev_b isn't viable either (#13). Simplest: keep the
+// parsing inline in cmd_merge. Below is a dedicated helper for each
+// branch that returns a two-element int list.
 cmd_merge(argv_start: int) {
-    // svn merge URL@REVA:REVB
-    //   URL identifies source path in the repo; REVA..REVB is the range.
-    if aether_args_count() <= argv_start {
-        println("svn merge: usage: svn merge URL@REVA:REVB")
-        return 2
-    }
-    url = aether_args_get(argv_start)
+    // Parse flags first so we know which form is in use.
+    r_flag = find_flag("--rev", argv_start)
+    if string.length(r_flag) == 0 { r_flag = find_flag("-r", argv_start) }
+    c_flag = find_flag("-c", argv_start)
 
-    // Strip '@' suffix: everything before it is the plain URL. Find the
-    // last '@' (before any path '?' or '#' — we don't have those).
-    n = string.length(url)
-    at_pos = -1
-    i = n - 1
-    while i >= 0 {
-        c = string.char_at(url, i)
-        if c == 64 { at_pos = i; break }   // '@'
-        if c == 47 { break }               // '/' before '@' — no peg
-        i = i - 1
-    }
-    if at_pos < 0 {
-        println("svn merge: URL must carry @REVA:REVB")
-        return 2
-    }
-    url_stem = string.substring(url, 0, at_pos)
-    rev_spec = string.substring(url, at_pos + 1, n)
-
-    // Split rev_spec on ':'
-    colon = string.index_of(rev_spec, ":")
-    if colon < 0 {
-        println("svn merge: expected REVA:REVB after @")
-        return 2
-    }
-    a_str = string.substring(rev_spec, 0, colon)
-    b_str = string.substring(rev_spec, colon + 1, string.length(rev_spec))
-    if string.try_int(a_str) == 0 {
-        println("svn merge: REVA not a number"); return 2
-    }
-    if string.try_int(b_str) == 0 {
-        println("svn merge: REVB not a number"); return 2
-    }
-    rev_a = string.get_int(a_str)
-    rev_b = string.get_int(b_str)
-
-    // source_path is the in-repo path portion of url_stem.
-    source = in_repo_path(url_stem)
-
-    // Optional second positional: target subdir within the WC. Default "".
+    // URL positional: the first non-flag arg. If `-c` or `-r` is used
+    // the URL has no @REV suffix. Target (optional second positional)
+    // is the next non-flag arg after URL.
+    url = ""
     target = ""
-    if aether_args_count() > argv_start + 1 {
-        t = aether_args_get(argv_start + 1)
-        if string.length(t) > 0 {
-            if string.char_at(t, 0) != 45 { target = t }
+    idx = argv_start
+    n_args = aether_args_count()
+    while idx < n_args {
+        a = aether_args_get(idx)
+        skip = 1
+        if string.length(a) > 0 {
+            if string.char_at(a, 0) == 45 {
+                // -r/-c/--rev each consume an extra arg; other flags (none
+                // today) just consume themselves.
+                if string.equals(a, "-r") == 1 { skip = 2 }
+                if string.equals(a, "-c") == 1 { skip = 2 }
+                if string.equals(a, "--rev") == 1 { skip = 2 }
+            } else {
+                if string.length(url) == 0 { url = a }
+                else {
+                    if string.length(target) == 0 { target = a }
+                }
+            }
+        }
+        idx = idx + skip
+    }
+
+    if string.length(url) == 0 {
+        println("svn merge: usage:")
+        println("  svn merge -r A:B URL [TARGET]   # rev-range (reverse if A>B)")
+        println("  svn merge -c N URL   [TARGET]   # cherry-pick rev N (use -N to reverse)")
+        println("  svn merge URL@A:B    [TARGET]   # classic form")
+        return 2
+    }
+
+    rev_a = 0
+    rev_b = 0
+
+    if string.length(c_flag) > 0 {
+        // -c N  → merge -r N-1:N    ; -c -N → merge -r N:N-1.
+        if string.try_int(c_flag) == 0 {
+            println("svn merge: -c expects a rev number"); return 2
+        }
+        n = string.get_int(c_flag)
+        if n == 0 { println("svn merge: -c 0 is empty"); return 2 }
+        if n > 0 { rev_a = n - 1; rev_b = n }
+        else     { k = 0 - n; rev_a = k; rev_b = k - 1 }
+    } else {
+        if string.length(r_flag) > 0 {
+            colon = string.index_of(r_flag, ":")
+            if colon < 0 {
+                println("svn merge: -r expects A:B"); return 2
+            }
+            a_s = string.substring(r_flag, 0, colon)
+            b_s = string.substring(r_flag, colon + 1, string.length(r_flag))
+            if string.try_int(a_s) == 0 { println("svn merge: -r A not a number"); return 2 }
+            if string.try_int(b_s) == 0 { println("svn merge: -r B not a number"); return 2 }
+            rev_a = string.get_int(a_s)
+            rev_b = string.get_int(b_s)
+        } else {
+            // Fall back to URL@A:B classic form.
+            n = string.length(url)
+            at_pos = -1
+            i = n - 1
+            while i >= 0 {
+                c = string.char_at(url, i)
+                if c == 64 { at_pos = i; break }
+                if c == 47 { break }
+                i = i - 1
+            }
+            if at_pos < 0 {
+                println("svn merge: URL must carry @REVA:REVB or use -r/-c")
+                return 2
+            }
+            url_stem = string.substring(url, 0, at_pos)
+            rev_spec = string.substring(url, at_pos + 1, n)
+            colon = string.index_of(rev_spec, ":")
+            if colon < 0 { println("svn merge: expected REVA:REVB after @"); return 2 }
+            a_str = string.substring(rev_spec, 0, colon)
+            b_str = string.substring(rev_spec, colon + 1, string.length(rev_spec))
+            if string.try_int(a_str) == 0 { println("svn merge: REVA not a number"); return 2 }
+            if string.try_int(b_str) == 0 { println("svn merge: REVB not a number"); return 2 }
+            rev_a = string.get_int(a_str)
+            rev_b = string.get_int(b_str)
+            url = url_stem
         }
     }
+
+    source = in_repo_path(url)
 
     rc = svnae_wc_merge(".", source, rev_a, rev_b, target)
     if rc == -2 {
@@ -658,7 +706,15 @@ cmd_merge(argv_start: int) {
         println("svn merge: failed (rc=${rc})")
         return 1
     }
-    println("--- Merging r${rev_a + 1} through r${rev_b} into '.':")
+    if rev_a < rev_b {
+        println("--- Merging r${rev_a + 1} through r${rev_b} into '.':")
+    } else {
+        if rev_a > rev_b {
+            println("--- Reverse-merging r${rev_a} through r${rev_b + 1} into '.':")
+        } else {
+            println("--- No-op merge (empty range).")
+        }
+    }
     return 0
 }
 

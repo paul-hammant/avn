@@ -243,12 +243,15 @@ walk_remote(const char *base_url, const char *repo, int rev,
 
 /* --- mergeinfo plumbing ---------------------------------------------- */
 
-/* Append "source:A-B\n" to the WC's svn:mergeinfo property on path ".". */
+/* Append a range to the WC's svn:mergeinfo property on path "".
+ * `reverse` == 0 appends "source:A+1-B" (forward merge of A..B).
+ * `reverse` == 1 appends "source:-A-B+1" using svn's convention for
+ * reverse merges (leading '-' on the range). We don't attempt range
+ * arithmetic / cancellation — that stays on the deferred list. */
 static int
-mergeinfo_add_range(const char *wc_root, const char *source, int a, int b)
+mergeinfo_add_range(const char *wc_root, const char *source,
+                    int lo, int hi, int reverse)
 {
-    /* We need a tracked path to hang props on. Use "" (the WC root) by
-     * ensuring a dummy row exists if it doesn't already. */
     sqlite3 *db = svnae_wc_db_open(wc_root);
     if (!db) return -1;
     if (!svnae_wc_db_node_exists(db, "")) {
@@ -258,7 +261,11 @@ mergeinfo_add_range(const char *wc_root, const char *source, int a, int b)
 
     char *existing = svnae_wc_propget(wc_root, "", "svn:mergeinfo");
     char line[256];
-    snprintf(line, sizeof line, "%s:%d-%d", source, a + 1, b);
+    if (reverse) {
+        snprintf(line, sizeof line, "%s:-%d-%d", source, hi, lo + 1);
+    } else {
+        snprintf(line, sizeof line, "%s:%d-%d", source, lo + 1, hi);
+    }
     char *new_val;
     if (existing && *existing) {
         size_t n = strlen(existing) + 1 + strlen(line) + 1;
@@ -277,13 +284,28 @@ mergeinfo_add_range(const char *wc_root, const char *source, int a, int b)
 
 /* target_path: the in-WC directory to apply the changes into. Pass ""
  * for the WC root (bare "svn merge URL@a:b"). Otherwise something like
- * "src-branch" maps the source-relative paths onto that subdirectory. */
+ * "src-branch" maps the source-relative paths onto that subdirectory.
+ *
+ * rev_a < rev_b:  forward merge — apply (source@A → source@B) onto WC.
+ * rev_a > rev_b:  reverse merge — undo the changes introduced by
+ *                 (source@rev_b → source@rev_a). Internally we swap
+ *                 the tree endpoints so the apply pass always diffs
+ *                 from "base" to "theirs"; the diff direction is what
+ *                 makes forward vs reverse happen.
+ * rev_a == rev_b: no-op, returns 0.
+ */
 int
 svnae_wc_merge(const char *wc_root, const char *source_path, int rev_a, int rev_b,
                const char *target_path)
 {
-    if (rev_b <= rev_a) return -1;  /* empty or reverse range */
+    if (rev_a == rev_b) return 0;
     if (!target_path) target_path = "";
+
+    int reverse  = (rev_a > rev_b);
+    /* After the swap, rev_base < rev_theirs always; the original
+     * rev_a/rev_b are preserved only for mergeinfo bookkeeping. */
+    int rev_base   = reverse ? rev_b : rev_a;
+    int rev_theirs = reverse ? rev_a : rev_b;
 
     sqlite3 *db = svnae_wc_db_open(wc_root);
     if (!db) return -1;
@@ -295,13 +317,27 @@ svnae_wc_merge(const char *wc_root, const char *source_path, int rev_a, int rev_
         return -1;
     }
 
-    /* Fetch the source tree at both endpoints. */
+    /* Fetch the source tree at both endpoints. A is the "base" tree
+     * (what gets diffed away); B is the "theirs" tree (what gets
+     * applied). For a forward merge A=rev_a, B=rev_b. For reverse
+     * merge A=rev_b, B=rev_a — so undoing a change means the pre-change
+     * tree is "theirs" and replaces the post-change tree. */
     struct rtree A = {0}, B = {0};
-    if (walk_remote(base_url, repo, rev_a, source_path, "", &A) != 0 ||
-        walk_remote(base_url, repo, rev_b, source_path, "", &B) != 0) {
+    if (walk_remote(base_url, repo, rev_base,   source_path, "", &A) != 0 ||
+        walk_remote(base_url, repo, rev_theirs, source_path, "", &B) != 0) {
         rt_free(&A); rt_free(&B);
         svnae_wc_info_free(base_url); svnae_wc_info_free(repo);
         return -1;
+    }
+    if (reverse) {
+        /* Swap so the apply pass below uses (base=A=post-change,
+         * theirs=B=pre-change). The semantics are: file that exists
+         * in "theirs" but not in "base" is ADDED to the WC (undoing a
+         * server-side delete); file that exists in "base" but not
+         * in "theirs" is REMOVED from the WC (undoing a server-side
+         * add); file that differs between them is text-merged with
+         * the pre-change content as the incoming text. */
+        struct rtree tmp = A; A = B; B = tmp;
     }
 
     /* Compute the diff: for each path in A ∪ B, decide add/mod/del. */
@@ -388,28 +424,30 @@ svnae_wc_merge(const char *wc_root, const char *source_path, int rev_a, int rev_
             local_base_rev = svnae_wc_node_base_rev(n);
             svnae_wc_node_free(n);
         }
-        int local_clean = (has_disk_sha && strcmp(disk_sha, local_base_sha) == 0);
-
-        if (local_clean) {
-            /* Safe overwrite — WC file was untouched. */
-            if (write_file_atomic(disk, rb->data, rb->data_len) != 0) continue;
-            svnae_wc_pristine_put(wc_root, rb->data, rb->data_len);
+        (void)has_disk_sha;
+        (void)local_base_rev;
+        /* Always use 3-way merge: mine=disk, base=source@A,
+         * theirs=source@B. For forward merges where the WC is clean
+         * this collapses to a straight overwrite anyway (no
+         * conflicting region). For reverse merges and cherry-picks
+         * the WC is NOT synced to A or B, so we must let merge3
+         * splice the base→theirs diff into mine rather than
+         * blindly overwriting. */
+        int m3rc = svnae_merge3_apply(disk,
+                                      ra ? ra->data : "", ra ? ra->data_len : 0, rev_a,
+                                      rb->data, rb->data_len, rev_b);
+        if (m3rc == 0) {
+            /* Clean merge. We do NOT update the pristine here because
+             * the WC's base is still the WC's original head — we only
+             * spliced an external rev-range diff into `mine`. Commit
+             * will pick up the change via disk-vs-pristine status. */
+        } else if (m3rc == 1) {
+            svnae_wc_db_set_conflicted(db, wc_rel, 1);
+            fprintf(stderr, "C    %s\n", wc_rel);
         } else {
-            /* 3-way merge: mine=disk, base=source@A, theirs=source@B. */
-            int m3rc = svnae_merge3_apply(disk,
-                                          ra ? ra->data : "", ra ? ra->data_len : 0, rev_a,
-                                          rb->data, rb->data_len, rev_b);
-            if (m3rc == 0) {
-                svnae_wc_pristine_put(wc_root, rb->data, rb->data_len);
-            } else if (m3rc == 1) {
-                svnae_wc_pristine_put(wc_root, rb->data, rb->data_len);
-                svnae_wc_db_set_conflicted(db, wc_rel, 1);
-                fprintf(stderr, "C    %s\n", wc_rel);
-            } else {
-                fprintf(stderr, "error merging %s; left alone\n", wc_rel);
-            }
-            (void)local_base_rev;
+            fprintf(stderr, "error merging %s; left alone\n", wc_rel);
         }
+        (void)local_base_sha;
     }
 
     #undef MAP_WC_REL
@@ -418,7 +456,9 @@ svnae_wc_merge(const char *wc_root, const char *source_path, int rev_a, int rev_
     rt_free(&A); rt_free(&B);
     svnae_wc_info_free(base_url); svnae_wc_info_free(repo);
 
-    /* Record merged range in svn:mergeinfo on the WC root. */
-    mergeinfo_add_range(wc_root, source_path, rev_a, rev_b);
+    /* Record merged range in svn:mergeinfo on the WC root. We always
+     * store as (lo, hi) with a reverse flag — the line emitted gets
+     * the leading '-' when reverse == 1. */
+    mergeinfo_add_range(wc_root, source_path, rev_base, rev_theirs, reverse);
     return 0;
 }

@@ -11,8 +11,8 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
 
 ## Headline
 
-- **40 commits.** Each phase is its own commit, reviewable in isolation.
-- **32 test suites** (added `test_switch.sh`), ~331 assertions, all green.
+- **41 commits.** Each phase is its own commit, reviewable in isolation.
+- **33 test suites** (added `test_merge_reverse.sh`), ~339 assertions, all green.
   Mix of in-language `.ae` tests and end-to-end shell harnesses that
   spin up a real HTTP server and drive it with curl and the built
   `svn` CLI.
@@ -84,7 +84,8 @@ Named after the plan's Phase N. Plan: `../svn-to-aether.md`.
 | 5.12b | svn merge + svn:mergeinfo | ✅ | `b04433c` |
 | 5.13 | 3-way conflict resolution + `svn resolve` | ✅ | (prev commit) |
 | 5.14 | Server-side properties (propset round-trips through commit/checkout/update) | ✅ | (prev commit) |
-| 5.15 | `svn switch` — relocate WC to a different branch URL, reusing update pipeline | ✅ | (this commit) |
+| 5.15 | `svn switch` — relocate WC to a different branch URL, reusing update pipeline | ✅ | (prev commit) |
+| 5.16 | `svn merge -c N` cherry-pick + reverse merge (`-r A:B` with A>B or `-c -N`) | ✅ | (this commit) |
 | 12 | svnadmin create/dump/load | ✅ | `52380a5` |
 
 ## Phases not yet done (from the plan)
@@ -105,15 +106,19 @@ Implemented:
 - `propset`/`get`/`del`/`list` (WC-local)
 - `svn:ignore` read by status
 - Server-side copy (`svn cp URL URL`) — full-subtree rep-sharing
-- `svn merge URL@A:B [TARGET]` linear forward rev-range merge
-- `svn:mergeinfo` recorded (append-only for now)
+- `svn merge` — forward rev-range (`-r A:B`, A<B), reverse (A>B), and
+  cherry-pick (`-c N` or `-c -N` for reverse). Classic `URL@A:B` form
+  still supported. Always uses 3-way merge so cherry-pick onto a tree
+  the source never saw does the right thing.
+- `svn:mergeinfo` recorded (append-only; reverse ranges written with
+  leading '-'). Range arithmetic / cancellation still deferred.
 - `svnadmin create/dump/load` with portable dump round-trip
 
 Not implemented (items the plan calls out or that reference svn has):
 
 - HTTPS / TLS transport
 - Authentication + authz
-- Reverse merge, cherry-pick, mergeinfo range arithmetic
+- Mergeinfo range arithmetic (cancel forward/reverse of same range)
 - `svn log --verbose` (per-rev path changes)
 - `svn blame`
 - Hooks (pre/post-commit scripts)
