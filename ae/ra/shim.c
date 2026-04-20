@@ -43,10 +43,51 @@ buf_write_cb(void *contents, size_t size, size_t nmemb, void *userp)
     return incoming;
 }
 
+/* Capture a specific response header into a buf. Matches are case-
+ * insensitive; the first matching header wins. */
+struct hdr_capture {
+    const char *want_name;   /* canonical lower-case name the caller asked for */
+    size_t      want_len;
+    char       *value;       /* malloc'd, NUL-terminated */
+};
+
+static size_t
+hdr_capture_cb(char *buffer, size_t size, size_t nitems, void *userdata)
+{
+    struct hdr_capture *c = userdata;
+    size_t len = size * nitems;
+    if (len < 2 || c->value) return len;  /* already captured or too short */
+    /* Header line format: "Name: value\r\n" */
+    const char *colon = memchr(buffer, ':', len);
+    if (!colon) return len;
+    size_t nlen = (size_t)(colon - buffer);
+    if (nlen != c->want_len) return len;
+    for (size_t i = 0; i < nlen; i++) {
+        char a = buffer[i];
+        if (a >= 'A' && a <= 'Z') a = (char)(a - 'A' + 'a');
+        if (a != c->want_name[i]) return len;
+    }
+    /* Skip the colon + any leading whitespace. */
+    const char *v = colon + 1;
+    size_t vlen = len - (size_t)(v - buffer);
+    while (vlen > 0 && (*v == ' ' || *v == '\t')) { v++; vlen--; }
+    while (vlen > 0 && (v[vlen-1] == '\r' || v[vlen-1] == '\n' || v[vlen-1] == ' '))
+        vlen--;
+    c->value = malloc(vlen + 1);
+    if (c->value) { memcpy(c->value, v, vlen); c->value[vlen] = '\0'; }
+    return len;
+}
+
 /* Perform GET. Returns (body, status). On success body is malloc'd NUL-
- * terminated; caller frees. On CURL-level failure body is NULL. */
-static int
-http_get(const char *url, char **out_body, size_t *out_len, int *out_status)
+ * terminated; caller frees. On CURL-level failure body is NULL.
+ * `out_node_hash` (nullable): if non-NULL, captures the
+ * X-Svnae-Node-Hash response header, written to a new malloc'd string
+ * the caller must free. Set to NULL when absent. */
+/* Non-static so ae/client/verify_shim.c can call it without adding a
+ * fourth RA accessor for every endpoint. */
+int
+http_get_ex(const char *url, char **out_body, size_t *out_len, int *out_status,
+            char **out_node_hash)
 {
     CURL *h = curl_easy_init();
     if (!h) return -1;
@@ -56,16 +97,30 @@ http_get(const char *url, char **out_body, size_t *out_len, int *out_status)
     curl_easy_setopt(h, CURLOPT_WRITEDATA, &b);
     curl_easy_setopt(h, CURLOPT_TIMEOUT, 30L);
 
+    struct hdr_capture cap = { "x-svnae-node-hash", 17, NULL };
+    if (out_node_hash) {
+        curl_easy_setopt(h, CURLOPT_HEADERFUNCTION, hdr_capture_cb);
+        curl_easy_setopt(h, CURLOPT_HEADERDATA, &cap);
+    }
+
     CURLcode rc = curl_easy_perform(h);
     long status = 0;
     curl_easy_getinfo(h, CURLINFO_RESPONSE_CODE, &status);
     curl_easy_cleanup(h);
-    if (rc != CURLE_OK) { free(b.data); return -1; }
+    if (rc != CURLE_OK) { free(b.data); free(cap.value); return -1; }
 
     *out_body = b.data;
     *out_len = b.len;
     *out_status = (int)status;
+    if (out_node_hash) *out_node_hash = cap.value;
     return 0;
+}
+
+/* Back-compat thin wrapper. */
+static int
+http_get(const char *url, char **out_body, size_t *out_len, int *out_status)
+{
+    return http_get_ex(url, out_body, out_len, out_status, NULL);
 }
 
 static int
@@ -299,7 +354,7 @@ svnae_ra_paths_free(struct svnae_ra_paths *P)
 
 /* ---- info handle ----------------------------------------------------- */
 
-struct svnae_ra_info { int rev; char *author; char *date; char *msg; };
+struct svnae_ra_info { int rev; char *author; char *date; char *msg; char *root; };
 
 struct svnae_ra_info *
 svnae_ra_info_rev(const char *base_url, const char *repo_name, int rev)
@@ -318,10 +373,12 @@ svnae_ra_info_rev(const char *base_url, const char *repo_name, int rev)
     cJSON *ja = cJSON_GetObjectItemCaseSensitive(root, "author");
     cJSON *jd = cJSON_GetObjectItemCaseSensitive(root, "date");
     cJSON *jm = cJSON_GetObjectItemCaseSensitive(root, "msg");
+    cJSON *jroot = cJSON_GetObjectItemCaseSensitive(root, "root");
     I->rev    = cJSON_IsNumber(jr) ? jr->valueint : -1;
     I->author = cJSON_IsString(ja) ? strdup(ja->valuestring) : strdup("");
     I->date   = cJSON_IsString(jd) ? strdup(jd->valuestring) : strdup("");
     I->msg    = cJSON_IsString(jm) ? strdup(jm->valuestring) : strdup("");
+    I->root   = cJSON_IsString(jroot) ? strdup(jroot->valuestring) : strdup("");
     cJSON_Delete(root);
     return I;
 }
@@ -330,12 +387,13 @@ int         svnae_ra_info_rev_num(const struct svnae_ra_info *I) { return I ? I-
 const char *svnae_ra_info_author (const struct svnae_ra_info *I) { return I ? I->author : ""; }
 const char *svnae_ra_info_date   (const struct svnae_ra_info *I) { return I ? I->date : ""; }
 const char *svnae_ra_info_msg    (const struct svnae_ra_info *I) { return I ? I->msg : ""; }
+const char *svnae_ra_info_root   (const struct svnae_ra_info *I) { return I && I->root ? I->root : ""; }
 
 void
 svnae_ra_info_free(struct svnae_ra_info *I)
 {
     if (!I) return;
-    free(I->author); free(I->date); free(I->msg);
+    free(I->author); free(I->date); free(I->msg); free(I->root);
     free(I);
 }
 
@@ -750,4 +808,297 @@ svnae_ra_commit_finish(struct svnae_ra_commit *cb,
     free(cb);
 
     return new_rev;
+}
+/* ae/client/verify_shim.c — Merkle verification of a remote repository.
+ *
+ * svnae_client_verify(base_url, repo, rev) walks the tree at `rev`
+ * top-down, re-hashes every file content and dir blob locally using
+ * the server's advertised algorithm, and confirms:
+ *
+ *   1. Each file/dir node's locally-computed content hash matches
+ *      the X-Svnae-Node-Hash header the server returned.
+ *   2. For each directory, the re-assembled blob (lines
+ *      "<kind> <child-sha> <name>\n", sorted) hashes to the same
+ *      sha that the parent dir pointed at.
+ *   3. The root-dir sha equals the rev blob's "root" field
+ *      (served via /info).
+ *
+ * The interesting move is step 2: the server gives us a JSON listing
+ * of a directory's entries (name + kind), but to re-hash a dir we
+ * need to reconstruct its *blob*, which has the wire format
+ *   <kind-char> <child-sha> <name>\n
+ * We obtain each child's sha by fetching that child (cat for files,
+ * list for dirs) and reading the X-Svnae-Node-Hash header. Recurse.
+ *
+ * The walk is depth-first from the root. We bail on the first
+ * mismatch and return a negative code; callers print a diagnostic.
+ *
+ * Returns:
+ *    0 on full verification success
+ *   -1 on I/O / protocol error
+ *   -2 on hash mismatch (message printed to stderr with path + details)
+ */
+
+#include <ctype.h>
+#include <openssl/evp.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#ifndef PATH_MAX
+#define PATH_MAX 4096
+#endif
+
+/* ---- forward decls from the RA shim -------------------------------- */
+
+struct svnae_ra_info;
+struct svnae_ra_info *svnae_ra_info_rev(const char *base_url, const char *repo,
+                                        int rev);
+int         svnae_ra_info_rev_num(const struct svnae_ra_info *I);
+const char *svnae_ra_info_root   (const struct svnae_ra_info *I);
+void        svnae_ra_info_free   (struct svnae_ra_info *I);
+
+char *svnae_ra_hash_algo(const char *base_url, const char *repo);
+
+/* We need to fetch a node's raw bytes + its Merkle header.  The existing
+ * RA accessors (svnae_ra_cat, svnae_ra_list) don't surface the header.
+ * Rather than add a third variant to each, the verify pass speaks HTTP
+ * directly via the RA shim's already-exposed http_get_ex (declared
+ * here; defined in ra/shim.c). */
+extern int http_get_ex(const char *url, char **out_body, size_t *out_len,
+                       int *out_status, char **out_node_hash);
+
+/* ---- hashing: inlined golden list (match ae/subr/checksum/shim.c) -- */
+
+static char *
+hash_hex(const char *algo, const char *data, int data_len)
+{
+    const EVP_MD *md = NULL;
+    if      (strcmp(algo, "sha1")   == 0) md = EVP_sha1();
+    else if (strcmp(algo, "sha256") == 0) md = EVP_sha256();
+    if (!md) return NULL;
+    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+    if (!ctx) return NULL;
+    unsigned char dig[EVP_MAX_MD_SIZE];
+    unsigned int dlen = 0;
+    char *out = NULL;
+    if (EVP_DigestInit_ex(ctx, md, NULL) == 1
+        && EVP_DigestUpdate(ctx, data, (size_t)data_len) == 1
+        && EVP_DigestFinal_ex(ctx, dig, &dlen) == 1) {
+        out = malloc((size_t)dlen * 2 + 1);
+        if (out) {
+            static const char hex[] = "0123456789abcdef";
+            for (unsigned int i = 0; i < dlen; i++) {
+                out[i * 2]     = hex[dig[i] >> 4];
+                out[i * 2 + 1] = hex[dig[i] & 0x0f];
+            }
+            out[dlen * 2] = '\0';
+        }
+    }
+    EVP_MD_CTX_free(ctx);
+    return out;
+}
+
+/* Sort helper for dir entries so the re-assembled blob matches the
+ * server's canonical line order. */
+struct entry { char kind_c; char *name; char *sha; };
+
+static int
+entry_cmp(const void *a, const void *b)
+{
+    const struct entry *ea = a, *eb = b;
+    return strcmp(ea->name, eb->name);
+}
+
+/* Fetch and verify a single file at `rel`. Returns 0 on match, -1 on
+ * I/O error, -2 on hash mismatch. Out: `*out_sha` gets a malloc'd
+ * copy of the computed sha (for the parent to thread into its own
+ * blob). */
+static int
+verify_file(const char *base_url, const char *repo, int rev,
+            const char *algo, const char *rel, char **out_sha)
+{
+    char url[2048];
+    snprintf(url, sizeof url, "%s/repos/%s/rev/%d/cat/%s",
+             base_url, repo, rev, rel);
+    char *body = NULL; size_t len = 0; int status = 0; char *hdr = NULL;
+    if (http_get_ex(url, &body, &len, &status, &hdr) != 0 || status != 200) {
+        free(body); free(hdr);
+        fprintf(stderr, "verify: GET failed for %s (status %d)\n", rel, status);
+        return -1;
+    }
+    /* Compute the file's content hash locally. Note: the server
+     * currently sends NUL-terminated text and we strlen it; same
+     * convention as `svnae_ra_cat`. When binary flows we'll switch
+     * to len-aware. */
+    int clen = (int)strlen(body);
+    char *local = hash_hex(algo, body, clen);
+    free(body);
+    if (!local) { free(hdr); return -1; }
+
+    if (!hdr || strcmp(local, hdr) != 0) {
+        fprintf(stderr, "verify: hash mismatch at /%s\n", rel);
+        fprintf(stderr, "  server: %s\n", hdr ? hdr : "(missing)");
+        fprintf(stderr, "  local:  %s\n", local);
+        free(hdr); free(local);
+        return -2;
+    }
+    free(hdr);
+    *out_sha = local;
+    return 0;
+}
+
+/* Recursive dir verify. `rel` is the repo-relative path of the
+ * directory being verified ("" for the root). The caller already
+ * knows the sha the parent attributed to this dir; we compare it
+ * against the dir's recomputed sha after recursion. */
+static int
+verify_dir(const char *base_url, const char *repo, int rev,
+           const char *algo, const char *rel, char **out_sha)
+{
+    /* GET /rev/N/list/<path> — listing tells us the immediate children
+     * (names + kinds). The response header carries the server's view
+     * of *this* dir's blob sha. */
+    char url[2048];
+    if (*rel) snprintf(url, sizeof url, "%s/repos/%s/rev/%d/list/%s",
+                       base_url, repo, rev, rel);
+    else      snprintf(url, sizeof url, "%s/repos/%s/rev/%d/list",
+                       base_url, repo, rev);
+
+    char *body = NULL; size_t len = 0; int status = 0; char *dir_hdr = NULL;
+    if (http_get_ex(url, &body, &len, &status, &dir_hdr) != 0 || status != 200) {
+        free(body); free(dir_hdr);
+        fprintf(stderr, "verify: GET /list failed for /%s (status %d)\n",
+                rel, status);
+        return -1;
+    }
+
+    /* Parse the JSON entries array by hand (no cJSON linkage here).
+     * Very simple format:
+     *   {"entries":[{"name":"...","kind":"file|dir"}, ...]}
+     */
+    struct entry *entries = NULL;
+    int n = 0, cap = 0;
+    const char *p = strstr(body, "\"entries\":[");
+    if (p) p += strlen("\"entries\":[");
+    while (p && *p && *p != ']') {
+        const char *name_k = strstr(p, "\"name\":\"");
+        if (!name_k || name_k > body + len) break;
+        name_k += 8;
+        const char *name_end = strchr(name_k, '"');
+        if (!name_end) break;
+        const char *kind_k = strstr(name_end, "\"kind\":\"");
+        if (!kind_k) break;
+        kind_k += 8;
+        const char *kind_end = strchr(kind_k, '"');
+        if (!kind_end) break;
+        if (n == cap) {
+            cap = cap ? cap * 2 : 8;
+            entries = realloc(entries, (size_t)cap * sizeof *entries);
+        }
+        entries[n].name = strndup(name_k, (size_t)(name_end - name_k));
+        entries[n].kind_c = (kind_k[0] == 'd') ? 'd' : 'f';
+        entries[n].sha = NULL;
+        n++;
+        p = kind_end + 1;
+    }
+    free(body);
+
+    /* Recurse into every child to compute its sha. */
+    for (int i = 0; i < n; i++) {
+        char child_rel[PATH_MAX];
+        if (*rel) snprintf(child_rel, sizeof child_rel, "%s/%s", rel, entries[i].name);
+        else      snprintf(child_rel, sizeof child_rel, "%s", entries[i].name);
+
+        int rc;
+        if (entries[i].kind_c == 'd') {
+            rc = verify_dir (base_url, repo, rev, algo, child_rel, &entries[i].sha);
+        } else {
+            rc = verify_file(base_url, repo, rev, algo, child_rel, &entries[i].sha);
+        }
+        if (rc != 0) {
+            for (int j = 0; j <= i; j++) { free(entries[j].name); free(entries[j].sha); }
+            for (int j = i + 1; j < n; j++) { free(entries[j].name); }
+            free(entries);
+            free(dir_hdr);
+            return rc;
+        }
+    }
+
+    /* Rebuild the dir blob (sorted by name) and hash it. Line format:
+     *   <kind> <sha> <name>\n
+     * matching fs_fs/txn_shim.c:rebuild_dir_c's serialiser. */
+    qsort(entries, (size_t)n, sizeof *entries, entry_cmp);
+    size_t buf_cap = 1024, buf_len = 0;
+    char *buf = malloc(buf_cap);
+    buf[0] = '\0';
+    for (int i = 0; i < n; i++) {
+        size_t need = 2 + strlen(entries[i].sha) + 1 + strlen(entries[i].name) + 2;
+        if (buf_len + need + 1 >= buf_cap) {
+            buf_cap = (buf_len + need + 1) * 2;
+            buf = realloc(buf, buf_cap);
+        }
+        buf_len += (size_t)snprintf(buf + buf_len, buf_cap - buf_len,
+                                    "%c %s %s\n",
+                                    entries[i].kind_c, entries[i].sha, entries[i].name);
+    }
+
+    char *local = hash_hex(algo, buf, (int)buf_len);
+    free(buf);
+
+    /* Compare the re-hashed blob against the dir header the server
+     * advertised for *this* dir. */
+    int ok = (local && dir_hdr && strcmp(local, dir_hdr) == 0);
+    if (!ok) {
+        fprintf(stderr, "verify: dir hash mismatch at /%s\n", *rel ? rel : "");
+        fprintf(stderr, "  server: %s\n", dir_hdr ? dir_hdr : "(missing)");
+        fprintf(stderr, "  local:  %s\n", local ? local : "(null)");
+    }
+    free(dir_hdr);
+
+    for (int i = 0; i < n; i++) { free(entries[i].name); free(entries[i].sha); }
+    free(entries);
+
+    if (!ok) { free(local); return -2; }
+    *out_sha = local;
+    return 0;
+}
+
+/* Public entry point. Prints a short summary on success. Returns
+ * 0 on match, -1 on protocol/IO error, -2 on Merkle mismatch. */
+int
+svnae_client_verify(const char *base_url, const char *repo, int rev)
+{
+    char *algo = svnae_ra_hash_algo(base_url, repo);
+    if (!algo || !*algo) { free(algo); fprintf(stderr, "verify: server info unavailable\n"); return -1; }
+
+    struct svnae_ra_info *I = svnae_ra_info_rev(base_url, repo, rev);
+    if (!I) { free(algo); fprintf(stderr, "verify: rev %d info unavailable\n", rev); return -1; }
+    const char *claimed_root = svnae_ra_info_root(I);
+    if (!*claimed_root) {
+        svnae_ra_info_free(I); free(algo);
+        fprintf(stderr, "verify: rev %d has no root sha in /info\n", rev);
+        return -1;
+    }
+    char *claimed_root_copy = strdup(claimed_root);
+    svnae_ra_info_free(I);
+
+    char *root_sha = NULL;
+    int rc = verify_dir(base_url, repo, rev, algo, "", &root_sha);
+    if (rc != 0) {
+        free(algo); free(root_sha); free(claimed_root_copy);
+        return rc;
+    }
+
+    if (!root_sha || strcmp(root_sha, claimed_root_copy) != 0) {
+        fprintf(stderr, "verify: root sha mismatch\n");
+        fprintf(stderr, "  rev-blob root: %s\n", claimed_root_copy);
+        fprintf(stderr, "  recomputed:    %s\n", root_sha ? root_sha : "(null)");
+        free(algo); free(root_sha); free(claimed_root_copy);
+        return -2;
+    }
+
+    fprintf(stdout, "verify: OK (algo=%s, root=%s)\n", algo, root_sha);
+    free(algo); free(root_sha); free(claimed_root_copy);
+    return 0;
 }

@@ -163,6 +163,28 @@ respond_error(HttpServerResponse *res, int code, const char *message)
     respond_json(res, code, buf);
 }
 
+/* Attach Merkle-verification headers describing the node being
+ * returned by this response. Callers that know the node's kind and
+ * content sha use this; callers that don't (errors, untyped JSON)
+ * leave them off. The headers advertise:
+ *   X-Svnae-Hash-Algo  — the repo's primary hash name (e.g. sha256)
+ *   X-Svnae-Node-Kind  — "file" or "dir"
+ *   X-Svnae-Node-Hash  — hex sha of this node's content blob
+ *
+ * Clients use these to independently re-hash fetched bytes and build
+ * a Merkle proof back to the revision's root sha. */
+static void
+set_merkle_headers(HttpServerResponse *res, const char *algo,
+                   const char *kind, const char *sha)
+{
+    if (algo && *algo)
+        http_response_set_header(res, "X-Svnae-Hash-Algo", algo);
+    if (kind && *kind)
+        http_response_set_header(res, "X-Svnae-Node-Kind", kind);
+    if (sha && *sha)
+        http_response_set_header(res, "X-Svnae-Node-Hash", sha);
+}
+
 /* --- JSON string builder ---------------------------------------------- */
 
 struct sb { char *data; size_t len, cap; };
@@ -358,9 +380,10 @@ handle_repo_log(HttpRequest *req, HttpServerResponse *res, void *user_data)
     free(s.data);
 }
 
-/* Load a rev's "props:" sha1 (or empty). Caller frees. */
+/* Load a "key: value" line from the rev blob of rev `rev`. Returns a
+ * malloc'd value (caller frees with free()), or NULL if key absent. */
 static char *
-load_rev_props_sha1(const char *repo, int rev)
+load_rev_blob_field(const char *repo, int rev, const char *key)
 {
     char path[PATH_MAX];
     snprintf(path, sizeof path, "%s/revs/%06d", repo, rev);
@@ -373,10 +396,12 @@ load_rev_props_sha1(const char *repo, int rev)
     while (n > 0 && (buf[n-1] == '\n' || buf[n-1] == '\r')) buf[--n] = '\0';
     char *body = svnae_rep_read_blob(repo, buf);
     if (!body) return NULL;
-    char *p = strstr(body, "props: ");
+    char needle[64];
+    snprintf(needle, sizeof needle, "%s: ", key);
+    char *p = strstr(body, needle);
     char *out = NULL;
     if (p) {
-        p += 7;
+        p += strlen(needle);
         char *eol = strchr(p, '\n');
         size_t L = eol ? (size_t)(eol - p) : strlen(p);
         out = malloc(L + 1);
@@ -385,6 +410,13 @@ load_rev_props_sha1(const char *repo, int rev)
     }
     svnae_rep_free(body);
     return out;
+}
+
+/* Back-compat: one call site still asks for "props:" specifically. */
+static char *
+load_rev_props_sha1(const char *repo, int rev)
+{
+    return load_rev_blob_field(repo, rev, "props");
 }
 
 /* Given a paths-props blob body and a target path, return the sha1 of
@@ -478,6 +510,9 @@ handle_repo_rev(HttpRequest *req, HttpServerResponse *res, void *user_data)
     if (strcmp(after, "/info") == 0) {
         struct svnae_info *I = svnae_repos_info_rev(repo, rev);
         if (!I) { respond_error(res, 404, "no such rev"); return; }
+        /* Also expose the rev's root-dir sha so verify can anchor its
+         * Merkle walk. */
+        char *root_sha = load_rev_blob_field(repo, rev, "root");
         struct sb s = {0};
         sb_puts(&s, "{\"rev\":");
         sb_putjson_int(&s, svnae_repos_info_rev_num(I));
@@ -487,7 +522,10 @@ handle_repo_rev(HttpRequest *req, HttpServerResponse *res, void *user_data)
         sb_putjson_string(&s, svnae_repos_info_date(I));
         sb_puts(&s, ",\"msg\":");
         sb_putjson_string(&s, svnae_repos_info_msg(I));
+        sb_puts(&s, ",\"root\":");
+        sb_putjson_string(&s, root_sha ? root_sha : "");
         sb_puts(&s, "}");
+        free(root_sha);
         svnae_repos_info_free(I);
         respond_json(res, 200, s.data ? s.data : "{}");
         free(s.data);
@@ -505,6 +543,13 @@ handle_repo_rev(HttpRequest *req, HttpServerResponse *res, void *user_data)
          * we use strlen. When binary blobs become common we'll add a
          * length-aware cat variant. */
         size_t len = strlen(data);
+        /* Merkle headers: resolve (rev, path) to its content sha. */
+        char node_sha[65] = {0};
+        char node_kind = 0;
+        if (svnae_repos_resolve(repo, rev, file_path, node_sha, &node_kind)) {
+            set_merkle_headers(res, svnae_repo_primary_hash(repo),
+                               node_kind == 'd' ? "dir" : "file", node_sha);
+        }
         respond_binary(res, data, len, "application/octet-stream");
         svnae_rep_free(data);
         return;
@@ -550,8 +595,12 @@ handle_repo_rev(HttpRequest *req, HttpServerResponse *res, void *user_data)
         svnae_rep_free(paths_body);
         if (!per_path_sha) { respond_json(res, 200, "{}"); return; }
         char *props_body = svnae_rep_read_blob(repo, per_path_sha);
+        if (!props_body) { free(per_path_sha); respond_json(res, 200, "{}"); return; }
+        /* Merkle headers: the per-path props blob's sha *is* this
+         * node's content hash for verification purposes. */
+        set_merkle_headers(res, svnae_repo_primary_hash(repo),
+                           "props", per_path_sha);
         free(per_path_sha);
-        if (!props_body) { respond_json(res, 200, "{}"); return; }
         struct sb s = {0};
         sb_put_props_as_json(&s, props_body);
         svnae_rep_free(props_body);
@@ -565,6 +614,14 @@ handle_repo_rev(HttpRequest *req, HttpServerResponse *res, void *user_data)
         const char *dir_path = strcmp(after, "/list") == 0 ? "" : after + 6;
         struct svnae_list *L = svnae_repos_list(repo, rev, *dir_path ? dir_path : "/");
         if (!L) { respond_error(res, 404, "not a directory"); return; }
+        /* Merkle headers: resolve (rev, dir_path) to its content sha. */
+        char node_sha[65] = {0};
+        char node_kind = 0;
+        if (svnae_repos_resolve(repo, rev, *dir_path ? dir_path : "", node_sha, &node_kind)
+            && node_kind == 'd') {
+            set_merkle_headers(res, svnae_repo_primary_hash(repo),
+                               "dir", node_sha);
+        }
         struct sb s = {0};
         sb_puts(&s, "{\"entries\":[");
         int n = svnae_repos_list_count(L);

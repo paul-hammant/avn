@@ -11,8 +11,8 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
 
 ## Headline
 
-- **44 commits.** Each phase is its own commit, reviewable in isolation.
-- **36 test suites** (added `test_hash_algo.sh`), ~366 assertions, all green.
+- **45 commits.** Each phase is its own commit, reviewable in isolation.
+- **37 test suites** (added `test_verify.sh`), ~374 assertions, all green.
   Mix of in-language `.ae` tests and end-to-end shell harnesses that
   spin up a real HTTP server and drive it with curl and the built
   `svn` CLI.
@@ -88,7 +88,8 @@ Named after the plan's Phase N. Plan: `../svn-to-aether.md`.
 | 5.16 | `svn merge -c N` cherry-pick + reverse merge (`-r A:B` with A>B or `-c -N`) | ✅ | (prev commit) |
 | 5.17 | `svn log -v` — per-rev A/M/D path list via new /rev/N/paths endpoint | ✅ | (prev commit) |
 | 5.18 | mergeinfo arithmetic (cancel/collapse) + prop-delete propagation on update | ✅ | (prev commit) |
-| 6.1  | Pluggable hash algorithms (sha1 golden-list default, sha256 via `--algos`) | ✅ | (this commit) |
+| 6.1  | Pluggable hash algorithms (sha1 golden-list default, sha256 via `--algos`) | ✅ | (prev commit) |
+| 6.2  | Merkle verification: node-hash headers + `svn verify` re-hash walk | ✅ | (this commit) |
 | 12 | svnadmin create/dump/load | ✅ | `52380a5` |
 
 ## Phases not yet done (from the plan)
@@ -123,6 +124,13 @@ Implemented:
   Server advertises via GET /info; clients adapt at checkout time and
   persist the algo in wc.db so pristine + change-detection use the same
   hash the server does. Golden list enforced at create time.
+- Merkle verification end-to-end: server stamps every cat/list/props
+  response with `X-Svnae-Hash-Algo`, `X-Svnae-Node-Kind`, and
+  `X-Svnae-Node-Hash` headers. `svn verify URL [--rev N]` walks the
+  tree top-down, re-hashes every file and dir blob locally, rebuilds
+  each dir blob from its children's hashes, and confirms the
+  recomputed root matches `/info`'s root sha. Detects tampering with
+  stored .rep files.
 
 Not implemented (items the plan calls out or that reference svn has):
 
