@@ -28,6 +28,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <fnmatch.h>
 #include <limits.h>
 #include <openssl/evp.h>
 #include <sqlite3.h>
@@ -45,6 +46,9 @@
 /* Externs from neighbouring shims. */
 sqlite3     *svnae_wc_db_open(const char *wc_root);
 void         svnae_wc_db_close(sqlite3 *db);
+
+char *svnae_wc_propget(const char *wc_root, const char *path, const char *name);
+void  svnae_wc_props_free(char *s);
 
 struct svnae_wc_nodelist;
 struct svnae_wc_nodelist *svnae_wc_db_list_nodes(sqlite3 *db);
@@ -145,6 +149,33 @@ strset_clear(struct strset *s)
     s->items = NULL; s->n = 0; s->cap = 0;
 }
 
+/* Does `name` match any glob in the newline-separated pattern list?
+ * Leading/trailing whitespace and empty lines are skipped. */
+static int
+matches_ignore(const char *patterns, const char *name)
+{
+    if (!patterns || !*patterns) return 0;
+    const char *p = patterns;
+    while (*p) {
+        const char *eol = strchr(p, '\n');
+        size_t n = eol ? (size_t)(eol - p) : strlen(p);
+        /* Trim leading whitespace. */
+        while (n > 0 && (*p == ' ' || *p == '\t')) { p++; n--; }
+        /* Trim trailing whitespace. */
+        while (n > 0 && (p[n-1] == ' ' || p[n-1] == '\t' || p[n-1] == '\r')) n--;
+        if (n > 0) {
+            char pat[256];
+            if (n >= sizeof pat) n = sizeof pat - 1;
+            memcpy(pat, p, n);
+            pat[n] = '\0';
+            if (fnmatch(pat, name, 0) == 0) return 1;
+        }
+        if (!eol) break;
+        p = eol + 1;
+    }
+    return 0;
+}
+
 static void
 walk_unversioned(const char *wc_root, const char *rel,
                  const struct strset *tracked,
@@ -154,8 +185,14 @@ walk_unversioned(const char *wc_root, const char *rel,
     if (*rel) snprintf(dir_path, sizeof dir_path, "%s/%s", wc_root, rel);
     else      snprintf(dir_path, sizeof dir_path, "%s", wc_root);
 
+    /* Fetch svn:ignore for this directory. An empty `rel` is the WC
+     * root — the db stores its props under the empty string iff we
+     * ever upserted a row for it. In practice we may not have one, so
+     * propget returns NULL and no patterns apply. */
+    char *ignore_prop = svnae_wc_propget(wc_root, rel, "svn:ignore");
+
     DIR *d = opendir(dir_path);
-    if (!d) return;
+    if (!d) { svnae_wc_props_free(ignore_prop); return; }
     struct dirent *e;
     while ((e = readdir(d)) != NULL) {
         if (e->d_name[0] == '.' && (e->d_name[1] == '\0'
@@ -172,19 +209,25 @@ walk_unversioned(const char *wc_root, const char *rel,
         if (lstat(child_fs, &st) != 0) continue;
 
         int is_tracked = strset_has(tracked, child_rel);
+        int ignored = 0;
+        if (!is_tracked && ignore_prop) {
+            ignored = matches_ignore(ignore_prop, e->d_name);
+        }
+
         if (S_ISDIR(st.st_mode)) {
             if (!is_tracked) {
-                add_entry(out, child_rel, '?');
+                if (!ignored) add_entry(out, child_rel, '?');
                 /* Don't recurse into unversioned dirs — reference svn
-                 * reports the dir once and stops there. */
+                 * reports the dir once (or suppresses it) and stops. */
             } else {
                 walk_unversioned(wc_root, child_rel, tracked, out);
             }
         } else if (S_ISREG(st.st_mode)) {
-            if (!is_tracked) add_entry(out, child_rel, '?');
+            if (!is_tracked && !ignored) add_entry(out, child_rel, '?');
         }
     }
     closedir(d);
+    svnae_wc_props_free(ignore_prop);
 }
 
 /* ---- public API ------------------------------------------------------ */
