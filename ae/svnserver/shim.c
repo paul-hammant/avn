@@ -1251,6 +1251,237 @@ b64_decode(const char *src, int src_len, unsigned char **out, int *out_len)
     return 0;
 }
 
+/* --- REST node edit handlers (Phase 7.4) -----------------------------
+ *
+ *   GET    /repos/{r}/path/<path>  → raw bytes at HEAD (+ Merkle hdrs)
+ *   PUT    /repos/{r}/path/<path>  → update existing file or create new
+ *   DELETE /repos/{r}/path/<path>  → remove file/dir from HEAD
+ *
+ * Required / optional headers on PUT and DELETE:
+ *   Svn-Based-On: <hex>  — prior content sha of this path. Omitted =
+ *                          "path must not currently exist" (PUT only).
+ *                          On mismatch: 409 + X-Svnae-Current-Hash.
+ *   Svn-Author:   <name> — commit author; defaults to X-Svnae-User.
+ *   Svn-Log:      <msg>  — commit log message; default is synthesized.
+ *   X-Svnae-User: <name> — placeholder auth, as with other endpoints.
+ *   X-Svnae-Superuser: <token> — bypass ACL + optimistic-concurrency.
+ */
+
+static const char *
+header_or_null(HttpRequest *req, const char *name)
+{
+    const char *v = req_header(req, name);
+    return (v && *v) ? v : NULL;
+}
+
+/* GET /repos/{r}/path/<path>: convenience — returns HEAD content.
+ * Internally a redirect-in-code to the /rev/HEAD/cat handler's logic.
+ * We reimplement inline rather than fabricate a fake req because the
+ * cat handler parses URL tails. */
+static void
+handle_repo_path_get(HttpRequest *req, HttpServerResponse *res)
+{
+    char name[128];
+    const char *tail = parse_repo_and_tail(req->path, name, sizeof name);
+    if (!tail || strncmp(tail, "/path/", 6) != 0) {
+        respond_error(res, 404, "not found"); return;
+    }
+    const char *repo = find_repo_path(name);
+    if (!repo) { respond_error(res, 404, "no such repo"); return; }
+    const char *file_path = tail + 6;
+
+    int rev = svnae_repos_head_rev(repo);
+    if (rev < 0) { respond_error(res, 500, "cannot read head"); return; }
+
+    const char *user = NULL;
+    int is_super = auth_context(req, &user);
+    if (!is_super && !acl_allows(repo, rev, user, file_path)) {
+        respond_error(res, 404, "not found");
+        return;
+    }
+
+    char *data = svnae_repos_cat(repo, rev, file_path);
+    if (!data) { respond_error(res, 404, "not found"); return; }
+    size_t len = strlen(data);
+    char node_sha[65] = {0};
+    char node_kind = 0;
+    if (svnae_repos_resolve(repo, rev, file_path, node_sha, &node_kind)) {
+        set_merkle_headers(res, svnae_repo_primary_hash(repo),
+                           node_kind == 'd' ? "dir" : "file", node_sha);
+    }
+    respond_binary(res, data, len, "application/octet-stream");
+    svnae_rep_free(data);
+}
+
+/* Optimistic-concurrency check: compare Svn-Based-On header against
+ * the current content sha at `path`. Returns:
+ *    1 OK (either the caller's based-on matches, or the caller omitted
+ *      it and the path currently doesn't exist — "create new")
+ *    0 conflict (response already emitted with 409)
+ */
+static int
+based_on_check(HttpRequest *req, HttpServerResponse *res,
+               const char *repo, int head_rev, const char *path,
+               int allow_missing_as_create)
+{
+    const char *based_on = header_or_null(req, "Svn-Based-On");
+
+    char cur_sha[65] = {0};
+    char cur_kind = 0;
+    int exists = svnae_repos_resolve(repo, head_rev, path, cur_sha, &cur_kind);
+
+    if (!based_on) {
+        /* Omitted. Caller is asserting "create new": fail if path
+         * already exists (unless allow_missing_as_create is 0 — DELETE
+         * always needs based_on, even though the path must exist). */
+        if (exists && allow_missing_as_create) {
+            http_response_set_header(res, "X-Svnae-Current-Hash", cur_sha);
+            respond_error(res, 409, "based_on missing but path exists");
+            return 0;
+        }
+        if (!exists && !allow_missing_as_create) {
+            respond_error(res, 404, "not found");
+            return 0;
+        }
+        return 1;
+    }
+
+    /* Header present. If the path doesn't exist we return 404 —
+     * "already gone" is a more actionable signal to scripted callers
+     * than a generic based_on mismatch. Distinguishable from an
+     * auth-denial 404 by the header being attempted at all. */
+    if (!exists) {
+        respond_error(res, 404, "not found");
+        return 0;
+    }
+    if (strcmp(based_on, cur_sha) != 0) {
+        http_response_set_header(res, "X-Svnae-Current-Hash", cur_sha);
+        respond_error(res, 409, "based_on mismatch");
+        return 0;
+    }
+    return 1;
+}
+
+/* PUT /repos/{r}/path/<path>: replace or create a file with the body
+ * bytes. Single-edit atomic commit. */
+static void
+handle_repo_path_put(HttpRequest *req, HttpServerResponse *res)
+{
+    char name[128];
+    const char *tail = parse_repo_and_tail(req->path, name, sizeof name);
+    if (!tail || strncmp(tail, "/path/", 6) != 0) {
+        respond_error(res, 404, "not found"); return;
+    }
+    const char *repo = find_repo_path(name);
+    if (!repo) { respond_error(res, 404, "no such repo"); return; }
+    const char *file_path = tail + 6;
+    if (!*file_path) { respond_error(res, 400, "empty path"); return; }
+
+    int base_rev = svnae_repos_head_rev(repo);
+    if (base_rev < 0) { respond_error(res, 500, "cannot read head"); return; }
+
+    /* Auth + write-ACL. Super-user bypasses. */
+    const char *user = NULL;
+    int is_super = auth_context(req, &user);
+    if (!is_super && !acl_allows_mode(repo, base_rev, user, file_path, 1)) {
+        respond_error(res, 403, "forbidden");
+        return;
+    }
+
+    /* Concurrency check. Super-user also respects based-on — it's
+     * lighter than ACL, and skipping it would make scripting unsafe
+     * in ways super-users might not expect. */
+    if (!based_on_check(req, res, repo, base_rev, file_path, 1)) return;
+
+    /* Build a one-edit txn: add-file with request body as content. */
+    struct svnae_txn *txn = svnae_txn_new(base_rev);
+    if (!txn) { respond_error(res, 500, "oom"); return; }
+    const char *body = req->body ? req->body : "";
+    int blen = req->body ? (int)req->body_length : 0;
+    svnae_txn_add_file(txn, file_path, body, blen);
+
+    const char *hdr_author = header_or_null(req, "Svn-Author");
+    if (!hdr_author) hdr_author = (user && *user) ? user : "anonymous";
+    const char *hdr_log = header_or_null(req, "Svn-Log");
+    char synth_log[PATH_MAX + 64];
+    if (!hdr_log) {
+        snprintf(synth_log, sizeof synth_log, "PUT /%s", file_path);
+        hdr_log = synth_log;
+    }
+
+    int new_rev = svnae_commit_finalise(repo, txn, hdr_author, hdr_log);
+    svnae_txn_free(txn);
+    if (new_rev < 0) {
+        respond_error(res, 500, "commit failed");
+        return;
+    }
+
+    /* Resolve the new path's sha for the response body. */
+    char new_sha[65] = {0};
+    char new_kind = 0;
+    svnae_repos_resolve(repo, new_rev, file_path, new_sha, &new_kind);
+
+    char buf[256];
+    snprintf(buf, sizeof buf, "{\"rev\":%d,\"sha\":\"%s\"}", new_rev, new_sha);
+    http_response_set_status(res, 201);
+    http_response_json(res, buf);
+}
+
+/* DELETE /repos/{r}/path/<path>: remove file or subtree from HEAD.
+ * Atomic single-edit commit. */
+static void
+handle_repo_path_delete(HttpRequest *req, HttpServerResponse *res)
+{
+    char name[128];
+    const char *tail = parse_repo_and_tail(req->path, name, sizeof name);
+    if (!tail || strncmp(tail, "/path/", 6) != 0) {
+        respond_error(res, 404, "not found"); return;
+    }
+    const char *repo = find_repo_path(name);
+    if (!repo) { respond_error(res, 404, "no such repo"); return; }
+    const char *file_path = tail + 6;
+    if (!*file_path) { respond_error(res, 400, "empty path"); return; }
+
+    int base_rev = svnae_repos_head_rev(repo);
+    if (base_rev < 0) { respond_error(res, 500, "cannot read head"); return; }
+
+    const char *user = NULL;
+    int is_super = auth_context(req, &user);
+    if (!is_super && !acl_allows_mode(repo, base_rev, user, file_path, 1)) {
+        respond_error(res, 403, "forbidden");
+        return;
+    }
+
+    /* DELETE requires the path to exist — "create-if-absent" semantics
+     * don't apply. The 4th arg 0 forces the based_on_check to 404 on
+     * missing path. */
+    if (!based_on_check(req, res, repo, base_rev, file_path, 0)) return;
+
+    struct svnae_txn *txn = svnae_txn_new(base_rev);
+    if (!txn) { respond_error(res, 500, "oom"); return; }
+    svnae_txn_delete(txn, file_path);
+
+    const char *hdr_author = header_or_null(req, "Svn-Author");
+    if (!hdr_author) hdr_author = (user && *user) ? user : "anonymous";
+    const char *hdr_log = header_or_null(req, "Svn-Log");
+    char synth_log[PATH_MAX + 64];
+    if (!hdr_log) {
+        snprintf(synth_log, sizeof synth_log, "DELETE /%s", file_path);
+        hdr_log = synth_log;
+    }
+
+    int new_rev = svnae_commit_finalise(repo, txn, hdr_author, hdr_log);
+    svnae_txn_free(txn);
+    if (new_rev < 0) {
+        respond_error(res, 500, "commit failed");
+        return;
+    }
+
+    char buf[64];
+    snprintf(buf, sizeof buf, "{\"rev\":%d}", new_rev);
+    respond_json(res, 200, buf);
+}
+
 /* --- commit handler --------------------------------------------------- *
  *
  *   POST /repos/{r}/commit
@@ -1623,6 +1854,19 @@ dispatch(HttpRequest *req, HttpServerResponse *res, void *user_data)
         return;
     }
 
+    /* Phase 7.4: REST node edits. /path/<rel> is the resource URL. */
+    if (strcmp(req->method, "PUT") == 0) {
+        if (strncmp(tail, "/path/", 6) == 0) { handle_repo_path_put(req, res); return; }
+        respond_error(res, 404, "unknown PUT route");
+        return;
+    }
+    if (strcmp(req->method, "DELETE") == 0) {
+        if (strncmp(tail, "/path/", 6) == 0) { handle_repo_path_delete(req, res); return; }
+        respond_error(res, 404, "unknown DELETE route");
+        return;
+    }
+
+    if (strncmp(tail, "/path/", 6) == 0) { handle_repo_path_get(req, res); return; }
     if (strcmp(tail, "/info") == 0)      { handle_repo_info(req, res, user_data); return; }
     if (strcmp(tail, "/log") == 0)       { handle_repo_log (req, res, user_data); return; }
     if (strncmp(tail, "/rev/", 5) == 0)  { handle_repo_rev (req, res, user_data); return; }

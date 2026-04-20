@@ -22,6 +22,8 @@ extern svnae_svnserver_set_superuser_token(token: string)
 extern http_server_create(port: int) -> ptr
 extern http_server_get(server: ptr, path: string, handler: ptr, user_data: ptr)
 extern http_server_post(server: ptr, path: string, handler: ptr, user_data: ptr)
+extern http_server_put(server: ptr, path: string, handler: ptr, user_data: ptr)
+extern http_server_delete(server: ptr, path: string, handler: ptr, user_data: ptr)
 
 main() {
     argc = aether_args_count()
@@ -62,8 +64,10 @@ main() {
     // distinguish /repos/*/info from /repos/*/log at the route layer.
     // Single catch-all route for GET, another for POST → C-side
     // dispatcher looks at method + tail.
-    http_server_get (server, "/repos/*", svnae_svnserver_handler_dispatch(), 0)
-    http_server_post(server, "/repos/*", svnae_svnserver_handler_dispatch(), 0)
+    http_server_get   (server, "/repos/*", svnae_svnserver_handler_dispatch(), 0)
+    http_server_post  (server, "/repos/*", svnae_svnserver_handler_dispatch(), 0)
+    http_server_put   (server, "/repos/*", svnae_svnserver_handler_dispatch(), 0)
+    http_server_delete(server, "/repos/*", svnae_svnserver_handler_dispatch(), 0)
 
     // http_server_start_raw calls bind_raw itself in fallback mode, so
     // skipping the explicit server_bind here. The stdlib's `server_start`
