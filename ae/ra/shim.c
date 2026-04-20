@@ -270,6 +270,64 @@ svnae_ra_cat(const char *base_url, const char *repo_name, int rev, const char *p
 
 void svnae_ra_free(char *p) { free(p); }
 
+/* --- remote properties ---------------------------------------------- *
+ *
+ * GET /repos/{r}/rev/{n}/props/<path> returns a JSON {k:v,...} object.
+ * We expose it as a handle with indexed name/value accessors.
+ */
+
+struct prop_entry_ra { char *name; char *value; };
+struct svnae_ra_props { struct prop_entry_ra *items; int n; };
+
+struct svnae_ra_props *
+svnae_ra_get_props(const char *base_url, const char *repo_name,
+                   int rev, const char *path)
+{
+    while (*path == '/') path++;
+    char url[2048];
+    if (*path) {
+        snprintf(url, sizeof url, "%s/repos/%s/rev/%d/props/%s",
+                 base_url, repo_name, rev, path);
+    } else {
+        snprintf(url, sizeof url, "%s/repos/%s/rev/%d/props",
+                 base_url, repo_name, rev);
+    }
+    char *body = NULL; size_t len = 0; int status = 0;
+    if (http_get(url, &body, &len, &status) != 0) return NULL;
+    if (status != 200) { free(body); return NULL; }
+    cJSON *root = cJSON_ParseWithLength(body, len);
+    free(body);
+    if (!root) return NULL;
+    if (!cJSON_IsObject(root)) { cJSON_Delete(root); return NULL; }
+
+    int n = 0;
+    for (cJSON *it = root->child; it; it = it->next) n++;
+    struct svnae_ra_props *P = calloc(1, sizeof *P);
+    P->n = n;
+    P->items = calloc((size_t)(n > 0 ? n : 1), sizeof *P->items);
+    int i = 0;
+    for (cJSON *it = root->child; it; it = it->next) {
+        P->items[i].name  = strdup(it->string ? it->string : "");
+        P->items[i].value = cJSON_IsString(it) ? strdup(it->valuestring) : strdup("");
+        i++;
+    }
+    cJSON_Delete(root);
+    return P;
+}
+
+int         svnae_ra_props_count(const struct svnae_ra_props *P) { return P ? P->n : 0; }
+const char *svnae_ra_props_name (const struct svnae_ra_props *P, int i) { return (P && i >= 0 && i < P->n) ? P->items[i].name  : ""; }
+const char *svnae_ra_props_value(const struct svnae_ra_props *P, int i) { return (P && i >= 0 && i < P->n) ? P->items[i].value : ""; }
+
+void
+svnae_ra_props_free(struct svnae_ra_props *P)
+{
+    if (!P) return;
+    for (int i = 0; i < P->n; i++) { free(P->items[i].name); free(P->items[i].value); }
+    free(P->items);
+    free(P);
+}
+
 /* --- server-side copy ------------------------------------------------ *
  *
  * POST /repos/{r}/copy with { base_rev, from_path, to_path, author, log }.
@@ -395,6 +453,11 @@ svnae_ra_list_free(struct svnae_ra_list *L)
 struct commit_edit { int op; char *path; unsigned char *content; int content_len; };
 /* op: 1=add-file, 2=mkdir, 3=delete. Matches txn_shim.c's edit kinds. */
 
+/* Per-path props collected for commit. Parallel arrays keyed by
+ * composite "path\0key" — we flatten for simplicity. When commit_finish
+ * serialises, we group by path into nested objects. */
+struct commit_prop { char *path; char *key; char *value; };
+
 struct svnae_ra_commit {
     int   base_rev;
     char *author;
@@ -402,6 +465,9 @@ struct svnae_ra_commit {
     struct commit_edit *edits;
     int   n;
     int   cap;
+    struct commit_prop *props;
+    int   n_props;
+    int   cap_props;
 };
 
 struct svnae_ra_commit *
@@ -474,6 +540,29 @@ svnae_ra_commit_delete(struct svnae_ra_commit *cb, const char *path)
     return 0;
 }
 
+/* Record a property to persist on the next commit. The commit payload
+ * carries ALL properties for each path the client wants to persist —
+ * unmentioned paths inherit the previous revision's props. Call once
+ * per (path, key, value). */
+int
+svnae_ra_commit_set_prop(struct svnae_ra_commit *cb,
+                         const char *path, const char *key, const char *value)
+{
+    if (!cb) return -1;
+    if (cb->n_props == cb->cap_props) {
+        int nc = cb->cap_props ? cb->cap_props * 2 : 8;
+        struct commit_prop *p = realloc(cb->props, (size_t)nc * sizeof *p);
+        if (!p) return -1;
+        cb->props = p;
+        cb->cap_props = nc;
+    }
+    cb->props[cb->n_props].path  = strdup(path);
+    cb->props[cb->n_props].key   = strdup(key);
+    cb->props[cb->n_props].value = strdup(value);
+    cb->n_props++;
+    return 0;
+}
+
 /* base64 encode for the wire. OpenSSL EVP_EncodeBlock returns a padded
  * length; the buffer we pass must be 4*((n+2)/3)+1 bytes. */
 static char *
@@ -518,6 +607,18 @@ svnae_ra_commit_finish(struct svnae_ra_commit *cb,
         }
         cJSON_AddItemToArray(jedits, e);
     }
+
+    /* Add props object: { path: {key: value, ...}, ... }. */
+    if (cb->n_props > 0) {
+        cJSON *jp = cJSON_AddObjectToObject(body, "props");
+        for (int i = 0; i < cb->n_props; i++) {
+            const char *p = cb->props[i].path;
+            cJSON *per = cJSON_GetObjectItemCaseSensitive(jp, p);
+            if (!per) per = cJSON_AddObjectToObject(jp, p);
+            cJSON_AddStringToObject(per, cb->props[i].key, cb->props[i].value);
+        }
+    }
+
     char *json = cJSON_PrintUnformatted(body);
     cJSON_Delete(body);
 
@@ -546,7 +647,13 @@ svnae_ra_commit_finish(struct svnae_ra_commit *cb,
         free(cb->edits[i].path);
         free(cb->edits[i].content);
     }
+    for (int i = 0; i < cb->n_props; i++) {
+        free(cb->props[i].path);
+        free(cb->props[i].key);
+        free(cb->props[i].value);
+    }
     free(cb->edits);
+    free(cb->props);
     free(cb);
 
     return new_rev;

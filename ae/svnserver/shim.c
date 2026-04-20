@@ -41,6 +41,17 @@ void svnae_txn_free(struct svnae_txn *t);
 
 int  svnae_commit_finalise(const char *repo, struct svnae_txn *txn,
                            const char *author, const char *logmsg);
+int  svnae_commit_finalise_with_props(const char *repo, struct svnae_txn *txn,
+                                      const char *author, const char *logmsg,
+                                      const char *props_sha1);
+const char *svnae_build_props_blob(const char *repo,
+                                   const char *const *keys,
+                                   const char *const *values,
+                                   int n_pairs);
+const char *svnae_build_paths_props_blob(const char *repo,
+                                         const char *const *paths,
+                                         const char *const *props_shas,
+                                         int n_paths);
 
 /* For server-side copy: resolve a (rev, path) pair to its sha1 + kind.
  * We piggy-back on the existing repos/shim.c's resolve_path by exposing
@@ -59,6 +70,7 @@ const char       *svnae_repos_log_msg(const struct svnae_log *lg, int i);
 void              svnae_repos_log_free(struct svnae_log *lg);
 
 char             *svnae_repos_cat(const char *repo, int rev, const char *path);
+char             *svnae_rep_read_blob(const char *repo, const char *sha1_hex);
 void              svnae_rep_free(char *p);
 
 struct svnae_list *svnae_repos_list(const char *repo, int rev, const char *path);
@@ -337,9 +349,102 @@ handle_repo_log(HttpRequest *req, HttpServerResponse *res, void *user_data)
     free(s.data);
 }
 
+/* Load a rev's "props:" sha1 (or empty). Caller frees. */
+static char *
+load_rev_props_sha1(const char *repo, int rev)
+{
+    char path[PATH_MAX];
+    snprintf(path, sizeof path, "%s/revs/%06d", repo, rev);
+    FILE *f = fopen(path, "r");
+    if (!f) return NULL;
+    char buf[128];
+    if (!fgets(buf, sizeof buf, f)) { fclose(f); return NULL; }
+    fclose(f);
+    size_t n = strlen(buf);
+    while (n > 0 && (buf[n-1] == '\n' || buf[n-1] == '\r')) buf[--n] = '\0';
+    char *body = svnae_rep_read_blob(repo, buf);
+    if (!body) return NULL;
+    char *p = strstr(body, "props: ");
+    char *out = NULL;
+    if (p) {
+        p += 7;
+        char *eol = strchr(p, '\n');
+        size_t L = eol ? (size_t)(eol - p) : strlen(p);
+        out = malloc(L + 1);
+        memcpy(out, p, L);
+        out[L] = '\0';
+    }
+    svnae_rep_free(body);
+    return out;
+}
+
+/* Given a paths-props blob body and a target path, return the sha1 of
+ * that path's per-path props blob (malloc'd), or NULL if missing. */
+static char *
+paths_props_lookup(const char *body, const char *path)
+{
+    if (!body) return NULL;
+    size_t plen = strlen(path);
+    const char *p = body;
+    while (*p) {
+        const char *eol = strchr(p, '\n');
+        size_t llen = eol ? (size_t)(eol - p) : strlen(p);
+        /* format: "<40-char sha> <path>" */
+        if (llen > 41) {
+            size_t name_len = llen - 41;
+            if (name_len == plen && memcmp(p + 41, path, plen) == 0) {
+                char *out = malloc(41);
+                memcpy(out, p, 40);
+                out[40] = '\0';
+                return out;
+            }
+        }
+        if (!eol) break;
+        p = eol + 1;
+    }
+    return NULL;
+}
+
+/* Given a per-path props blob (key=value\n lines), emit it as JSON
+ * {"k":"v",...} into sb. */
+static void
+sb_put_props_as_json(struct sb *s, const char *body)
+{
+    sb_putc(s, '{');
+    int first = 1;
+    const char *p = body;
+    while (*p) {
+        const char *eol = strchr(p, '\n');
+        size_t llen = eol ? (size_t)(eol - p) : strlen(p);
+        const char *eq = memchr(p, '=', llen);
+        if (eq) {
+            size_t klen = (size_t)(eq - p);
+            size_t vlen = llen - klen - 1;
+            if (!first) sb_putc(s, ',');
+            first = 0;
+            char kbuf[256];
+            if (klen < sizeof kbuf) {
+                memcpy(kbuf, p, klen); kbuf[klen] = '\0';
+                sb_putjson_string(s, kbuf);
+            } else {
+                sb_puts(s, "\"\"");
+            }
+            sb_putc(s, ':');
+            char *vbuf = malloc(vlen + 1);
+            memcpy(vbuf, eq + 1, vlen); vbuf[vlen] = '\0';
+            sb_putjson_string(s, vbuf);
+            free(vbuf);
+        }
+        if (!eol) break;
+        p = eol + 1;
+    }
+    sb_putc(s, '}');
+}
+
 /* GET /repos/{r}/rev/:rev/info  → info_rev JSON
  * GET /repos/{r}/rev/:rev/cat/<path>   → raw bytes
  * GET /repos/{r}/rev/:rev/list/<path>  → list JSON
+ * GET /repos/{r}/rev/:rev/props/<path> → props JSON
  *
  * Single handler dispatches based on what follows the rev number.
  */
@@ -393,6 +498,33 @@ handle_repo_rev(HttpRequest *req, HttpServerResponse *res, void *user_data)
         size_t len = strlen(data);
         respond_binary(res, data, len, "application/octet-stream");
         svnae_rep_free(data);
+        return;
+    }
+
+    /* /rev/N/props/<path>  */
+    if (strncmp(after, "/props/", 7) == 0 || strcmp(after, "/props") == 0) {
+        const char *target = strcmp(after, "/props") == 0 ? "" : after + 7;
+        /* The path "" means the WC root. */
+        char *props_sha = load_rev_props_sha1(repo, rev);
+        if (!props_sha || !*props_sha) {
+            free(props_sha);
+            respond_json(res, 200, "{}");
+            return;
+        }
+        char *paths_body = svnae_rep_read_blob(repo, props_sha);
+        free(props_sha);
+        if (!paths_body) { respond_json(res, 200, "{}"); return; }
+        char *per_path_sha = paths_props_lookup(paths_body, target);
+        svnae_rep_free(paths_body);
+        if (!per_path_sha) { respond_json(res, 200, "{}"); return; }
+        char *props_body = svnae_rep_read_blob(repo, per_path_sha);
+        free(per_path_sha);
+        if (!props_body) { respond_json(res, 200, "{}"); return; }
+        struct sb s = {0};
+        sb_put_props_as_json(&s, props_body);
+        svnae_rep_free(props_body);
+        respond_json(res, 200, s.data ? s.data : "{}");
+        free(s.data);
         return;
     }
 
@@ -555,12 +687,60 @@ handle_repo_commit(HttpRequest *req, HttpServerResponse *res, void *user_data)
             return;
         }
     }
+
+    /* Optional top-level "props" object: { path: {key: value, ...}, ... } */
+    /* The WC always sends ALL current props for the set of paths it wants
+     * to persist. We honour what we're given verbatim. Must run BEFORE
+     * cJSON_Delete(root) since jprops lives inside root. */
+    cJSON *jprops = cJSON_GetObjectItemCaseSensitive(root, "props");
+    const char *use_props_sha1 = "";   /* default -> inherit prev */
+    char *built_props_sha1 = NULL;
+    if (jprops && cJSON_IsObject(jprops)) {
+        /* Build paths-props blob. */
+        int np = 0;
+        for (cJSON *it = jprops->child; it; it = it->next) np++;
+        if (np > 0) {
+            const char **paths      = calloc((size_t)np, sizeof *paths);
+            const char **props_shas = calloc((size_t)np, sizeof *props_shas);
+            char       **props_sha_copies = calloc((size_t)np, sizeof *props_sha_copies);
+            int i = 0;
+            for (cJSON *p = jprops->child; p; p = p->next) {
+                paths[i] = p->string ? p->string : "";
+                /* p is an object; its children are key:value string pairs. */
+                int nk = 0;
+                for (cJSON *kv = p->child; kv; kv = kv->next) nk++;
+                const char **keys   = calloc((size_t)(nk > 0 ? nk : 1), sizeof *keys);
+                const char **values = calloc((size_t)(nk > 0 ? nk : 1), sizeof *values);
+                int k = 0;
+                for (cJSON *kv = p->child; kv; kv = kv->next) {
+                    if (cJSON_IsString(kv)) {
+                        keys[k]   = kv->string ? kv->string : "";
+                        values[k] = kv->valuestring ? kv->valuestring : "";
+                        k++;
+                    }
+                }
+                const char *psha = svnae_build_props_blob(repo, keys, values, k);
+                free(keys); free(values);
+                if (!psha) psha = "";
+                props_sha_copies[i] = strdup(psha);
+                props_shas[i]       = props_sha_copies[i];
+                i++;
+            }
+            const char *psb = svnae_build_paths_props_blob(repo, paths, props_shas, i);
+            if (psb) built_props_sha1 = strdup(psb);
+            for (int j = 0; j < i; j++) free(props_sha_copies[j]);
+            free(props_sha_copies); free(paths); free(props_shas);
+            if (built_props_sha1) use_props_sha1 = built_props_sha1;
+        }
+    }
     cJSON_Delete(root);
 
-    int new_rev = svnae_commit_finalise(repo, txn, author, logmsg);
+    int new_rev = svnae_commit_finalise_with_props(repo, txn, author, logmsg,
+                                                   use_props_sha1);
     svnae_txn_free(txn);
     free(author);
     free(logmsg);
+    free(built_props_sha1);
     if (new_rev < 0) {
         respond_error(res, 500, "commit failed");
         return;

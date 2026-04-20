@@ -11,10 +11,11 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
 
 ## Headline
 
-- **34 commits.** Each phase is its own commit, reviewable in isolation.
-- **30 test suites**, ~310 assertions, all green. Mix of in-language
-  `.ae` tests and end-to-end shell harnesses that spin up a real HTTP
-  server and drive it with curl and the built `svn` CLI.
+- **39 commits.** Each phase is its own commit, reviewable in isolation.
+- **31 test suites** (added `test_server_props.sh`), ~325 assertions, all green.
+  Mix of in-language `.ae` tests and end-to-end shell harnesses that
+  spin up a real HTTP server and drive it with curl and the built
+  `svn` CLI.
 - **~14,400 lines** total (Aether + C shims + shell test drivers).
 - Daily-driver workflow works end to end: checkout → edit → status
   → diff → add → rm → commit → update → branch → merge.
@@ -81,6 +82,8 @@ Named after the plan's Phase N. Plan: `../svn-to-aether.md`.
 | 5.11 | svn:ignore filter for status | ✅ | `6202fb5` |
 | 5.12a | Branches (server-side copy) | ✅ | `94c06f0` |
 | 5.12b | svn merge + svn:mergeinfo | ✅ | `b04433c` |
+| 5.13 | 3-way conflict resolution + `svn resolve` | ✅ | (prev commit) |
+| 5.14 | Server-side properties (propset round-trips through commit/checkout/update) | ✅ | (this commit) |
 | 12 | svnadmin create/dump/load | ✅ | `52380a5` |
 
 ## Phases not yet done (from the plan)

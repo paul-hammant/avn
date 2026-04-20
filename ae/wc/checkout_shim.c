@@ -53,6 +53,17 @@ int          svnae_wc_db_set_info(sqlite3 *db, const char *key, const char *valu
 
 const char *svnae_wc_pristine_put(const char *wc_root, const char *data, int len);
 
+struct svnae_ra_props;
+struct svnae_ra_props *svnae_ra_get_props(const char *base_url, const char *repo_name,
+                                          int rev, const char *path);
+int         svnae_ra_props_count(const struct svnae_ra_props *P);
+const char *svnae_ra_props_name (const struct svnae_ra_props *P, int i);
+const char *svnae_ra_props_value(const struct svnae_ra_props *P, int i);
+void        svnae_ra_props_free (struct svnae_ra_props *P);
+
+int svnae_wc_propset(const char *wc_root, const char *path,
+                     const char *name, const char *value);
+
 /* --- helpers ---------------------------------------------------------- */
 
 static int
@@ -127,13 +138,23 @@ walk(const char *base_url, const char *repo, int rev,
         if (strcmp(kind, "dir") == 0) {
             if (mkdir_p(disk) != 0) { svnae_ra_list_free(L); return -1; }
             svnae_wc_db_upsert_node(db, rel, 1 /*dir*/, rev, "", 0);
+            /* Ingest props for this dir. */
+            struct svnae_ra_props *P = svnae_ra_get_props(base_url, repo, rev, rel);
+            if (P) {
+                int pn = svnae_ra_props_count(P);
+                for (int j = 0; j < pn; j++) {
+                    svnae_wc_propset(dest, rel, svnae_ra_props_name(P, j),
+                                                svnae_ra_props_value(P, j));
+                }
+                svnae_ra_props_free(P);
+            }
             if (walk(base_url, repo, rev, dest, rel, db) != 0) {
                 svnae_ra_list_free(L); return -1;
             }
         } else {
             char *data = svnae_ra_cat(base_url, repo, rev, rel);
             if (!data) { svnae_ra_list_free(L); return -1; }
-            int len = (int)strlen(data);  /* text-only for Phase 5; see comment above */
+            int len = (int)strlen(data);
 
             if (write_file_atomic(disk, data, len) != 0) {
                 svnae_ra_free(data); svnae_ra_list_free(L); return -1;
@@ -142,6 +163,16 @@ walk(const char *base_url, const char *repo, int rev,
             if (!sha) { svnae_ra_free(data); svnae_ra_list_free(L); return -1; }
             svnae_wc_db_upsert_node(db, rel, 0 /*file*/, rev, sha, 0);
             svnae_ra_free(data);
+            /* Ingest props for this file. */
+            struct svnae_ra_props *P = svnae_ra_get_props(base_url, repo, rev, rel);
+            if (P) {
+                int pn = svnae_ra_props_count(P);
+                for (int j = 0; j < pn; j++) {
+                    svnae_wc_propset(dest, rel, svnae_ra_props_name(P, j),
+                                                svnae_ra_props_value(P, j));
+                }
+                svnae_ra_props_free(P);
+            }
         }
     }
     svnae_ra_list_free(L);

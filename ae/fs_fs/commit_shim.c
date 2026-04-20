@@ -89,10 +89,134 @@ load_rev_root_sha1(const char *repo, int rev)
 }
 
 /* Finalise: take the txn's base rev, rebuild the tree, write a new
- * revision blob, bump head, return the new rev number. -1 on failure. */
+ * revision blob, bump head, return the new rev number. -1 on failure.
+ *
+ * `props_sha1` is the sha1 of a paths-props blob associated with this
+ * commit — pass an empty string to inherit the previous rev's props
+ * (rep-sharing works automatically), or a specific sha1 when commits
+ * touch properties. This extension is additive: older clients/tests
+ * that pass "" always get the previous rev's props-sha1 carried
+ * forward. */
+
+/* Read a "key: <value>\n" line from an existing revision blob (or
+ * return NULL if not present). Caller frees. */
+static char *
+rev_blob_field(const char *repo, int rev, const char *key)
+{
+    char path[PATH_MAX];
+    snprintf(path, sizeof path, "%s/revs/%06d", repo, rev);
+    FILE *f = fopen(path, "r");
+    if (!f) return NULL;
+    char buf[128];
+    if (!fgets(buf, sizeof buf, f)) { fclose(f); return NULL; }
+    fclose(f);
+    size_t n = strlen(buf);
+    while (n > 0 && (buf[n-1] == '\n' || buf[n-1] == '\r')) buf[--n] = '\0';
+
+    char *body = svnae_rep_read_blob(repo, buf);
+    if (!body) return NULL;
+    size_t klen = strlen(key);
+    char needle[64];
+    snprintf(needle, sizeof needle, "%s: ", key);
+    char *p = strstr(body, needle);
+    char *out = NULL;
+    if (p) {
+        p += klen + 2;
+        char *eol = strchr(p, '\n');
+        size_t L = eol ? (size_t)(eol - p) : strlen(p);
+        out = malloc(L + 1);
+        memcpy(out, p, L);
+        out[L] = '\0';
+    }
+    svnae_rep_free(body);
+    return out;
+}
+
 int
 svnae_commit_finalise(const char *repo, struct svnae_txn *txn,
                       const char *author, const char *logmsg)
+{
+    return svnae_commit_finalise_with_props(repo, txn, author, logmsg, "");
+}
+
+/* Build a per-path props blob ("key=value\n" lines), write it to the
+ * rep store, return its sha1 (as static thread-local, copy before
+ * reuse). NULL on failure. */
+const char *
+svnae_build_props_blob(const char *repo,
+                      const char *const *keys,
+                      const char *const *values,
+                      int n_pairs)
+{
+    /* Sort (key, value) pairs by key so identical prop sets always
+     * hash to the same sha1. Cheap: bubble sort on indices. */
+    int *order = malloc(sizeof(int) * (size_t)(n_pairs > 0 ? n_pairs : 1));
+    for (int i = 0; i < n_pairs; i++) order[i] = i;
+    for (int i = 0; i < n_pairs; i++) {
+        for (int j = i + 1; j < n_pairs; j++) {
+            if (strcmp(keys[order[i]], keys[order[j]]) > 0) {
+                int t = order[i]; order[i] = order[j]; order[j] = t;
+            }
+        }
+    }
+    size_t cap = 256, len = 0;
+    char *body = malloc(cap);
+    body[0] = '\0';
+    for (int i = 0; i < n_pairs; i++) {
+        int idx = order[i];
+        size_t need = strlen(keys[idx]) + 1 + strlen(values[idx]) + 1 + 1;
+        if (len + need >= cap) {
+            cap = (len + need) * 2;
+            body = realloc(body, cap);
+        }
+        len += (size_t)snprintf(body + len, cap - len, "%s=%s\n", keys[idx], values[idx]);
+    }
+    free(order);
+    const char *sha = svnae_rep_write_blob(repo, body, (int)len);
+    free(body);
+    return sha;   /* static-thread-local in rep_store_shim */
+}
+
+/* Build a paths-props blob ("<props-sha1> <path>\n" per line, sorted
+ * by path), write to rep store, return its sha1. */
+const char *
+svnae_build_paths_props_blob(const char *repo,
+                            const char *const *paths,
+                            const char *const *props_shas,
+                            int n_paths)
+{
+    int *order = malloc(sizeof(int) * (size_t)(n_paths > 0 ? n_paths : 1));
+    for (int i = 0; i < n_paths; i++) order[i] = i;
+    for (int i = 0; i < n_paths; i++) {
+        for (int j = i + 1; j < n_paths; j++) {
+            if (strcmp(paths[order[i]], paths[order[j]]) > 0) {
+                int t = order[i]; order[i] = order[j]; order[j] = t;
+            }
+        }
+    }
+    size_t cap = 256, len = 0;
+    char *body = malloc(cap);
+    body[0] = '\0';
+    for (int i = 0; i < n_paths; i++) {
+        int idx = order[i];
+        size_t need = 40 + 1 + strlen(paths[idx]) + 1 + 1;
+        if (len + need >= cap) {
+            cap = (len + need) * 2;
+            body = realloc(body, cap);
+        }
+        len += (size_t)snprintf(body + len, cap - len, "%s %s\n",
+                                props_shas[idx], paths[idx]);
+    }
+    free(order);
+    const char *sha = svnae_rep_write_blob(repo, body, (int)len);
+    free(body);
+    return sha;
+}
+
+int
+svnae_commit_finalise_with_props(const char *repo, struct svnae_txn *txn,
+                                 const char *author, const char *logmsg,
+                                 const char *props_sha1)
 {
     int base_rev = svnae_txn_base_rev(txn);
     if (base_rev < 0) return -1;
@@ -107,21 +231,28 @@ svnae_commit_finalise(const char *repo, struct svnae_txn *txn,
     if (prev < 0) { free(new_root); return -1; }
     int next = prev + 1;
 
-    /* Build revision blob as plain text. */
-    size_t est = strlen(author) + strlen(logmsg) + 64 + 40 + 32;
+    /* If caller didn't supply a props_sha1, inherit the previous rev's. */
+    char *inherited_props = NULL;
+    const char *ps = props_sha1 && *props_sha1 ? props_sha1 : NULL;
+    if (!ps) {
+        inherited_props = rev_blob_field(repo, prev, "props");
+        ps = inherited_props ? inherited_props : "";
+    }
+
+    /* Build revision blob. */
+    size_t est = strlen(author) + strlen(logmsg) + 128 + 40 + 40 + 32;
     char *rev_body = malloc(est);
     int n = snprintf(rev_body, est,
-                     "root: %s\nprev: %d\nauthor: %s\ndate: %s\nlog: %s\n",
-                     new_root, prev, author, svnae_fsfs_now_iso8601(), logmsg);
-    /* snprintf returns the length it would have written; realloc if we
-     * underestimated (rare — author+log are small in practice). */
+                     "root: %s\nprops: %s\nprev: %d\nauthor: %s\ndate: %s\nlog: %s\n",
+                     new_root, ps, prev, author, svnae_fsfs_now_iso8601(), logmsg);
     if (n >= (int)est) {
         free(rev_body);
         rev_body = malloc((size_t)n + 1);
         snprintf(rev_body, (size_t)n + 1,
-                 "root: %s\nprev: %d\nauthor: %s\ndate: %s\nlog: %s\n",
-                 new_root, prev, author, svnae_fsfs_now_iso8601(), logmsg);
+                 "root: %s\nprops: %s\nprev: %d\nauthor: %s\ndate: %s\nlog: %s\n",
+                 new_root, ps, prev, author, svnae_fsfs_now_iso8601(), logmsg);
     }
+    free(inherited_props);
 
     const char *rev_sha = svnae_rep_write_blob(repo, rev_body, (int)strlen(rev_body));
     free(rev_body);

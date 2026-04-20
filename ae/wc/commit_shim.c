@@ -60,7 +60,15 @@ struct svnae_ra_commit *svnae_ra_commit_begin(int base_rev, const char *author, 
 int  svnae_ra_commit_add_file(struct svnae_ra_commit *cb, const char *path, const char *content, int len);
 int  svnae_ra_commit_mkdir(struct svnae_ra_commit *cb, const char *path);
 int  svnae_ra_commit_delete(struct svnae_ra_commit *cb, const char *path);
+int  svnae_ra_commit_set_prop(struct svnae_ra_commit *cb, const char *path, const char *key, const char *value);
 int  svnae_ra_commit_finish(struct svnae_ra_commit *cb, const char *base_url, const char *repo_name);
+
+struct svnae_wc_proplist;
+struct svnae_wc_proplist *svnae_wc_proplist(const char *wc_root, const char *path);
+int          svnae_wc_proplist_count(const struct svnae_wc_proplist *L);
+const char  *svnae_wc_proplist_name (const struct svnae_wc_proplist *L, int i);
+const char  *svnae_wc_proplist_value(const struct svnae_wc_proplist *L, int i);
+void         svnae_wc_proplist_free (struct svnae_wc_proplist *L);
 
 /* --- helpers --------------------------------------------------------- */
 
@@ -230,6 +238,27 @@ svnae_wc_commit(const char *wc_root, const char *author, const char *logmsg)
             roles[i] = 1;
             any_edits = 1;
         }
+    }
+
+    /* Collect WC-side properties to send with the commit. Strategy:
+     * for every node with at least one row in `props`, include ALL its
+     * current props in the commit. Paths whose props haven't been
+     * touched don't need to be re-sent — they inherit the previous
+     * revision's props-sha1 via rep-sharing on the server. But since
+     * Phase 5.14 doesn't yet track per-path dirty bits, we include
+     * every tracked path with props. This is correct but noisier; an
+     * optimisation pass can add delta tracking later. */
+    for (int i = 0; i < n; i++) {
+        const char *rel = svnae_wc_nodelist_path(L, i);
+        struct svnae_wc_proplist *P = svnae_wc_proplist(wc_root, rel);
+        if (!P) continue;
+        int pn = svnae_wc_proplist_count(P);
+        for (int j = 0; j < pn; j++) {
+            svnae_ra_commit_set_prop(cb, rel,
+                                     svnae_wc_proplist_name(P, j),
+                                     svnae_wc_proplist_value(P, j));
+        }
+        svnae_wc_proplist_free(P);
     }
 
     if (!any_edits) {

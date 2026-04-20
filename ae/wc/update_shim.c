@@ -79,6 +79,17 @@ void        svnae_ra_list_free(struct svnae_ra_list *L);
 char       *svnae_ra_cat(const char *base_url, const char *repo_name, int rev, const char *path);
 void        svnae_ra_free(char *p);
 
+struct svnae_ra_props;
+struct svnae_ra_props *svnae_ra_get_props(const char *base_url, const char *repo_name,
+                                          int rev, const char *path);
+int         svnae_ra_props_count(const struct svnae_ra_props *P);
+const char *svnae_ra_props_name (const struct svnae_ra_props *P, int i);
+const char *svnae_ra_props_value(const struct svnae_ra_props *P, int i);
+void        svnae_ra_props_free (struct svnae_ra_props *P);
+
+int svnae_wc_propset(const char *wc_root, const char *path,
+                     const char *name, const char *value);
+
 /* --- small helpers ---------------------------------------------------- */
 
 static int
@@ -258,6 +269,24 @@ walk_remote(const char *base_url, const char *repo, int rev,
     return 0;
 }
 
+/* Pull props for `rel` from the server at `rev` and re-apply them via
+ * svnae_wc_propset. We don't currently delete removed props — reference
+ * svn's prop merge is more subtle; for this phase we only overwrite /
+ * add, which covers propset and propchange. */
+static void
+ingest_props(const char *base_url, const char *repo, int rev,
+             const char *wc_root, const char *rel)
+{
+    struct svnae_ra_props *P = svnae_ra_get_props(base_url, repo, rev, rel);
+    if (!P) return;
+    int pn = svnae_ra_props_count(P);
+    for (int j = 0; j < pn; j++) {
+        svnae_wc_propset(wc_root, rel, svnae_ra_props_name(P, j),
+                                        svnae_ra_props_value(P, j));
+    }
+    svnae_ra_props_free(P);
+}
+
 /* --- conflict detection + apply --------------------------------------- */
 
 int
@@ -344,6 +373,7 @@ svnae_wc_update(const char *wc_root, int target_rev)
                 if (write_file_atomic(disk, r->data, r->data_len) != 0) continue;
                 svnae_wc_pristine_put(wc_root, r->data, r->data_len);
                 svnae_wc_db_upsert_node(db, rel, 0, target_rev, r->sha1, 0);
+                ingest_props(base_url, repo, target_rev, wc_root, rel);
             } else {
                 /* Local modified. 3-way merge: base = pristine,
                  * theirs = remote, mine = disk. */
@@ -364,6 +394,7 @@ svnae_wc_update(const char *wc_root, int target_rev)
                      * disk contains the merged text (now equal to remote). */
                     svnae_wc_pristine_put(wc_root, r->data, r->data_len);
                     svnae_wc_db_upsert_node(db, rel, 0, target_rev, r->sha1, 0);
+                    ingest_props(base_url, repo, target_rev, wc_root, rel);
                 } else if (m3rc == 1) {
                     /* Conflict. Pristine advances to remote (so the file's
                      * "base" for next operations is the new remote), but we
@@ -379,8 +410,10 @@ svnae_wc_update(const char *wc_root, int target_rev)
                 }
             }
         } else {
-            /* Unchanged — just bump base_rev. */
+            /* Unchanged — just bump base_rev. Props may still have
+             * changed for this path, so re-ingest them. */
             svnae_wc_db_upsert_node(db, rel, kind, target_rev, base_sha, 0);
+            ingest_props(base_url, repo, target_rev, wc_root, rel);
         }
     }
 
@@ -404,6 +437,7 @@ svnae_wc_update(const char *wc_root, int target_rev)
             svnae_wc_pristine_put(wc_root, r->data, r->data_len);
             svnae_wc_db_upsert_node(db, r->path, 0, target_rev, r->sha1, 0);
         }
+        ingest_props(base_url, repo, target_rev, wc_root, r->path);
     }
 
     /* 5. Bump base_rev in info. */
