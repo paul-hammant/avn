@@ -78,48 +78,23 @@ int   svnae_merge3_apply(const char *wc_path,
 
 /* --- tiny helpers ---------------------------------------------------- */
 
+extern int svnae_wc_hash_bytes(const char *wc_root, const char *data, int len, char *out);
+extern int svnae_wc_hash_file (const char *wc_root, const char *path, char *out);
+
+static __thread const char *g_wc_root = NULL;
+
 static int
-sha1_of_file(const char *path, char out[41])
+sha1_of_file(const char *path, char out[65])
 {
-    int fd = open(path, O_RDONLY);
-    if (fd < 0) return -1;
-    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
-    EVP_DigestInit_ex(ctx, EVP_sha1(), NULL);
-    char buf[8192];
-    for (;;) {
-        ssize_t n = read(fd, buf, sizeof buf);
-        if (n < 0) { if (errno == EINTR) continue; EVP_MD_CTX_free(ctx); close(fd); return -1; }
-        if (n == 0) break;
-        EVP_DigestUpdate(ctx, buf, (size_t)n);
-    }
-    close(fd);
-    unsigned char dig[EVP_MAX_MD_SIZE]; unsigned int dlen = 0;
-    EVP_DigestFinal_ex(ctx, dig, &dlen);
-    EVP_MD_CTX_free(ctx);
-    static const char hex[] = "0123456789abcdef";
-    for (unsigned int i = 0; i < 20; i++) {
-        out[i*2]   = hex[dig[i] >> 4];
-        out[i*2+1] = hex[dig[i] & 0xf];
-    }
-    out[40] = '\0';
-    return 0;
+    if (!g_wc_root) return -1;
+    return svnae_wc_hash_file(g_wc_root, path, out);
 }
 
 static void
-sha1_of_bytes(const char *data, int len, char out[41])
+sha1_of_bytes(const char *data, int len, char out[65])
 {
-    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
-    unsigned char dig[EVP_MAX_MD_SIZE]; unsigned int dlen = 0;
-    EVP_DigestInit_ex(ctx, EVP_sha1(), NULL);
-    EVP_DigestUpdate(ctx, data, (size_t)len);
-    EVP_DigestFinal_ex(ctx, dig, &dlen);
-    EVP_MD_CTX_free(ctx);
-    static const char hex[] = "0123456789abcdef";
-    for (unsigned int i = 0; i < 20; i++) {
-        out[i*2]   = hex[dig[i] >> 4];
-        out[i*2+1] = hex[dig[i] & 0xf];
-    }
-    out[40] = '\0';
+    out[0] = '\0';
+    if (g_wc_root) svnae_wc_hash_bytes(g_wc_root, data, len, out);
 }
 
 static int
@@ -158,7 +133,7 @@ write_file_atomic(const char *path, const char *data, int len)
 
 /* --- remote-tree snapshot (same as update_shim) ---------------------- */
 
-struct rnode { char *path; int kind; char sha1[41]; char *data; int data_len; };
+struct rnode { char *path; int kind; char sha1[65]; char *data; int data_len; };
 struct rtree { struct rnode *items; int n, cap; };
 
 static void
@@ -539,6 +514,7 @@ int
 svnae_wc_merge(const char *wc_root, const char *source_path, int rev_a, int rev_b,
                const char *target_path)
 {
+    g_wc_root = wc_root;
     if (rev_a == rev_b) return 0;
     if (!target_path) target_path = "";
 
@@ -607,8 +583,13 @@ svnae_wc_merge(const char *wc_root, const char *source_path, int rev_a, int rev_
                 int brev = svnae_wc_node_base_rev(n);
                 const char *bsha = svnae_wc_node_base_sha1(n);
                 int kind = svnae_wc_node_kind(n);
-                char bsha_copy[41] = {0};
-                if (bsha) strncpy(bsha_copy, bsha, 40);
+                char bsha_copy[65] = {0};
+                if (bsha) {
+                    size_t l = strlen(bsha);
+                    if (l >= sizeof bsha_copy) l = sizeof bsha_copy - 1;
+                    memcpy(bsha_copy, bsha, l);
+                    bsha_copy[l] = '\0';
+                }
                 svnae_wc_node_free(n);
                 svnae_wc_db_upsert_node(db, wc_rel, kind, brev, bsha_copy, 2);
             }
@@ -654,7 +635,7 @@ svnae_wc_merge(const char *wc_root, const char *source_path, int rev_a, int rev_
         }
 
         /* Tracked. Check for local modification. */
-        char disk_sha[41];
+        char disk_sha[65];
         int has_disk_sha = (sha1_of_file(disk, disk_sha) == 0);
         struct svnae_wc_node *n = svnae_wc_db_get_node(db, wc_rel);
         char local_base_sha[41] = {0};

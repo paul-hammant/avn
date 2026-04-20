@@ -98,50 +98,31 @@ const char *svnae_wc_proplist_name (const struct svnae_wc_proplist *L, int i);
 const char *svnae_wc_proplist_value(const struct svnae_wc_proplist *L, int i);
 void        svnae_wc_proplist_free (struct svnae_wc_proplist *L);
 
-/* --- small helpers ---------------------------------------------------- */
+/* --- hashing helpers ------------------------------------------------
+ *
+ * Phase 6.1: WC content addressing uses the configured algorithm, which
+ * is read per-call from the WC's info table. We set `g_wc_root` at the
+ * top of the public entry points so the helpers below can find it
+ * without threading it through every internal signature. The algo
+ * changes only at checkout time, so a thread-local pointer is safe. */
+
+extern int svnae_wc_hash_bytes(const char *wc_root, const char *data, int len, char *out);
+extern int svnae_wc_hash_file (const char *wc_root, const char *path, char *out);
+
+static __thread const char *g_wc_root = NULL;
 
 static int
-sha1_of_file(const char *path, char out[41])
+sha1_of_file(const char *path, char out[65])
 {
-    int fd = open(path, O_RDONLY);
-    if (fd < 0) return -1;
-    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
-    EVP_DigestInit_ex(ctx, EVP_sha1(), NULL);
-    char buf[8192];
-    for (;;) {
-        ssize_t n = read(fd, buf, sizeof buf);
-        if (n < 0) { if (errno == EINTR) continue; EVP_MD_CTX_free(ctx); close(fd); return -1; }
-        if (n == 0) break;
-        EVP_DigestUpdate(ctx, buf, (size_t)n);
-    }
-    close(fd);
-    unsigned char dig[EVP_MAX_MD_SIZE]; unsigned int dlen = 0;
-    EVP_DigestFinal_ex(ctx, dig, &dlen);
-    EVP_MD_CTX_free(ctx);
-    static const char hex[] = "0123456789abcdef";
-    for (unsigned int i = 0; i < 20; i++) {
-        out[i*2]   = hex[dig[i] >> 4];
-        out[i*2+1] = hex[dig[i] & 0xf];
-    }
-    out[40] = '\0';
-    return 0;
+    if (!g_wc_root) return -1;
+    return svnae_wc_hash_file(g_wc_root, path, out);
 }
 
 static void
-sha1_of_bytes(const char *data, int len, char out[41])
+sha1_of_bytes(const char *data, int len, char out[65])
 {
-    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
-    unsigned char dig[EVP_MAX_MD_SIZE]; unsigned int dlen = 0;
-    EVP_DigestInit_ex(ctx, EVP_sha1(), NULL);
-    EVP_DigestUpdate(ctx, data, (size_t)len);
-    EVP_DigestFinal_ex(ctx, dig, &dlen);
-    EVP_MD_CTX_free(ctx);
-    static const char hex[] = "0123456789abcdef";
-    for (unsigned int i = 0; i < 20; i++) {
-        out[i*2]   = hex[dig[i] >> 4];
-        out[i*2+1] = hex[dig[i] & 0xf];
-    }
-    out[40] = '\0';
+    out[0] = '\0';
+    if (g_wc_root) svnae_wc_hash_bytes(g_wc_root, data, len, out);
 }
 
 static int
@@ -190,7 +171,7 @@ write_file_atomic(const char *path, const char *data, int len)
 struct remote_node {
     char *path;
     int   kind;    /* 0=file 1=dir */
-    char  sha1[41];
+    char  sha1[65];   /* hex-encoded hash; sized for sha256 */
     char *data;    /* malloc'd, only for files */
     int   data_len;
 };
@@ -321,6 +302,7 @@ ingest_props(const char *base_url, const char *repo, int rev,
 int
 svnae_wc_update(const char *wc_root, int target_rev)
 {
+    g_wc_root = wc_root;
     sqlite3 *db = svnae_wc_db_open(wc_root);
     if (!db) return -1;
 
@@ -393,7 +375,7 @@ svnae_wc_update(const char *wc_root, int target_rev)
             /* Remote newer. Decide: clean overwrite, or 3-way merge. */
             char disk[PATH_MAX];
             snprintf(disk, sizeof disk, "%s/%s", wc_root, rel);
-            char disk_sha[41];
+            char disk_sha[65];
             int local_clean = (sha1_of_file(disk, disk_sha) == 0
                                && strcmp(disk_sha, base_sha) == 0);
 
@@ -497,6 +479,7 @@ svnae_wc_switch(const char *wc_root,
                 const char *new_base_url, const char *new_repo,
                 int target_rev)
 {
+    g_wc_root = wc_root;
     sqlite3 *db = svnae_wc_db_open(wc_root);
     if (!db) return -1;
 

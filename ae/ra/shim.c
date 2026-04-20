@@ -119,6 +119,30 @@ svnae_ra_head_rev(const char *base_url, const char *repo_name)
     return rev;
 }
 
+/* Query the server's primary content-address algorithm. Returns a
+ * malloc'd string (caller frees via free()) or NULL on failure. If
+ * the server predates Phase 6.1 and omits the field, returns "sha1"
+ * so callers can safely default. */
+char *
+svnae_ra_hash_algo(const char *base_url, const char *repo_name)
+{
+    char url[1024];
+    snprintf(url, sizeof url, "%s/repos/%s/info", base_url, repo_name);
+    char *body = NULL; size_t len = 0; int status = 0;
+    if (http_get(url, &body, &len, &status) != 0) return NULL;
+    if (status != 200) { free(body); return NULL; }
+
+    cJSON *root = cJSON_ParseWithLength(body, len);
+    free(body);
+    if (!root) return NULL;
+    cJSON *h = cJSON_GetObjectItemCaseSensitive(root, "hash_algo");
+    char *algo = (cJSON_IsString(h) && h->valuestring[0])
+                     ? strdup(h->valuestring)
+                     : strdup("sha1");
+    cJSON_Delete(root);
+    return algo;
+}
+
 /* ---- log handle (matches repos/shim.c accessor shape) ---------------- */
 
 struct log_entry { int rev; char *author; char *date; char *msg; };

@@ -72,6 +72,7 @@ void              svnae_repos_log_free(struct svnae_log *lg);
 char             *svnae_repos_cat(const char *repo, int rev, const char *path);
 char             *svnae_rep_read_blob(const char *repo, const char *sha1_hex);
 void              svnae_rep_free(char *p);
+const char       *svnae_repo_primary_hash(const char *repo);
 
 struct svnae_list *svnae_repos_list(const char *repo, int rev, const char *path);
 int               svnae_repos_list_count(const struct svnae_list *L);
@@ -312,6 +313,8 @@ handle_repo_info(HttpRequest *req, HttpServerResponse *res, void *user_data)
     sb_putjson_int(&s, head);
     sb_puts(&s, ",\"name\":");
     sb_putjson_string(&s, name);
+    sb_puts(&s, ",\"hash_algo\":");
+    sb_putjson_string(&s, svnae_repo_primary_hash(repo));
     sb_puts(&s, "}");
     respond_json(res, 200, s.data ? s.data : "{}");
     free(s.data);
@@ -829,7 +832,7 @@ handle_repo_copy(HttpRequest *req, HttpServerResponse *res, void *user_data)
     char *logmsg    = strdup(jlog->valuestring);
     cJSON_Delete(root);
 
-    char sha1[41];
+    char sha1[65];
     char kind_char;
     if (!svnae_repos_resolve(repo, base_rev, from_path, sha1, &kind_char)) {
         free(from_path); free(to_path); free(author); free(logmsg);

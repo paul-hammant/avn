@@ -132,11 +132,26 @@ parse_int(const char *s, int *out)
 
 /* ---- create --------------------------------------------------------- */
 
-/* Create the empty on-disk layout: dirs, format file, rep-cache schema.
- * No rev 0, no head. Shared by `create` (which goes on to seed rev 0)
- * and `load` (which replays revs from a dump). */
+/* Golden list of hash algorithms. Match ae/subr/checksum/shim.c's
+ * evp_by_name; kept local so svnadmin links standalone. */
 static int
-create_bare(const char *repo)
+algo_supported(const char *algo)
+{
+    if (!algo) return 0;
+    if (strcmp(algo, "sha1")   == 0) return 1;
+    if (strcmp(algo, "sha256") == 0) return 1;
+    return 0;
+}
+#define svnae_hash_supported algo_supported
+
+/* Create the empty on-disk layout: dirs, format file, rep-cache schema.
+ * No rev 0, no head. `algos_spec` is the comma-separated hash list
+ * written into the format file (first entry = primary). Pass NULL or
+ * "" to default to "sha1" for backward-compatible repos.
+ * Shared by `create` (which goes on to seed rev 0) and `load` (which
+ * replays revs from a dump). */
+static int
+create_bare(const char *repo, const char *algos_spec)
 {
     if (mkdir_p(repo) != 0) return -1;
 
@@ -146,8 +161,26 @@ create_bare(const char *repo)
     snprintf(path, sizeof path, "%s/revs", repo);
     if (mkdir_p(path) != 0) return -1;
 
+    /* Validate each algorithm against the golden list before writing. */
+    const char *spec = (algos_spec && *algos_spec) ? algos_spec : "sha1";
+    {
+        const char *p = spec;
+        while (*p) {
+            const char *comma = strchr(p, ',');
+            size_t alen = comma ? (size_t)(comma - p) : strlen(p);
+            char a[32];
+            if (alen >= sizeof a) return -1;
+            memcpy(a, p, alen); a[alen] = '\0';
+            if (!svnae_hash_supported(a)) return -1;
+            if (!comma) break;
+            p = comma + 1;
+        }
+    }
+
     snprintf(path, sizeof path, "%s/format", repo);
-    if (write_file_atomic(path, "svnae-fsfs-1\n", 13) != 0) return -1;
+    char fmt_line[128];
+    int flen = snprintf(fmt_line, sizeof fmt_line, "svnae-fsfs-1 %s\n", spec);
+    if (write_file_atomic(path, fmt_line, flen) != 0) return -1;
 
     snprintf(path, sizeof path, "%s/rep-cache.db", repo);
     sqlite3 *db;
@@ -171,14 +204,22 @@ create_bare(const char *repo)
 int
 svnae_svnadmin_create(const char *repo)
 {
-    if (create_bare(repo) != 0) return -1;
+    return svnae_svnadmin_create_with_algos(repo, NULL);
+}
+
+int
+svnae_svnadmin_create_with_algos(const char *repo, const char *algos_spec)
+{
+    if (create_bare(repo, algos_spec) != 0) return -1;
 
     /* Seed rev 0: empty root dir + rev blob pointing at it. */
     const char *empty_sha = svnae_rep_write_blob(repo, "", 0);
     if (!empty_sha) return -1;
-    char empty_copy[41];
-    memcpy(empty_copy, empty_sha, 40);
-    empty_copy[40] = '\0';
+    /* Hash output sized for sha256 (64 hex) + NUL. */
+    char empty_copy[65];
+    size_t n = strlen(empty_sha);
+    if (n >= sizeof empty_copy) return -1;
+    memcpy(empty_copy, empty_sha, n + 1);
 
     char rev0[512];
     int rev0_len = snprintf(rev0, sizeof rev0,
@@ -187,7 +228,7 @@ svnae_svnadmin_create(const char *repo)
     const char *rev0_sha = svnae_rep_write_blob(repo, rev0, rev0_len);
     if (!rev0_sha) return -1;
 
-    char ptr_body[64];
+    char ptr_body[128];   /* sha256 = 64 hex + \n + NUL */
     int plen = snprintf(ptr_body, sizeof ptr_body, "%s\n", rev0_sha);
     char path[PATH_MAX];
     snprintf(path, sizeof path, "%s/revs/000000", repo);
@@ -369,14 +410,21 @@ svnae_svnadmin_load(const char *repo, int in_fd)
     if (len < 0 || strncmp(line, "REP-COUNT ", 10) != 0 || !parse_int(line + 10, &rep_count)) return -1;
 
     /* Initialise target repo's bare layout (no seed rev 0 — the dump
-     * will replay its own rev 0 below). */
-    if (create_bare(repo) != 0) return -1;
+     * will replay its own rev 0 below). Dumps currently always carry
+     * sha1 blobs, so we create the target as sha1. If we later add
+     * an ALGOS header to the dump format, pass it through here. */
+    if (create_bare(repo, "sha1") != 0) return -1;
 
-    /* REP-COUNT blocks. */
+    /* REP-COUNT blocks. Hash may be sha1 (40 hex) or sha256 (64 hex).
+     * The REP line gives us the full hex; we read up to the next
+     * newline to cover either. */
     for (int i = 0; i < rep_count; i++) {
         len = read_line(in_fd, line, sizeof line);
         if (len < 0 || strncmp(line, "REP ", 4) != 0) return -1;
-        char sha[41]; strncpy(sha, line + 4, 40); sha[40] = '\0';
+        char sha[65];
+        size_t slen = (size_t)(len - 4);
+        if (slen >= sizeof sha) return -1;
+        memcpy(sha, line + 4, slen); sha[slen] = '\0';
 
         len = read_line(in_fd, line, sizeof line);
         if (len < 0 || strncmp(line, "SIZE ", 5) != 0) return -1;
@@ -411,7 +459,7 @@ svnae_svnadmin_load(const char *repo, int in_fd)
         if (len < 0 || strncmp(line, "POINTER ", 8) != 0) return -1;
         const char *sha = line + 8;
 
-        char ptr_body[64];
+        char ptr_body[128];
         int plen = snprintf(ptr_body, sizeof ptr_body, "%s\n", sha);
         char ptr_path[PATH_MAX];
         snprintf(ptr_path, sizeof ptr_path, "%s/revs/%06d", repo, rev);

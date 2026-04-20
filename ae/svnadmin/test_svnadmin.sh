@@ -40,7 +40,7 @@ check() {
 # --- create ---
 "$ADMIN_BIN" create "$REPO1"
 check "format file exists"     "present"           "$(test -f "$REPO1/format" && echo present || echo absent)"
-check "format contents"        "svnae-fsfs-1"      "$(cat "$REPO1/format")"
+check "format contents"        "svnae-fsfs-1 sha1" "$(cat "$REPO1/format")"
 check "initial head is 0"      "0"                 "$(cat "$REPO1/head")"
 
 # --- populate (via seeder, which uses the Phase 3.3 API directly) ---

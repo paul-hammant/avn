@@ -42,6 +42,126 @@
 
 /* --- helpers ---------------------------------------------------------- */
 
+/* Read the WC's configured content-address algorithm. Stored in wc.db's
+ * info table under key "hash_algo" at checkout time. Defaults to sha1
+ * for repos that predate Phase 6.1. Returned pointer is to a static
+ * thread-local buffer — copy before another call. */
+#include <sqlite3.h>
+extern sqlite3 *svnae_wc_db_open(const char *wc_root);
+extern void     svnae_wc_db_close(sqlite3 *db);
+extern char    *svnae_wc_db_get_info(sqlite3 *db, const char *key);
+extern void     svnae_wc_info_free(char *s);
+
+/* Inline digest dispatch so every binary that links this shim gets the
+ * algorithm table for free, without relying on ae/subr/checksum/shim.c
+ * being pulled into the link. Keeping the list in sync with
+ * ae/subr/checksum/shim.c's evp_by_name is the golden list: {sha1,
+ * sha256}. */
+static char *
+local_hash_hex(const char *algo, const char *data, int data_len)
+{
+    const EVP_MD *md = NULL;
+    if      (strcmp(algo, "sha1")   == 0) md = EVP_sha1();
+    else if (strcmp(algo, "sha256") == 0) md = EVP_sha256();
+    if (!md) return NULL;
+    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+    if (!ctx) return NULL;
+    unsigned char dig[EVP_MAX_MD_SIZE];
+    unsigned int dlen = 0;
+    char *out = NULL;
+    if (EVP_DigestInit_ex(ctx, md, NULL) == 1
+        && EVP_DigestUpdate(ctx, data, (size_t)data_len) == 1
+        && EVP_DigestFinal_ex(ctx, dig, &dlen) == 1) {
+        out = malloc((size_t)dlen * 2 + 1);
+        if (out) {
+            static const char hex[] = "0123456789abcdef";
+            for (unsigned int i = 0; i < dlen; i++) {
+                out[i * 2]     = hex[dig[i] >> 4];
+                out[i * 2 + 1] = hex[dig[i] & 0x0f];
+            }
+            out[dlen * 2] = '\0';
+        }
+    }
+    EVP_MD_CTX_free(ctx);
+    return out;
+}
+#define svnae_hash_hex local_hash_hex
+
+const char *
+svnae_wc_hash_algo(const char *wc_root)
+{
+    static __thread char cache[32];
+    cache[0] = '\0';
+    sqlite3 *db = svnae_wc_db_open(wc_root);
+    if (!db) { strcpy(cache, "sha1"); return cache; }
+    char *v = svnae_wc_db_get_info(db, "hash_algo");
+    svnae_wc_db_close(db);
+    if (!v || !*v) {
+        strcpy(cache, "sha1");
+        svnae_wc_info_free(v);
+        return cache;
+    }
+    size_t n = strlen(v);
+    if (n >= sizeof cache) n = sizeof cache - 1;
+    memcpy(cache, v, n);
+    cache[n] = '\0';
+    svnae_wc_info_free(v);
+    return cache;
+}
+
+/* Compute the WC's configured hash of `data[0..len]`. `out` must be at
+ * least 65 bytes. Returns the hex length on success, 0 on failure. */
+static int
+wc_hash(const char *wc_root, const char *data, int len, char *out)
+{
+    const char *algo = svnae_wc_hash_algo(wc_root);
+    char *hex = svnae_hash_hex(algo, data, len);
+    if (!hex) return 0;
+    size_t hlen = strlen(hex);
+    if (hlen >= 65) { free(hex); return 0; }
+    memcpy(out, hex, hlen + 1);
+    free(hex);
+    return (int)hlen;
+}
+
+/* Public: hash `data[0..len]` using the WC's configured algorithm.
+ * `out` must be at least 65 bytes. Returns hex length on success, 0
+ * on failure. */
+int
+svnae_wc_hash_bytes(const char *wc_root, const char *data, int len, char *out)
+{
+    return wc_hash(wc_root, data, len, out);
+}
+
+/* Public: hash the contents of `path` on disk using the WC's configured
+ * algorithm. `out` must be at least 65 bytes. Returns 0 on success,
+ * -1 on I/O or hash failure. */
+int
+svnae_wc_hash_file(const char *wc_root, const char *path, char *out)
+{
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) return -1;
+    struct stat st;
+    if (fstat(fd, &st) != 0) { close(fd); return -1; }
+    size_t sz = (size_t)st.st_size;
+    char *buf = malloc(sz + 1);
+    if (!buf) { close(fd); return -1; }
+    size_t got = 0;
+    while (got < sz) {
+        ssize_t r = read(fd, buf + got, sz - got);
+        if (r < 0) { if (errno == EINTR) continue; free(buf); close(fd); return -1; }
+        if (r == 0) break;
+        got += (size_t)r;
+    }
+    close(fd);
+    int rc = wc_hash(wc_root, buf, (int)got, out) ? 0 : -1;
+    free(buf);
+    return rc;
+}
+
+/* Legacy shim: old callers passing a plain char[41] and no wc_root.
+ * Still sha1, kept for the handful of call sites that never needed the
+ * configured algo (e.g. in-process tests). */
 static void
 sha1_hex(const char *data, int len, char out[41])
 {
@@ -114,8 +234,8 @@ write_atomic(const char *path, const char *data, int len)
 const char *
 svnae_wc_pristine_put(const char *wc_root, const char *data, int len)
 {
-    static __thread char sha1[41];
-    sha1_hex(data, len, sha1);
+    static __thread char sha1[65];   /* sized for sha256 hex */
+    if (wc_hash(wc_root, data, len, sha1) == 0) return NULL;
 
     char path[PATH_MAX];
     build_path(wc_root, sha1, path, sizeof path);

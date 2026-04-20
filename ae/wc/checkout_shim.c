@@ -51,6 +51,8 @@ void         svnae_wc_db_close(sqlite3 *db);
 int          svnae_wc_db_upsert_node(sqlite3 *db, const char *path, int kind, int base_rev, const char *sha1, int state);
 int          svnae_wc_db_set_info(sqlite3 *db, const char *key, const char *value);
 
+char *svnae_ra_hash_algo(const char *base_url, const char *repo_name);
+
 const char *svnae_wc_pristine_put(const char *wc_root, const char *data, int len);
 
 struct svnae_ra_props;
@@ -202,6 +204,13 @@ svnae_wc_checkout(const char *base_url, const char *repo_name,
     svnae_wc_db_set_info(db, "repo",     repo_name);
     char rev_str[16]; snprintf(rev_str, sizeof rev_str, "%d", rev);
     svnae_wc_db_set_info(db, "base_rev", rev_str);
+
+    /* Record the server's content-address algo so this WC's local
+     * pristine store and modification-detection logic match. Defaults
+     * to sha1 if the server doesn't advertise (pre-Phase-6.1 server). */
+    char *algo = svnae_ra_hash_algo(base_url, repo_name);
+    svnae_wc_db_set_info(db, "hash_algo", algo ? algo : "sha1");
+    free(algo);
 
     int rc = walk(base_url, repo_name, rev, dest, "", db);
 

@@ -262,7 +262,7 @@ svnae_commit_finalise_with_props(const char *repo, struct svnae_txn *txn,
     /* revs/NNNNNN pointer file. */
     char ptr_path[PATH_MAX];
     snprintf(ptr_path, sizeof ptr_path, "%s/revs/%06d", repo, next);
-    char ptr_body[64];
+    char ptr_body[128];   /* sha256 hex is 64; keep some slack */
     int plen = snprintf(ptr_body, sizeof ptr_body, "%s\n", rev_sha);
     if (write_atomic(ptr_path, ptr_body, plen) != 0) return -1;
 

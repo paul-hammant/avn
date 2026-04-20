@@ -368,17 +368,20 @@ static void sbuf_push(struct sbuf *s, const char *t, int n)
 static void sbuf_push_cstr(struct sbuf *s, const char *t) { sbuf_push(s, t, (int)strlen(t)); }
 
 /* A simple sorted list of (name, kind, sha1) records. */
-struct rec { char *name; char kind; char sha1[41]; };
+struct rec { char *name; char kind; char sha1[65]; };
 struct reclist { struct rec *items; int n, cap; };
 
 static void reclist_add(struct reclist *r, const char *name, char kind, const char *sha1)
 {
+    size_t slen = strlen(sha1);
+    if (slen >= 65) slen = 64;
+
     /* Replace if name already present. */
     for (int i = 0; i < r->n; i++) {
         if (strcmp(r->items[i].name, name) == 0) {
             r->items[i].kind = kind;
-            memcpy(r->items[i].sha1, sha1, 40);
-            r->items[i].sha1[40] = '\0';
+            memcpy(r->items[i].sha1, sha1, slen);
+            r->items[i].sha1[slen] = '\0';
             return;
         }
     }
@@ -389,8 +392,8 @@ static void reclist_add(struct reclist *r, const char *name, char kind, const ch
     }
     r->items[r->n].name = strdup(name);
     r->items[r->n].kind = kind;
-    memcpy(r->items[r->n].sha1, sha1, 40);
-    r->items[r->n].sha1[40] = '\0';
+    memcpy(r->items[r->n].sha1, sha1, slen);
+    r->items[r->n].sha1[slen] = '\0';
     r->n++;
 }
 
@@ -430,20 +433,31 @@ rebuild_dir_c(const char *repo, const char *base_dir_sha1,
     if (base_dir_sha1 && base_dir_sha1[0]) {
         char *base_body = svnae_rep_read_blob(repo, base_dir_sha1);
         if (base_body) {
-            /* Parse each line "<k> <sha1> <name>\n". */
+            /* Parse each line "<k> <sha-hex> <name>\n" — the sha-hex
+             * width is whatever the repo's primary hash produces
+             * (40 for sha1, 64 for sha256). We locate the second space
+             * dynamically rather than assume a fixed prefix. */
             char *p = base_body;
             while (*p) {
                 char *eol = strchr(p, '\n');
                 if (!eol) break;
                 int llen = (int)(eol - p);
-                if (llen < 44) { p = eol + 1; continue; }
+                if (llen < 4) { p = eol + 1; continue; }
                 char kind = p[0];
-                char sha1[41];
-                memcpy(sha1, p + 2, 40);
-                sha1[40] = '\0';
-                int name_len = llen - 43;
+                /* p[1] is a space, p[2..] is the sha until the next space. */
+                const char *sha_start = p + 2;
+                const char *sp2 = memchr(sha_start, ' ', (size_t)(llen - 2));
+                if (!sp2) { p = eol + 1; continue; }
+                int sha_len = (int)(sp2 - sha_start);
+                if (sha_len >= 65) { p = eol + 1; continue; }
+                char sha1[65];
+                memcpy(sha1, sha_start, (size_t)sha_len);
+                sha1[sha_len] = '\0';
+                int name_off = 2 + sha_len + 1;
+                int name_len = llen - name_off;
+                if (name_len <= 0) { p = eol + 1; continue; }
                 char *name = malloc((size_t)name_len + 1);
-                memcpy(name, p + 43, (size_t)name_len);
+                memcpy(name, p + name_off, (size_t)name_len);
                 name[name_len] = '\0';
 
                 /* full_path = prefix ? prefix+"/"+name : name */
@@ -539,21 +553,24 @@ rebuild_dir_c(const char *repo, const char *base_dir_sha1,
         if (edits_touch_subtree_c(txn, subprefix)) {
             char *new_sub = rebuild_dir_c(repo, rl.items[i].sha1, subprefix, txn);
             if (new_sub) {
-                memcpy(rl.items[i].sha1, new_sub, 40);
-                rl.items[i].sha1[40] = '\0';
+                size_t nl = strlen(new_sub);
+                if (nl >= sizeof rl.items[i].sha1) nl = sizeof rl.items[i].sha1 - 1;
+                memcpy(rl.items[i].sha1, new_sub, nl);
+                rl.items[i].sha1[nl] = '\0';
                 free(new_sub);
             }
         }
         free(subprefix);
     }
 
-    /* Step 4: sort and serialise. */
+    /* Step 4: sort and serialise. sha width is variable — sha1 is 40
+     * hex, sha256 is 64 — so don't clamp the sha with "%.40s". */
     qsort(rl.items, (size_t)rl.n, sizeof *rl.items, rec_cmp);
 
     struct sbuf body = {0};
     for (int i = 0; i < rl.n; i++) {
-        char line[80];
-        snprintf(line, sizeof line, "%c %.40s %s\n",
+        char line[4096 + 96];
+        snprintf(line, sizeof line, "%c %s %s\n",
                  rl.items[i].kind, rl.items[i].sha1, rl.items[i].name);
         sbuf_push_cstr(&body, line);
     }

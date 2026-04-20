@@ -72,32 +72,16 @@ void         svnae_wc_proplist_free (struct svnae_wc_proplist *L);
 
 /* --- helpers --------------------------------------------------------- */
 
+extern int svnae_wc_hash_bytes(const char *wc_root, const char *data, int len, char *out);
+extern int svnae_wc_hash_file (const char *wc_root, const char *path, char *out);
+
+static __thread const char *g_wc_root = NULL;
+
 static int
-sha1_of_file(const char *path, char out[41])
+sha1_of_file(const char *path, char out[65])
 {
-    int fd = open(path, O_RDONLY);
-    if (fd < 0) return -1;
-    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
-    EVP_DigestInit_ex(ctx, EVP_sha1(), NULL);
-    char buf[8192];
-    for (;;) {
-        ssize_t n = read(fd, buf, sizeof buf);
-        if (n < 0) { if (errno == EINTR) continue; EVP_MD_CTX_free(ctx); close(fd); return -1; }
-        if (n == 0) break;
-        EVP_DigestUpdate(ctx, buf, (size_t)n);
-    }
-    close(fd);
-    unsigned char dig[EVP_MAX_MD_SIZE];
-    unsigned int dlen = 0;
-    EVP_DigestFinal_ex(ctx, dig, &dlen);
-    EVP_MD_CTX_free(ctx);
-    static const char hex[] = "0123456789abcdef";
-    for (unsigned int i = 0; i < 20; i++) {
-        out[i*2]   = hex[dig[i] >> 4];
-        out[i*2+1] = hex[dig[i] & 0xf];
-    }
-    out[40] = '\0';
-    return 0;
+    if (!g_wc_root) return -1;
+    return svnae_wc_hash_file(g_wc_root, path, out);
 }
 
 static char *
@@ -127,6 +111,7 @@ read_file_to_malloc(const char *path, int *out_len)
 int
 svnae_wc_commit(const char *wc_root, const char *author, const char *logmsg)
 {
+    g_wc_root = wc_root;
     sqlite3 *db = svnae_wc_db_open(wc_root);
     if (!db) return -1;
 
@@ -201,20 +186,13 @@ svnae_wc_commit(const char *wc_root, const char *author, const char *logmsg)
             char *data = read_file_to_malloc(disk, &len);
             if (!data) continue;
             svnae_ra_commit_add_file(cb, rel, data, len);
-            /* Record sha1 for post-commit pristine + db refresh. */
-            char sha[41];
-            EVP_MD_CTX *ctx = EVP_MD_CTX_new();
-            unsigned char dig[EVP_MAX_MD_SIZE]; unsigned int dlen = 0;
-            EVP_DigestInit_ex(ctx, EVP_sha1(), NULL);
-            EVP_DigestUpdate(ctx, data, (size_t)len);
-            EVP_DigestFinal_ex(ctx, dig, &dlen);
-            EVP_MD_CTX_free(ctx);
-            static const char hex[] = "0123456789abcdef";
-            for (unsigned int j = 0; j < 20; j++) {
-                sha[j*2]   = hex[dig[j] >> 4];
-                sha[j*2+1] = hex[dig[j] & 0xf];
+            /* Record content-hash for post-commit pristine + db refresh
+             * using the WC's configured algorithm (sha1 by default;
+             * sha256 on Phase 6.1 repos). */
+            char sha[65];
+            if (svnae_wc_hash_bytes(wc_root, data, len, sha) == 0) {
+                free(data); continue;
             }
-            sha[40] = '\0';
             new_sha1s[i] = strdup(sha);
             svnae_wc_pristine_put(wc_root, data, len);
             free(data);
@@ -224,7 +202,7 @@ svnae_wc_commit(const char *wc_root, const char *author, const char *logmsg)
         }
         /* state == normal. For files: modified? */
         if (kind == 0 /*file*/) {
-            char disk_sha[41];
+            char disk_sha[65];
             if (sha1_of_file(disk, disk_sha) != 0) continue;
             if (strcmp(disk_sha, base_sha) == 0) continue;  /* unchanged */
             /* Modified — same wire shape as add-file. */

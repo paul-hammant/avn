@@ -11,8 +11,8 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
 
 ## Headline
 
-- **43 commits.** Each phase is its own commit, reviewable in isolation.
-- **35 test suites** (added `test_mergeinfo_arith.sh`), ~358 assertions, all green.
+- **44 commits.** Each phase is its own commit, reviewable in isolation.
+- **36 test suites** (added `test_hash_algo.sh`), ~366 assertions, all green.
   Mix of in-language `.ae` tests and end-to-end shell harnesses that
   spin up a real HTTP server and drive it with curl and the built
   `svn` CLI.
@@ -87,7 +87,8 @@ Named after the plan's Phase N. Plan: `../svn-to-aether.md`.
 | 5.15 | `svn switch` — relocate WC to a different branch URL, reusing update pipeline | ✅ | (prev commit) |
 | 5.16 | `svn merge -c N` cherry-pick + reverse merge (`-r A:B` with A>B or `-c -N`) | ✅ | (prev commit) |
 | 5.17 | `svn log -v` — per-rev A/M/D path list via new /rev/N/paths endpoint | ✅ | (prev commit) |
-| 5.18 | mergeinfo arithmetic (cancel/collapse) + prop-delete propagation on update | ✅ | (this commit) |
+| 5.18 | mergeinfo arithmetic (cancel/collapse) + prop-delete propagation on update | ✅ | (prev commit) |
+| 6.1  | Pluggable hash algorithms (sha1 golden-list default, sha256 via `--algos`) | ✅ | (this commit) |
 | 12 | svnadmin create/dump/load | ✅ | `52380a5` |
 
 ## Phases not yet done (from the plan)
@@ -117,6 +118,11 @@ Implemented:
   reverse ranges of the same rev cancel out, empty results remove the
   property entirely.
 - `svnadmin create/dump/load` with portable dump round-trip
+- Per-repo pluggable content-address hash: sha1 (default) or sha256 via
+  `svnadmin create PATH --algos sha256`. Format file records the choice.
+  Server advertises via GET /info; clients adapt at checkout time and
+  persist the algo in wc.db so pristine + change-detection use the same
+  hash the server does. Golden list enforced at create time.
 
 Not implemented (items the plan calls out or that reference svn has):
 

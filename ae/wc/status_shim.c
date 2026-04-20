@@ -62,32 +62,15 @@ void        svnae_wc_nodelist_free(struct svnae_wc_nodelist *L);
 
 /* ---- helpers ---------------------------------------------------------- */
 
+extern int svnae_wc_hash_file(const char *wc_root, const char *path, char *out);
+
+static __thread const char *g_wc_root = NULL;
+
 static int
-sha1_of_file(const char *path, char out[41])
+sha1_of_file(const char *path, char out[65])
 {
-    int fd = open(path, O_RDONLY);
-    if (fd < 0) return -1;
-    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
-    EVP_DigestInit_ex(ctx, EVP_sha1(), NULL);
-    char buf[8192];
-    for (;;) {
-        ssize_t n = read(fd, buf, sizeof buf);
-        if (n < 0) { if (errno == EINTR) continue; EVP_MD_CTX_free(ctx); close(fd); return -1; }
-        if (n == 0) break;
-        EVP_DigestUpdate(ctx, buf, (size_t)n);
-    }
-    close(fd);
-    unsigned char dig[EVP_MAX_MD_SIZE];
-    unsigned int dlen = 0;
-    EVP_DigestFinal_ex(ctx, dig, &dlen);
-    EVP_MD_CTX_free(ctx);
-    static const char hex[] = "0123456789abcdef";
-    for (unsigned int i = 0; i < 20; i++) {
-        out[i*2]   = hex[dig[i] >> 4];
-        out[i*2+1] = hex[dig[i] & 0xf];
-    }
-    out[40] = '\0';
-    return 0;
+    if (!g_wc_root) return -1;
+    return svnae_wc_hash_file(g_wc_root, path, out);
 }
 
 /* ---- result list ----------------------------------------------------- */
@@ -255,6 +238,7 @@ walk_unversioned(const char *wc_root, const char *rel,
 struct svnae_wc_statuslist *
 svnae_wc_status(const char *wc_root)
 {
+    g_wc_root = wc_root;
     sqlite3 *db = svnae_wc_db_open(wc_root);
     if (!db) return NULL;
 
@@ -288,7 +272,7 @@ svnae_wc_status(const char *wc_root)
         if (!on_disk) { add_entry(out, rel, '!'); continue; }
         if (kind == 1 /*dir*/) { continue; }
         /* Tracked file: hash it. */
-        char cur[41];
+        char cur[65];
         if (sha1_of_file(disk, cur) != 0) { add_entry(out, rel, '!'); continue; }
         if (strcmp(cur, base_sha) != 0) add_entry(out, rel, 'M');
     }

@@ -14,6 +14,7 @@ extern aether_args_count() -> int
 extern aether_args_get(index: int) -> string
 
 extern svnae_svnadmin_create(repo: string) -> int
+extern svnae_svnadmin_create_with_algos(repo: string, algos_spec: string) -> int
 extern svnae_svnadmin_dump  (repo: string, out_fd: int) -> int
 extern svnae_svnadmin_load  (repo: string, in_fd: int) -> int
 
@@ -41,8 +42,34 @@ cmd_create(argv_start: int) {
         println("svnadmin create: missing PATH")
         return 2
     }
-    path = aether_args_get(argv_start)
-    rc = svnae_svnadmin_create(path)
+    // First non-flag argv value is the path.
+    path = ""
+    k = argv_start
+    n_argv = aether_args_count()
+    while k < n_argv {
+        a = aether_args_get(k)
+        if string.length(a) > 0 {
+            if string.char_at(a, 0) != 45 {
+                if string.length(path) == 0 { path = a }
+            }
+        }
+        k = k + 1
+    }
+    if string.length(path) == 0 {
+        println("svnadmin create: missing PATH")
+        return 2
+    }
+    algos = find_flag("--algos", argv_start)
+    rc = 0
+    if string.length(algos) > 0 {
+        rc = svnae_svnadmin_create_with_algos(path, algos)
+        if rc != 0 {
+            println("svnadmin create: unsupported or invalid --algos '${algos}'")
+            return 1
+        }
+    } else {
+        rc = svnae_svnadmin_create(path)
+    }
     if rc != 0 {
         println("svnadmin create: failed (rc=${rc})")
         return 1

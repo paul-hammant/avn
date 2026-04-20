@@ -268,9 +268,11 @@ resolve_path(const char *repo, const char *root_sha1, const char *path,
         return 1;
     }
 
-    char cur_sha1[41];
-    memcpy(cur_sha1, root_sha1, 40);
-    cur_sha1[40] = '\0';
+    /* Dynamic-length to cover sha1 (40) and sha256 (64). */
+    char cur_sha1[65];
+    size_t rs_len = strlen(root_sha1);
+    if (rs_len >= sizeof cur_sha1) return 0;
+    memcpy(cur_sha1, root_sha1, rs_len + 1);
     char *cur_body = svnae_rep_read_blob(repo, cur_sha1);
     if (!cur_body) return 0;
 
@@ -287,21 +289,29 @@ resolve_path(const char *repo, const char *root_sha1, const char *path,
         int at_end = (*p == '\0');
         if (*p == '/') p++;
 
-        /* Walk cur_body lines looking for `seg`. */
+        /* Walk cur_body lines looking for `seg`. Sha width varies by
+         * repo algo (40 for sha1, 64 for sha256), so parse dynamically. */
         char *lp = cur_body;
         char found_kind = 0;
-        char found_sha1[41] = {0};
+        char found_sha1[65] = {0};
         while (*lp) {
             char *eol = strchr(lp, '\n');
             size_t llen = eol ? (size_t)(eol - lp) : strlen(lp);
-            if (llen >= 44) {
-                /* Kind at [0], sha1 at [2..42], name at [43..] */
-                size_t name_len = llen - 43;
-                if (name_len == seg_len && memcmp(lp + 43, seg, seg_len) == 0) {
-                    found_kind = lp[0];
-                    memcpy(found_sha1, lp + 2, 40);
-                    found_sha1[40] = '\0';
-                    break;
+            if (llen >= 4) {
+                const char *sha_start = lp + 2;
+                const char *sp2 = memchr(sha_start, ' ', llen - 2);
+                if (sp2) {
+                    size_t sha_len = (size_t)(sp2 - sha_start);
+                    size_t name_off = 2 + sha_len + 1;
+                    if (sha_len < sizeof found_sha1 && llen > name_off) {
+                        size_t name_len = llen - name_off;
+                        if (name_len == seg_len && memcmp(lp + name_off, seg, seg_len) == 0) {
+                            found_kind = lp[0];
+                            memcpy(found_sha1, sha_start, sha_len);
+                            found_sha1[sha_len] = '\0';
+                            break;
+                        }
+                    }
                 }
             }
             if (!eol) break;
@@ -318,8 +328,9 @@ resolve_path(const char *repo, const char *root_sha1, const char *path,
         }
         /* Must be a directory to keep walking. */
         if (found_kind != 'd') return 0;
-        memcpy(cur_sha1, found_sha1, 40);
-        cur_sha1[40] = '\0';
+        size_t fs_len = strlen(found_sha1);
+        if (fs_len >= sizeof cur_sha1) return 0;
+        memcpy(cur_sha1, found_sha1, fs_len + 1);
         cur_body = svnae_rep_read_blob(repo, cur_sha1);
         if (!cur_body) return 0;
     }
@@ -387,13 +398,21 @@ svnae_repos_list(const char *repo, int rev, const char *path)
     for (char *lp = body; *lp; ) {
         char *eol = strchr(lp, '\n');
         size_t llen = eol ? (size_t)(eol - lp) : strlen(lp);
-        if (llen >= 44) {
-            L->items[i].kind = lp[0];
-            size_t name_len = llen - 43;
-            L->items[i].name = malloc(name_len + 1);
-            memcpy(L->items[i].name, lp + 43, name_len);
-            L->items[i].name[name_len] = '\0';
-            i++;
+        if (llen >= 4) {
+            const char *sha_start = lp + 2;
+            const char *sp2 = memchr(sha_start, ' ', llen - 2);
+            if (sp2) {
+                size_t sha_len = (size_t)(sp2 - sha_start);
+                size_t name_off = 2 + sha_len + 1;
+                if (llen > name_off) {
+                    L->items[i].kind = lp[0];
+                    size_t name_len = llen - name_off;
+                    L->items[i].name = malloc(name_len + 1);
+                    memcpy(L->items[i].name, lp + name_off, name_len);
+                    L->items[i].name[name_len] = '\0';
+                    i++;
+                }
+            }
         }
         if (!eol) break;
         lp = eol + 1;
@@ -493,7 +512,7 @@ int svnae_repos_head_rev(const char *repo) { return head_rev(repo); }
  * same across revs hash identically and get skipped. That's a happy
  * rep-sharing side effect. */
 
-struct flat_entry { char *path; char kind; char sha1[41]; };
+struct flat_entry { char *path; char kind; char sha1[65]; };
 struct flat_tree  { struct flat_entry *items; int n, cap; };
 
 static void
@@ -506,8 +525,10 @@ flat_add(struct flat_tree *t, const char *path, char kind, const char *sha1)
     }
     t->items[t->n].path = strdup(path);
     t->items[t->n].kind = kind;
-    memcpy(t->items[t->n].sha1, sha1, 40);
-    t->items[t->n].sha1[40] = '\0';
+    size_t sl = strlen(sha1);
+    if (sl >= sizeof t->items[t->n].sha1) sl = sizeof t->items[t->n].sha1 - 1;
+    memcpy(t->items[t->n].sha1, sha1, sl);
+    t->items[t->n].sha1[sl] = '\0';
     t->n++;
 }
 
@@ -530,15 +551,20 @@ flatten_tree(const char *repo, const char *dir_sha1, const char *prefix,
     while (*lp) {
         char *eol = strchr(lp, '\n');
         size_t llen = eol ? (size_t)(eol - lp) : strlen(lp);
-        if (llen >= 44) {
+        if (llen >= 4) {
             char kind = lp[0];
-            char child_sha[41];
-            memcpy(child_sha, lp + 2, 40);
-            child_sha[40] = '\0';
-            size_t name_len = llen - 43;
+            const char *sha_start = lp + 2;
+            const char *sp2 = memchr(sha_start, ' ', llen - 2);
+            size_t sha_len = sp2 ? (size_t)(sp2 - sha_start) : 0;
+            if (sp2 && sha_len < 65) {
+            char child_sha[65];
+            memcpy(child_sha, sha_start, sha_len);
+            child_sha[sha_len] = '\0';
+            size_t name_off = 2 + sha_len + 1;
+            size_t name_len = llen > name_off ? llen - name_off : 0;
             char name[512];
-            if (name_len < sizeof name) {
-                memcpy(name, lp + 43, name_len);
+            if (name_len > 0 && name_len < sizeof name) {
+                memcpy(name, lp + name_off, name_len);
                 name[name_len] = '\0';
 
                 char child_path[PATH_MAX];
@@ -549,6 +575,7 @@ flatten_tree(const char *repo, const char *dir_sha1, const char *prefix,
                 if (kind == 'd') {
                     flatten_tree(repo, child_sha, child_path, out);
                 }
+            }
             }
         }
         if (!eol) break;
@@ -672,8 +699,9 @@ svnae_repos_resolve(const char *repo, int rev, const char *path,
     int ok = resolve_path(repo, root, path, &kind, &sha1);
     free(root);
     if (!ok) { free(sha1); return 0; }
-    memcpy(out_sha1, sha1, 40);
-    out_sha1[40] = '\0';
+    size_t sl = strlen(sha1);
+    /* out_sha1 must be big enough — callers now pass char[65]. */
+    memcpy(out_sha1, sha1, sl + 1);
     *out_kind = kind;
     free(sha1);
     return 1;

@@ -93,22 +93,73 @@ mkdir_p(const char *path)
     return 0;
 }
 
-static void
-sha1_hex_of(const char *data, int len, char out[41])
+/* Parse the second token out of $repo/format. The file looks like:
+ *   svnae-fsfs-1\n                 (legacy — assumed sha1)
+ *   svnae-fsfs-1 sha256\n          (primary = sha256)
+ *   svnae-fsfs-1 sha256,sha1\n     (primary = sha256, sha1 kept as secondary)
+ * Returns the primary algorithm name as a static-thread-local string
+ * (caller copies before another call). On any parse failure or if the
+ * file is missing, returns "sha1" for backward compatibility. */
+const char *
+svnae_repo_primary_hash(const char *repo)
 {
+    static __thread char cache[32];
+    cache[0] = '\0';
+
+    char fmt_path[PATH_MAX];
+    snprintf(fmt_path, sizeof fmt_path, "%s/format", repo);
+    FILE *f = fopen(fmt_path, "r");
+    if (!f) { strcpy(cache, "sha1"); return cache; }
+    char line[128];
+    if (!fgets(line, sizeof line, f)) { fclose(f); strcpy(cache, "sha1"); return cache; }
+    fclose(f);
+
+    /* Trim trailing whitespace. */
+    size_t n = strlen(line);
+    while (n > 0 && (line[n-1] == '\n' || line[n-1] == '\r' || line[n-1] == ' ')) line[--n] = '\0';
+
+    /* Look for a space after the tag. */
+    char *sp = strchr(line, ' ');
+    if (!sp) { strcpy(cache, "sha1"); return cache; }
+    const char *algos = sp + 1;
+    /* Primary is up to the first ',' (or end of line). */
+    const char *comma = strchr(algos, ',');
+    size_t plen = comma ? (size_t)(comma - algos) : strlen(algos);
+    if (plen == 0 || plen >= sizeof cache) { strcpy(cache, "sha1"); return cache; }
+    memcpy(cache, algos, plen);
+    cache[plen] = '\0';
+    return cache;
+}
+
+/* Hash `data` using the repo's primary algorithm. `out` must be at
+ * least 65 bytes (64 hex chars for sha256 + NUL). Returns the hex
+ * length on success, 0 on failure. Inlines the golden list here —
+ * matches ae/subr/checksum/shim.c. */
+static int
+repo_hash_of(const char *repo, const char *data, int len, char out[65])
+{
+    const char *algo = svnae_repo_primary_hash(repo);
+    const EVP_MD *md = NULL;
+    if      (strcmp(algo, "sha1")   == 0) md = EVP_sha1();
+    else if (strcmp(algo, "sha256") == 0) md = EVP_sha256();
+    if (!md) return 0;
     EVP_MD_CTX *ctx = EVP_MD_CTX_new();
-    unsigned char buf[EVP_MAX_MD_SIZE];
-    unsigned int out_len = 0;
-    EVP_DigestInit_ex(ctx, EVP_sha1(), NULL);
-    EVP_DigestUpdate(ctx, data, (size_t)len);
-    EVP_DigestFinal_ex(ctx, buf, &out_len);
+    if (!ctx) return 0;
+    unsigned char dig[EVP_MAX_MD_SIZE];
+    unsigned int dlen = 0;
+    int ok = (EVP_DigestInit_ex(ctx, md, NULL) == 1
+              && EVP_DigestUpdate(ctx, data, (size_t)len) == 1
+              && EVP_DigestFinal_ex(ctx, dig, &dlen) == 1);
     EVP_MD_CTX_free(ctx);
+    if (!ok) return 0;
+    if ((int)dlen * 2 >= 65) return 0;
     static const char hex[] = "0123456789abcdef";
-    for (unsigned int i = 0; i < 20; i++) {
-        out[i * 2]     = hex[buf[i] >> 4];
-        out[i * 2 + 1] = hex[buf[i] & 0x0f];
+    for (unsigned int i = 0; i < dlen; i++) {
+        out[i * 2]     = hex[dig[i] >> 4];
+        out[i * 2 + 1] = hex[dig[i] & 0x0f];
     }
-    out[40] = '\0';
+    out[dlen * 2] = '\0';
+    return (int)dlen * 2;
 }
 
 /* --- rep-cache access ---------------------------------------------- */
@@ -157,8 +208,8 @@ rep_cache_insert(sqlite3 *db, const char *sha1_hex, const char *rel_path,
 const char *
 svnae_rep_write_blob(const char *repo, const char *data, int len)
 {
-    static __thread char sha1_buf[41];
-    sha1_hex_of(data, len, sha1_buf);
+    static __thread char sha1_buf[65];   /* sized for sha256 (64 hex chars + NUL) */
+    if (repo_hash_of(repo, data, len, sha1_buf) == 0) return NULL;
 
     char cache_path[PATH_MAX];
     snprintf(cache_path, sizeof cache_path, "%s/rep-cache.db", repo);
