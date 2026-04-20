@@ -204,6 +204,75 @@ svnae_ra_log_free(struct svnae_ra_log *lg)
     free(lg);
 }
 
+/* ---- paths-changed handle (for `svn log --verbose`) ----------------- */
+
+struct path_change_ra { char action; char *path; };
+struct svnae_ra_paths { struct path_change_ra *items; int n; };
+
+struct svnae_ra_paths *
+svnae_ra_paths_changed(const char *base_url, const char *repo_name, int rev)
+{
+    char url[1024];
+    snprintf(url, sizeof url, "%s/repos/%s/rev/%d/paths", base_url, repo_name, rev);
+    char *body = NULL; size_t len = 0; int status = 0;
+    if (http_get(url, &body, &len, &status) != 0) return NULL;
+    if (status != 200) { free(body); return NULL; }
+
+    cJSON *root = cJSON_ParseWithLength(body, len);
+    free(body);
+    if (!root) return NULL;
+    cJSON *jentries = cJSON_GetObjectItemCaseSensitive(root, "entries");
+    if (!cJSON_IsArray(jentries)) { cJSON_Delete(root); return NULL; }
+
+    int n = cJSON_GetArraySize(jentries);
+    struct svnae_ra_paths *P = calloc(1, sizeof *P);
+    P->n = n;
+    P->items = calloc((size_t)(n > 0 ? n : 1), sizeof *P->items);
+    int i = 0;
+    cJSON *e;
+    cJSON_ArrayForEach(e, jentries) {
+        cJSON *ja = cJSON_GetObjectItemCaseSensitive(e, "action");
+        cJSON *jp = cJSON_GetObjectItemCaseSensitive(e, "path");
+        P->items[i].action = (cJSON_IsString(ja) && ja->valuestring[0])
+                                 ? ja->valuestring[0] : '?';
+        P->items[i].path   = cJSON_IsString(jp) ? strdup(jp->valuestring) : strdup("");
+        i++;
+    }
+    cJSON_Delete(root);
+    return P;
+}
+
+int svnae_ra_paths_count(const struct svnae_ra_paths *P) { return P ? P->n : 0; }
+
+const char *
+svnae_ra_paths_action(const struct svnae_ra_paths *P, int i)
+{
+    static const char a_[] = "A", m_[] = "M", d_[] = "D", u_[] = "";
+    if (!P || i < 0 || i >= P->n) return u_;
+    switch (P->items[i].action) {
+        case 'A': return a_;
+        case 'M': return m_;
+        case 'D': return d_;
+        default:  return u_;
+    }
+}
+
+const char *
+svnae_ra_paths_path(const struct svnae_ra_paths *P, int i)
+{
+    if (!P || i < 0 || i >= P->n) return "";
+    return P->items[i].path;
+}
+
+void
+svnae_ra_paths_free(struct svnae_ra_paths *P)
+{
+    if (!P) return;
+    for (int i = 0; i < P->n; i++) free(P->items[i].path);
+    free(P->items);
+    free(P);
+}
+
 /* ---- info handle ----------------------------------------------------- */
 
 struct svnae_ra_info { int rev; char *author; char *date; char *msg; };

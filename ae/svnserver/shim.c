@@ -86,6 +86,12 @@ const char       *svnae_repos_info_date(const struct svnae_info *I);
 const char       *svnae_repos_info_msg(const struct svnae_info *I);
 void              svnae_repos_info_free(struct svnae_info *I);
 
+struct svnae_paths *svnae_repos_paths_changed(const char *repo, int rev);
+int                 svnae_repos_paths_count(const struct svnae_paths *P);
+const char         *svnae_repos_paths_path(const struct svnae_paths *P, int i);
+const char         *svnae_repos_paths_action(const struct svnae_paths *P, int i);
+void                svnae_repos_paths_free(struct svnae_paths *P);
+
 /* Aether HTTP server types we reach into. Must match the layout in
  * aether/std/net/aether_http_server.h exactly. */
 typedef struct {
@@ -498,6 +504,29 @@ handle_repo_rev(HttpRequest *req, HttpServerResponse *res, void *user_data)
         size_t len = strlen(data);
         respond_binary(res, data, len, "application/octet-stream");
         svnae_rep_free(data);
+        return;
+    }
+
+    /* /rev/N/paths → {"entries":[{"action":"A","path":"..."}, ...]}
+     * Used by `svn log --verbose`. */
+    if (strcmp(after, "/paths") == 0) {
+        struct svnae_paths *P = svnae_repos_paths_changed(repo, rev);
+        if (!P) { respond_error(res, 404, "no such rev"); return; }
+        struct sb s = {0};
+        sb_puts(&s, "{\"entries\":[");
+        int n = svnae_repos_paths_count(P);
+        for (int i = 0; i < n; i++) {
+            if (i) sb_putc(&s, ',');
+            sb_puts(&s, "{\"action\":");
+            sb_putjson_string(&s, svnae_repos_paths_action(P, i));
+            sb_puts(&s, ",\"path\":");
+            sb_putjson_string(&s, svnae_repos_paths_path(P, i));
+            sb_putc(&s, '}');
+        }
+        sb_puts(&s, "]}");
+        svnae_repos_paths_free(P);
+        respond_json(res, 200, s.data ? s.data : "{\"entries\":[]}");
+        free(s.data);
         return;
     }
 

@@ -476,6 +476,189 @@ svnae_repos_info_free(struct svnae_info *I)
 
 int svnae_repos_head_rev(const char *repo) { return head_rev(repo); }
 
+/* --- paths changed in a single revision -----------------------------
+ *
+ * For `svn log --verbose`: given rev N we want the list of paths added,
+ * modified, or deleted in N relative to N-1. Both trees get flattened
+ * into a sorted (path → (kind, sha1)) table by recursively walking
+ * the dir blobs; then a linear merge classifies each path:
+ *   present in both, same sha1 → skip
+ *   present in both, different sha1 → 'M'
+ *   only in N     → 'A'
+ *   only in N-1   → 'D'
+ *
+ * Directories are included so that purely-empty dir adds/deletes show
+ * up; their sha1 is whatever their dir-blob sha hashes to, which changes
+ * whenever any descendant does, so subdirs that are structurally the
+ * same across revs hash identically and get skipped. That's a happy
+ * rep-sharing side effect. */
+
+struct flat_entry { char *path; char kind; char sha1[41]; };
+struct flat_tree  { struct flat_entry *items; int n, cap; };
+
+static void
+flat_add(struct flat_tree *t, const char *path, char kind, const char *sha1)
+{
+    if (t->n == t->cap) {
+        int nc = t->cap ? t->cap * 2 : 64;
+        t->items = realloc(t->items, (size_t)nc * sizeof *t->items);
+        t->cap = nc;
+    }
+    t->items[t->n].path = strdup(path);
+    t->items[t->n].kind = kind;
+    memcpy(t->items[t->n].sha1, sha1, 40);
+    t->items[t->n].sha1[40] = '\0';
+    t->n++;
+}
+
+static void
+flat_free(struct flat_tree *t)
+{
+    for (int i = 0; i < t->n; i++) free(t->items[i].path);
+    free(t->items);
+}
+
+/* Depth-first walk of a dir-blob, emitting "<prefix>/<name>" entries
+ * for every file and directory reachable from `dir_sha1`. */
+static void
+flatten_tree(const char *repo, const char *dir_sha1, const char *prefix,
+             struct flat_tree *out)
+{
+    char *body = svnae_rep_read_blob(repo, dir_sha1);
+    if (!body) return;
+    char *lp = body;
+    while (*lp) {
+        char *eol = strchr(lp, '\n');
+        size_t llen = eol ? (size_t)(eol - lp) : strlen(lp);
+        if (llen >= 44) {
+            char kind = lp[0];
+            char child_sha[41];
+            memcpy(child_sha, lp + 2, 40);
+            child_sha[40] = '\0';
+            size_t name_len = llen - 43;
+            char name[512];
+            if (name_len < sizeof name) {
+                memcpy(name, lp + 43, name_len);
+                name[name_len] = '\0';
+
+                char child_path[PATH_MAX];
+                if (*prefix) snprintf(child_path, sizeof child_path, "%s/%s", prefix, name);
+                else         snprintf(child_path, sizeof child_path, "%s",    name);
+
+                flat_add(out, child_path, kind, child_sha);
+                if (kind == 'd') {
+                    flatten_tree(repo, child_sha, child_path, out);
+                }
+            }
+        }
+        if (!eol) break;
+        lp = eol + 1;
+    }
+    svnae_rep_free(body);
+}
+
+static int
+flat_cmp(const void *a, const void *b)
+{
+    const struct flat_entry *pa = a, *pb = b;
+    return strcmp(pa->path, pb->path);
+}
+
+struct path_change { char action; char *path; };
+struct svnae_paths { struct path_change *items; int n; };
+
+struct svnae_paths *
+svnae_repos_paths_changed(const char *repo, int rev)
+{
+    if (rev < 0) return NULL;
+
+    /* Rev 0 is the initial empty-copy revision the seeder writes; its
+     * paths-changed list is empty. For rev > 0 we diff against rev-1. */
+    char *cur_root = root_dir_sha1_for_rev(repo, rev);
+    if (!cur_root) return NULL;
+    char *prev_root = NULL;
+    if (rev > 0) {
+        prev_root = root_dir_sha1_for_rev(repo, rev - 1);
+        if (!prev_root) { free(cur_root); return NULL; }
+    }
+
+    struct flat_tree cur = {0}, prev = {0};
+    flatten_tree(repo, cur_root, "", &cur);
+    if (prev_root) flatten_tree(repo, prev_root, "", &prev);
+    free(cur_root);
+    free(prev_root);
+
+    qsort(cur.items,  (size_t)cur.n,  sizeof *cur.items,  flat_cmp);
+    qsort(prev.items, (size_t)prev.n, sizeof *prev.items, flat_cmp);
+
+    struct svnae_paths *P = calloc(1, sizeof *P);
+    int cap = cur.n + prev.n + 1;
+    P->items = calloc((size_t)cap, sizeof *P->items);
+
+    int i = 0, j = 0;
+    while (i < cur.n || j < prev.n) {
+        int cmp;
+        if      (i >= cur.n)  cmp = +1;
+        else if (j >= prev.n) cmp = -1;
+        else                  cmp = strcmp(cur.items[i].path, prev.items[j].path);
+
+        if (cmp == 0) {
+            if (strcmp(cur.items[i].sha1, prev.items[j].sha1) != 0) {
+                P->items[P->n].action = 'M';
+                P->items[P->n].path   = strdup(cur.items[i].path);
+                P->n++;
+            }
+            i++; j++;
+        } else if (cmp < 0) {
+            P->items[P->n].action = 'A';
+            P->items[P->n].path   = strdup(cur.items[i].path);
+            P->n++;
+            i++;
+        } else {
+            P->items[P->n].action = 'D';
+            P->items[P->n].path   = strdup(prev.items[j].path);
+            P->n++;
+            j++;
+        }
+    }
+
+    flat_free(&cur);
+    flat_free(&prev);
+    return P;
+}
+
+int svnae_repos_paths_count(const struct svnae_paths *P) { return P ? P->n : 0; }
+
+const char *
+svnae_repos_paths_path(const struct svnae_paths *P, int i)
+{
+    if (!P || i < 0 || i >= P->n) return "";
+    return P->items[i].path;
+}
+
+/* Returns a single-char action string: "A", "M", or "D". */
+const char *
+svnae_repos_paths_action(const struct svnae_paths *P, int i)
+{
+    static const char a_[] = "A", m_[] = "M", d_[] = "D", u_[] = "";
+    if (!P || i < 0 || i >= P->n) return u_;
+    switch (P->items[i].action) {
+        case 'A': return a_;
+        case 'M': return m_;
+        case 'D': return d_;
+        default:  return u_;
+    }
+}
+
+void
+svnae_repos_paths_free(struct svnae_paths *P)
+{
+    if (!P) return;
+    for (int i = 0; i < P->n; i++) free(P->items[i].path);
+    free(P->items);
+    free(P);
+}
+
 /* Public shim for server-side copy: resolve (rev, path) to its sha1 +
  * kind char. Returns 1 on success, 0 on miss. */
 int

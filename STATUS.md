@@ -11,8 +11,8 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
 
 ## Headline
 
-- **41 commits.** Each phase is its own commit, reviewable in isolation.
-- **33 test suites** (added `test_merge_reverse.sh`), ~339 assertions, all green.
+- **42 commits.** Each phase is its own commit, reviewable in isolation.
+- **34 test suites** (added `test_log_verbose.sh`), ~350 assertions, all green.
   Mix of in-language `.ae` tests and end-to-end shell harnesses that
   spin up a real HTTP server and drive it with curl and the built
   `svn` CLI.
@@ -85,7 +85,8 @@ Named after the plan's Phase N. Plan: `../svn-to-aether.md`.
 | 5.13 | 3-way conflict resolution + `svn resolve` | ✅ | (prev commit) |
 | 5.14 | Server-side properties (propset round-trips through commit/checkout/update) | ✅ | (prev commit) |
 | 5.15 | `svn switch` — relocate WC to a different branch URL, reusing update pipeline | ✅ | (prev commit) |
-| 5.16 | `svn merge -c N` cherry-pick + reverse merge (`-r A:B` with A>B or `-c -N`) | ✅ | (this commit) |
+| 5.16 | `svn merge -c N` cherry-pick + reverse merge (`-r A:B` with A>B or `-c -N`) | ✅ | (prev commit) |
+| 5.17 | `svn log -v` — per-rev A/M/D path list via new /rev/N/paths endpoint | ✅ | (this commit) |
 | 12 | svnadmin create/dump/load | ✅ | `52380a5` |
 
 ## Phases not yet done (from the plan)
@@ -102,7 +103,7 @@ Implemented:
 
 - `checkout`, `update`, `switch`, `status`, `commit` (both URL-flag stateless and WC-backed)
 - `add`, `rm`, `cp`, `mv`, `revert`, `diff`
-- `log`, `cat`, `ls`, `info` (all over the wire)
+- `log` (with `-v`/`--verbose` per-rev path list), `cat`, `ls`, `info` (all over the wire)
 - `propset`/`get`/`del`/`list` (WC-local)
 - `svn:ignore` read by status
 - Server-side copy (`svn cp URL URL`) — full-subtree rep-sharing
@@ -119,7 +120,6 @@ Not implemented (items the plan calls out or that reference svn has):
 - HTTPS / TLS transport
 - Authentication + authz
 - Mergeinfo range arithmetic (cancel forward/reverse of same range)
-- `svn log --verbose` (per-rev path changes)
 - `svn blame`
 - Hooks (pre/post-commit scripts)
 - Path-based authz
