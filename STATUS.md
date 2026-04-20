@@ -11,8 +11,8 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
 
 ## Headline
 
-- **39 commits.** Each phase is its own commit, reviewable in isolation.
-- **31 test suites** (added `test_server_props.sh`), ~325 assertions, all green.
+- **40 commits.** Each phase is its own commit, reviewable in isolation.
+- **32 test suites** (added `test_switch.sh`), ~331 assertions, all green.
   Mix of in-language `.ae` tests and end-to-end shell harnesses that
   spin up a real HTTP server and drive it with curl and the built
   `svn` CLI.
@@ -83,7 +83,8 @@ Named after the plan's Phase N. Plan: `../svn-to-aether.md`.
 | 5.12a | Branches (server-side copy) | ✅ | `94c06f0` |
 | 5.12b | svn merge + svn:mergeinfo | ✅ | `b04433c` |
 | 5.13 | 3-way conflict resolution + `svn resolve` | ✅ | (prev commit) |
-| 5.14 | Server-side properties (propset round-trips through commit/checkout/update) | ✅ | (this commit) |
+| 5.14 | Server-side properties (propset round-trips through commit/checkout/update) | ✅ | (prev commit) |
+| 5.15 | `svn switch` — relocate WC to a different branch URL, reusing update pipeline | ✅ | (this commit) |
 | 12 | svnadmin create/dump/load | ✅ | `52380a5` |
 
 ## Phases not yet done (from the plan)
@@ -98,7 +99,7 @@ Named after the plan's Phase N. Plan: `../svn-to-aether.md`.
 
 Implemented:
 
-- `checkout`, `update`, `status`, `commit` (both URL-flag stateless and WC-backed)
+- `checkout`, `update`, `switch`, `status`, `commit` (both URL-flag stateless and WC-backed)
 - `add`, `rm`, `cp`, `mv`, `revert`, `diff`
 - `log`, `cat`, `ls`, `info` (all over the wire)
 - `propset`/`get`/`del`/`list` (WC-local)
@@ -112,16 +113,16 @@ Not implemented (items the plan calls out or that reference svn has):
 
 - HTTPS / TLS transport
 - Authentication + authz
-- Conflict resolution UX (we abort on conflict; reference svn has text
-  and tree conflict markers + `svn resolve`)
-- Server-side property storage (properties are WC-local in this phase;
-  server doesn't persist per-node props yet)
 - Reverse merge, cherry-pick, mergeinfo range arithmetic
 - `svn log --verbose` (per-rev path changes)
 - `svn blame`
 - Hooks (pre/post-commit scripts)
 - Path-based authz
 - Locks (`svn lock`/`unlock`)
+- `svn externals` (svn:externals property pulling sub-WCs)
+- `svn cleanup` (WC crash recovery)
+- Prop-delete propagation on update (prop-add/change works; prop-remove
+  does not currently remove the WC-local entry — deferred)
 - Pre-1.7 WC compatibility (intentionally dropped)
 - Reference-svn dump-format compatibility (intentionally dropped;
   we have our own portable format)

@@ -455,3 +455,30 @@ svnae_wc_update(const char *wc_root, int target_rev)
     (void)had_conflict;
     return target_rev;
 }
+
+/* svn switch: relocate the WC to point at a different branch (or
+ * different repo) at `target_rev` (−1 means the new location's head).
+ * We rewrite the `url`/`base_url`/`repo` info rows first, then reuse
+ * svnae_wc_update — the update algorithm is exactly what switch needs
+ * (fetch remote tree, diff against local, apply with 3-way merge on
+ * overlap). Nodes whose content sha1 matches the new tree get a free
+ * ride; everything else goes through the merge / conflict pipeline. */
+int
+svnae_wc_switch(const char *wc_root,
+                const char *new_base_url, const char *new_repo,
+                int target_rev)
+{
+    sqlite3 *db = svnae_wc_db_open(wc_root);
+    if (!db) return -1;
+
+    /* Rewrite info before handing off to update. full_url matches what
+     * checkout wrote originally: "<base>/<repo>". */
+    char full_url[2048];
+    snprintf(full_url, sizeof full_url, "%s/%s", new_base_url, new_repo);
+    svnae_wc_db_set_info(db, "url",      full_url);
+    svnae_wc_db_set_info(db, "base_url", new_base_url);
+    svnae_wc_db_set_info(db, "repo",     new_repo);
+    svnae_wc_db_close(db);
+
+    return svnae_wc_update(wc_root, target_rev);
+}

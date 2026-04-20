@@ -65,6 +65,7 @@ extern svnae_wc_add(wc_root: string, rel_path: string) -> int
 extern svnae_wc_rm (wc_root: string, rel_path: string) -> int
 extern svnae_wc_commit(wc_root: string, author: string, logmsg: string) -> int
 extern svnae_wc_update(wc_root: string, target_rev: int) -> int
+extern svnae_wc_switch(wc_root: string, new_base_url: string, new_repo: string, target_rev: int) -> int
 extern svnae_wc_revert(wc_root: string, rel_path: string) -> int
 extern svnae_wc_diff(wc_root: string, rel_path_or_empty: string) -> int
 extern svnae_wc_cp(wc_root: string, src: string, dst: string) -> int
@@ -885,6 +886,41 @@ cmd_update(argv_start: int) {
     return 0
 }
 
+// svn switch NEW_URL [--rev N]
+// Relocates the WC to a different branch/repo URL at the given rev
+// (defaults to new location's head). Reuses the update pipeline, so
+// locally-modified files flow through 3-way merge and conflict flags
+// the same way `svn update` does.
+cmd_switch(argv_start: int) {
+    if aether_args_count() <= argv_start {
+        println("usage: svn switch NEW_URL [--rev N]")
+        return 2
+    }
+    url = aether_args_get(argv_start)
+    if string.length(url) == 0 {
+        println("usage: svn switch NEW_URL [--rev N]")
+        return 2
+    }
+    base = url_base(url)
+    repo = url_repo(url)
+    if string.length(repo) == 0 {
+        println("svn switch: URL must look like http://host:port/repo")
+        return 2
+    }
+    rev_str = find_flag("--rev", argv_start)
+    target = -1
+    if string.length(rev_str) > 0 {
+        if string.try_int(rev_str) == 1 { target = string.get_int(rev_str) }
+    }
+    rc = svnae_wc_switch(".", base, repo, target)
+    if rc < 0 {
+        println("svn switch: failed")
+        return 1
+    }
+    println("At revision ${rc}.")
+    return 0
+}
+
 cmd_status(argv_start: int) {
     // `svn status` takes an optional WC path argument; defaults to '.'.
     wc = "."
@@ -1000,6 +1036,8 @@ main() {
     if string.equals(sub, "co") == 1       { exit(cmd_checkout(2)) }
     if string.equals(sub, "update") == 1   { exit(cmd_update(2)) }
     if string.equals(sub, "up") == 1       { exit(cmd_update(2)) }
+    if string.equals(sub, "switch") == 1   { exit(cmd_switch(2)) }
+    if string.equals(sub, "sw") == 1       { exit(cmd_switch(2)) }
     if string.equals(sub, "revert") == 1   { exit(cmd_revert(2)) }
     if string.equals(sub, "diff") == 1     { exit(cmd_diff(2)) }
     if string.equals(sub, "di") == 1       { exit(cmd_diff(2)) }
