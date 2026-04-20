@@ -11,8 +11,8 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
 
 ## Headline
 
-- **46 commits.** Each phase is its own commit, reviewable in isolation.
-- **38 test suites** (added `test_acl.sh`), ~388 assertions, all green.
+- **47 commits.** Each phase is its own commit, reviewable in isolation.
+- **39 test suites** (added `test_acl_write.sh`), ~398 assertions, all green.
   Mix of in-language `.ae` tests and end-to-end shell harnesses that
   spin up a real HTTP server and drive it with curl and the built
   `svn` CLI.
@@ -90,7 +90,8 @@ Named after the plan's Phase N. Plan: `../svn-to-aether.md`.
 | 5.18 | mergeinfo arithmetic (cancel/collapse) + prop-delete propagation on update | ✅ | (prev commit) |
 | 6.1  | Pluggable hash algorithms (sha1 golden-list default, sha256 via `--algos`) | ✅ | (prev commit) |
 | 6.2  | Merkle verification: node-hash headers + `svn verify` re-hash walk | ✅ | (prev commit) |
-| 7.1  | Authorization: out-of-line ACLs + `svn acl` CLI + Merkle redaction | ✅ | (this commit) |
+| 7.1  | Authorization: out-of-line ACLs + `svn acl` CLI + Merkle redaction | ✅ | (prev commit) |
+| 7.2  | Write-side ACL enforcement + copy guard; rw/r/w rule modes | ✅ | (this commit) |
 | 12 | svnadmin create/dump/load | ✅ | `52380a5` |
 
 ## Phases not yet done (from the plan)
@@ -134,16 +135,23 @@ Implemented:
   stored .rep files.
 - Authorization (placeholder auth): ACLs stored out-of-band in the
   rev blob as an `acl:` sha pointing at a paths-acl blob. Per-path
-  ACLs are `+alice` / `-eve` / `+*` / `-*` rule lines. Inheritance:
-  nearest ancestor wins; no rule anywhere = open. `svn acl set/get/clear`
-  manages via commits (super-user required). Server filters cat (404),
-  list (blinds denied children as `{kind:hidden, sha}`), props, log
-  entries, and paths endpoints. `/info` root sha is re-computed per
-  user so `svn verify` anchors at the caller's *view* of the tree;
-  Merkle verification still succeeds through hidden entries. Auth is
-  placeholder: `X-Svnae-User: <name>` header trusted verbatim,
-  super-user proven by `--superuser-token SECRET` match (real auth
-  deferred). Clients set `SVN_USER` / `SVN_SUPERUSER_TOKEN` env vars.
+  ACLs are `+alice` / `-eve` / `+*` / `-*` rule lines, with optional
+  mode suffix (`+alice:r` read-only, `+alice:w` write-only, `+alice:rw`
+  = the shorthand `+alice`). Inheritance: nearest ancestor wins; no
+  rule anywhere = open. `svn acl set/get/clear` manages via commits
+  (super-user required). Server filters cat (404), list (blinds
+  denied children as `{kind:hidden, sha}`), props, log entries, and
+  paths endpoints. `/info` root sha is re-computed per user so
+  `svn verify` anchors at the caller's *view* of the tree; Merkle
+  verification still succeeds through hidden entries.
+  Write enforcement: commit returns 403 on any denied path; self-
+  elevation refused (user with no write on X can't set ACL on X);
+  anonymous users (no header) can't write ACL'd paths. Copy guard:
+  `svn cp` requires read on source and write on dest; super-user
+  bypasses. Auth is placeholder: `X-Svnae-User: <name>` header
+  trusted verbatim, super-user proven by `--superuser-token SECRET`
+  match (real auth deferred). Clients set `SVN_USER` /
+  `SVN_SUPERUSER_TOKEN` env vars.
 
 Not implemented (items the plan calls out or that reference svn has):
 

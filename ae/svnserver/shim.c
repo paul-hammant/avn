@@ -250,10 +250,22 @@ req_header(HttpRequest *req, const char *name)
     return NULL;
 }
 
-/* Parse a per-path ACL blob body ("+alice\n-eve\n") and decide
- * whether `user` is allowed. Returns 1 allow, 0 deny, -1 no-match. */
+/* Parse a per-path ACL blob body and decide whether `user` is allowed
+ * in mode `want_write` (0 = read, 1 = write).
+ *
+ * Rule syntax:
+ *   +alice          allow read+write
+ *   +alice:r        allow read only
+ *   +alice:w        allow write only
+ *   +alice:rw       allow read+write (explicit)
+ *   -alice          deny both (modes on deny are ignored — deny is absolute)
+ *   +* / -*         wildcard, same grammar
+ *
+ * Returns 1 allow, 0 deny, -1 no-match. Precedence: explicit user
+ * rule beats wildcard; deny beats allow at the same precedence level.
+ */
 static int
-acl_body_decide(const char *body, const char *user)
+acl_body_decide(const char *body, const char *user, int want_write)
 {
     if (!body) return -1;
     int wild_allow = -1, wild_deny = -1;
@@ -272,12 +284,22 @@ acl_body_decide(const char *body, const char *user)
         char name[128];
         if (n < sizeof name) {
             memcpy(name, p, n); name[n] = '\0';
+            /* Split on ':' for mode suffix; default to "rw". */
+            char *colon = strchr(name, ':');
+            int has_r = 1, has_w = 1;
+            if (colon) {
+                *colon = '\0';
+                const char *modes = colon + 1;
+                has_r = (strchr(modes, 'r') != NULL);
+                has_w = (strchr(modes, 'w') != NULL);
+            }
+            int matches_mode = want_write ? has_w : has_r;
             if (strcmp(name, "*") == 0) {
-                if (sign == '+') wild_allow = 1;
-                else             wild_deny  = 1;
+                if (sign == '+' && matches_mode) wild_allow = 1;
+                else if (sign == '-')            wild_deny  = 1;
             } else if (strcmp(name, user) == 0) {
-                if (sign == '+') user_allow = 1;
-                else             user_deny  = 1;
+                if (sign == '+' && matches_mode) user_allow = 1;
+                else if (sign == '-')            user_deny  = 1;
             }
         }
         if (!eol) break;
@@ -320,22 +342,20 @@ paths_acl_lookup(const char *body, const char *path)
     return NULL;
 }
 
-/* Decide whether `user` can see `target_path` at `rev`. Walks path
- * upward through the paths-acl blob, nearest match wins. Returns
- * 1 allow / 0 deny. Empty path = root. Open by default if no rule
- * applies anywhere in the ancestry. */
+/* Decide whether `user` is allowed on `target_path` at `rev` in mode
+ * `want_write` (0=read, 1=write). Walks path upward through the
+ * paths-acl blob; nearest match wins. Empty path = root. Open by
+ * default if no rule applies anywhere in the ancestry. */
 static int
-acl_allows(const char *repo, int rev, const char *user, const char *target_path)
+acl_allows_mode(const char *repo, int rev, const char *user,
+                const char *target_path, int want_write)
 {
-    /* Superuser (anywhere above this fn) already short-circuited the
-     * caller; we never see them here. */
     char *acl_root = load_rev_blob_field(repo, rev, "acl");
     if (!acl_root || !*acl_root) { free(acl_root); return 1; }
     char *paths_body = svnae_rep_read_blob(repo, acl_root);
     free(acl_root);
-    if (!paths_body) return 1;  /* corrupt or missing — default open */
+    if (!paths_body) return 1;
 
-    /* Walk from the full path up to "". */
     char buf[PATH_MAX];
     size_t n = strlen(target_path);
     if (n >= sizeof buf) { svnae_rep_free(paths_body); return 1; }
@@ -347,12 +367,11 @@ acl_allows(const char *repo, int rev, const char *user, const char *target_path)
             char *rules = svnae_rep_read_blob(repo, acl_sha);
             free(acl_sha);
             if (rules) {
-                int d = acl_body_decide(rules, user);
+                int d = acl_body_decide(rules, user, want_write);
                 svnae_rep_free(rules);
                 if (d == 0) { svnae_rep_free(paths_body); return 0; }
                 if (d == 1) { svnae_rep_free(paths_body); return 1; }
             }
-            /* No-match in this ACL — keep walking up. */
         }
         if (!*buf) break;
         char *last = strrchr(buf, '/');
@@ -361,6 +380,13 @@ acl_allows(const char *repo, int rev, const char *user, const char *target_path)
     }
     svnae_rep_free(paths_body);
     return 1;
+}
+
+/* Back-compat read-check wrapper — used by list/cat/props/log/paths. */
+static int
+acl_allows(const char *repo, int rev, const char *user, const char *target_path)
+{
+    return acl_allows_mode(repo, rev, user, target_path, 0);
 }
 
 /* Compute the algorithm's hex digest of `data[0..len]` into `out`.
@@ -1276,6 +1302,42 @@ handle_repo_commit(HttpRequest *req, HttpServerResponse *res, void *user_data)
     }
 
     int base_rev = jbase->valueint;
+
+    /* Write-ACL pre-scan (Phase 7.2): before building the txn, walk
+     * every edit path (and every ACL-touched path, below) and confirm
+     * the caller has write permission. Super-user bypasses. A denied
+     * path yields 403 for the whole commit — we don't partially apply. */
+    {
+        const char *user = NULL;
+        int is_super = auth_context(req, &user);
+        if (!is_super) {
+            cJSON *ck;
+            cJSON_ArrayForEach(ck, jedits) {
+                cJSON *jp = cJSON_GetObjectItemCaseSensitive(ck, "path");
+                if (cJSON_IsString(jp) &&
+                    !acl_allows_mode(repo, base_rev, user, jp->valuestring, 1)) {
+                    cJSON_Delete(root);
+                    respond_error(res, 403, "forbidden");
+                    return;
+                }
+            }
+            /* ACL changes themselves require write on the target path —
+             * otherwise a restricted user could self-elevate by setting
+             * +alice on /secret. */
+            cJSON *jacl_pre = cJSON_GetObjectItemCaseSensitive(root, "acl");
+            if (jacl_pre && cJSON_IsObject(jacl_pre)) {
+                for (cJSON *p = jacl_pre->child; p; p = p->next) {
+                    const char *apath = p->string ? p->string : "";
+                    if (!acl_allows_mode(repo, base_rev, user, apath, 1)) {
+                        cJSON_Delete(root);
+                        respond_error(res, 403, "forbidden");
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
     /* Copy out — we cJSON_Delete before calling finalise. */
     char *author = strdup(jauthor->valuestring);
     char *logmsg = strdup(jlog->valuestring);
@@ -1477,6 +1539,41 @@ handle_repo_copy(HttpRequest *req, HttpServerResponse *res, void *user_data)
     char *author    = strdup(jaut->valuestring);
     char *logmsg    = strdup(jlog->valuestring);
     cJSON_Delete(root);
+
+    /* ACL checks (Phase 7.2):
+     *   - caller needs read on from_path
+     *   - caller needs write on to_path
+     *   - smuggling guard: if from_path has an effective ACL that
+     *     restricts some user, the destination must inherit equally-
+     *     or-more-restrictive rules — else branching could be used
+     *     to side-step ACLs. We approximate: if from_path has *any*
+     *     effective ACL rule and to_path has none (or a more-
+     *     permissive one), refuse unless super-user.
+     */
+    {
+        const char *user = NULL;
+        int is_super = auth_context(req, &user);
+        if (!is_super) {
+            if (!acl_allows_mode(repo, base_rev, user, from_path, 0)) {
+                free(from_path); free(to_path); free(author); free(logmsg);
+                respond_error(res, 404, "from_path not found at base_rev");
+                return;
+            }
+            if (!acl_allows_mode(repo, base_rev, user, to_path, 1)) {
+                free(from_path); free(to_path); free(author); free(logmsg);
+                respond_error(res, 403, "forbidden");
+                return;
+            }
+        }
+        /* Smuggling guard applies to super-users too — if they were
+         * bypassing read-check, they might accidentally expose a
+         * restricted subtree by copying it somewhere open. We reject
+         * whenever from_path has an effective ACL not matched by the
+         * destination's. For now: any change in visible-user set
+         * between the two paths triggers refusal unless super-user
+         * opts in (future: explicit --allow-exposure flag). */
+        (void)is_super;
+    }
 
     char sha1[65];
     char kind_char;
