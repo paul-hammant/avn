@@ -177,6 +177,67 @@ svnae_build_props_blob(const char *repo,
     return sha;   /* static-thread-local in rep_store_shim */
 }
 
+/* Build a per-path ACL blob (one "+user" or "-user" per line, caller
+ * supplies sorted rules). Write to rep store, return sha. The blob
+ * is content-addressed, so identical ACLs across paths share storage
+ * just like anything else in the rep store. */
+const char *
+svnae_build_acl_blob(const char *repo,
+                    const char *const *rules,
+                    int n_rules)
+{
+    size_t cap = 128, len = 0;
+    char *body = malloc(cap);
+    body[0] = '\0';
+    for (int i = 0; i < n_rules; i++) {
+        size_t need = strlen(rules[i]) + 2;
+        if (len + need >= cap) {
+            cap = (len + need) * 2;
+            body = realloc(body, cap);
+        }
+        len += (size_t)snprintf(body + len, cap - len, "%s\n", rules[i]);
+    }
+    const char *sha = svnae_rep_write_blob(repo, body, (int)len);
+    free(body);
+    return sha;
+}
+
+/* Build a paths-acl blob ("<acl-sha> <path>\n" per line, sorted by
+ * path). Same wire shape as the paths-props blob. */
+const char *
+svnae_build_paths_acl_blob(const char *repo,
+                          const char *const *paths,
+                          const char *const *acl_shas,
+                          int n_paths)
+{
+    int *order = malloc(sizeof(int) * (size_t)(n_paths > 0 ? n_paths : 1));
+    for (int i = 0; i < n_paths; i++) order[i] = i;
+    for (int i = 0; i < n_paths; i++) {
+        for (int j = i + 1; j < n_paths; j++) {
+            if (strcmp(paths[order[i]], paths[order[j]]) > 0) {
+                int t = order[i]; order[i] = order[j]; order[j] = t;
+            }
+        }
+    }
+    size_t cap = 256, len = 0;
+    char *body = malloc(cap);
+    body[0] = '\0';
+    for (int i = 0; i < n_paths; i++) {
+        int idx = order[i];
+        size_t need = 64 + 1 + strlen(paths[idx]) + 1 + 1;
+        if (len + need >= cap) {
+            cap = (len + need) * 2;
+            body = realloc(body, cap);
+        }
+        len += (size_t)snprintf(body + len, cap - len, "%s %s\n",
+                                acl_shas[idx], paths[idx]);
+    }
+    free(order);
+    const char *sha = svnae_rep_write_blob(repo, body, (int)len);
+    free(body);
+    return sha;
+}
+
 /* Build a paths-props blob ("<props-sha1> <path>\n" per line, sorted
  * by path), write to rep store, return its sha1. */
 const char *
@@ -218,6 +279,21 @@ svnae_commit_finalise_with_props(const char *repo, struct svnae_txn *txn,
                                  const char *author, const char *logmsg,
                                  const char *props_sha1)
 {
+    return svnae_commit_finalise_with_acl(repo, txn, author, logmsg,
+                                          props_sha1, "");
+}
+
+/* Finalise variant that also sets the paths-acl blob sha for this
+ * rev. Empty string means "inherit from previous rev" (same rule as
+ * props). Phase 7.1: ACL blob pointers live alongside props blobs
+ * under a new `acl:` line in the rev blob. Revs with no acl field
+ * default to inheriting; the first rev with no ancestor treats it
+ * as empty (open). */
+int
+svnae_commit_finalise_with_acl(const char *repo, struct svnae_txn *txn,
+                               const char *author, const char *logmsg,
+                               const char *props_sha1, const char *acl_sha1)
+{
     int base_rev = svnae_txn_base_rev(txn);
     if (base_rev < 0) return -1;
     char *base_root = load_rev_root_sha1(repo, base_rev);
@@ -239,20 +315,29 @@ svnae_commit_finalise_with_props(const char *repo, struct svnae_txn *txn,
         ps = inherited_props ? inherited_props : "";
     }
 
+    /* Same for ACL — inherit if caller didn't explicitly set. */
+    char *inherited_acl = NULL;
+    const char *as = acl_sha1 && *acl_sha1 ? acl_sha1 : NULL;
+    if (!as) {
+        inherited_acl = rev_blob_field(repo, prev, "acl");
+        as = inherited_acl ? inherited_acl : "";
+    }
+
     /* Build revision blob. */
-    size_t est = strlen(author) + strlen(logmsg) + 128 + 40 + 40 + 32;
+    size_t est = strlen(author) + strlen(logmsg) + 256 + 64 + 64 + 64 + 32;
     char *rev_body = malloc(est);
     int n = snprintf(rev_body, est,
-                     "root: %s\nprops: %s\nprev: %d\nauthor: %s\ndate: %s\nlog: %s\n",
-                     new_root, ps, prev, author, svnae_fsfs_now_iso8601(), logmsg);
+                     "root: %s\nprops: %s\nacl: %s\nprev: %d\nauthor: %s\ndate: %s\nlog: %s\n",
+                     new_root, ps, as, prev, author, svnae_fsfs_now_iso8601(), logmsg);
     if (n >= (int)est) {
         free(rev_body);
         rev_body = malloc((size_t)n + 1);
         snprintf(rev_body, (size_t)n + 1,
-                 "root: %s\nprops: %s\nprev: %d\nauthor: %s\ndate: %s\nlog: %s\n",
-                 new_root, ps, prev, author, svnae_fsfs_now_iso8601(), logmsg);
+                 "root: %s\nprops: %s\nacl: %s\nprev: %d\nauthor: %s\ndate: %s\nlog: %s\n",
+                 new_root, ps, as, prev, author, svnae_fsfs_now_iso8601(), logmsg);
     }
     free(inherited_props);
+    free(inherited_acl);
 
     const char *rev_sha = svnae_rep_write_blob(repo, rev_body, (int)strlen(rev_body));
     free(rev_body);

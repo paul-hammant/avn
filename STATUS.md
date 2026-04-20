@@ -11,8 +11,8 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
 
 ## Headline
 
-- **45 commits.** Each phase is its own commit, reviewable in isolation.
-- **37 test suites** (added `test_verify.sh`), ~374 assertions, all green.
+- **46 commits.** Each phase is its own commit, reviewable in isolation.
+- **38 test suites** (added `test_acl.sh`), ~388 assertions, all green.
   Mix of in-language `.ae` tests and end-to-end shell harnesses that
   spin up a real HTTP server and drive it with curl and the built
   `svn` CLI.
@@ -89,7 +89,8 @@ Named after the plan's Phase N. Plan: `../svn-to-aether.md`.
 | 5.17 | `svn log -v` — per-rev A/M/D path list via new /rev/N/paths endpoint | ✅ | (prev commit) |
 | 5.18 | mergeinfo arithmetic (cancel/collapse) + prop-delete propagation on update | ✅ | (prev commit) |
 | 6.1  | Pluggable hash algorithms (sha1 golden-list default, sha256 via `--algos`) | ✅ | (prev commit) |
-| 6.2  | Merkle verification: node-hash headers + `svn verify` re-hash walk | ✅ | (this commit) |
+| 6.2  | Merkle verification: node-hash headers + `svn verify` re-hash walk | ✅ | (prev commit) |
+| 7.1  | Authorization: out-of-line ACLs + `svn acl` CLI + Merkle redaction | ✅ | (this commit) |
 | 12 | svnadmin create/dump/load | ✅ | `52380a5` |
 
 ## Phases not yet done (from the plan)
@@ -131,6 +132,18 @@ Implemented:
   each dir blob from its children's hashes, and confirms the
   recomputed root matches `/info`'s root sha. Detects tampering with
   stored .rep files.
+- Authorization (placeholder auth): ACLs stored out-of-band in the
+  rev blob as an `acl:` sha pointing at a paths-acl blob. Per-path
+  ACLs are `+alice` / `-eve` / `+*` / `-*` rule lines. Inheritance:
+  nearest ancestor wins; no rule anywhere = open. `svn acl set/get/clear`
+  manages via commits (super-user required). Server filters cat (404),
+  list (blinds denied children as `{kind:hidden, sha}`), props, log
+  entries, and paths endpoints. `/info` root sha is re-computed per
+  user so `svn verify` anchors at the caller's *view* of the tree;
+  Merkle verification still succeeds through hidden entries. Auth is
+  placeholder: `X-Svnae-User: <name>` header trusted verbatim,
+  super-user proven by `--superuser-token SECRET` match (real auth
+  deferred). Clients set `SVN_USER` / `SVN_SUPERUSER_TOKEN` env vars.
 
 Not implemented (items the plan calls out or that reference svn has):
 

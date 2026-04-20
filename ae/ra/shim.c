@@ -24,6 +24,55 @@
 
 /* ---- HTTP plumbing ---------------------------------------------------- */
 
+/* Per-process auth context — set once at CLI startup, attached to every
+ * outgoing request. Placeholder auth: the client claims identity; the
+ * server trusts it. Superuser token proves bypass rights via a shared
+ * secret. */
+static char *g_client_user = NULL;
+static char *g_client_super_token = NULL;
+
+void svnae_ra_set_user(const char *user) {
+    free(g_client_user);
+    g_client_user = user && *user ? strdup(user) : NULL;
+}
+void svnae_ra_set_superuser_token(const char *token) {
+    free(g_client_super_token);
+    g_client_super_token = token && *token ? strdup(token) : NULL;
+}
+
+/* Environment-variable accessor for the Aether CLI. Returns a static
+ * thread-local NUL-terminated string, or "" on miss. */
+const char *svnae_env_get(const char *name) {
+    static __thread char buf[512];
+    const char *v = getenv(name);
+    if (!v) { buf[0] = '\0'; return buf; }
+    size_t n = strlen(v);
+    if (n >= sizeof buf) n = sizeof buf - 1;
+    memcpy(buf, v, n);
+    buf[n] = '\0';
+    return buf;
+}
+
+/* svnae_http_get_body lives below, after http_get is defined. */
+
+/* Build a curl header list containing whatever auth we have. Caller
+ * frees with curl_slist_free_all. Always returns non-NULL (at least
+ * a User-Agent-less empty list is fine with libcurl's default). */
+static struct curl_slist *
+build_auth_headers(struct curl_slist *base)
+{
+    char buf[512];
+    if (g_client_user) {
+        snprintf(buf, sizeof buf, "X-Svnae-User: %s", g_client_user);
+        base = curl_slist_append(base, buf);
+    }
+    if (g_client_super_token) {
+        snprintf(buf, sizeof buf, "X-Svnae-Superuser: %s", g_client_super_token);
+        base = curl_slist_append(base, buf);
+    }
+    return base;
+}
+
 struct buf { char *data; size_t len; size_t cap; };
 
 static size_t
@@ -97,6 +146,9 @@ http_get_ex(const char *url, char **out_body, size_t *out_len, int *out_status,
     curl_easy_setopt(h, CURLOPT_WRITEDATA, &b);
     curl_easy_setopt(h, CURLOPT_TIMEOUT, 30L);
 
+    struct curl_slist *hdrs = build_auth_headers(NULL);
+    if (hdrs) curl_easy_setopt(h, CURLOPT_HTTPHEADER, hdrs);
+
     struct hdr_capture cap = { "x-svnae-node-hash", 17, NULL };
     if (out_node_hash) {
         curl_easy_setopt(h, CURLOPT_HEADERFUNCTION, hdr_capture_cb);
@@ -106,6 +158,7 @@ http_get_ex(const char *url, char **out_body, size_t *out_len, int *out_status,
     CURLcode rc = curl_easy_perform(h);
     long status = 0;
     curl_easy_getinfo(h, CURLINFO_RESPONSE_CODE, &status);
+    if (hdrs) curl_slist_free_all(hdrs);
     curl_easy_cleanup(h);
     if (rc != CURLE_OK) { free(b.data); free(cap.value); return -1; }
 
@@ -123,6 +176,16 @@ http_get(const char *url, char **out_body, size_t *out_len, int *out_status)
     return http_get_ex(url, out_body, out_len, out_status, NULL);
 }
 
+/* Simple "fetch URL and return the body as a malloc'd string" used by
+ * CLI subcommands that just want to print a JSON response verbatim.
+ * Returns "" on any failure. Caller takes ownership. */
+char *svnae_http_get_body(const char *url) {
+    char *body = NULL; size_t len = 0; int status = 0;
+    if (http_get(url, &body, &len, &status) != 0) return strdup("");
+    if (status != 200) { free(body); return strdup(""); }
+    return body ? body : strdup("");
+}
+
 static int
 http_post_json(const char *url, const char *body, char **out_resp, size_t *out_len, int *out_status)
 {
@@ -131,6 +194,7 @@ http_post_json(const char *url, const char *body, char **out_resp, size_t *out_l
     struct buf b = {0};
     struct curl_slist *headers = NULL;
     headers = curl_slist_append(headers, "Content-Type: application/json");
+    headers = build_auth_headers(headers);
     curl_easy_setopt(h, CURLOPT_URL, url);
     curl_easy_setopt(h, CURLOPT_POST, 1L);
     curl_easy_setopt(h, CURLOPT_POSTFIELDS, body);
@@ -609,6 +673,10 @@ struct commit_edit { int op; char *path; unsigned char *content; int content_len
  * serialises, we group by path into nested objects. */
 struct commit_prop { char *path; char *key; char *value; };
 
+/* Per-path ACL rules collected for commit. Flat list of (path, rule)
+ * like "+alice" / "-eve"; commit_finish groups into array-per-path. */
+struct commit_acl { char *path; char *rule; };
+
 struct svnae_ra_commit {
     int   base_rev;
     char *author;
@@ -619,6 +687,9 @@ struct svnae_ra_commit {
     struct commit_prop *props;
     int   n_props;
     int   cap_props;
+    struct commit_acl *acls;
+    int   n_acls;
+    int   cap_acls;
 };
 
 struct svnae_ra_commit *
@@ -688,6 +759,28 @@ svnae_ra_commit_delete(struct svnae_ra_commit *cb, const char *path)
     cb->edits[i].path = strdup(path);
     cb->edits[i].content = NULL;
     cb->edits[i].content_len = 0;
+    return 0;
+}
+
+/* Record an ACL rule for `path` on the pending commit. Multiple calls
+ * with the same path accumulate into an ACL array on the wire. Clearing
+ * a path's ACL is done by calling svnae_ra_commit_acl_clear, which
+ * sends an empty array. */
+int
+svnae_ra_commit_acl_add(struct svnae_ra_commit *cb,
+                        const char *path, const char *rule)
+{
+    if (!cb) return -1;
+    if (cb->n_acls == cb->cap_acls) {
+        int nc = cb->cap_acls ? cb->cap_acls * 2 : 8;
+        struct commit_acl *p = realloc(cb->acls, (size_t)nc * sizeof *p);
+        if (!p) return -1;
+        cb->acls = p;
+        cb->cap_acls = nc;
+    }
+    cb->acls[cb->n_acls].path = strdup(path);
+    cb->acls[cb->n_acls].rule = strdup(rule);
+    cb->n_acls++;
     return 0;
 }
 
@@ -770,6 +863,17 @@ svnae_ra_commit_finish(struct svnae_ra_commit *cb,
         }
     }
 
+    /* Add acl object: { path: ["+rule1", "-rule2", ...], ... }. */
+    if (cb->n_acls > 0) {
+        cJSON *ja = cJSON_AddObjectToObject(body, "acl");
+        for (int i = 0; i < cb->n_acls; i++) {
+            const char *p = cb->acls[i].path;
+            cJSON *arr = cJSON_GetObjectItemCaseSensitive(ja, p);
+            if (!arr) arr = cJSON_AddArrayToObject(ja, p);
+            cJSON_AddItemToArray(arr, cJSON_CreateString(cb->acls[i].rule));
+        }
+    }
+
     char *json = cJSON_PrintUnformatted(body);
     cJSON_Delete(body);
 
@@ -803,8 +907,13 @@ svnae_ra_commit_finish(struct svnae_ra_commit *cb,
         free(cb->props[i].key);
         free(cb->props[i].value);
     }
+    for (int i = 0; i < cb->n_acls; i++) {
+        free(cb->acls[i].path);
+        free(cb->acls[i].rule);
+    }
     free(cb->edits);
     free(cb->props);
+    free(cb->acls);
     free(cb);
 
     return new_rev;

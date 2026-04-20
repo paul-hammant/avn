@@ -24,6 +24,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 /* --- forward decls from other shims ------------------------------------ */
 
@@ -52,6 +53,15 @@ const char *svnae_build_paths_props_blob(const char *repo,
                                          const char *const *paths,
                                          const char *const *props_shas,
                                          int n_paths);
+int  svnae_commit_finalise_with_acl(const char *repo, struct svnae_txn *txn,
+                                    const char *author, const char *logmsg,
+                                    const char *props_sha1, const char *acl_sha1);
+const char *svnae_build_acl_blob(const char *repo,
+                                 const char *const *rules, int n_rules);
+const char *svnae_build_paths_acl_blob(const char *repo,
+                                       const char *const *paths,
+                                       const char *const *acl_shas,
+                                       int n_paths);
 
 /* For server-side copy: resolve a (rev, path) pair to its sha1 + kind.
  * We piggy-back on the existing repos/shim.c's resolve_path by exposing
@@ -185,9 +195,293 @@ set_merkle_headers(HttpServerResponse *res, const char *algo,
         http_response_set_header(res, "X-Svnae-Node-Hash", sha);
 }
 
-/* --- JSON string builder ---------------------------------------------- */
-
+/* Forward declarations — ACL helpers below reference these before
+ * they're defined in this file. Full struct sb definition inlined so
+ * the ACL pass can use it (moves the shared definition up). */
 struct sb { char *data; size_t len, cap; };
+static void sb_push(struct sb *s, const char *p, size_t n);
+static void sb_putc(struct sb *s, char c);
+static void sb_puts(struct sb *s, const char *p);
+static void sb_putjson_string(struct sb *s, const char *v);
+static void sb_putjson_int(struct sb *s, int v);
+static char *load_rev_blob_field(const char *repo, int rev, const char *key);
+
+/* --- authorization (Phase 7.1) --------------------------------------
+ *
+ * Rules live in the rev blob as an `acl: <paths-acl-sha>` field. The
+ * paths-acl blob lists "<acl-sha> <path>" lines; each per-path ACL
+ * blob has "+user" or "-user" lines (also "+*" / "-*" wildcard).
+ *
+ * Inheritance: a path's effective ACL is the nearest ancestor (or
+ * self) with an entry. If no ancestor has one, the tree is open.
+ *
+ * Placeholder auth: X-Svnae-User: <name> — trusted verbatim. Missing
+ * header = anonymous. Super-user bypass: X-Svnae-Superuser: <token>
+ * matches the server's --superuser-token flag. */
+
+static char *g_superuser_token = NULL;
+
+void
+svnae_svnserver_set_superuser_token(const char *token)
+{
+    free(g_superuser_token);
+    g_superuser_token = token && *token ? strdup(token) : NULL;
+}
+
+/* Case-insensitive header lookup on an HttpRequest. The Aether stdlib
+ * doesn't expose header arrays, so we rely on fields added via Phase 7.1.
+ * For now we parse them from `req->query_string` if absent (fallback).
+ * TODO: plumb through a proper headers array when std.http exposes one. */
+typedef struct {
+    char** keys;
+    char** values;
+    int    count;
+} __HdrPair;
+
+/* Aether http_server request type already declared above; header arrays
+ * live on it as header_keys / header_values / header_count (mirroring
+ * the response struct). */
+static const char *
+req_header(HttpRequest *req, const char *name)
+{
+    for (int i = 0; i < req->header_count; i++) {
+        if (strcasecmp(req->header_keys[i], name) == 0) return req->header_values[i];
+    }
+    return NULL;
+}
+
+/* Parse a per-path ACL blob body ("+alice\n-eve\n") and decide
+ * whether `user` is allowed. Returns 1 allow, 0 deny, -1 no-match. */
+static int
+acl_body_decide(const char *body, const char *user)
+{
+    if (!body) return -1;
+    int wild_allow = -1, wild_deny = -1;
+    int user_allow = -1, user_deny = -1;
+    const char *p = body;
+    while (*p) {
+        char sign = *p;
+        if (sign != '+' && sign != '-') {
+            const char *eol = strchr(p, '\n');
+            p = eol ? eol + 1 : p + strlen(p);
+            continue;
+        }
+        p++;
+        const char *eol = strchr(p, '\n');
+        size_t n = eol ? (size_t)(eol - p) : strlen(p);
+        char name[128];
+        if (n < sizeof name) {
+            memcpy(name, p, n); name[n] = '\0';
+            if (strcmp(name, "*") == 0) {
+                if (sign == '+') wild_allow = 1;
+                else             wild_deny  = 1;
+            } else if (strcmp(name, user) == 0) {
+                if (sign == '+') user_allow = 1;
+                else             user_deny  = 1;
+            }
+        }
+        if (!eol) break;
+        p = eol + 1;
+    }
+    /* Priority: explicit user rule > wildcard. Deny wins ties. */
+    if (user_deny  == 1) return 0;
+    if (user_allow == 1) return 1;
+    if (wild_deny  == 1) return 0;
+    if (wild_allow == 1) return 1;
+    return -1;
+}
+
+/* Scan the paths-acl blob body for a path entry. Returns a malloc'd
+ * 64+NUL sha of the matching per-path ACL blob, or NULL if absent. */
+static char *
+paths_acl_lookup(const char *body, const char *path)
+{
+    if (!body) return NULL;
+    size_t plen = strlen(path);
+    const char *p = body;
+    while (*p) {
+        const char *eol = strchr(p, '\n');
+        size_t llen = eol ? (size_t)(eol - p) : strlen(p);
+        /* Format: "<sha-hex> <path>". Sha width is repo-algo-dependent. */
+        const char *sp = memchr(p, ' ', llen);
+        if (sp) {
+            size_t sha_len = (size_t)(sp - p);
+            size_t name_len = llen - sha_len - 1;
+            if (name_len == plen && memcmp(sp + 1, path, plen) == 0 && sha_len < 65) {
+                char *out = malloc(sha_len + 1);
+                memcpy(out, p, sha_len);
+                out[sha_len] = '\0';
+                return out;
+            }
+        }
+        if (!eol) break;
+        p = eol + 1;
+    }
+    return NULL;
+}
+
+/* Decide whether `user` can see `target_path` at `rev`. Walks path
+ * upward through the paths-acl blob, nearest match wins. Returns
+ * 1 allow / 0 deny. Empty path = root. Open by default if no rule
+ * applies anywhere in the ancestry. */
+static int
+acl_allows(const char *repo, int rev, const char *user, const char *target_path)
+{
+    /* Superuser (anywhere above this fn) already short-circuited the
+     * caller; we never see them here. */
+    char *acl_root = load_rev_blob_field(repo, rev, "acl");
+    if (!acl_root || !*acl_root) { free(acl_root); return 1; }
+    char *paths_body = svnae_rep_read_blob(repo, acl_root);
+    free(acl_root);
+    if (!paths_body) return 1;  /* corrupt or missing — default open */
+
+    /* Walk from the full path up to "". */
+    char buf[PATH_MAX];
+    size_t n = strlen(target_path);
+    if (n >= sizeof buf) { svnae_rep_free(paths_body); return 1; }
+    memcpy(buf, target_path, n + 1);
+
+    for (;;) {
+        char *acl_sha = paths_acl_lookup(paths_body, buf);
+        if (acl_sha) {
+            char *rules = svnae_rep_read_blob(repo, acl_sha);
+            free(acl_sha);
+            if (rules) {
+                int d = acl_body_decide(rules, user);
+                svnae_rep_free(rules);
+                if (d == 0) { svnae_rep_free(paths_body); return 0; }
+                if (d == 1) { svnae_rep_free(paths_body); return 1; }
+            }
+            /* No-match in this ACL — keep walking up. */
+        }
+        if (!*buf) break;
+        char *last = strrchr(buf, '/');
+        if (last) *last = '\0';
+        else      buf[0] = '\0';
+    }
+    svnae_rep_free(paths_body);
+    return 1;
+}
+
+/* Compute the algorithm's hex digest of `data[0..len]` into `out`.
+ * `out` is [65] bytes. Returns hex length or 0. */
+static int
+hex_digest(const char *algo, const char *data, int len, char *out)
+{
+    const EVP_MD *md = NULL;
+    if      (strcmp(algo, "sha1")   == 0) md = EVP_sha1();
+    else if (strcmp(algo, "sha256") == 0) md = EVP_sha256();
+    if (!md) { out[0] = '\0'; return 0; }
+    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+    unsigned char dig[EVP_MAX_MD_SIZE]; unsigned int dlen = 0;
+    EVP_DigestInit_ex(ctx, md, NULL);
+    EVP_DigestUpdate(ctx, data, (size_t)len);
+    EVP_DigestFinal_ex(ctx, dig, &dlen);
+    EVP_MD_CTX_free(ctx);
+    static const char hex[] = "0123456789abcdef";
+    for (unsigned int i = 0; i < dlen; i++) {
+        out[i * 2]     = hex[dig[i] >> 4];
+        out[i * 2 + 1] = hex[dig[i] & 0x0f];
+    }
+    out[dlen * 2] = '\0';
+    return (int)dlen * 2;
+}
+
+/* Recursively compute the redacted-for-`user` sha of the dir at
+ * `dir_sha`. Writes 65-byte hex into `out`. Returns 0 on success.
+ * `prefix` is the repo-relative path of this dir. */
+static int
+compute_redacted_dir_sha(const char *repo, int rev, const char *user,
+                         const char *dir_sha, const char *prefix, char *out)
+{
+    char *body = svnae_rep_read_blob(repo, dir_sha);
+    if (!body) return -1;
+    const char *algo = svnae_repo_primary_hash(repo);
+    struct sb redact = {0};
+    const char *p = body;
+    while (*p) {
+        const char *eol = strchr(p, '\n');
+        size_t llen = eol ? (size_t)(eol - p) : strlen(p);
+        if (llen >= 4) {
+            char kind_c = p[0];
+            const char *sha_start = p + 2;
+            const char *sp2 = memchr(sha_start, ' ', llen - 2);
+            if (sp2) {
+                size_t sha_len = (size_t)(sp2 - sha_start);
+                size_t name_off = 2 + sha_len + 1;
+                size_t name_len = llen - name_off;
+                char child_sha[65], child_name[PATH_MAX];
+                if (sha_len < sizeof child_sha && name_len < sizeof child_name) {
+                    memcpy(child_sha, sha_start, sha_len); child_sha[sha_len] = '\0';
+                    memcpy(child_name, p + name_off, name_len); child_name[name_len] = '\0';
+                    char child_path[PATH_MAX];
+                    if (*prefix) snprintf(child_path, sizeof child_path, "%s/%s",
+                                          prefix, child_name);
+                    else         snprintf(child_path, sizeof child_path, "%s",
+                                          child_name);
+                    int allowed = acl_allows(repo, rev, user, child_path);
+                    if (allowed) {
+                        /* Descend: the effective hash of a subdir may
+                         * itself be redacted if grandchildren are
+                         * denied. Files pass through as-is. */
+                        if (kind_c == 'd') {
+                            char sub[65];
+                            if (compute_redacted_dir_sha(repo, rev, user,
+                                                         child_sha, child_path, sub) == 0) {
+                                char line[PATH_MAX + 96];
+                                snprintf(line, sizeof line, "%c %s %s\n",
+                                         kind_c, sub, child_name);
+                                sb_puts(&redact, line);
+                            }
+                        } else {
+                            char line[PATH_MAX + 96];
+                            snprintf(line, sizeof line, "%c %s %s\n",
+                                     kind_c, child_sha, child_name);
+                            sb_puts(&redact, line);
+                        }
+                    } else {
+                        char line[96];
+                        snprintf(line, sizeof line, "H %s\n", child_sha);
+                        sb_puts(&redact, line);
+                    }
+                }
+            }
+        }
+        if (!eol) break;
+        p = eol + 1;
+    }
+    svnae_rep_free(body);
+    hex_digest(algo, redact.data ? redact.data : "",
+               redact.data ? (int)redact.len : 0, out);
+    free(redact.data);
+    return 0;
+}
+
+/* Figure out the effective auth context for this request. Returns
+ * 1 if super-user (bypass ACL), 0 otherwise. Writes the effective
+ * username (possibly "") into `*out_user` as a static-thread-local. */
+static int
+auth_context(HttpRequest *req, const char **out_user)
+{
+    static __thread char user_cache[128];
+    const char *hdr_user  = req_header(req, "X-Svnae-User");
+    const char *hdr_super = req_header(req, "X-Svnae-Superuser");
+    if (hdr_user) {
+        size_t n = strlen(hdr_user);
+        if (n >= sizeof user_cache) n = sizeof user_cache - 1;
+        memcpy(user_cache, hdr_user, n);
+        user_cache[n] = '\0';
+    } else {
+        user_cache[0] = '\0';   /* anonymous */
+    }
+    *out_user = user_cache;
+    if (hdr_super && g_superuser_token && strcmp(hdr_super, g_superuser_token) == 0) {
+        return 1;
+    }
+    return 0;
+}
+
+/* --- JSON string builder ---------------------------------------------- */
 
 static void sb_push(struct sb *s, const char *p, size_t n)
 {
@@ -359,13 +653,37 @@ handle_repo_log(HttpRequest *req, HttpServerResponse *res, void *user_data)
     struct svnae_log *lg = svnae_repos_log(repo);
     if (!lg) { respond_error(res, 500, "cannot read log"); return; }
 
+    const char *user = NULL;
+    int is_super = auth_context(req, &user);
+
     struct sb s = {0};
     sb_puts(&s, "{\"entries\":[");
     int n = svnae_repos_log_count(lg);
+    int any = 0;
     for (int i = 0; i < n; i++) {
-        if (i) sb_putc(&s, ',');
+        int rev = svnae_repos_log_rev(lg, i);
+        /* A rev is shown to the caller iff at least one of its touched
+         * paths is visible. r0 (the empty init commit) has no paths;
+         * always show that. Super-user shows everything. */
+        int visible = 1;
+        if (!is_super && rev > 0) {
+            visible = 0;
+            struct svnae_paths *P = svnae_repos_paths_changed(repo, rev);
+            if (P) {
+                int pn = svnae_repos_paths_count(P);
+                for (int j = 0; j < pn; j++) {
+                    if (acl_allows(repo, rev, user, svnae_repos_paths_path(P, j))) {
+                        visible = 1; break;
+                    }
+                }
+                svnae_repos_paths_free(P);
+            }
+        }
+        if (!visible) continue;
+        if (any) sb_putc(&s, ',');
+        any = 1;
         sb_puts(&s, "{\"rev\":");
-        sb_putjson_int(&s, svnae_repos_log_rev(lg, i));
+        sb_putjson_int(&s, rev);
         sb_puts(&s, ",\"author\":");
         sb_putjson_string(&s, svnae_repos_log_author(lg, i));
         sb_puts(&s, ",\"date\":");
@@ -510,9 +828,22 @@ handle_repo_rev(HttpRequest *req, HttpServerResponse *res, void *user_data)
     if (strcmp(after, "/info") == 0) {
         struct svnae_info *I = svnae_repos_info_rev(repo, rev);
         if (!I) { respond_error(res, 404, "no such rev"); return; }
-        /* Also expose the rev's root-dir sha so verify can anchor its
-         * Merkle walk. */
+
+        /* Root sha, possibly redacted if the caller is a non-super-user
+         * and any subtree is denied to them. Matters because `svn verify`
+         * anchors the Merkle walk here; the user's recomputed root has
+         * to equal what /info claims. */
+        const char *user = NULL;
+        int is_super = auth_context(req, &user);
         char *root_sha = load_rev_blob_field(repo, rev, "root");
+        char redacted[65] = {0};
+        const char *reported_root = root_sha ? root_sha : "";
+        if (root_sha && *root_sha && !is_super) {
+            if (compute_redacted_dir_sha(repo, rev, user, root_sha, "", redacted) == 0
+                && *redacted) {
+                reported_root = redacted;
+            }
+        }
         struct sb s = {0};
         sb_puts(&s, "{\"rev\":");
         sb_putjson_int(&s, svnae_repos_info_rev_num(I));
@@ -523,7 +854,7 @@ handle_repo_rev(HttpRequest *req, HttpServerResponse *res, void *user_data)
         sb_puts(&s, ",\"msg\":");
         sb_putjson_string(&s, svnae_repos_info_msg(I));
         sb_puts(&s, ",\"root\":");
-        sb_putjson_string(&s, root_sha ? root_sha : "");
+        sb_putjson_string(&s, reported_root);
         sb_puts(&s, "}");
         free(root_sha);
         svnae_repos_info_free(I);
@@ -536,6 +867,15 @@ handle_repo_rev(HttpRequest *req, HttpServerResponse *res, void *user_data)
     if (strncmp(after, "/cat/", 5) == 0 || strcmp(after, "/cat") == 0) {
         const char *file_path = strcmp(after, "/cat") == 0 ? "" : after + 5;
         if (!*file_path) { respond_error(res, 400, "cat requires a path"); return; }
+        /* ACL check before reading: denied = 404 (indistinguishable
+         * from "doesn't exist", per Phase 7.1 design). Super-user
+         * bypasses. */
+        const char *user = NULL;
+        int is_super = auth_context(req, &user);
+        if (!is_super && !acl_allows(repo, rev, user, file_path)) {
+            respond_error(res, 404, "not found");
+            return;
+        }
         char *data = svnae_repos_cat(repo, rev, file_path);
         if (!data) { respond_error(res, 404, "not found"); return; }
         /* We don't know the length without a separate API call. Our cat
@@ -556,19 +896,27 @@ handle_repo_rev(HttpRequest *req, HttpServerResponse *res, void *user_data)
     }
 
     /* /rev/N/paths → {"entries":[{"action":"A","path":"..."}, ...]}
-     * Used by `svn log --verbose`. */
+     * Used by `svn log --verbose`. Denied paths are filtered out of
+     * the result (indistinguishable from "path didn't change in this
+     * rev"). Super-users get the full set. */
     if (strcmp(after, "/paths") == 0) {
         struct svnae_paths *P = svnae_repos_paths_changed(repo, rev);
         if (!P) { respond_error(res, 404, "no such rev"); return; }
+        const char *user = NULL;
+        int is_super = auth_context(req, &user);
         struct sb s = {0};
         sb_puts(&s, "{\"entries\":[");
         int n = svnae_repos_paths_count(P);
+        int any = 0;
         for (int i = 0; i < n; i++) {
-            if (i) sb_putc(&s, ',');
+            const char *path = svnae_repos_paths_path(P, i);
+            if (!is_super && !acl_allows(repo, rev, user, path)) continue;
+            if (any) sb_putc(&s, ',');
+            any = 1;
             sb_puts(&s, "{\"action\":");
             sb_putjson_string(&s, svnae_repos_paths_action(P, i));
             sb_puts(&s, ",\"path\":");
-            sb_putjson_string(&s, svnae_repos_paths_path(P, i));
+            sb_putjson_string(&s, path);
             sb_putc(&s, '}');
         }
         sb_puts(&s, "]}");
@@ -578,9 +926,92 @@ handle_repo_rev(HttpRequest *req, HttpServerResponse *res, void *user_data)
         return;
     }
 
+    /* /rev/N/acl/<path> → {"rules":["+alice","-eve"], "effective_from":"path"}
+     *
+     * Returns the *effective* ACL at `path` — nearest ancestor wins.
+     * Super-user only; normal users that hit this get 404 so they
+     * can't probe existence. */
+    if (strncmp(after, "/acl/", 5) == 0 || strcmp(after, "/acl") == 0) {
+        const char *target = strcmp(after, "/acl") == 0 ? "" : after + 5;
+        const char *a_user = NULL;
+        int a_is_super = auth_context(req, &a_user);
+        if (!a_is_super) { respond_error(res, 404, "not found"); return; }
+
+        /* Walk the paths-acl blob from target upward. */
+        char *acl_root = load_rev_blob_field(repo, rev, "acl");
+        if (!acl_root || !*acl_root) {
+            free(acl_root);
+            respond_json(res, 200, "{\"rules\":[],\"effective_from\":\"\"}");
+            return;
+        }
+        char *paths_body = svnae_rep_read_blob(repo, acl_root);
+        free(acl_root);
+        if (!paths_body) {
+            respond_json(res, 200, "{\"rules\":[],\"effective_from\":\"\"}");
+            return;
+        }
+        char buf[PATH_MAX];
+        size_t tl = strlen(target);
+        if (tl >= sizeof buf) { svnae_rep_free(paths_body); respond_error(res, 400, "path too long"); return; }
+        memcpy(buf, target, tl + 1);
+
+        char *eff_path = NULL;
+        char *eff_sha = NULL;
+        for (;;) {
+            eff_sha = paths_acl_lookup(paths_body, buf);
+            if (eff_sha) { eff_path = strdup(buf); break; }
+            if (!*buf) break;
+            char *last = strrchr(buf, '/');
+            if (last) *last = '\0';
+            else      buf[0] = '\0';
+        }
+        svnae_rep_free(paths_body);
+
+        struct sb s = {0};
+        sb_puts(&s, "{\"rules\":[");
+        if (eff_sha) {
+            char *rules = svnae_rep_read_blob(repo, eff_sha);
+            if (rules) {
+                int first = 1;
+                const char *p = rules;
+                while (*p) {
+                    const char *eol = strchr(p, '\n');
+                    size_t n = eol ? (size_t)(eol - p) : strlen(p);
+                    if (n > 0) {
+                        char line[128];
+                        if (n < sizeof line) {
+                            memcpy(line, p, n); line[n] = '\0';
+                            if (!first) sb_putc(&s, ',');
+                            sb_putjson_string(&s, line);
+                            first = 0;
+                        }
+                    }
+                    if (!eol) break;
+                    p = eol + 1;
+                }
+                svnae_rep_free(rules);
+            }
+            free(eff_sha);
+        }
+        sb_puts(&s, "],\"effective_from\":");
+        sb_putjson_string(&s, eff_path ? eff_path : "");
+        sb_putc(&s, '}');
+        free(eff_path);
+        respond_json(res, 200, s.data ? s.data : "{}");
+        free(s.data);
+        return;
+    }
+
     /* /rev/N/props/<path>  */
     if (strncmp(after, "/props/", 7) == 0 || strcmp(after, "/props") == 0) {
         const char *target = strcmp(after, "/props") == 0 ? "" : after + 7;
+        /* ACL check: denied paths have empty props from caller's view. */
+        const char *p_user = NULL;
+        int p_is_super = auth_context(req, &p_user);
+        if (!p_is_super && !acl_allows(repo, rev, p_user, target)) {
+            respond_json(res, 200, "{}");
+            return;
+        }
         /* The path "" means the WC root. */
         char *props_sha = load_rev_props_sha1(repo, rev);
         if (!props_sha || !*props_sha) {
@@ -609,34 +1040,149 @@ handle_repo_rev(HttpRequest *req, HttpServerResponse *res, void *user_data)
         return;
     }
 
-    /* /rev/N/list/<path>  (path "" → root) */
+    /* /rev/N/list/<path>  (path "" → root)
+     *
+     * Phase 7.1: may redact per-child entries based on the caller's
+     * ACL view. Redacted children appear as {"kind":"hidden",
+     * "sha":"<hex>"} — no name. The dir's X-Svnae-Node-Hash header
+     * is recomputed against the redacted dir blob so the client's
+     * Merkle walk terminates at the same sha the server reports.
+     *
+     * Super-user: sees the raw dir blob verbatim (no redaction, no
+     * rehash — same as Phase 6.2 behaviour). */
     if (strncmp(after, "/list/", 6) == 0 || strcmp(after, "/list") == 0) {
         const char *dir_path = strcmp(after, "/list") == 0 ? "" : after + 6;
-        struct svnae_list *L = svnae_repos_list(repo, rev, *dir_path ? dir_path : "/");
-        if (!L) { respond_error(res, 404, "not a directory"); return; }
-        /* Merkle headers: resolve (rev, dir_path) to its content sha. */
-        char node_sha[65] = {0};
-        char node_kind = 0;
-        if (svnae_repos_resolve(repo, rev, *dir_path ? dir_path : "", node_sha, &node_kind)
-            && node_kind == 'd') {
-            set_merkle_headers(res, svnae_repo_primary_hash(repo),
-                               "dir", node_sha);
+
+        const char *user = NULL;
+        int is_super = auth_context(req, &user);
+
+        /* ACL check on the dir itself. If the dir is denied, pretend
+         * it doesn't exist. */
+        if (!is_super && !acl_allows(repo, rev, user, dir_path)) {
+            respond_error(res, 404, "not a directory");
+            return;
         }
-        struct sb s = {0};
-        sb_puts(&s, "{\"entries\":[");
-        int n = svnae_repos_list_count(L);
-        for (int i = 0; i < n; i++) {
-            if (i) sb_putc(&s, ',');
-            sb_puts(&s, "{\"name\":");
-            sb_putjson_string(&s, svnae_repos_list_name(L, i));
-            sb_puts(&s, ",\"kind\":");
-            sb_putjson_string(&s, svnae_repos_list_kind(L, i));
-            sb_putc(&s, '}');
+
+        /* Resolve the dir's sha + read its raw blob so we can parse
+         * children with their content-shas intact. */
+        char dir_sha[65] = {0};
+        char dir_kind = 0;
+        if (!svnae_repos_resolve(repo, rev, dir_path, dir_sha, &dir_kind)
+            || dir_kind != 'd') {
+            respond_error(res, 404, "not a directory");
+            return;
         }
-        sb_puts(&s, "]}");
-        svnae_repos_list_free(L);
-        respond_json(res, 200, s.data ? s.data : "{\"entries\":[]}");
-        free(s.data);
+        char *dir_body = svnae_rep_read_blob(repo, dir_sha);
+        if (!dir_body) { respond_error(res, 500, "cannot read dir blob"); return; }
+
+        /* Parse each line "<kind> <sha> <name>\n" and decide per-child:
+         *   allowed      → emit {name, kind}
+         *   denied       → emit {kind:"hidden", sha}, no name
+         * Also build the redacted dir blob so we can rehash for the
+         * response header. For allowed children the blob line is
+         * identical to the original; for denied children it becomes
+         * "H <sha>\n" (no trailing space-name, no name).
+         *
+         * The blob wire format the client needs to recompute this
+         * redacted-dir hash is *that* redacted form — so verify knows
+         * to rebuild "H <sha>\n" lines for children returned with
+         * kind=hidden. */
+        struct sb body = {0};     /* JSON output */
+        struct sb redact = {0};   /* redacted raw dir blob */
+        sb_puts(&body, "{\"entries\":[");
+        int any = 0;
+        const char *p = dir_body;
+        const char *algo = svnae_repo_primary_hash(repo);
+        while (*p) {
+            const char *eol = strchr(p, '\n');
+            size_t llen = eol ? (size_t)(eol - p) : strlen(p);
+            if (llen >= 4) {
+                char kind_c = p[0];
+                const char *sha_start = p + 2;
+                const char *sp2 = memchr(sha_start, ' ', llen - 2);
+                if (sp2) {
+                    size_t sha_len = (size_t)(sp2 - sha_start);
+                    size_t name_off = 2 + sha_len + 1;
+                    size_t name_len = llen - name_off;
+                    char child_sha[65], child_name[PATH_MAX];
+                    if (sha_len < sizeof child_sha && name_len < sizeof child_name) {
+                        memcpy(child_sha, sha_start, sha_len); child_sha[sha_len] = '\0';
+                        memcpy(child_name, p + name_off, name_len); child_name[name_len] = '\0';
+
+                        /* Build the child's full repo-relative path. */
+                        char child_path[PATH_MAX];
+                        if (*dir_path) snprintf(child_path, sizeof child_path, "%s/%s",
+                                                dir_path, child_name);
+                        else           snprintf(child_path, sizeof child_path, "%s",
+                                                child_name);
+
+                        int allowed = is_super || acl_allows(repo, rev, user, child_path);
+
+                        if (any) sb_putc(&body, ',');
+                        any = 1;
+                        if (allowed) {
+                            sb_puts(&body, "{\"name\":");
+                            sb_putjson_string(&body, child_name);
+                            sb_puts(&body, ",\"kind\":");
+                            sb_puts(&body, kind_c == 'd' ? "\"dir\"" : "\"file\"");
+                            sb_putc(&body, '}');
+
+                            /* Preserve the raw line verbatim in the
+                             * redact buffer. */
+                            char line[PATH_MAX + 96];
+                            snprintf(line, sizeof line, "%c %s %s\n",
+                                     kind_c, child_sha, child_name);
+                            sb_puts(&redact, line);
+                        } else {
+                            sb_puts(&body, "{\"kind\":\"hidden\",\"sha\":");
+                            sb_putjson_string(&body, child_sha);
+                            sb_putc(&body, '}');
+
+                            /* Redacted form: "H <sha>\n" — no name. */
+                            char line[96];
+                            snprintf(line, sizeof line, "H %s\n", child_sha);
+                            sb_puts(&redact, line);
+                        }
+                    }
+                }
+            }
+            if (!eol) break;
+            p = eol + 1;
+        }
+        sb_puts(&body, "]}");
+        svnae_rep_free(dir_body);
+
+        /* Compute the redacted dir's hash (for super-users this
+         * collapses to the unmodified dir_sha since nothing was
+         * rewritten). */
+        if (is_super) {
+            set_merkle_headers(res, algo, "dir", dir_sha);
+        } else {
+            char rehash[65] = {0};
+            const EVP_MD *md = NULL;
+            if      (strcmp(algo, "sha1")   == 0) md = EVP_sha1();
+            else if (strcmp(algo, "sha256") == 0) md = EVP_sha256();
+            if (md) {
+                EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+                unsigned char dig[EVP_MAX_MD_SIZE]; unsigned int dlen = 0;
+                EVP_DigestInit_ex(ctx, md, NULL);
+                EVP_DigestUpdate(ctx, redact.data ? redact.data : "",
+                                 redact.data ? redact.len : 0);
+                EVP_DigestFinal_ex(ctx, dig, &dlen);
+                EVP_MD_CTX_free(ctx);
+                static const char hex[] = "0123456789abcdef";
+                for (unsigned int i = 0; i < dlen; i++) {
+                    rehash[i*2]   = hex[dig[i] >> 4];
+                    rehash[i*2+1] = hex[dig[i] & 0x0f];
+                }
+                rehash[dlen*2] = '\0';
+            }
+            set_merkle_headers(res, algo, "dir", rehash);
+        }
+
+        free(redact.data);
+        respond_json(res, 200, body.data ? body.data : "{\"entries\":[]}");
+        free(body.data);
         return;
     }
 
@@ -822,14 +1368,57 @@ handle_repo_commit(HttpRequest *req, HttpServerResponse *res, void *user_data)
             if (built_props_sha1) use_props_sha1 = built_props_sha1;
         }
     }
+    /* Optional top-level "acl" object: { path: ["+alice","-eve"], ... }.
+     * Empty array removes the ACL on that path. If the key is omitted
+     * entirely, ACLs inherit from the previous rev (handled by
+     * svnae_commit_finalise_with_acl when we pass ""). */
+    cJSON *jacl = cJSON_GetObjectItemCaseSensitive(root, "acl");
+    const char *use_acl_sha1 = "";
+    char *built_acl_sha1 = NULL;
+    if (jacl && cJSON_IsObject(jacl)) {
+        int np = 0;
+        for (cJSON *it = jacl->child; it; it = it->next) np++;
+        if (np > 0) {
+            const char **paths     = calloc((size_t)np, sizeof *paths);
+            const char **acl_shas  = calloc((size_t)np, sizeof *acl_shas);
+            char       **sha_copies = calloc((size_t)np, sizeof *sha_copies);
+            int i = 0;
+            for (cJSON *p = jacl->child; p; p = p->next) {
+                if (!cJSON_IsArray(p)) continue;
+                int nr = cJSON_GetArraySize(p);
+                if (nr == 0) continue;   /* empty = remove */
+                const char **rules = calloc((size_t)nr, sizeof *rules);
+                int rcount = 0;
+                for (int k = 0; k < nr; k++) {
+                    cJSON *r = cJSON_GetArrayItem(p, k);
+                    if (cJSON_IsString(r)) rules[rcount++] = r->valuestring;
+                }
+                const char *asha = svnae_build_acl_blob(repo, rules, rcount);
+                free(rules);
+                if (!asha) asha = "";
+                paths[i] = p->string ? p->string : "";
+                sha_copies[i] = strdup(asha);
+                acl_shas[i] = sha_copies[i];
+                i++;
+            }
+            if (i > 0) {
+                const char *pab = svnae_build_paths_acl_blob(repo, paths, acl_shas, i);
+                if (pab) built_acl_sha1 = strdup(pab);
+            }
+            for (int j = 0; j < i; j++) free(sha_copies[j]);
+            free(sha_copies); free(paths); free(acl_shas);
+            if (built_acl_sha1) use_acl_sha1 = built_acl_sha1;
+        }
+    }
     cJSON_Delete(root);
 
-    int new_rev = svnae_commit_finalise_with_props(repo, txn, author, logmsg,
-                                                   use_props_sha1);
+    int new_rev = svnae_commit_finalise_with_acl(repo, txn, author, logmsg,
+                                                 use_props_sha1, use_acl_sha1);
     svnae_txn_free(txn);
     free(author);
     free(logmsg);
     free(built_props_sha1);
+    free(built_acl_sha1);
     if (new_rev < 0) {
         respond_error(res, 500, "commit failed");
         return;
