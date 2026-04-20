@@ -442,13 +442,56 @@ will reach for `!` first.
 
 ## Notes for Nicolas
 
-The Aether-Subversion port is feasible and we're pushing through the above.
-Of the list, **#2 (cross-module `ptr` type erasure) is the only one that
-threatens the architecture** — without it we can't have clean inter-library
-APIs and have to fall back to C-shim-per-boundary. If that one gets fixed,
-everything else is ergonomics.
+After ~11,500 lines of Aether + ~4,000 lines of C shims, 30 test suites,
+and a working svn client/server pair, the picture of which bugs hurt most:
 
-`__FILE__`/`__LINE__` (#4) is the next most valuable because error-handling
-is pervasive.
+**The type-system cluster is the whole problem.** Issues #1, #2, #13, #14,
+#16 are all the same root cause: Aether's type inference for user-defined
+functions, recursive calls, and extern declarations with explicit return
+types doesn't hold the types correctly through all phases of the compiler.
+Each manifests differently, but the effect is the same — any non-trivial
+Aether code that involves pointer handoffs across functions or modules ends
+up miscompiled, with the generated C casting pointers to ints and then
+back, which usually segfaults at runtime rather than failing to compile.
 
-Everything else is workaroundable in place.
+The concrete cost: **we've written all the heavy logic in C** (~4,000 lines
+of shim code) and used Aether as a CLI / orchestration layer. That's a
+survivable shape for this port, but it's not what Aether is marketed as.
+A language that claims to be a systems language needs its typed cross-module
+boundary to carry pointers correctly. Fixing the type cluster would let us
+move most of the shim code to Aether in a follow-up pass.
+
+**Second tier — #4 (no `__FILE__` / `__LINE__` intrinsics).** Pervasive
+cost because we want source locations in every error-chain link. Today
+we pass them as string + int args at every call site, which bit-rots on
+every edit.
+
+**Ergonomic but mattered in practice:**
+
+- #5 (`message` keyword): the `MESSAGE_KEYWORD` parse error pointing at
+  the wrong column cost a non-trivial debug cycle on first encounter.
+- #8 (double extern call in one expression hangs): silent infinite loop.
+  Easy to work around once you know, but it's a compiler bug that should
+  just not happen.
+- #9 (`extra_sources` cache): you change a `.c` file, build output doesn't
+  update, you chase a bug that's already fixed. Cache-key by content hash
+  of all listed sources, not just the `.ae`.
+- #15 (`!` on non-bool): every other C-family language does coerce. This
+  one catches newcomers immediately.
+
+**Fine as-is, just needs docs:**
+
+#3, #6, #7, #10, #11, #12 — all documented workarounds in the port, and
+none of them cost more than a few minutes once you've hit them the first
+time. Worth a "known surprises" page on aetherlang.org.
+
+**Not shown here but worth mentioning:** Aether's ergonomic wins are
+real. The `${expr}` string interpolation is lovely. Actor syntax is clean.
+The Go-style `(value, err)` tuple returns read well. The toml-driven
+project layout with `ae run` / `ae build` is simple enough that new
+contributors understood it immediately. When the type system cooperates
+(simple scalar-return functions over ints and strings) the code is
+pleasant to write. The language has a voice. It's just not yet robust
+enough at the pointer boundary to carry 300KLoC of systems code by itself.
+
+— The svn-aether port team, after 34 commits.
