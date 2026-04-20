@@ -70,6 +70,7 @@ extern svnae_wc_diff(wc_root: string, rel_path_or_empty: string) -> int
 extern svnae_wc_cp(wc_root: string, src: string, dst: string) -> int
 extern svnae_wc_mv(wc_root: string, src: string, dst: string) -> int
 extern svnae_ra_server_copy(base_url: string, repo_name: string, base_rev: int, from_path: string, to_path: string, author: string, logmsg: string) -> int
+extern svnae_wc_merge(wc_root: string, source_path: string, rev_a: int, rev_b: int, target_path: string) -> int
 
 extern svnae_wc_propset(wc_root: string, path: string, name: string, value: string) -> int
 extern svnae_wc_propget(wc_root: string, path: string, name: string) -> string
@@ -543,6 +544,75 @@ cmd_rm(argv_start: int) {
     return 0
 }
 
+cmd_merge(argv_start: int) {
+    // svn merge URL@REVA:REVB
+    //   URL identifies source path in the repo; REVA..REVB is the range.
+    if aether_args_count() <= argv_start {
+        println("svn merge: usage: svn merge URL@REVA:REVB")
+        return 2
+    }
+    url = aether_args_get(argv_start)
+
+    // Strip '@' suffix: everything before it is the plain URL. Find the
+    // last '@' (before any path '?' or '#' — we don't have those).
+    n = string.length(url)
+    at_pos = -1
+    i = n - 1
+    while i >= 0 {
+        c = string.char_at(url, i)
+        if c == 64 { at_pos = i; break }   // '@'
+        if c == 47 { break }               // '/' before '@' — no peg
+        i = i - 1
+    }
+    if at_pos < 0 {
+        println("svn merge: URL must carry @REVA:REVB")
+        return 2
+    }
+    url_stem = string.substring(url, 0, at_pos)
+    rev_spec = string.substring(url, at_pos + 1, n)
+
+    // Split rev_spec on ':'
+    colon = string.index_of(rev_spec, ":")
+    if colon < 0 {
+        println("svn merge: expected REVA:REVB after @")
+        return 2
+    }
+    a_str = string.substring(rev_spec, 0, colon)
+    b_str = string.substring(rev_spec, colon + 1, string.length(rev_spec))
+    if string.try_int(a_str) == 0 {
+        println("svn merge: REVA not a number"); return 2
+    }
+    if string.try_int(b_str) == 0 {
+        println("svn merge: REVB not a number"); return 2
+    }
+    rev_a = string.get_int(a_str)
+    rev_b = string.get_int(b_str)
+
+    // source_path is the in-repo path portion of url_stem.
+    source = in_repo_path(url_stem)
+
+    // Optional second positional: target subdir within the WC. Default "".
+    target = ""
+    if aether_args_count() > argv_start + 1 {
+        t = aether_args_get(argv_start + 1)
+        if string.length(t) > 0 {
+            if string.char_at(t, 0) != 45 { target = t }
+        }
+    }
+
+    rc = svnae_wc_merge(".", source, rev_a, rev_b, target)
+    if rc == -2 {
+        println("svn merge: conflict(s) prevent merge")
+        return 1
+    }
+    if rc != 0 {
+        println("svn merge: failed (rc=${rc})")
+        return 1
+    }
+    println("--- Merging r${rev_a + 1} through r${rev_b} into '.':")
+    return 0
+}
+
 cmd_propset(argv_start: int) {
     if aether_args_count() < argv_start + 3 {
         println("svn propset: usage: svn propset NAME VALUE PATH")
@@ -550,7 +620,7 @@ cmd_propset(argv_start: int) {
     }
     name  = aether_args_get(argv_start)
     value = aether_args_get(argv_start + 1)
-    path  = aether_args_get(argv_start + 2)
+    path  = prop_path(aether_args_get(argv_start + 2))
     rc = svnae_wc_propset(".", path, name, value)
     if rc == -2 {
         println("svn propset: ${path} is not tracked")
@@ -564,13 +634,20 @@ cmd_propset(argv_start: int) {
     return 0
 }
 
+// Canonicalise "." -> "" (WC root) for property paths. Everything else
+// passes through.
+prop_path(p: string) {
+    if string.equals(p, ".") == 1 { return "" }
+    return p
+}
+
 cmd_propget(argv_start: int) {
     if aether_args_count() < argv_start + 2 {
         println("svn propget: usage: svn propget NAME PATH")
         return 2
     }
     name = aether_args_get(argv_start)
-    path = aether_args_get(argv_start + 1)
+    path = prop_path(aether_args_get(argv_start + 1))
     v = svnae_wc_propget(".", path, name)
     if v == 0 {
         return 1
@@ -586,7 +663,7 @@ cmd_propdel(argv_start: int) {
         return 2
     }
     name = aether_args_get(argv_start)
-    path = aether_args_get(argv_start + 1)
+    path = prop_path(aether_args_get(argv_start + 1))
     rc = svnae_wc_propdel(".", path, name)
     if rc != 0 {
         println("svn propdel: failed (rc=${rc})")
@@ -601,7 +678,7 @@ cmd_proplist(argv_start: int) {
         println("svn proplist: usage: svn proplist PATH")
         return 2
     }
-    path = aether_args_get(argv_start)
+    path = prop_path(aether_args_get(argv_start))
     L = svnae_wc_proplist(".", path)
     if L == 0 {
         println("svn proplist: could not read properties")
@@ -846,8 +923,9 @@ print_usage() {
     println("  update   [--rev N]")
     println("  revert   PATH [PATH...]")
     println("  diff     [PATH]")
-    println("  cp       SRC DST")
+    println("  cp       SRC DST | URL@REV URL --author A --log M")
     println("  mv       SRC DST")
+    println("  merge    URL@REVA:REVB [TARGET_DIR]")
     println("  propset  NAME VALUE PATH")
     println("  propget  NAME PATH")
     println("  propdel  NAME PATH")
@@ -880,6 +958,7 @@ main() {
     if string.equals(sub, "mv") == 1       { exit(cmd_mv(2)) }
     if string.equals(sub, "move") == 1     { exit(cmd_mv(2)) }
     if string.equals(sub, "rename") == 1   { exit(cmd_mv(2)) }
+    if string.equals(sub, "merge") == 1    { exit(cmd_merge(2)) }
     if string.equals(sub, "propset") == 1  { exit(cmd_propset(2)) }
     if string.equals(sub, "ps") == 1       { exit(cmd_propset(2)) }
     if string.equals(sub, "propget") == 1  { exit(cmd_propget(2)) }
