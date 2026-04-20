@@ -83,6 +83,7 @@ extern svnae_wc_rm (wc_root: string, rel_path: string) -> int
 extern svnae_wc_commit(wc_root: string, author: string, logmsg: string) -> int
 extern svnae_wc_update(wc_root: string, target_rev: int) -> int
 extern svnae_wc_switch(wc_root: string, new_base_url: string, new_repo: string, target_rev: int) -> int
+extern svnae_wc_cleanup(wc_root: string) -> int
 extern svnae_wc_revert(wc_root: string, rel_path: string) -> int
 extern svnae_wc_diff(wc_root: string, rel_path_or_empty: string) -> int
 extern svnae_wc_cp(wc_root: string, src: string, dst: string) -> int
@@ -1077,6 +1078,29 @@ cmd_mv(argv_start: int) {
     return 0
 }
 
+// svn cleanup [PATH]
+// Removes stale *.tmp.* files left behind by aborted atomic writes
+// anywhere in the WC, and clears a stale wc.db-journal if present.
+// PATH defaults to ".". Reports the number of files deleted.
+cmd_cleanup(argv_start: int) {
+    wc = "."
+    if aether_args_count() > argv_start {
+        candidate = aether_args_get(argv_start)
+        if string.length(candidate) > 0 {
+            if string.char_at(candidate, 0) != 45 {
+                wc = candidate
+            }
+        }
+    }
+    rc = svnae_wc_cleanup(wc)
+    if rc < 0 {
+        println("svn cleanup: ${wc} is not a working copy")
+        return 1
+    }
+    println("svn cleanup: ${rc} stale file(s) removed from ${wc}")
+    return 0
+}
+
 cmd_revert(argv_start: int) {
     n = aether_args_count()
     if argv_start >= n {
@@ -1295,6 +1319,7 @@ main() {
     if string.equals(sub, "up") == 1       { exit(cmd_update(2)) }
     if string.equals(sub, "switch") == 1   { exit(cmd_switch(2)) }
     if string.equals(sub, "sw") == 1       { exit(cmd_switch(2)) }
+    if string.equals(sub, "cleanup") == 1  { exit(cmd_cleanup(2)) }
     if string.equals(sub, "revert") == 1   { exit(cmd_revert(2)) }
     if string.equals(sub, "diff") == 1     { exit(cmd_diff(2)) }
     if string.equals(sub, "di") == 1       { exit(cmd_diff(2)) }
