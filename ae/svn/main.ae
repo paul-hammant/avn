@@ -69,6 +69,8 @@ extern svnae_wc_revert(wc_root: string, rel_path: string) -> int
 extern svnae_wc_diff(wc_root: string, rel_path_or_empty: string) -> int
 extern svnae_wc_cp(wc_root: string, src: string, dst: string) -> int
 extern svnae_wc_mv(wc_root: string, src: string, dst: string) -> int
+extern svnae_ra_server_copy(base_url: string, repo_name: string, base_rev: int, from_path: string, to_path: string, author: string, logmsg: string) -> int
+
 extern svnae_wc_propset(wc_root: string, path: string, name: string, value: string) -> int
 extern svnae_wc_propget(wc_root: string, path: string, name: string) -> string
 extern svnae_wc_propdel(wc_root: string, path: string, name: string) -> int
@@ -109,6 +111,103 @@ url_repo(url: string) {
         c = string.char_at(url, i)
         if c == 47 { return string.substring(url, i + 1, n) }
         i = i - 1
+    }
+    return ""
+}
+
+// Parse "http://host[:port]/repo/sub/path" into the three parts:
+//   base_url_deep(URL) -> "http://host[:port]"    (scheme + authority)
+//   repo_name_deep(URL) -> "repo"                 (first segment after /)
+//   in_repo_path(URL)   -> "sub/path"             (remainder, maybe empty)
+// Also strips any "@REV" suffix.
+
+strip_rev_suffix(url: string) {
+    // Find last '@' — it's the peg-rev marker.
+    n = string.length(url)
+    i = n - 1
+    while i >= 0 {
+        c = string.char_at(url, i)
+        if c == 64 { return string.substring(url, 0, i) }  // @
+        // '/' means no @ in the path portion — bail.
+        if c == 47 { return url }
+        i = i - 1
+    }
+    return url
+}
+
+// Parse the '@REV' off URL and return the int rev, or -1 if absent.
+parse_rev_suffix(url: string) {
+    n = string.length(url)
+    i = n - 1
+    while i >= 0 {
+        c = string.char_at(url, i)
+        if c == 64 {
+            s = string.substring(url, i + 1, n)
+            if string.try_int(s) == 1 { return string.get_int(s) }
+            return -1
+        }
+        if c == 47 { return -1 }
+        i = i - 1
+    }
+    return -1
+}
+
+// Position of the third '/' in a URL (after "http://host..../" — i.e.
+// the slash that ends the authority). Returns -1 if not found.
+third_slash(url: string) {
+    n = string.length(url)
+    i = 0
+    count = 0
+    while i < n {
+        if string.char_at(url, i) == 47 {
+            count = count + 1
+            if count == 3 { return i }
+        }
+        i = i + 1
+    }
+    return -1
+}
+
+base_url_deep(url: string) {
+    url = strip_rev_suffix(url)
+    ts = third_slash(url)
+    if ts < 0 { return url }
+    return string.substring(url, 0, ts)
+}
+
+// Returns repo-name and the in-repo path through a side effect (we'd need
+// tuple returns which Aether typed-param bugs complicate). Instead:
+// expose two functions, each re-scanning.
+
+repo_name_deep(url: string) {
+    url = strip_rev_suffix(url)
+    ts = third_slash(url)
+    if ts < 0 { return "" }
+    rest = string.substring(url, ts + 1, string.length(url))
+    // first segment of rest
+    m = string.length(rest)
+    i = 0
+    while i < m {
+        if string.char_at(rest, i) == 47 {
+            return string.substring(rest, 0, i)
+        }
+        i = i + 1
+    }
+    return rest
+}
+
+in_repo_path(url: string) {
+    url = strip_rev_suffix(url)
+    ts = third_slash(url)
+    if ts < 0 { return "" }
+    rest = string.substring(url, ts + 1, string.length(url))
+    m = string.length(rest)
+    i = 0
+    while i < m {
+        if string.char_at(rest, i) == 47 {
+            return string.substring(rest, i + 1, m)
+        }
+        i = i + 1
     }
     return ""
 }
@@ -528,11 +627,58 @@ cmd_proplist(argv_start: int) {
 
 cmd_cp(argv_start: int) {
     if aether_args_count() < argv_start + 2 {
-        println("svn cp: usage: svn cp SRC DST")
+        println("svn cp: usage:")
+        println("  svn cp SRC DST                                    (WC-local copy)")
+        println("  svn cp URL@REV URL --author A --log M             (server-side copy)")
         return 2
     }
     src = aether_args_get(argv_start)
     dst = aether_args_get(argv_start + 1)
+
+    // URL-URL mode: both args start with "http".
+    is_url_src = 0
+    if string.length(src) >= 4 {
+        if string.equals(string.substring(src, 0, 4), "http") == 1 { is_url_src = 1 }
+    }
+    is_url_dst = 0
+    if string.length(dst) >= 4 {
+        if string.equals(string.substring(dst, 0, 4), "http") == 1 { is_url_dst = 1 }
+    }
+
+    if is_url_src == 1 && is_url_dst == 1 {
+        author = find_flag("--author", argv_start + 2)
+        logmsg = find_flag("--log",    argv_start + 2)
+        if string.length(author) == 0 || string.length(logmsg) == 0 {
+            println("svn cp (URL-URL): --author and --log required")
+            return 2
+        }
+        base_src = base_url_deep(src)
+        base_dst = base_url_deep(dst)
+        if string.equals(base_src, base_dst) == 0 {
+            println("svn cp: cross-server copy not supported")
+            return 1
+        }
+        repo_src = repo_name_deep(src)
+        repo_dst = repo_name_deep(dst)
+        if string.equals(repo_src, repo_dst) == 0 {
+            println("svn cp: cross-repo copy not supported")
+            return 1
+        }
+        from_path = in_repo_path(src)
+        to_path   = in_repo_path(dst)
+        rev = parse_rev_suffix(src)
+        if rev < 0 {
+            // Default to head.
+            rev = svnae_ra_head_rev(base_src, repo_src)
+            if rev < 0 { println("svn cp: cannot contact server"); return 1 }
+        }
+        new_rev = svnae_ra_server_copy(base_src, repo_src, rev, from_path, to_path, author, logmsg)
+        if new_rev < 0 { println("svn cp: server-side copy failed"); return 1 }
+        println("Committed revision ${new_rev}.")
+        return 0
+    }
+
+    // WC-local mode (original Phase 5.9 behaviour).
     rc = svnae_wc_cp(".", src, dst)
     if rc != 0 {
         println("svn cp: failed (rc=${rc})")

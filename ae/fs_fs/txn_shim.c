@@ -46,6 +46,7 @@ enum edit_kind {
     EDIT_ADD_FILE = 1,   /* ADD or replace; fs_fs storage is the same */
     EDIT_MKDIR    = 2,
     EDIT_DELETE   = 3,
+    EDIT_COPY     = 4,   /* copy-from: target path points at existing sha1 */
 };
 
 struct edit {
@@ -53,6 +54,9 @@ struct edit {
     char *path;      /* canonical: no leading '/', '/' separator, no trailing '/' */
     char *content;   /* only for ADD_FILE; malloc'd, binary-safe */
     int   content_len;
+    /* For EDIT_COPY: */
+    char *copy_from_sha1;  /* 40-char, already resolved by caller */
+    int   copy_kind;       /* 0=file 1=dir */
 };
 
 struct svnae_txn {
@@ -83,6 +87,10 @@ push_edit(struct svnae_txn *t)
         t->edits = p;
         t->cap = ncap;
     }
+    /* realloc() doesn't zero new storage; every caller expects the new
+     * slot to be fully zeroed so free() of its (optional) fields at
+     * teardown doesn't hit garbage. */
+    memset(&t->edits[t->n], 0, sizeof t->edits[t->n]);
     return t->n++;
 }
 
@@ -135,6 +143,26 @@ svnae_txn_delete(struct svnae_txn *t, const char *path)
     return 0;
 }
 
+/* Copy-from: place `path` pointing at an existing (already-resolved)
+ * sha1 with the given kind (0=file, 1=dir). The caller resolves
+ * (from_path@base_rev) -> sha1 before calling this. */
+int
+svnae_txn_copy(struct svnae_txn *t, const char *path,
+               const char *from_sha1, int from_kind)
+{
+    if (!t || !from_sha1 || strlen(from_sha1) != 40) return -1;
+    int idx = push_edit(t);
+    if (idx < 0) return -1;
+    struct edit *e = &t->edits[idx];
+    e->kind = EDIT_COPY;
+    e->path = strdup(path);
+    e->content = NULL;
+    e->content_len = 0;
+    e->copy_from_sha1 = strdup(from_sha1);
+    e->copy_kind = from_kind;
+    return 0;
+}
+
 int svnae_txn_count(const struct svnae_txn *t) { return t ? t->n : 0; }
 
 int
@@ -166,6 +194,7 @@ svnae_txn_free(struct svnae_txn *t)
     for (int i = 0; i < t->n; i++) {
         free(t->edits[i].path);
         free(t->edits[i].content);
+        free(t->edits[i].copy_from_sha1);
     }
     free(t->edits);
     free(t);
@@ -481,6 +510,9 @@ rebuild_dir_c(const char *repo, const char *base_dir_sha1,
             }
         } else if (e->kind == EDIT_DELETE) {
             reclist_remove(&rl, name);
+        } else if (e->kind == EDIT_COPY) {
+            char k = e->copy_kind == 1 ? 'd' : 'f';
+            reclist_add(&rl, name, k, e->copy_from_sha1);
         }
     }
 

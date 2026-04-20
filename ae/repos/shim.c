@@ -475,3 +475,23 @@ svnae_repos_info_free(struct svnae_info *I)
 }
 
 int svnae_repos_head_rev(const char *repo) { return head_rev(repo); }
+
+/* Public shim for server-side copy: resolve (rev, path) to its sha1 +
+ * kind char. Returns 1 on success, 0 on miss. */
+int
+svnae_repos_resolve(const char *repo, int rev, const char *path,
+                    char *out_sha1, char *out_kind)
+{
+    char *root = root_dir_sha1_for_rev(repo, rev);
+    if (!root) return 0;
+    char kind = 0;
+    char *sha1 = NULL;
+    int ok = resolve_path(repo, root, path, &kind, &sha1);
+    free(root);
+    if (!ok) { free(sha1); return 0; }
+    memcpy(out_sha1, sha1, 40);
+    out_sha1[40] = '\0';
+    *out_kind = kind;
+    free(sha1);
+    return 1;
+}

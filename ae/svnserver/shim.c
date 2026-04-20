@@ -36,10 +36,17 @@ struct svnae_txn *svnae_txn_new(int base_rev);
 int  svnae_txn_add_file(struct svnae_txn *t, const char *path, const char *content, int len);
 int  svnae_txn_mkdir(struct svnae_txn *t, const char *path);
 int  svnae_txn_delete(struct svnae_txn *t, const char *path);
+int  svnae_txn_copy  (struct svnae_txn *t, const char *path, const char *from_sha1, int from_kind);
 void svnae_txn_free(struct svnae_txn *t);
 
 int  svnae_commit_finalise(const char *repo, struct svnae_txn *txn,
                            const char *author, const char *logmsg);
+
+/* For server-side copy: resolve a (rev, path) pair to its sha1 + kind.
+ * We piggy-back on the existing repos/shim.c's resolve_path by exposing
+ * a small helper there. */
+int  svnae_repos_resolve(const char *repo, int rev, const char *path,
+                         char *out_sha1, char *out_kind /* 'f' or 'd' */);
 
 int          svnae_repos_head_rev(const char *repo);
 
@@ -564,6 +571,75 @@ handle_repo_commit(HttpRequest *req, HttpServerResponse *res, void *user_data)
     respond_json(res, 200, buf);
 }
 
+/* --- copy handler ------------------------------------------------------ *
+ *
+ *   POST /repos/{r}/copy
+ *   Body: { "base_rev": N, "from_path": "...", "to_path": "...",
+ *           "author": "...", "log": "..." }
+ *
+ * Atomic server-side copy — the new revision's tree contains to_path
+ * pointing at the exact sha1 of from_path@base_rev. Full rep-sharing.
+ * Caller gets back {"rev": N+1}.
+ */
+static void
+handle_repo_copy(HttpRequest *req, HttpServerResponse *res, void *user_data)
+{
+    (void)user_data;
+    char name[128];
+    const char *tail = parse_repo_and_tail(req->path, name, sizeof name);
+    if (!tail || strcmp(tail, "/copy") != 0) {
+        respond_error(res, 404, "not found");
+        return;
+    }
+    const char *repo = find_repo_path(name);
+    if (!repo) { respond_error(res, 404, "no such repo"); return; }
+    if (!req->body || req->body_length == 0) {
+        respond_error(res, 400, "empty body");
+        return;
+    }
+    cJSON *root = cJSON_ParseWithLength(req->body, req->body_length);
+    if (!root) { respond_error(res, 400, "malformed JSON"); return; }
+
+    cJSON *jbase = cJSON_GetObjectItemCaseSensitive(root, "base_rev");
+    cJSON *jfrom = cJSON_GetObjectItemCaseSensitive(root, "from_path");
+    cJSON *jto   = cJSON_GetObjectItemCaseSensitive(root, "to_path");
+    cJSON *jaut  = cJSON_GetObjectItemCaseSensitive(root, "author");
+    cJSON *jlog  = cJSON_GetObjectItemCaseSensitive(root, "log");
+    if (!cJSON_IsNumber(jbase) || !cJSON_IsString(jfrom) ||
+        !cJSON_IsString(jto)   || !cJSON_IsString(jaut)  ||
+        !cJSON_IsString(jlog)) {
+        cJSON_Delete(root);
+        respond_error(res, 400, "missing or wrong-typed field");
+        return;
+    }
+
+    int base_rev = jbase->valueint;
+    char *from_path = strdup(jfrom->valuestring);
+    char *to_path   = strdup(jto->valuestring);
+    char *author    = strdup(jaut->valuestring);
+    char *logmsg    = strdup(jlog->valuestring);
+    cJSON_Delete(root);
+
+    char sha1[41];
+    char kind_char;
+    if (!svnae_repos_resolve(repo, base_rev, from_path, sha1, &kind_char)) {
+        free(from_path); free(to_path); free(author); free(logmsg);
+        respond_error(res, 404, "from_path not found at base_rev");
+        return;
+    }
+
+    struct svnae_txn *txn = svnae_txn_new(base_rev);
+    svnae_txn_copy(txn, to_path, sha1, kind_char == 'd' ? 1 : 0);
+    int new_rev = svnae_commit_finalise(repo, txn, author, logmsg);
+    svnae_txn_free(txn);
+    free(from_path); free(to_path); free(author); free(logmsg);
+
+    if (new_rev < 0) { respond_error(res, 500, "copy commit failed"); return; }
+    char buf[64];
+    snprintf(buf, sizeof buf, "{\"rev\":%d}", new_rev);
+    respond_json(res, 200, buf);
+}
+
 void *svnae_svnserver_handler_info(void) { return (void *)handle_repo_info; }
 void *svnae_svnserver_handler_log (void) { return (void *)handle_repo_log;  }
 void *svnae_svnserver_handler_rev (void) { return (void *)handle_repo_rev;  }
@@ -587,6 +663,7 @@ dispatch(HttpRequest *req, HttpServerResponse *res, void *user_data)
 
     if (strcmp(req->method, "POST") == 0) {
         if (strcmp(tail, "/commit") == 0) { handle_repo_commit(req, res, user_data); return; }
+        if (strcmp(tail, "/copy")   == 0) { handle_repo_copy  (req, res, user_data); return; }
         respond_error(res, 404, "unknown POST route");
         return;
     }

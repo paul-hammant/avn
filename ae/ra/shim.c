@@ -270,6 +270,45 @@ svnae_ra_cat(const char *base_url, const char *repo_name, int rev, const char *p
 
 void svnae_ra_free(char *p) { free(p); }
 
+/* --- server-side copy ------------------------------------------------ *
+ *
+ * POST /repos/{r}/copy with { base_rev, from_path, to_path, author, log }.
+ * Returns the new revision number, or -1.
+ */
+int
+svnae_ra_server_copy(const char *base_url, const char *repo_name,
+                     int base_rev,
+                     const char *from_path, const char *to_path,
+                     const char *author, const char *logmsg)
+{
+    cJSON *body = cJSON_CreateObject();
+    cJSON_AddNumberToObject(body, "base_rev",  base_rev);
+    cJSON_AddStringToObject(body, "from_path", from_path);
+    cJSON_AddStringToObject(body, "to_path",   to_path);
+    cJSON_AddStringToObject(body, "author",    author);
+    cJSON_AddStringToObject(body, "log",       logmsg);
+    char *json = cJSON_PrintUnformatted(body);
+    cJSON_Delete(body);
+
+    char url[1024];
+    snprintf(url, sizeof url, "%s/repos/%s/copy", base_url, repo_name);
+    char *resp = NULL; size_t len = 0; int status = 0;
+    int rc = http_post_json(url, json, &resp, &len, &status);
+    free(json);
+
+    int new_rev = -1;
+    if (rc == 0 && status == 200 && resp) {
+        cJSON *root = cJSON_ParseWithLength(resp, len);
+        if (root) {
+            cJSON *jr = cJSON_GetObjectItemCaseSensitive(root, "rev");
+            if (cJSON_IsNumber(jr)) new_rev = jr->valueint;
+            cJSON_Delete(root);
+        }
+    }
+    free(resp);
+    return new_rev;
+}
+
 /* ---- list ------------------------------------------------------------ */
 
 struct list_entry { char *name; char kind; };
