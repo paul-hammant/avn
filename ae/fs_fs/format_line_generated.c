@@ -120,6 +120,8 @@ typedef struct { float _0; const char* _1; } _tuple_float_string;
 
 // Forward declarations
 int after_first_space(const char*);
+const char* rb_int_to_dec(int);
+const char* rb_digit_char(int);
 static _tuple_int_string string_to_int(const char*);
 static _tuple_int_string string_to_long(const char*);
 static _tuple_float_string string_to_float(const char*);
@@ -433,6 +435,115 @@ i = (i + 1);
     return "";
 }
 
+// Exported:
+const char* rev_blob_body(const char* root, const char* branch, const char* props, const char* acl, int prev, const char* author, const char* date, const char* log) {
+const char* out = "root: ";
+    int _heap_out = 0; (void)_heap_out;
+out = string_concat(out, root);
+out = string_concat(out, "\nbranch: ");
+out = string_concat(out, branch);
+out = string_concat(out, "\nprops: ");
+out = string_concat(out, props);
+out = string_concat(out, "\nacl: ");
+out = string_concat(out, acl);
+out = string_concat(out, "\nprev: ");
+out = string_concat(out, rb_int_to_dec(prev));
+out = string_concat(out, "\nauthor: ");
+out = string_concat(out, author);
+out = string_concat(out, "\ndate: ");
+out = string_concat(out, date);
+out = string_concat(out, "\nlog: ");
+out = string_concat(out, log);
+out = string_concat(out, "\n");
+    return out;
+}
+
+const char* rb_int_to_dec(int v) {
+if (v == 0) {
+        {
+            return "0";
+        }
+    }
+int neg = 0;
+int n = v;
+if (v < 0) {
+        {
+neg = 1;
+n = (0 - v);
+        }
+    }
+const char* out = "";
+    int _heap_out = 0; (void)_heap_out;
+    int d;
+while (n > 0) {
+        {
+d = (n - ((n / 10) * 10));
+out = string_concat(rb_digit_char(d), out);
+n = (n / 10);
+        }
+    }
+if (neg == 1) {
+        {
+out = string_concat("-", out);
+        }
+    }
+    return out;
+}
+
+const char* rb_digit_char(int d) {
+if (d == 0) {
+        {
+            return "0";
+        }
+    }
+if (d == 1) {
+        {
+            return "1";
+        }
+    }
+if (d == 2) {
+        {
+            return "2";
+        }
+    }
+if (d == 3) {
+        {
+            return "3";
+        }
+    }
+if (d == 4) {
+        {
+            return "4";
+        }
+    }
+if (d == 5) {
+        {
+            return "5";
+        }
+    }
+if (d == 6) {
+        {
+            return "6";
+        }
+    }
+if (d == 7) {
+        {
+            return "7";
+        }
+    }
+if (d == 8) {
+        {
+            return "8";
+        }
+    }
+if (d == 9) {
+        {
+            return "9";
+        }
+    }
+    return "?";
+}
+
 static _tuple_int_string string_to_int(const char* s) {
 int ok = string_try_int(s);
 if (ok == 0) {
@@ -489,4 +600,13 @@ int32_t aether_format_secondary_count(const char* line) {
 }
 const char* aether_format_secondary_hash(const char* line, int32_t target) {
     return format_secondary_hash(line, target);
+}
+const char* aether_rev_blob_body(const char* root, const char* branch, const char* props, const char* acl, int32_t prev, const char* author, const char* date, const char* log) {
+    return rev_blob_body(root, branch, props, acl, prev, author, date, log);
+}
+const char* aether_rb_int_to_dec(int32_t v) {
+    return rb_int_to_dec(v);
+}
+const char* aether_rb_digit_char(int32_t d) {
+    return rb_digit_char(d);
 }

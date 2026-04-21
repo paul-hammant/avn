@@ -120,6 +120,10 @@ load_rev_root_sha1(const char *repo, int rev)
 
 /* Field extraction ported to Aether (ae/repos/blobfield.ae). */
 extern const char *aether_blobfield_get(const char *body, const char *key);
+extern const char *aether_rev_blob_body(const char *root, const char *branch,
+                                        const char *props, const char *acl,
+                                        int prev, const char *author,
+                                        const char *date, const char *log);
 
 static char *
 rev_blob_field(const char *repo, int rev, const char *key)
@@ -358,26 +362,14 @@ svnae_commit_finalise_on_branch(const char *repo, struct svnae_txn *txn,
         as = inherited_acl ? inherited_acl : "";
     }
 
-    /* Build revision blob — now includes `branch:`. */
-    size_t est = strlen(author) + strlen(logmsg) + strlen(branch) + 320;
-    char *rev_body = malloc(est);
-    int n = snprintf(rev_body, est,
-                     "root: %s\nbranch: %s\nprops: %s\nacl: %s\nprev: %d\nauthor: %s\ndate: %s\nlog: %s\n",
-                     new_root, branch, ps, as, prev, author,
-                     svnae_fsfs_now_iso8601(), logmsg);
-    if (n >= (int)est) {
-        free(rev_body);
-        rev_body = malloc((size_t)n + 1);
-        snprintf(rev_body, (size_t)n + 1,
-                 "root: %s\nbranch: %s\nprops: %s\nacl: %s\nprev: %d\nauthor: %s\ndate: %s\nlog: %s\n",
-                 new_root, branch, ps, as, prev, author,
-                 svnae_fsfs_now_iso8601(), logmsg);
-    }
+    /* Build revision blob — rev_blob_body lives in ae/fs_fs/format_line.ae. */
+    const char *rev_body = aether_rev_blob_body(new_root, branch, ps, as,
+                                                prev, author,
+                                                svnae_fsfs_now_iso8601(), logmsg);
     free(inherited_props);
     free(inherited_acl);
 
     const char *rev_sha = svnae_rep_write_blob(repo, rev_body, (int)strlen(rev_body));
-    free(rev_body);
     if (!rev_sha) { free(new_root); return -1; }
     /* Copy out of the thread-local buffer before it's reused for
      * subsequent blob writes (path_rev secondary-hash inserts may
@@ -802,14 +794,11 @@ svnae_branch_create(const char *repo, const char *name, const char *base,
     snprintf(logmsg, sizeof logmsg, "create branch %s from %s with %d include(s)",
              name, base, n_globs);
 
-    size_t est = strlen(author) + strlen(logmsg) + strlen(name) + 320;
-    char *rev_body = malloc(est);
-    int rblen = snprintf(rev_body, est,
-                         "root: %s\nbranch: %s\nprops: %s\nacl: %s\nprev: %d\nauthor: %s\ndate: %s\nlog: %s\n",
-                         new_root, name, prev_props, prev_acl, base_rev,
-                         author, svnae_fsfs_now_iso8601(), logmsg);
-    const char *rev_sha = svnae_rep_write_blob(repo, rev_body, rblen);
-    free(rev_body);
+    const char *rev_body = aether_rev_blob_body(new_root, name,
+                                                 prev_props, prev_acl,
+                                                 base_rev, author,
+                                                 svnae_fsfs_now_iso8601(), logmsg);
+    const char *rev_sha = svnae_rep_write_blob(repo, rev_body, (int)strlen(rev_body));
     if (!rev_sha) { free(new_root); return -1; }
     char rev_sha_copy[65];
     {

@@ -117,6 +117,68 @@ export format_secondary_hash(line: string, target: int) -> string {
     return ""
 }
 
+// Rev-blob body formatter — ported from the three snprintf sites in
+// ae/fs_fs/commit_shim.c that all build the same 8-field header:
+//
+//   root: <sha>
+//   branch: <name>
+//   props: <sha>
+//   acl: <sha>
+//   prev: <int>
+//   author: <user>
+//   date: <iso8601>
+//   log: <message>
+export rev_blob_body(root: string, branch: string, props: string, acl: string,
+                     prev: int, author: string, date: string, log: string) -> string {
+    out = "root: "
+    out = string.concat(out, root)
+    out = string.concat(out, "\nbranch: ")
+    out = string.concat(out, branch)
+    out = string.concat(out, "\nprops: ")
+    out = string.concat(out, props)
+    out = string.concat(out, "\nacl: ")
+    out = string.concat(out, acl)
+    out = string.concat(out, "\nprev: ")
+    out = string.concat(out, rb_int_to_dec(prev))
+    out = string.concat(out, "\nauthor: ")
+    out = string.concat(out, author)
+    out = string.concat(out, "\ndate: ")
+    out = string.concat(out, date)
+    out = string.concat(out, "\nlog: ")
+    out = string.concat(out, log)
+    out = string.concat(out, "\n")
+    return out
+}
+
+rb_int_to_dec(v: int) -> string {
+    if v == 0 { return "0" }
+    neg = 0
+    n = v
+    if v < 0 { neg = 1; n = 0 - v }
+    out = ""
+    while n > 0 {
+        d = n - (n / 10) * 10
+        out = string.concat(rb_digit_char(d), out)
+        n = n / 10
+    }
+    if neg == 1 { out = string.concat("-", out) }
+    return out
+}
+
+rb_digit_char(d: int) -> string {
+    if d == 0 { return "0" }
+    if d == 1 { return "1" }
+    if d == 2 { return "2" }
+    if d == 3 { return "3" }
+    if d == 4 { return "4" }
+    if d == 5 { return "5" }
+    if d == 6 { return "6" }
+    if d == 7 { return "7" }
+    if d == 8 { return "8" }
+    if d == 9 { return "9" }
+    return "?"
+}
+
 main() {
     println("ae/fs_fs/format_line.ae is a library; not meant to run standalone")
 }
