@@ -62,6 +62,12 @@ void svnae_txn_free(struct svnae_txn *t);
 /* Phase 8.2b enforcement. */
 int  svnae_branch_spec_allows(const char *repo, const char *branch, const char *path);
 
+/* Dir-blob line parser ported to Aether (ae/fs_fs/dirblob.ae). */
+extern int         aether_dir_count_entries(const char *body);
+extern int         aether_dir_entry_kind(const char *body, int i);
+extern const char *aether_dir_entry_sha(const char *body, int i);
+extern const char *aether_dir_entry_name(const char *body, int i);
+
 int  svnae_commit_finalise(const char *repo, struct svnae_txn *txn,
                            const char *author, const char *logmsg);
 int  svnae_commit_finalise_with_props(const char *repo, struct svnae_txn *txn,
@@ -402,57 +408,48 @@ compute_redacted_dir_sha(const char *repo, int rev, const char *user,
     if (!body) return -1;
     const char *algo = svnae_repo_primary_hash(repo);
     struct sb redact = {0};
-    const char *p = body;
-    while (*p) {
-        const char *eol = strchr(p, '\n');
-        size_t llen = eol ? (size_t)(eol - p) : strlen(p);
-        if (llen >= 4) {
-            char kind_c = p[0];
-            const char *sha_start = p + 2;
-            const char *sp2 = memchr(sha_start, ' ', llen - 2);
-            if (sp2) {
-                size_t sha_len = (size_t)(sp2 - sha_start);
-                size_t name_off = 2 + sha_len + 1;
-                size_t name_len = llen - name_off;
-                char child_sha[65], child_name[PATH_MAX];
-                if (sha_len < sizeof child_sha && name_len < sizeof child_name) {
-                    memcpy(child_sha, sha_start, sha_len); child_sha[sha_len] = '\0';
-                    memcpy(child_name, p + name_off, name_len); child_name[name_len] = '\0';
-                    char child_path[PATH_MAX];
-                    if (*prefix) snprintf(child_path, sizeof child_path, "%s/%s",
-                                          prefix, child_name);
-                    else         snprintf(child_path, sizeof child_path, "%s",
-                                          child_name);
-                    int allowed = acl_allows(repo, rev, user, child_path);
-                    if (allowed) {
-                        /* Descend: the effective hash of a subdir may
-                         * itself be redacted if grandchildren are
-                         * denied. Files pass through as-is. */
-                        if (kind_c == 'd') {
-                            char sub[65];
-                            if (compute_redacted_dir_sha(repo, rev, user,
-                                                         child_sha, child_path, sub) == 0) {
-                                char line[PATH_MAX + 96];
-                                snprintf(line, sizeof line, "%c %s %s\n",
-                                         kind_c, sub, child_name);
-                                sb_puts(&redact, line);
-                            }
-                        } else {
-                            char line[PATH_MAX + 96];
-                            snprintf(line, sizeof line, "%c %s %s\n",
-                                     kind_c, child_sha, child_name);
-                            sb_puts(&redact, line);
-                        }
-                    } else {
-                        char line[96];
-                        snprintf(line, sizeof line, "H %s\n", child_sha);
-                        sb_puts(&redact, line);
-                    }
+    int n_entries = aether_dir_count_entries(body);
+    for (int ei = 0; ei < n_entries; ei++) {
+        char kind_c = (char)aether_dir_entry_kind(body, ei);
+        /* Snapshot the child fields: recursive compute_redacted_dir_sha
+         * below will reuse the Aether thread-local return buffers. */
+        char child_sha[65], child_name[PATH_MAX];
+        const char *sha_ref = aether_dir_entry_sha(body, ei);
+        size_t sha_len = strlen(sha_ref);
+        if (sha_len >= sizeof child_sha) continue;
+        memcpy(child_sha, sha_ref, sha_len + 1);
+        const char *name_ref = aether_dir_entry_name(body, ei);
+        size_t name_len = strlen(name_ref);
+        if (name_len >= sizeof child_name) continue;
+        memcpy(child_name, name_ref, name_len + 1);
+
+        char child_path[PATH_MAX];
+        if (*prefix) snprintf(child_path, sizeof child_path, "%s/%s",
+                              prefix, child_name);
+        else         snprintf(child_path, sizeof child_path, "%s",
+                              child_name);
+        int allowed = acl_allows(repo, rev, user, child_path);
+        if (allowed) {
+            if (kind_c == 'd') {
+                char sub[65];
+                if (compute_redacted_dir_sha(repo, rev, user,
+                                             child_sha, child_path, sub) == 0) {
+                    char line[PATH_MAX + 96];
+                    snprintf(line, sizeof line, "%c %s %s\n",
+                             kind_c, sub, child_name);
+                    sb_puts(&redact, line);
                 }
+            } else {
+                char line[PATH_MAX + 96];
+                snprintf(line, sizeof line, "%c %s %s\n",
+                         kind_c, child_sha, child_name);
+                sb_puts(&redact, line);
             }
+        } else {
+            char line[96];
+            snprintf(line, sizeof line, "H %s\n", child_sha);
+            sb_puts(&redact, line);
         }
-        if (!eol) break;
-        p = eol + 1;
     }
     svnae_rep_free(body);
     hex_digest(algo, redact.data ? redact.data : "",
@@ -1206,63 +1203,51 @@ handle_repo_rev(HttpRequest *req, HttpServerResponse *res, void *user_data)
         struct sb redact = {0};   /* redacted raw dir blob */
         sb_puts(&body, "{\"entries\":[");
         int any = 0;
-        const char *p = dir_body;
         const char *algo = svnae_repo_primary_hash(repo);
-        while (*p) {
-            const char *eol = strchr(p, '\n');
-            size_t llen = eol ? (size_t)(eol - p) : strlen(p);
-            if (llen >= 4) {
-                char kind_c = p[0];
-                const char *sha_start = p + 2;
-                const char *sp2 = memchr(sha_start, ' ', llen - 2);
-                if (sp2) {
-                    size_t sha_len = (size_t)(sp2 - sha_start);
-                    size_t name_off = 2 + sha_len + 1;
-                    size_t name_len = llen - name_off;
-                    char child_sha[65], child_name[PATH_MAX];
-                    if (sha_len < sizeof child_sha && name_len < sizeof child_name) {
-                        memcpy(child_sha, sha_start, sha_len); child_sha[sha_len] = '\0';
-                        memcpy(child_name, p + name_off, name_len); child_name[name_len] = '\0';
+        int n_entries = aether_dir_count_entries(dir_body);
+        for (int ei = 0; ei < n_entries; ei++) {
+            char kind_c = (char)aether_dir_entry_kind(dir_body, ei);
+            char child_sha[65], child_name[PATH_MAX];
+            const char *sha_ref = aether_dir_entry_sha(dir_body, ei);
+            size_t sha_len = strlen(sha_ref);
+            if (sha_len >= sizeof child_sha) continue;
+            memcpy(child_sha, sha_ref, sha_len + 1);
+            const char *name_ref = aether_dir_entry_name(dir_body, ei);
+            size_t name_len = strlen(name_ref);
+            if (name_len >= sizeof child_name) continue;
+            memcpy(child_name, name_ref, name_len + 1);
 
-                        /* Build the child's full repo-relative path. */
-                        char child_path[PATH_MAX];
-                        if (*dir_path) snprintf(child_path, sizeof child_path, "%s/%s",
-                                                dir_path, child_name);
-                        else           snprintf(child_path, sizeof child_path, "%s",
-                                                child_name);
+            char child_path[PATH_MAX];
+            if (*dir_path) snprintf(child_path, sizeof child_path, "%s/%s",
+                                    dir_path, child_name);
+            else           snprintf(child_path, sizeof child_path, "%s",
+                                    child_name);
 
-                        int allowed = is_super || acl_allows(repo, rev, user, child_path);
+            int allowed = is_super || acl_allows(repo, rev, user, child_path);
+            if (any) sb_putc(&body, ',');
+            any = 1;
+            if (allowed) {
+                sb_puts(&body, "{\"name\":");
+                sb_putjson_string(&body, child_name);
+                sb_puts(&body, ",\"kind\":");
+                sb_puts(&body, kind_c == 'd' ? "\"dir\"" : "\"file\"");
+                sb_putc(&body, '}');
 
-                        if (any) sb_putc(&body, ',');
-                        any = 1;
-                        if (allowed) {
-                            sb_puts(&body, "{\"name\":");
-                            sb_putjson_string(&body, child_name);
-                            sb_puts(&body, ",\"kind\":");
-                            sb_puts(&body, kind_c == 'd' ? "\"dir\"" : "\"file\"");
-                            sb_putc(&body, '}');
+                /* Preserve the raw line verbatim in the redact buffer. */
+                char line[PATH_MAX + 96];
+                snprintf(line, sizeof line, "%c %s %s\n",
+                         kind_c, child_sha, child_name);
+                sb_puts(&redact, line);
+            } else {
+                sb_puts(&body, "{\"kind\":\"hidden\",\"sha\":");
+                sb_putjson_string(&body, child_sha);
+                sb_putc(&body, '}');
 
-                            /* Preserve the raw line verbatim in the
-                             * redact buffer. */
-                            char line[PATH_MAX + 96];
-                            snprintf(line, sizeof line, "%c %s %s\n",
-                                     kind_c, child_sha, child_name);
-                            sb_puts(&redact, line);
-                        } else {
-                            sb_puts(&body, "{\"kind\":\"hidden\",\"sha\":");
-                            sb_putjson_string(&body, child_sha);
-                            sb_putc(&body, '}');
-
-                            /* Redacted form: "H <sha>\n" — no name. */
-                            char line[96];
-                            snprintf(line, sizeof line, "H %s\n", child_sha);
-                            sb_puts(&redact, line);
-                        }
-                    }
-                }
+                /* Redacted form: "H <sha>\n" — no name. */
+                char line[96];
+                snprintf(line, sizeof line, "H %s\n", child_sha);
+                sb_puts(&redact, line);
             }
-            if (!eol) break;
-            p = eol + 1;
         }
         sb_puts(&body, "]}");
         svnae_rep_free(dir_body);
