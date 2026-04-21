@@ -507,6 +507,8 @@ static void sb_puts(struct sb *s, const char *p) { sb_push(s, p, strlen(p)); }
  * sites need to change. */
 extern const char *aether_json_escape_string(const char *v);
 extern const char *aether_json_int_to_dec(int v);
+extern const char *aether_props_blob_to_json(const char *body);
+extern const char *aether_specs_to_json_array(const char *body);
 
 static void
 sb_putjson_string(struct sb *s, const char *v)
@@ -661,16 +663,28 @@ handle_repo_info(HttpRequest *req, HttpServerResponse *res, void *user_data)
                 sb_putjson_string(&s, de->d_name);
                 sb_puts(&s, ":[");
                 if (sf) {
-                    char line[512];
-                    int any = 0;
-                    while (fgets(line, sizeof line, sf)) {
-                        size_t ll = strlen(line);
-                        while (ll > 0 && (line[ll-1] == '\n' || line[ll-1] == '\r'
-                                          || line[ll-1] == ' ')) line[--ll] = '\0';
-                        if (ll == 0) continue;
-                        if (any) sb_putc(&s, ',');
-                        any = 1;
-                        sb_putjson_string(&s, line);
+                    /* Slurp the whole (small) spec file and hand it to
+                     * the Aether specs_to_json_array transform, which
+                     * handles the line-split + trim + escape + array
+                     * framing. We re-open the brackets here so the
+                     * helper can own both the "[" and the "]". */
+                    fseek(sf, 0, SEEK_END);
+                    long spec_sz = ftell(sf);
+                    fseek(sf, 0, SEEK_SET);
+                    if (spec_sz > 0 && spec_sz < 65536) {
+                        char *spec_buf = malloc((size_t)spec_sz + 1);
+                        if (spec_buf) {
+                            size_t rd = fread(spec_buf, 1, (size_t)spec_sz, sf);
+                            spec_buf[rd] = '\0';
+                            /* Strip the leading '[' we already emitted
+                             * (Aether helper emits its own brackets). */
+                            sb_puts(&s, aether_specs_to_json_array(spec_buf) + 1);
+                            free(spec_buf);
+                            /* aether_specs_to_json_array emits trailing ']'
+                             * so we don't need our own. */
+                            fclose(sf);
+                            continue;
+                        }
                     }
                     fclose(sf);
                 }
@@ -800,8 +814,6 @@ paths_props_lookup(const char *body, const char *path)
 }
 
 /* props-blob → JSON transform ported to Aether (ae/svnserver/json.ae). */
-extern const char *aether_props_blob_to_json(const char *body);
-
 static void
 sb_put_props_as_json(struct sb *s, const char *body)
 {

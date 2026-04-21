@@ -563,6 +563,80 @@ out = string_concat(out, "}");
     return out;
 }
 
+// Exported:
+const char* specs_to_json_array(const char* body) {
+const char* out = "[";
+    int _heap_out = 0; (void)_heap_out;
+int n = string_length(body);
+int any = 0;
+int line_start = 0;
+int i = 0;
+    int at_end;
+    int c;
+    int is_eol;
+    int end;
+    int t;
+    const char* glob;
+while (i <= n) {
+        {
+at_end = 0;
+c = 0;
+if (i == n) {
+                {
+at_end = 1;
+                }
+            } else {
+                {
+c = string_char_at(body, i);
+                }
+            }
+is_eol = 0;
+if (at_end == 1) {
+                {
+is_eol = 1;
+                }
+            }
+if (c == 10) {
+                {
+is_eol = 1;
+                }
+            }
+if (is_eol == 1) {
+                {
+end = i;
+while (end > line_start) {
+                        {
+t = string_char_at(body, (end - 1));
+if (((t != 13) && (t != 32)) && (t != 9)) {
+                                {
+                                    break;
+                                }
+                            }
+end = (end - 1);
+                        }
+                    }
+if (end > line_start) {
+                        {
+if (any == 1) {
+                                {
+out = string_concat(out, ",");
+                                }
+                            }
+any = 1;
+glob = string_substring(body, line_start, end);
+out = string_concat(out, json_escape_string_impl(glob));
+                        }
+                    }
+line_start = (i + 1);
+                }
+            }
+i = (i + 1);
+        }
+    }
+out = string_concat(out, "]");
+    return out;
+}
+
 static _tuple_int_string string_to_int(const char* s) {
 int ok = string_try_int(s);
 if (ok == 0) {
@@ -628,4 +702,7 @@ const char* aether_hex_char(int32_t d) {
 }
 const char* aether_props_blob_to_json(const char* body) {
     return props_blob_to_json(body);
+}
+const char* aether_specs_to_json_array(const char* body) {
+    return specs_to_json_array(body);
 }

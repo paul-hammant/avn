@@ -170,6 +170,47 @@ export props_blob_to_json(body: string) -> string {
     return out
 }
 
+// --- spec-file body → JSON array ----------------------------------------
+//
+// A branch spec file holds one include-glob per line. /info's specs map
+// emits each branch's spec as a JSON array: ["glob1", "glob2", ...].
+// Lines that are empty after trimming trailing whitespace are dropped.
+
+export specs_to_json_array(body: string) -> string {
+    out = "["
+    n = string.length(body)
+    any = 0
+    line_start = 0
+    i = 0
+    while i <= n {
+        at_end = 0
+        c = 0
+        if i == n { at_end = 1 } else { c = string.char_at(body, i) }
+        is_eol = 0
+        if at_end == 1 { is_eol = 1 }
+        if c == 10 { is_eol = 1 }
+        if is_eol == 1 {
+            // Trim trailing whitespace (\r, space).
+            end = i
+            while end > line_start {
+                t = string.char_at(body, end - 1)
+                if t != 13 && t != 32 && t != 9 { break }
+                end = end - 1
+            }
+            if end > line_start {
+                if any == 1 { out = string.concat(out, ",") }
+                any = 1
+                glob = string.substring(body, line_start, end)
+                out = string.concat(out, json_escape_string_impl(glob))
+            }
+            line_start = i + 1
+        }
+        i = i + 1
+    }
+    out = string.concat(out, "]")
+    return out
+}
+
 main() {
     println("ae/svnserver/json.ae is a library; not meant to run standalone")
 }
