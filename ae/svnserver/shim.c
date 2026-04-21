@@ -514,6 +514,8 @@ extern const char *aether_rev_info_json(int rev, const char *author, const char 
 extern const char *aether_hashes_prelude_json(const char *algo, const char *primary_hash);
 extern const char *aether_secondary_entry_json(const char *algo, const char *hash);
 extern const char *aether_acl_response_json(const char *rules_body, const char *effective_from);
+extern const char *aether_copy_acl_follow(const char *body, const char *from_path, const char *to_path);
+extern const char *aether_paths_index_sort_by_path(const char *body);
 
 static void
 sb_putjson_string(struct sb *s, const char *v)
@@ -1856,92 +1858,16 @@ auto_follow_copy_acl(const char *repo, int base_rev,
     free(acl_root);
     if (!body) return NULL;
 
-    /* First pass: count matches AND collect all existing entries so
-     * the new paths-acl blob preserves every original plus the new
-     * rebased entries. */
-    int cap = 16, n = 0;
-    char **paths    = calloc((size_t)cap, sizeof *paths);
-    char **acl_shas = calloc((size_t)cap, sizeof *acl_shas);
-
-    size_t from_len = strlen(from_path);
-
-    const char *p = body;
-    while (*p) {
-        const char *eol = strchr(p, '\n');
-        size_t llen = eol ? (size_t)(eol - p) : strlen(p);
-        const char *sp = memchr(p, ' ', llen);
-        if (sp) {
-            size_t sha_len = (size_t)(sp - p);
-            size_t name_len = llen - sha_len - 1;
-            if (sha_len < 65 && name_len < PATH_MAX) {
-                char sha[65], this_path[PATH_MAX];
-                memcpy(sha, p, sha_len); sha[sha_len] = '\0';
-                memcpy(this_path, sp + 1, name_len); this_path[name_len] = '\0';
-
-                /* Preserve the existing entry verbatim. */
-                if (n == cap) {
-                    cap *= 2;
-                    paths    = realloc(paths,    (size_t)cap * sizeof *paths);
-                    acl_shas = realloc(acl_shas, (size_t)cap * sizeof *acl_shas);
-                }
-                paths[n]    = strdup(this_path);
-                acl_shas[n] = strdup(sha);
-                n++;
-
-                /* Does this entry live under from_path? If so emit a
-                 * parallel entry at to_path/<tail>. Exact-match
-                 * becomes to_path itself. */
-                int rebase = 0;
-                if (strcmp(this_path, from_path) == 0) {
-                    rebase = 1;
-                } else if (name_len > from_len
-                           && memcmp(this_path, from_path, from_len) == 0
-                           && this_path[from_len] == '/') {
-                    rebase = 1;
-                }
-                if (rebase) {
-                    char rebased[PATH_MAX];
-                    if (strcmp(this_path, from_path) == 0) {
-                        snprintf(rebased, sizeof rebased, "%s", to_path);
-                    } else {
-                        /* tail = this_path[from_len+1..] */
-                        snprintf(rebased, sizeof rebased, "%s/%s",
-                                 to_path, this_path + from_len + 1);
-                    }
-                    if (n == cap) {
-                        cap *= 2;
-                        paths    = realloc(paths,    (size_t)cap * sizeof *paths);
-                        acl_shas = realloc(acl_shas, (size_t)cap * sizeof *acl_shas);
-                    }
-                    paths[n]    = strdup(rebased);
-                    acl_shas[n] = strdup(sha);
-                    n++;
-                }
-            }
-        }
-        if (!eol) break;
-        p = eol + 1;
-    }
+    /* Body-scan + rebase ported to Aether (ae/svnserver/copy_acl.ae).
+     * Returns the preserved-plus-rebased body; we sort it then write
+     * via the rep store. */
+    const char *augmented = aether_copy_acl_follow(body, from_path, to_path);
     svnae_rep_free(body);
-
-    if (n == 0) {
-        free(paths); free(acl_shas);
-        return NULL;
-    }
-
-    const char **cpaths    = calloc((size_t)n, sizeof *cpaths);
-    const char **cacl_shas = calloc((size_t)n, sizeof *cacl_shas);
-    for (int i = 0; i < n; i++) {
-        cpaths[i] = paths[i];
-        cacl_shas[i] = acl_shas[i];
-    }
-    const char *new_blob = svnae_build_paths_acl_blob(repo, cpaths, cacl_shas, n);
-    char *out = new_blob ? strdup(new_blob) : NULL;
-
-    for (int i = 0; i < n; i++) { free(paths[i]); free(acl_shas[i]); }
-    free(paths); free(acl_shas);
-    free(cpaths); free(cacl_shas);
-    return out;
+    if (!augmented || !*augmented) return NULL;
+    const char *sorted = aether_paths_index_sort_by_path(augmented);
+    extern const char *svnae_rep_write_blob(const char *repo, const char *data, int len);
+    const char *new_blob = svnae_rep_write_blob(repo, sorted, (int)strlen(sorted));
+    return new_blob ? strdup(new_blob) : NULL;
 }
 
 /* --- copy handler ------------------------------------------------------ *
