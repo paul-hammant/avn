@@ -557,39 +557,22 @@ static void sb_push(struct sb *s, const char *p, size_t n)
 static void sb_putc(struct sb *s, char c) { sb_push(s, &c, 1); }
 static void sb_puts(struct sb *s, const char *p) { sb_push(s, p, strlen(p)); }
 
+/* JSON formatting ported to Aether (ae/svnserver/json.ae, --emit=lib).
+ * The C entry points are now thin wrappers so none of the 35-ish call
+ * sites need to change. */
+extern const char *aether_json_escape_string(const char *v);
+extern const char *aether_json_int_to_dec(int v);
+
 static void
 sb_putjson_string(struct sb *s, const char *v)
 {
-    sb_putc(s, '"');
-    for (const unsigned char *p = (const unsigned char *)v; *p; p++) {
-        unsigned char c = *p;
-        switch (c) {
-            case '"':  sb_puts(s, "\\\""); break;
-            case '\\': sb_puts(s, "\\\\"); break;
-            case '\n': sb_puts(s, "\\n");  break;
-            case '\r': sb_puts(s, "\\r");  break;
-            case '\t': sb_puts(s, "\\t");  break;
-            case '\b': sb_puts(s, "\\b");  break;
-            case '\f': sb_puts(s, "\\f");  break;
-            default:
-                if (c < 0x20) {
-                    char buf[8];
-                    snprintf(buf, sizeof buf, "\\u%04x", c);
-                    sb_puts(s, buf);
-                } else {
-                    sb_putc(s, (char)c);
-                }
-        }
-    }
-    sb_putc(s, '"');
+    sb_puts(s, aether_json_escape_string(v ? v : ""));
 }
 
 static void
 sb_putjson_int(struct sb *s, int v)
 {
-    char buf[32];
-    snprintf(buf, sizeof buf, "%d", v);
-    sb_puts(s, buf);
+    sb_puts(s, aether_json_int_to_dec(v));
 }
 
 /* --- repo path registry ------------------------------------------------ *

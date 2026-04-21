@@ -1,0 +1,12 @@
+# Regeneration recipe for Aether-as-library C sources under ae/svnserver/.
+
+AETHERC ?= $(HOME)/scm/aether/build/aetherc
+
+GENERATED := json_generated.c
+
+all: $(GENERATED)
+
+json_generated.c: json.ae
+	$(AETHERC) --emit=lib $< $@
+
+.PHONY: all

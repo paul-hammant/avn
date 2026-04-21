@@ -1,0 +1,120 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// permissions and limitations under the License.
+
+// JSON string escaping + int→dec — ported from sb_putjson_string and
+// sb_putjson_int in ae/svnserver/shim.c. Pure string transformation; no
+// I/O, compiles under --emit=lib.
+//
+// Strategy: single left-to-right scan. Whenever we hit a byte that
+// needs escaping, flush the preceding safe run via substring and then
+// emit the escape. Safe runs cover ordinary ASCII and UTF-8 multi-byte
+// sequences alike — they pass through verbatim.
+
+import std.string
+
+// Return the JSON-escaped form of `v` including surrounding double
+// quotes. Handles the six short-form escapes and \u00XX for any other
+// control byte < 0x20.
+export json_escape_string(v: string) -> string {
+    out = "\""
+    n = string.length(v)
+    run_start = 0
+    i = 0
+    while i < n {
+        c = string.char_at(v, i)
+        needs_escape = 0
+        if c == 34 { needs_escape = 1 }   // "
+        if c == 92 { needs_escape = 1 }   // \
+        if c < 32  { needs_escape = 1 }   // control bytes
+        if needs_escape == 1 {
+            if i > run_start {
+                out = string.concat(out, string.substring(v, run_start, i))
+            }
+            out = string.concat(out, escape_byte(c))
+            run_start = i + 1
+        }
+        i = i + 1
+    }
+    if run_start < n {
+        out = string.concat(out, string.substring(v, run_start, n))
+    }
+    out = string.concat(out, "\"")
+    return out
+}
+
+// Write `v` as decimal (no surrounding quotes).
+export json_int_to_dec(v: int) -> string {
+    if v == 0 { return "0" }
+    neg = 0
+    n = v
+    if v < 0 { neg = 1; n = 0 - v }
+    out = ""
+    while n > 0 {
+        d = n - (n / 10) * 10
+        out = string.concat(digit_char(d), out)
+        n = n / 10
+    }
+    if neg == 1 { out = string.concat("-", out) }
+    return out
+}
+
+// --- internal helpers -----------------------------------------------------
+
+escape_byte(c: int) -> string {
+    if c == 34 { return "\\\"" }
+    if c == 92 { return "\\\\" }
+    if c == 10 { return "\\n" }
+    if c == 13 { return "\\r" }
+    if c == 9  { return "\\t" }
+    if c == 8  { return "\\b" }
+    if c == 12 { return "\\f" }
+    // Any other control byte: \u00XX (4 hex digits total; the high
+    // two are always "00" for c < 32).
+    hi = c / 16
+    lo = c - hi * 16
+    out = "\\u00"
+    out = string.concat(out, hex_char(hi))
+    out = string.concat(out, hex_char(lo))
+    return out
+}
+
+digit_char(d: int) -> string {
+    if d == 0 { return "0" }
+    if d == 1 { return "1" }
+    if d == 2 { return "2" }
+    if d == 3 { return "3" }
+    if d == 4 { return "4" }
+    if d == 5 { return "5" }
+    if d == 6 { return "6" }
+    if d == 7 { return "7" }
+    if d == 8 { return "8" }
+    if d == 9 { return "9" }
+    return "?"
+}
+
+hex_char(d: int) -> string {
+    if d < 10 { return digit_char(d) }
+    if d == 10 { return "a" }
+    if d == 11 { return "b" }
+    if d == 12 { return "c" }
+    if d == 13 { return "d" }
+    if d == 14 { return "e" }
+    if d == 15 { return "f" }
+    return "?"
+}
+
+main() {
+    println("ae/svnserver/json.ae is a library; not meant to run standalone")
+}
