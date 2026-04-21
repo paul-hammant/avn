@@ -643,6 +643,23 @@ out = string_concat(out, "]");
 }
 
 // Exported:
+const char* rev_info_json(int rev, const char* author, const char* date, const char* msg, const char* root) {
+const char* out = "{\"rev\":";
+    int _heap_out = 0; (void)_heap_out;
+out = string_concat(out, json_int_to_dec_impl(rev));
+out = string_concat(out, ",\"author\":");
+out = string_concat(out, json_escape_string_impl(author));
+out = string_concat(out, ",\"date\":");
+out = string_concat(out, json_escape_string_impl(date));
+out = string_concat(out, ",\"msg\":");
+out = string_concat(out, json_escape_string_impl(msg));
+out = string_concat(out, ",\"root\":");
+out = string_concat(out, json_escape_string_impl(root));
+out = string_concat(out, "}");
+    return out;
+}
+
+// Exported:
 const char* log_entry_json(int rev, const char* author, const char* date, const char* msg) {
 const char* out = "{\"rev\":";
     int _heap_out = 0; (void)_heap_out;
@@ -765,6 +782,9 @@ const char* aether_props_blob_to_json(const char* body) {
 }
 const char* aether_specs_to_json_array(const char* body) {
     return specs_to_json_array(body);
+}
+const char* aether_rev_info_json(int32_t rev, const char* author, const char* date, const char* msg, const char* root) {
+    return rev_info_json(rev, author, date, msg, root);
 }
 const char* aether_log_entry_json(int32_t rev, const char* author, const char* date, const char* msg) {
     return log_entry_json(rev, author, date, msg);

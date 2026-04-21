@@ -221,6 +221,23 @@ export specs_to_json_array(body: string) -> string {
 // caller already has as C strings. Each was a 4-6 line sb_puts/sb_putjson_*
 // run at the svnserver emit site.
 
+// Full {"rev":N,"author":"...","date":"...","msg":"...","root":"..."} object.
+// Used by /rev/N/info (emits as-is including the trailing }).
+export rev_info_json(rev: int, author: string, date: string, msg: string, root: string) -> string {
+    out = "{\"rev\":"
+    out = string.concat(out, json_int_to_dec_impl(rev))
+    out = string.concat(out, ",\"author\":")
+    out = string.concat(out, json_escape_string_impl(author))
+    out = string.concat(out, ",\"date\":")
+    out = string.concat(out, json_escape_string_impl(date))
+    out = string.concat(out, ",\"msg\":")
+    out = string.concat(out, json_escape_string_impl(msg))
+    out = string.concat(out, ",\"root\":")
+    out = string.concat(out, json_escape_string_impl(root))
+    out = string.concat(out, "}")
+    return out
+}
+
 // {"rev":N,"author":"...","date":"...","msg":"..."}
 export log_entry_json(rev: int, author: string, date: string, msg: string) -> string {
     out = "{\"rev\":"

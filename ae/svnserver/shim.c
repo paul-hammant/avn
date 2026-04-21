@@ -510,6 +510,7 @@ extern const char *aether_log_entry_json(int rev, const char *author, const char
 extern const char *aether_path_change_entry_json(const char *action, const char *path);
 extern const char *aether_blame_entry_json(int rev, const char *author, const char *text);
 extern const char *aether_info_prelude_json(int head, const char *name, const char *hash_algo);
+extern const char *aether_rev_info_json(int rev, const char *author, const char *date, const char *msg, const char *root);
 
 static void
 sb_putjson_string(struct sb *s, const char *v)
@@ -854,22 +855,14 @@ handle_repo_rev(HttpRequest *req, HttpServerResponse *res, void *user_data)
                 reported_root = redacted;
             }
         }
-        struct sb s = {0};
-        sb_puts(&s, "{\"rev\":");
-        sb_putjson_int(&s, svnae_repos_info_rev_num(I));
-        sb_puts(&s, ",\"author\":");
-        sb_putjson_string(&s, svnae_repos_info_author(I));
-        sb_puts(&s, ",\"date\":");
-        sb_putjson_string(&s, svnae_repos_info_date(I));
-        sb_puts(&s, ",\"msg\":");
-        sb_putjson_string(&s, svnae_repos_info_msg(I));
-        sb_puts(&s, ",\"root\":");
-        sb_putjson_string(&s, reported_root);
-        sb_puts(&s, "}");
+        const char *body = aether_rev_info_json(svnae_repos_info_rev_num(I),
+                                                svnae_repos_info_author(I),
+                                                svnae_repos_info_date(I),
+                                                svnae_repos_info_msg(I),
+                                                reported_root);
         free(root_sha);
         svnae_repos_info_free(I);
-        respond_json(res, 200, s.data ? s.data : "{}");
-        free(s.data);
+        respond_json(res, 200, body ? body : "{}");
         return;
     }
 
