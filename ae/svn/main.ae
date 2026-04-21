@@ -39,6 +39,7 @@ extern svnae_ra_paths_path(P: ptr, i: int) -> string
 extern svnae_ra_paths_free(P: ptr)
 
 extern svnae_client_verify(base_url: string, repo_name: string, rev: int) -> int
+extern svnae_client_verify_full(base_url: string, repo_name: string, rev: int, with_secondaries: int) -> int
 
 extern svnae_ra_info_rev(base_url: string, repo_name: string, rev: int) -> ptr
 extern svnae_ra_info_rev_num(I: ptr) -> int
@@ -317,19 +318,23 @@ cmd_info(argv_start: int) {
 // first mismatched path.
 cmd_verify(argv_start: int) {
     url = ""
+    with_secondaries = 0
     k = argv_start
     n_argv = aether_args_count()
     while k < n_argv {
         a = aether_args_get(k)
-        if string.length(a) > 0 {
-            if string.char_at(a, 0) != 45 {
-                if string.length(url) == 0 { url = a }
+        if string.equals(a, "--secondaries") == 1 { with_secondaries = 1 }
+        else {
+            if string.length(a) > 0 {
+                if string.char_at(a, 0) != 45 {
+                    if string.length(url) == 0 { url = a }
+                }
             }
         }
         k = k + 1
     }
     if string.length(url) == 0 {
-        println("svn verify: usage: svn verify URL [--rev N]")
+        println("svn verify: usage: svn verify URL [--rev N] [--secondaries]")
         return 2
     }
     base = url_base(url)
@@ -344,7 +349,7 @@ cmd_verify(argv_start: int) {
         println("svn verify: could not contact server")
         return 1
     }
-    rc = svnae_client_verify(base, repo, rev)
+    rc = svnae_client_verify_full(base, repo, rev, with_secondaries)
     if rc == -2 {
         println("svn verify: MISMATCH — repository content does not match advertised hashes")
         return 1

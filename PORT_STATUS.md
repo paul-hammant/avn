@@ -11,8 +11,8 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
 
 ## Headline
 
-- **49 commits.** Each phase is its own commit, reviewable in isolation.
-- **41 test suites** (added `test_cleanup.sh`, `test_rest_put.sh`), ~426 assertions, all green.
+- **51 commits.** Each phase is its own commit, reviewable in isolation.
+- **42 test suites** (added `test_verify_secondaries.sh`), ~436 assertions, all green.
   Mix of in-language `.ae` tests and end-to-end shell harnesses that
   spin up a real HTTP server and drive it with curl and the built
   `svn` CLI.
@@ -93,7 +93,8 @@ Named after the plan's Phase N. Plan: `../svn-to-aether.md`.
 | 7.1  | Authorization: out-of-line ACLs + `svn acl` CLI + Merkle redaction | ✅ | (prev commit) |
 | 7.2  | Write-side ACL enforcement + copy guard; rw/r/w rule modes | ✅ | (prev commit) |
 | 7.3  | `svn cleanup` — remove stale `.tmp.*` files + wc.db-journal | ✅ | `60589f5` |
-| 7.4  | REST PUT/DELETE on `/path/<rel>` with Svn-Based-On concurrency token | ✅ | (this commit) |
+| 7.4  | REST PUT/DELETE on `/path/<rel>` with Svn-Based-On concurrency token | ✅ | (prev commit) |
+| 7.5  | Multi-algo secondary verification (`svn verify --secondaries`) | ✅ | (this commit) |
 | 12 | svnadmin create/dump/load | ✅ | `52380a5` |
 
 ## Phases not yet done (from the plan)

@@ -1173,10 +1173,141 @@ verify_dir(const char *base_url, const char *repo, int rev,
     return 0;
 }
 
+/* Crawl the tree rooted at `rel` and, for every file, fetch its
+ * /hashes endpoint. For each secondary algo the server stores,
+ * re-hash the content locally and compare. Returns 0 match, -1 I/O,
+ * -2 mismatch. Emits a per-file OK summary to stdout with the
+ * secondary-hash count when the caller asked for verbose output. */
+static int
+verify_secondaries_in_dir(const char *base_url, const char *repo, int rev,
+                          const char *rel, int *out_files_checked,
+                          int *out_secondary_count)
+{
+    char url[2048];
+    if (*rel) snprintf(url, sizeof url, "%s/repos/%s/rev/%d/list/%s",
+                       base_url, repo, rev, rel);
+    else      snprintf(url, sizeof url, "%s/repos/%s/rev/%d/list",
+                       base_url, repo, rev);
+    char *body = NULL; size_t len = 0; int status = 0;
+    if (http_get_ex(url, &body, &len, &status, NULL) != 0 || status != 200) {
+        free(body);
+        return -1;
+    }
+    /* Parse entries (same shape as verify_dir). */
+    struct entry { char kind_c; char *name; };
+    struct entry *ents = NULL;
+    int n = 0, cap = 0;
+    const char *p = strstr(body, "\"entries\":[");
+    if (p) p += strlen("\"entries\":[");
+    while (p && *p && *p != ']') {
+        const char *name_k = strstr(p, "\"name\":\"");
+        if (!name_k || name_k > body + len) break;
+        name_k += 8;
+        const char *name_end = strchr(name_k, '"');
+        if (!name_end) break;
+        const char *kind_k = strstr(name_end, "\"kind\":\"");
+        if (!kind_k) break;
+        kind_k += 8;
+        const char *kind_end = strchr(kind_k, '"');
+        if (!kind_end) break;
+        if (n == cap) {
+            cap = cap ? cap * 2 : 8;
+            ents = realloc(ents, (size_t)cap * sizeof *ents);
+        }
+        ents[n].name = strndup(name_k, (size_t)(name_end - name_k));
+        ents[n].kind_c = (kind_k[0] == 'd') ? 'd' : 'f';
+        n++;
+        p = kind_end + 1;
+    }
+    free(body);
+
+    int overall = 0;
+    for (int i = 0; i < n; i++) {
+        char child_rel[PATH_MAX];
+        if (*rel) snprintf(child_rel, sizeof child_rel, "%s/%s", rel, ents[i].name);
+        else      snprintf(child_rel, sizeof child_rel, "%s", ents[i].name);
+
+        if (ents[i].kind_c == 'd') {
+            int rc = verify_secondaries_in_dir(base_url, repo, rev, child_rel,
+                                               out_files_checked, out_secondary_count);
+            if (rc != 0 && overall == 0) overall = rc;
+        } else {
+            /* Fetch /cat and /hashes; re-hash for each declared secondary. */
+            char cat_url[2048];
+            snprintf(cat_url, sizeof cat_url, "%s/repos/%s/rev/%d/cat/%s",
+                     base_url, repo, rev, child_rel);
+            char *cbody = NULL; size_t clen = 0; int cstatus = 0;
+            if (http_get_ex(cat_url, &cbody, &clen, &cstatus, NULL) != 0
+                || cstatus != 200) {
+                if (overall == 0) overall = -1;
+                free(cbody); continue;
+            }
+            int body_len = (int)strlen(cbody);
+
+            char h_url[2048];
+            snprintf(h_url, sizeof h_url, "%s/repos/%s/rev/%d/hashes/%s",
+                     base_url, repo, rev, child_rel);
+            char *hbody = NULL; size_t hlen = 0; int hstatus = 0;
+            if (http_get_ex(h_url, &hbody, &hlen, &hstatus, NULL) != 0
+                || hstatus != 200) {
+                free(cbody); free(hbody);
+                if (overall == 0) overall = -1;
+                continue;
+            }
+
+            /* Parse the secondaries array by hand. */
+            const char *sp = strstr(hbody, "\"secondaries\":[");
+            if (sp) sp += strlen("\"secondaries\":[");
+            while (sp && *sp && *sp != ']') {
+                const char *algo_k = strstr(sp, "\"algo\":\"");
+                if (!algo_k) break;
+                algo_k += 8;
+                const char *algo_end = strchr(algo_k, '"');
+                if (!algo_end) break;
+                const char *hash_k = strstr(algo_end, "\"hash\":\"");
+                if (!hash_k) break;
+                hash_k += 8;
+                const char *hash_end = strchr(hash_k, '"');
+                if (!hash_end) break;
+                char algo[32], server_hex[65];
+                size_t al = (size_t)(algo_end - algo_k);
+                size_t hl = (size_t)(hash_end - hash_k);
+                if (al < sizeof algo && hl < sizeof server_hex) {
+                    memcpy(algo, algo_k, al); algo[al] = '\0';
+                    memcpy(server_hex, hash_k, hl); server_hex[hl] = '\0';
+                    char *local = hash_hex(algo, cbody, body_len);
+                    if (local && strcmp(local, server_hex) == 0) {
+                        (*out_secondary_count)++;
+                    } else {
+                        fprintf(stderr,
+                                "verify: secondary %s mismatch at /%s\n"
+                                "  server: %s\n  local:  %s\n",
+                                algo, child_rel,
+                                server_hex, local ? local : "(null)");
+                        if (overall == 0) overall = -2;
+                    }
+                    free(local);
+                }
+                sp = hash_end + 1;
+            }
+            free(cbody); free(hbody);
+            (*out_files_checked)++;
+        }
+    }
+    for (int i = 0; i < n; i++) free(ents[i].name);
+    free(ents);
+    return overall;
+}
+
 /* Public entry point. Prints a short summary on success. Returns
- * 0 on match, -1 on protocol/IO error, -2 on Merkle mismatch. */
+ * 0 on match, -1 on protocol/IO error, -2 on Merkle mismatch.
+ *
+ * When `with_secondaries` is 1, after the primary Merkle walk passes
+ * the tree is re-walked to verify every file's stored secondary
+ * hashes. Mismatch in a secondary fails the whole verify. */
 int
-svnae_client_verify(const char *base_url, const char *repo, int rev)
+svnae_client_verify_full(const char *base_url, const char *repo, int rev,
+                        int with_secondaries)
 {
     char *algo = svnae_ra_hash_algo(base_url, repo);
     if (!algo || !*algo) { free(algo); fprintf(stderr, "verify: server info unavailable\n"); return -1; }
@@ -1207,7 +1338,30 @@ svnae_client_verify(const char *base_url, const char *repo, int rev)
         return -2;
     }
 
-    fprintf(stdout, "verify: OK (algo=%s, root=%s)\n", algo, root_sha);
+    int sec_rc = 0;
+    int files = 0, sec_count = 0;
+    if (with_secondaries) {
+        sec_rc = verify_secondaries_in_dir(base_url, repo, rev, "", &files, &sec_count);
+    }
+
+    if (sec_rc != 0) {
+        fprintf(stderr, "verify: secondary check failed (rc=%d)\n", sec_rc);
+        free(algo); free(root_sha); free(claimed_root_copy);
+        return sec_rc;
+    }
+
+    if (with_secondaries) {
+        fprintf(stdout, "verify: OK (algo=%s, root=%s, %d file(s), %d secondary hash(es) verified)\n",
+                algo, root_sha, files, sec_count);
+    } else {
+        fprintf(stdout, "verify: OK (algo=%s, root=%s)\n", algo, root_sha);
+    }
     free(algo); free(root_sha); free(claimed_root_copy);
     return 0;
+}
+
+int
+svnae_client_verify(const char *base_url, const char *repo, int rev)
+{
+    return svnae_client_verify_full(base_url, repo, rev, 0);
 }

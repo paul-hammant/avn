@@ -131,14 +131,48 @@ svnae_repo_primary_hash(const char *repo)
     return cache;
 }
 
-/* Hash `data` using the repo's primary algorithm. `out` must be at
- * least 65 bytes (64 hex chars for sha256 + NUL). Returns the hex
- * length on success, 0 on failure. Inlines the golden list here —
- * matches ae/subr/checksum/shim.c. */
-static int
-repo_hash_of(const char *repo, const char *data, int len, char out[65])
+/* Parse the comma-separated secondary algo list from the format file.
+ * Writes into `out` (caller-sized); returns count of secondaries
+ * (0 if only a primary is declared, or no format file). */
+int
+svnae_repo_secondary_hashes(const char *repo, char out[4][32])
 {
-    const char *algo = svnae_repo_primary_hash(repo);
+    char fmt_path[PATH_MAX];
+    snprintf(fmt_path, sizeof fmt_path, "%s/format", repo);
+    FILE *f = fopen(fmt_path, "r");
+    if (!f) return 0;
+    char line[256];
+    if (!fgets(line, sizeof line, f)) { fclose(f); return 0; }
+    fclose(f);
+    size_t n = strlen(line);
+    while (n > 0 && (line[n-1] == '\n' || line[n-1] == '\r' || line[n-1] == ' ')) line[--n] = '\0';
+
+    char *sp = strchr(line, ' ');
+    if (!sp) return 0;
+    /* Skip the primary (up to first comma). */
+    char *first = sp + 1;
+    char *comma = strchr(first, ',');
+    if (!comma) return 0;
+    int count = 0;
+    const char *p = comma + 1;
+    while (*p && count < 4) {
+        const char *start = p;
+        const char *end   = strchr(p, ',');
+        size_t len_ = end ? (size_t)(end - start) : strlen(start);
+        if (len_ == 0 || len_ >= 32) break;
+        memcpy(out[count], start, len_);
+        out[count][len_] = '\0';
+        count++;
+        if (!end) break;
+        p = end + 1;
+    }
+    return count;
+}
+
+/* Hex-encode digest into out (>= 65 bytes). */
+static int
+hex_of_algo(const char *algo, const char *data, int len, char out[65])
+{
     const EVP_MD *md = NULL;
     if      (strcmp(algo, "sha1")   == 0) md = EVP_sha1();
     else if (strcmp(algo, "sha256") == 0) md = EVP_sha256();
@@ -160,6 +194,16 @@ repo_hash_of(const char *repo, const char *data, int len, char out[65])
     }
     out[dlen * 2] = '\0';
     return (int)dlen * 2;
+}
+
+/* Hash `data` using the repo's primary algorithm. `out` must be at
+ * least 65 bytes (64 hex chars for sha256 + NUL). Returns the hex
+ * length on success, 0 on failure. Inlines the golden list here —
+ * matches ae/subr/checksum/shim.c. */
+static int
+repo_hash_of(const char *repo, const char *data, int len, char out[65])
+{
+    return hex_of_algo(svnae_repo_primary_hash(repo), data, len, out);
 }
 
 /* --- rep-cache access ---------------------------------------------- */
@@ -198,6 +242,68 @@ rep_cache_insert(sqlite3 *db, const char *sha1_hex, const char *rel_path,
     int rc = sqlite3_step(st);
     sqlite3_finalize(st);
     return rc == SQLITE_DONE ? 0 : -1;
+}
+
+/* Ensure the secondary-hash table exists. Created lazily on the first
+ * secondary-hash write so repos that never grew secondaries don't
+ * carry the schema. Not an error if it already exists. */
+static void
+rep_cache_sec_ensure(sqlite3 *db)
+{
+    sqlite3_exec(db,
+        "CREATE TABLE IF NOT EXISTS rep_cache_sec ("
+        "  primary_hash TEXT NOT NULL,"
+        "  algo         TEXT NOT NULL,"
+        "  secondary_hash TEXT NOT NULL,"
+        "  PRIMARY KEY (primary_hash, algo))",
+        NULL, NULL, NULL);
+}
+
+static int
+rep_cache_sec_insert(sqlite3 *db, const char *primary_hex,
+                     const char *algo, const char *secondary_hex)
+{
+    sqlite3_stmt *st = NULL;
+    if (sqlite3_prepare_v2(db,
+            "INSERT OR IGNORE INTO rep_cache_sec (primary_hash, algo, secondary_hash) VALUES (?,?,?)",
+            -1, &st, NULL) != SQLITE_OK) return -1;
+    sqlite3_bind_text(st, 1, primary_hex,   -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(st, 2, algo,          -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(st, 3, secondary_hex, -1, SQLITE_TRANSIENT);
+    int rc = sqlite3_step(st);
+    sqlite3_finalize(st);
+    return rc == SQLITE_DONE ? 0 : -1;
+}
+
+/* Lookup: returns malloc'd hex or NULL. Caller frees. */
+char *
+svnae_rep_lookup_secondary(const char *repo, const char *primary_hex,
+                          const char *algo)
+{
+    char cache_path[PATH_MAX];
+    snprintf(cache_path, sizeof cache_path, "%s/rep-cache.db", repo);
+    sqlite3 *db;
+    if (sqlite3_open_v2(cache_path, &db, SQLITE_OPEN_READONLY, NULL) != SQLITE_OK) {
+        if (db) sqlite3_close(db);
+        return NULL;
+    }
+    sqlite3_stmt *st = NULL;
+    if (sqlite3_prepare_v2(db,
+            "SELECT secondary_hash FROM rep_cache_sec WHERE primary_hash = ? AND algo = ?",
+            -1, &st, NULL) != SQLITE_OK) {
+        sqlite3_close(db);
+        return NULL;
+    }
+    sqlite3_bind_text(st, 1, primary_hex, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(st, 2, algo,        -1, SQLITE_TRANSIENT);
+    char *out = NULL;
+    if (sqlite3_step(st) == SQLITE_ROW) {
+        const char *s = (const char *)sqlite3_column_text(st, 0);
+        if (s) out = strdup(s);
+    }
+    sqlite3_finalize(st);
+    sqlite3_close(db);
+    return out;
 }
 
 /* --- public interface ---------------------------------------------- */
@@ -272,6 +378,20 @@ svnae_rep_write_blob(const char *repo, const char *data, int len)
                          use_zlib ? STORAGE_ZLIB : STORAGE_RAW) != 0) {
         sqlite3_close(db);
         return NULL;
+    }
+
+    /* Phase 7.5: compute and persist secondary hashes (if any). The
+     * table is created on demand so legacy repos pay no cost. */
+    char sec[4][32];
+    int sec_n = svnae_repo_secondary_hashes(repo, sec);
+    if (sec_n > 0) {
+        rep_cache_sec_ensure(db);
+        for (int i = 0; i < sec_n; i++) {
+            char shex[65];
+            if (hex_of_algo(sec[i], data, len, shex)) {
+                rep_cache_sec_insert(db, sha1_buf, sec[i], shex);
+            }
+        }
     }
     sqlite3_close(db);
     return sha1_buf;

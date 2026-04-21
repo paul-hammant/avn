@@ -83,6 +83,10 @@ char             *svnae_repos_cat(const char *repo, int rev, const char *path);
 char             *svnae_rep_read_blob(const char *repo, const char *sha1_hex);
 void              svnae_rep_free(char *p);
 const char       *svnae_repo_primary_hash(const char *repo);
+int                svnae_repo_secondary_hashes(const char *repo, char out[4][32]);
+char              *svnae_rep_lookup_secondary(const char *repo,
+                                              const char *primary_hex,
+                                              const char *algo);
 
 struct svnae_list *svnae_repos_list(const char *repo, int rev, const char *path);
 int               svnae_repos_list_count(const struct svnae_list *L);
@@ -948,6 +952,63 @@ handle_repo_rev(HttpRequest *req, HttpServerResponse *res, void *user_data)
         sb_puts(&s, "]}");
         svnae_repos_paths_free(P);
         respond_json(res, 200, s.data ? s.data : "{\"entries\":[]}");
+        free(s.data);
+        return;
+    }
+
+    /* /rev/N/hashes/<path> → {"primary":{algo,hash}, "secondaries":[...]}
+     *
+     * Used by `svn verify --secondaries`. The client can fetch the
+     * content bytes separately (via /cat or /list's child shas), re-
+     * hash locally under each algo, and compare with the server's
+     * stored secondaries. ACL applies — denied paths return 404. */
+    if (strncmp(after, "/hashes/", 8) == 0 || strcmp(after, "/hashes") == 0) {
+        const char *target = strcmp(after, "/hashes") == 0 ? "" : after + 8;
+
+        const char *hu_user = NULL;
+        int hu_is_super = auth_context(req, &hu_user);
+        if (!hu_is_super && !acl_allows(repo, rev, hu_user, target)) {
+            respond_error(res, 404, "not found");
+            return;
+        }
+
+        char node_sha[65] = {0};
+        char node_kind = 0;
+        if (!svnae_repos_resolve(repo, rev, target, node_sha, &node_kind)) {
+            respond_error(res, 404, "not found");
+            return;
+        }
+
+        const char *algo = svnae_repo_primary_hash(repo);
+        struct sb s = {0};
+        sb_puts(&s, "{\"primary\":{\"algo\":");
+        sb_putjson_string(&s, algo);
+        sb_puts(&s, ",\"hash\":");
+        sb_putjson_string(&s, node_sha);
+        sb_puts(&s, "},\"secondaries\":[");
+
+        /* Iterate declared secondaries in the format file, looking up
+         * each one's stored hash for this blob. Missing entries
+         * (e.g. the blob was written before a secondary was added)
+         * are silently skipped. */
+        char sec[4][32];
+        int sec_n = svnae_repo_secondary_hashes(repo, sec);
+        int any = 0;
+        for (int i = 0; i < sec_n; i++) {
+            char *shex = svnae_rep_lookup_secondary(repo, node_sha, sec[i]);
+            if (shex && *shex) {
+                if (any) sb_putc(&s, ',');
+                any = 1;
+                sb_puts(&s, "{\"algo\":");
+                sb_putjson_string(&s, sec[i]);
+                sb_puts(&s, ",\"hash\":");
+                sb_putjson_string(&s, shex);
+                sb_putc(&s, '}');
+            }
+            free(shex);
+        }
+        sb_puts(&s, "]}");
+        respond_json(res, 200, s.data ? s.data : "{}");
         free(s.data);
         return;
     }
