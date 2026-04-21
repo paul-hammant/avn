@@ -46,6 +46,12 @@
  * other shims (see aether.toml extra_sources for the test binary). */
 
 char *svnae_rep_read_blob(const char *repo, const char *sha1_hex);
+
+/* Dir-blob line parser ported to Aether (ae/fs_fs/dirblob.ae). */
+extern int         aether_dir_count_entries(const char *body);
+extern int         aether_dir_entry_kind(const char *body, int i);
+extern const char *aether_dir_entry_sha(const char *body, int i);
+extern const char *aether_dir_entry_name(const char *body, int i);
 void  svnae_rep_free(char *p);
 
 /* --- helpers --------------------------------------------------------- */
@@ -312,33 +318,20 @@ resolve_path(const char *repo, const char *root_sha1, const char *path,
         int at_end = (*p == '\0');
         if (*p == '/') p++;
 
-        /* Walk cur_body lines looking for `seg`. Sha width varies by
-         * repo algo (40 for sha1, 64 for sha256), so parse dynamically. */
-        char *lp = cur_body;
+        /* Walk cur_body entries looking for `seg`. */
         char found_kind = 0;
         char found_sha1[65] = {0};
-        while (*lp) {
-            char *eol = strchr(lp, '\n');
-            size_t llen = eol ? (size_t)(eol - lp) : strlen(lp);
-            if (llen >= 4) {
-                const char *sha_start = lp + 2;
-                const char *sp2 = memchr(sha_start, ' ', llen - 2);
-                if (sp2) {
-                    size_t sha_len = (size_t)(sp2 - sha_start);
-                    size_t name_off = 2 + sha_len + 1;
-                    if (sha_len < sizeof found_sha1 && llen > name_off) {
-                        size_t name_len = llen - name_off;
-                        if (name_len == seg_len && memcmp(lp + name_off, seg, seg_len) == 0) {
-                            found_kind = lp[0];
-                            memcpy(found_sha1, sha_start, sha_len);
-                            found_sha1[sha_len] = '\0';
-                            break;
-                        }
-                    }
-                }
+        int n_entries = aether_dir_count_entries(cur_body);
+        for (int ei = 0; ei < n_entries; ei++) {
+            const char *name = aether_dir_entry_name(cur_body, ei);
+            if (strlen(name) == seg_len && memcmp(name, seg, seg_len) == 0) {
+                found_kind = (char)aether_dir_entry_kind(cur_body, ei);
+                const char *sha = aether_dir_entry_sha(cur_body, ei);
+                size_t sha_len = strlen(sha);
+                if (sha_len >= sizeof found_sha1) { svnae_rep_free(cur_body); return 0; }
+                memcpy(found_sha1, sha, sha_len + 1);
+                break;
             }
-            if (!eol) break;
-            lp = eol + 1;
         }
         svnae_rep_free(cur_body);
         cur_body = NULL;
@@ -407,40 +400,13 @@ svnae_repos_list(const char *repo, int rev, const char *path)
     if (!body) return NULL;
 
     struct svnae_list *L = calloc(1, sizeof *L);
-    /* Count lines first for allocation. */
-    int lines = 0;
-    for (char *lp = body; *lp; ) {
-        char *eol = strchr(lp, '\n');
-        if (!eol) { if (*lp) lines++; break; }
-        lines++;
-        lp = eol + 1;
+    int n_entries = aether_dir_count_entries(body);
+    L->items = calloc((size_t)(n_entries > 0 ? n_entries : 1), sizeof *L->items);
+    for (int ei = 0; ei < n_entries; ei++) {
+        L->items[ei].kind = (char)aether_dir_entry_kind(body, ei);
+        L->items[ei].name = strdup(aether_dir_entry_name(body, ei));
     }
-    L->items = calloc((size_t)lines, sizeof *L->items);
-
-    int i = 0;
-    for (char *lp = body; *lp; ) {
-        char *eol = strchr(lp, '\n');
-        size_t llen = eol ? (size_t)(eol - lp) : strlen(lp);
-        if (llen >= 4) {
-            const char *sha_start = lp + 2;
-            const char *sp2 = memchr(sha_start, ' ', llen - 2);
-            if (sp2) {
-                size_t sha_len = (size_t)(sp2 - sha_start);
-                size_t name_off = 2 + sha_len + 1;
-                if (llen > name_off) {
-                    L->items[i].kind = lp[0];
-                    size_t name_len = llen - name_off;
-                    L->items[i].name = malloc(name_len + 1);
-                    memcpy(L->items[i].name, lp + name_off, name_len);
-                    L->items[i].name[name_len] = '\0';
-                    i++;
-                }
-            }
-        }
-        if (!eol) break;
-        lp = eol + 1;
-    }
-    L->n = i;
+    L->n = n_entries;
     svnae_rep_free(body);
     return L;
 }
@@ -570,39 +536,26 @@ flatten_tree(const char *repo, const char *dir_sha1, const char *prefix,
 {
     char *body = svnae_rep_read_blob(repo, dir_sha1);
     if (!body) return;
-    char *lp = body;
-    while (*lp) {
-        char *eol = strchr(lp, '\n');
-        size_t llen = eol ? (size_t)(eol - lp) : strlen(lp);
-        if (llen >= 4) {
-            char kind = lp[0];
-            const char *sha_start = lp + 2;
-            const char *sp2 = memchr(sha_start, ' ', llen - 2);
-            size_t sha_len = sp2 ? (size_t)(sp2 - sha_start) : 0;
-            if (sp2 && sha_len < 65) {
-            char child_sha[65];
-            memcpy(child_sha, sha_start, sha_len);
-            child_sha[sha_len] = '\0';
-            size_t name_off = 2 + sha_len + 1;
-            size_t name_len = llen > name_off ? llen - name_off : 0;
-            char name[512];
-            if (name_len > 0 && name_len < sizeof name) {
-                memcpy(name, lp + name_off, name_len);
-                name[name_len] = '\0';
+    int n_entries = aether_dir_count_entries(body);
+    for (int ei = 0; ei < n_entries; ei++) {
+        char kind = (char)aether_dir_entry_kind(body, ei);
+        const char *child_sha_ref = aether_dir_entry_sha(body, ei);
+        const char *name = aether_dir_entry_name(body, ei);
+        /* Snapshot the Aether-owned strings before we recurse (which
+         * may reuse the thread-local buffers). */
+        char child_sha[65];
+        size_t sha_len = strlen(child_sha_ref);
+        if (sha_len >= sizeof child_sha) continue;
+        memcpy(child_sha, child_sha_ref, sha_len + 1);
 
-                char child_path[PATH_MAX];
-                if (*prefix) snprintf(child_path, sizeof child_path, "%s/%s", prefix, name);
-                else         snprintf(child_path, sizeof child_path, "%s",    name);
+        char child_path[PATH_MAX];
+        if (*prefix) snprintf(child_path, sizeof child_path, "%s/%s", prefix, name);
+        else         snprintf(child_path, sizeof child_path, "%s",    name);
 
-                flat_add(out, child_path, kind, child_sha);
-                if (kind == 'd') {
-                    flatten_tree(repo, child_sha, child_path, out);
-                }
-            }
-            }
+        flat_add(out, child_path, kind, child_sha);
+        if (kind == 'd') {
+            flatten_tree(repo, child_sha, child_path, out);
         }
-        if (!eol) break;
-        lp = eol + 1;
     }
     svnae_rep_free(body);
 }

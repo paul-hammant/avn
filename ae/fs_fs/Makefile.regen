@@ -8,11 +8,14 @@
 
 AETHERC ?= $(HOME)/scm/aether/build/aetherc
 
-GENERATED := spec_generated.c
+GENERATED := spec_generated.c dirblob_generated.c
 
 all: $(GENERATED)
 
 spec_generated.c: spec.ae
+	$(AETHERC) --emit=lib $< $@
+
+dirblob_generated.c: dirblob.ae
 	$(AETHERC) --emit=lib $< $@
 
 .PHONY: all
