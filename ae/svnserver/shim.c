@@ -1828,6 +1828,153 @@ handle_repo_commit(HttpRequest *req, HttpServerResponse *res, void *user_data)
     respond_json(res, 200, buf);
 }
 
+/* Recursively walk `path` at `rev` and confirm that `user` has RW on
+ * every descendant (including `path` itself). Returns 1 if fully RW,
+ * 0 if any descendant denies RW to the caller. Used by the /copy
+ * handler to enforce "you can only copy what you fully own". */
+static int
+acl_user_has_rw_subtree(const char *repo, int rev, const char *user,
+                        const char *path)
+{
+    if (!acl_allows_mode(repo, rev, user, path, 0)) return 0;
+    if (!acl_allows_mode(repo, rev, user, path, 1)) return 0;
+
+    /* If it's a dir, descend. Files have no descendants. */
+    char sha[65] = {0};
+    char kind = 0;
+    if (!svnae_repos_resolve(repo, rev, path, sha, &kind)) return 1;
+    if (kind != 'd') return 1;
+
+    struct svnae_list *L = svnae_repos_list(repo, rev, *path ? path : "/");
+    if (!L) return 1;
+    int n = svnae_repos_list_count(L);
+    int ok = 1;
+    for (int i = 0; i < n; i++) {
+        const char *name = svnae_repos_list_name(L, i);
+        char child[PATH_MAX];
+        if (*path) snprintf(child, sizeof child, "%s/%s", path, name);
+        else       snprintf(child, sizeof child, "%s", name);
+        if (!acl_user_has_rw_subtree(repo, rev, user, child)) { ok = 0; break; }
+    }
+    svnae_repos_list_free(L);
+    return ok;
+}
+
+/* Collect (path, acl-sha) pairs from the base rev's paths-acl blob
+ * where the path starts with `from_path` (or equals it). For each
+ * match, emit a parallel (rebased_path, acl-sha) pair under
+ * `to_path`. Returns a paths-acl blob sha for the new rev, or NULL
+ * if no entries needed rewriting.
+ *
+ * This is how `svn cp` auto-follows ACLs: the branch inherits the
+ * source's restrictions verbatim, so visibility for anyone other
+ * than the caller doesn't change.
+ *
+ * Caller frees via free() on the returned sha. */
+extern const char *svnae_build_paths_acl_blob(const char *repo,
+                                              const char *const *paths,
+                                              const char *const *acl_shas,
+                                              int n_paths);
+
+static char *
+auto_follow_copy_acl(const char *repo, int base_rev,
+                    const char *from_path, const char *to_path)
+{
+    /* Read the base rev's paths-acl blob. */
+    char *acl_root = load_rev_blob_field(repo, base_rev, "acl");
+    if (!acl_root || !*acl_root) { free(acl_root); return NULL; }
+    char *body = svnae_rep_read_blob(repo, acl_root);
+    free(acl_root);
+    if (!body) return NULL;
+
+    /* First pass: count matches AND collect all existing entries so
+     * the new paths-acl blob preserves every original plus the new
+     * rebased entries. */
+    int cap = 16, n = 0;
+    char **paths    = calloc((size_t)cap, sizeof *paths);
+    char **acl_shas = calloc((size_t)cap, sizeof *acl_shas);
+
+    size_t from_len = strlen(from_path);
+
+    const char *p = body;
+    while (*p) {
+        const char *eol = strchr(p, '\n');
+        size_t llen = eol ? (size_t)(eol - p) : strlen(p);
+        const char *sp = memchr(p, ' ', llen);
+        if (sp) {
+            size_t sha_len = (size_t)(sp - p);
+            size_t name_len = llen - sha_len - 1;
+            if (sha_len < 65 && name_len < PATH_MAX) {
+                char sha[65], this_path[PATH_MAX];
+                memcpy(sha, p, sha_len); sha[sha_len] = '\0';
+                memcpy(this_path, sp + 1, name_len); this_path[name_len] = '\0';
+
+                /* Preserve the existing entry verbatim. */
+                if (n == cap) {
+                    cap *= 2;
+                    paths    = realloc(paths,    (size_t)cap * sizeof *paths);
+                    acl_shas = realloc(acl_shas, (size_t)cap * sizeof *acl_shas);
+                }
+                paths[n]    = strdup(this_path);
+                acl_shas[n] = strdup(sha);
+                n++;
+
+                /* Does this entry live under from_path? If so emit a
+                 * parallel entry at to_path/<tail>. Exact-match
+                 * becomes to_path itself. */
+                int rebase = 0;
+                if (strcmp(this_path, from_path) == 0) {
+                    rebase = 1;
+                } else if (name_len > from_len
+                           && memcmp(this_path, from_path, from_len) == 0
+                           && this_path[from_len] == '/') {
+                    rebase = 1;
+                }
+                if (rebase) {
+                    char rebased[PATH_MAX];
+                    if (strcmp(this_path, from_path) == 0) {
+                        snprintf(rebased, sizeof rebased, "%s", to_path);
+                    } else {
+                        /* tail = this_path[from_len+1..] */
+                        snprintf(rebased, sizeof rebased, "%s/%s",
+                                 to_path, this_path + from_len + 1);
+                    }
+                    if (n == cap) {
+                        cap *= 2;
+                        paths    = realloc(paths,    (size_t)cap * sizeof *paths);
+                        acl_shas = realloc(acl_shas, (size_t)cap * sizeof *acl_shas);
+                    }
+                    paths[n]    = strdup(rebased);
+                    acl_shas[n] = strdup(sha);
+                    n++;
+                }
+            }
+        }
+        if (!eol) break;
+        p = eol + 1;
+    }
+    svnae_rep_free(body);
+
+    if (n == 0) {
+        free(paths); free(acl_shas);
+        return NULL;
+    }
+
+    const char **cpaths    = calloc((size_t)n, sizeof *cpaths);
+    const char **cacl_shas = calloc((size_t)n, sizeof *cacl_shas);
+    for (int i = 0; i < n; i++) {
+        cpaths[i] = paths[i];
+        cacl_shas[i] = acl_shas[i];
+    }
+    const char *new_blob = svnae_build_paths_acl_blob(repo, cpaths, cacl_shas, n);
+    char *out = new_blob ? strdup(new_blob) : NULL;
+
+    for (int i = 0; i < n; i++) { free(paths[i]); free(acl_shas[i]); }
+    free(paths); free(acl_shas);
+    free(cpaths); free(cacl_shas);
+    return out;
+}
+
 /* --- copy handler ------------------------------------------------------ *
  *
  *   POST /repos/{r}/copy
@@ -1877,23 +2024,24 @@ handle_repo_copy(HttpRequest *req, HttpServerResponse *res, void *user_data)
     char *logmsg    = strdup(jlog->valuestring);
     cJSON_Delete(root);
 
-    /* ACL checks (Phase 7.2):
-     *   - caller needs read on from_path
-     *   - caller needs write on to_path
-     *   - smuggling guard: if from_path has an effective ACL that
-     *     restricts some user, the destination must inherit equally-
-     *     or-more-restrictive rules — else branching could be used
-     *     to side-step ACLs. We approximate: if from_path has *any*
-     *     effective ACL rule and to_path has none (or a more-
-     *     permissive one), refuse unless super-user.
+    /* ACL check (Phase 7.7):
+     *   You can only server-copy what you already have RW on in
+     *   full. Walk from_path's subtree and require RW everywhere.
+     *   Caller also needs write on to_path. Super-user bypasses.
+     *
+     *   If the check passes, the copy proceeds and ACLs auto-follow:
+     *   every paths-acl entry under from_path gets a parallel entry
+     *   rebased under to_path, so the branch inherits its source's
+     *   restrictions verbatim. Nothing's visibility changes from
+     *   any other user's perspective.
      */
     {
         const char *user = NULL;
         int is_super = auth_context(req, &user);
         if (!is_super) {
-            if (!acl_allows_mode(repo, base_rev, user, from_path, 0)) {
+            if (!acl_user_has_rw_subtree(repo, base_rev, user, from_path)) {
                 free(from_path); free(to_path); free(author); free(logmsg);
-                respond_error(res, 404, "from_path not found at base_rev");
+                respond_error(res, 403, "forbidden");
                 return;
             }
             if (!acl_allows_mode(repo, base_rev, user, to_path, 1)) {
@@ -1902,14 +2050,6 @@ handle_repo_copy(HttpRequest *req, HttpServerResponse *res, void *user_data)
                 return;
             }
         }
-        /* Smuggling guard applies to super-users too — if they were
-         * bypassing read-check, they might accidentally expose a
-         * restricted subtree by copying it somewhere open. We reject
-         * whenever from_path has an effective ACL not matched by the
-         * destination's. For now: any change in visible-user set
-         * between the two paths triggers refusal unless super-user
-         * opts in (future: explicit --allow-exposure flag). */
-        (void)is_super;
     }
 
     char sha1[65];
@@ -1920,11 +2060,17 @@ handle_repo_copy(HttpRequest *req, HttpServerResponse *res, void *user_data)
         return;
     }
 
+    /* Compute the new rev's paths-acl blob sha (if any ACLs follow). */
+    char *new_acl_sha = auto_follow_copy_acl(repo, base_rev, from_path, to_path);
+
     struct svnae_txn *txn = svnae_txn_new(base_rev);
     svnae_txn_copy(txn, to_path, sha1, kind_char == 'd' ? 1 : 0);
-    int new_rev = svnae_commit_finalise(repo, txn, author, logmsg);
+    int new_rev = svnae_commit_finalise_with_acl(repo, txn, author, logmsg,
+                                                  "", /* props inherit */
+                                                  new_acl_sha ? new_acl_sha : "");
     svnae_txn_free(txn);
     free(from_path); free(to_path); free(author); free(logmsg);
+    free(new_acl_sha);
 
     if (new_rev < 0) { respond_error(res, 500, "copy commit failed"); return; }
     char buf[64];

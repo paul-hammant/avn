@@ -11,8 +11,8 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
 
 ## Headline
 
-- **52 commits.** Each phase is its own commit, reviewable in isolation.
-- **43 test suites** (added `test_blame.sh`), ~449 assertions, all green.
+- **53 commits.** Each phase is its own commit, reviewable in isolation.
+- **44 test suites** (added `test_acl_cp_follow.sh`), ~459 assertions, all green.
   Mix of in-language `.ae` tests and end-to-end shell harnesses that
   spin up a real HTTP server and drive it with curl and the built
   `svn` CLI.
@@ -95,7 +95,8 @@ Named after the plan's Phase N. Plan: `../svn-to-aether.md`.
 | 7.3  | `svn cleanup` — remove stale `.tmp.*` files + wc.db-journal | ✅ | `60589f5` |
 | 7.4  | REST PUT/DELETE on `/path/<rel>` with Svn-Based-On concurrency token | ✅ | (prev commit) |
 | 7.5  | Multi-algo secondary verification (`svn verify --secondaries`) | ✅ | (prev commit) |
-| 7.6  | `svn blame` — per-line revision attribution (LCS-based) | ✅ | (this commit) |
+| 7.6  | `svn blame` — per-line revision attribution (LCS-based) | ✅ | (prev commit) |
+| 7.7  | `svn cp` refuse-unless-RW-everywhere + ACL auto-follow | ✅ | (this commit) |
 | 12 | svnadmin create/dump/load | ✅ | `52380a5` |
 
 ## Phases not yet done (from the plan)
@@ -151,8 +152,11 @@ Implemented:
   Write enforcement: commit returns 403 on any denied path; self-
   elevation refused (user with no write on X can't set ACL on X);
   anonymous users (no header) can't write ACL'd paths. Copy guard:
-  `svn cp` requires read on source and write on dest; super-user
-  bypasses.
+  `svn cp URL URL` refuses unless the caller has RW on every path
+  in the source subtree; super-user bypasses. On success, the
+  source's paths-acl entries auto-follow — rebased onto the
+  destination — so the branch inherits its source's restrictions
+  verbatim (no accidental exposure).
 - REST node editing: `PUT /repos/{r}/path/<rel>` with raw body
   updates or creates a file; `DELETE` same URL removes. Optimistic
   concurrency via `Svn-Based-On: <prior-sha>` header — 409 on
