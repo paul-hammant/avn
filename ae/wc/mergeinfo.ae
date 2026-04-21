@@ -1,0 +1,606 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// permissions and limitations under the License.
+
+// svn:mergeinfo arithmetic — ported from the pure helpers in
+// ae/wc/merge_shim.c (parse_mergeinfo / cancel_pairs / serialize_mergeinfo
+// and friends).
+//
+// svn:mergeinfo is a line-oriented property. One line per source path:
+//   <source-path>:<range>[,<range>...]
+// where <range> is either "A-B" (forward-merged revs A..B inclusive) or
+// "-A-B" (reverse-merged revs A..B inclusive).
+//
+// The single exported entry point takes the existing property text,
+// a source path, a rev half-open lower bound + inclusive upper bound,
+// and a reverse flag. It:
+//   1. Parses existing into per-source (forward, reverse) revsets.
+//   2. Adds the new range (lo+1..hi inclusive) to the appropriate set.
+//   3. Cancels any rev that appears in both fwd and rev for that source.
+//   4. Collapses contiguous revs into "A-B" ranges.
+//   5. Returns the fresh mergeinfo text (empty string means "delete the
+//      property entirely").
+//
+// Compiled with --emit=lib: no I/O here.
+
+import std.string
+
+// --- dynamic int list ("revset"): sorted + unique -------------------------
+//
+// Aether has std.list but we only need a tiny sorted-int set, so we
+// hand-roll one using a pair of packed strings-as-buffers. To keep this
+// simple and avoid pointer lists, we represent the revset as a
+// comma-separated decimal string, sorted ascending with no duplicates.
+// Every insertion re-parses + re-emits; that's O(n) per insert but n is
+// tiny (a handful of revs per source in practice).
+//
+// Empty revset is "".
+
+// Insert `rev` into the sorted CSV string `rs`. Returns the new string.
+rs_add(rs: string, rev: int) -> string {
+    n = string.length(rs)
+    if n == 0 { return int_to_dec(rev) }
+    // Walk positions, splitting on commas.
+    out = ""
+    i = 0
+    inserted = 0
+    start = 0
+    while i <= n {
+        c = 0
+        at_end = 0
+        if i == n { at_end = 1 } else { c = string.char_at(rs, i) }
+        if at_end == 1 {
+            // final token: rs[start..n]
+            if i > start {
+                tok = string.substring(rs, start, i)
+                v = parse_int(tok)
+                if inserted == 0 && rev < v {
+                    out = append_csv_int(out, rev)
+                    inserted = 1
+                    out = append_csv_str(out, tok)
+                } else if inserted == 0 && rev == v {
+                    out = append_csv_str(out, tok)
+                    inserted = 1   // dedupe
+                } else {
+                    out = append_csv_str(out, tok)
+                }
+            }
+            i = i + 1
+        } else {
+            if c == 44 {   // ','
+                if i > start {
+                    tok = string.substring(rs, start, i)
+                    v = parse_int(tok)
+                    if inserted == 0 && rev < v {
+                        out = append_csv_int(out, rev)
+                        inserted = 1
+                        out = append_csv_str(out, tok)
+                    } else if inserted == 0 && rev == v {
+                        out = append_csv_str(out, tok)
+                        inserted = 1
+                    } else {
+                        out = append_csv_str(out, tok)
+                    }
+                }
+                start = i + 1
+            }
+            i = i + 1
+        }
+    }
+    if inserted == 0 {
+        out = append_csv_int(out, rev)
+    }
+    return out
+}
+
+// Remove `rev` from sorted CSV string `rs`. Returns new string.
+rs_remove(rs: string, rev: int) -> string {
+    n = string.length(rs)
+    if n == 0 { return "" }
+    out = ""
+    i = 0
+    start = 0
+    while i <= n {
+        at_end = 0
+        c = 0
+        if i == n { at_end = 1 } else { c = string.char_at(rs, i) }
+        is_sep = 0
+        if at_end == 1 { is_sep = 1 }
+        if c == 44 { is_sep = 1 }
+        if is_sep == 1 {
+            if i > start {
+                tok = string.substring(rs, start, i)
+                v = parse_int(tok)
+                if v != rev {
+                    out = append_csv_str(out, tok)
+                }
+            }
+            start = i + 1
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// Does `rs` contain `rev`?
+rs_contains(rs: string, rev: int) {
+    n = string.length(rs)
+    if n == 0 { return 0 }
+    i = 0
+    start = 0
+    while i <= n {
+        at_end = 0
+        c = 0
+        if i == n { at_end = 1 } else { c = string.char_at(rs, i) }
+        is_sep = 0
+        if at_end == 1 { is_sep = 1 }
+        if c == 44 { is_sep = 1 }
+        if is_sep == 1 {
+            if i > start {
+                tok = string.substring(rs, start, i)
+                if parse_int(tok) == rev { return 1 }
+            }
+            start = i + 1
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+// --- helpers: int<->dec, CSV append ---------------------------------------
+
+int_to_dec(v: int) -> string {
+    if v == 0 { return "0" }
+    neg = 0
+    n = v
+    if v < 0 { neg = 1; n = 0 - v }
+    out = ""
+    while n > 0 {
+        d = n - (n / 10) * 10
+        ch = ""
+        if d == 0 { ch = "0" }
+        if d == 1 { ch = "1" }
+        if d == 2 { ch = "2" }
+        if d == 3 { ch = "3" }
+        if d == 4 { ch = "4" }
+        if d == 5 { ch = "5" }
+        if d == 6 { ch = "6" }
+        if d == 7 { ch = "7" }
+        if d == 8 { ch = "8" }
+        if d == 9 { ch = "9" }
+        out = string.concat(ch, out)
+        n = n / 10
+    }
+    if neg == 1 { out = string.concat("-", out) }
+    return out
+}
+
+// Parse a decimal signed integer (no whitespace, no leading '+').
+parse_int(s: string) {
+    n = string.length(s)
+    if n == 0 { return 0 }
+    sign = 1
+    start = 0
+    if string.char_at(s, 0) == 45 { sign = 0 - 1; start = 1 }
+    v = 0
+    i = start
+    while i < n {
+        c = string.char_at(s, i)
+        if c < 48 { return v * sign }
+        if c > 57 { return v * sign }
+        v = v * 10 + (c - 48)
+        i = i + 1
+    }
+    return v * sign
+}
+
+append_csv_str(dst: string, tok: string) -> string {
+    if string.length(dst) == 0 { return tok }
+    with_comma = string.concat(dst, ",")
+    return string.concat(with_comma, tok)
+}
+
+append_csv_int(dst: string, v: int) -> string {
+    return append_csv_str(dst, int_to_dec(v))
+}
+
+// --- range-list parsing ---------------------------------------------------
+
+// Parse a comma-separated range list like "5-5,7-9,-3-4" and return the
+// per-rev union added to the given revsets. Returns the (fwd, rev) pair
+// as a two-string joined by a single NUL byte? — Aether doesn't have
+// pairs cleanly, so we pass them through out-parameter-style returns
+// using fresh strings each call.
+//
+// Easier: two small helpers, one per direction.
+
+// Parse `list` and add all FORWARD ranges (no leading '-') to the CSV
+// revset. Returns the new revset. REVERSE ranges are added only if
+// `want_reverse` is 1; otherwise skipped.
+//
+// A range is either "A" (single rev), "A-B" (range), or "-A-B" (reverse).
+parse_ranges(rs_in: string, list: string, want_reverse: int) -> string {
+    rs = rs_in
+    n = string.length(list)
+    i = 0
+    while i < n {
+        // skip separators
+        while i < n {
+            c = string.char_at(list, i)
+            if c != 44 && c != 32 { break }
+            i = i + 1
+        }
+        if i >= n { return rs }
+        // optional leading '-' → reverse
+        is_reverse = 0
+        if string.char_at(list, i) == 45 {
+            is_reverse = 1
+            i = i + 1
+        }
+        // read first number
+        if i >= n { return rs }
+        c = string.char_at(list, i)
+        if c < 48 || c > 57 {
+            // malformed — skip to comma
+            while i < n {
+                cc = string.char_at(list, i)
+                if cc == 44 { break }
+                i = i + 1
+            }
+        } else {
+            a = 0
+            while i < n {
+                d = string.char_at(list, i)
+                if d < 48 || d > 57 { break }
+                a = a * 10 + (d - 48)
+                i = i + 1
+            }
+            b = a
+            if i < n {
+                if string.char_at(list, i) == 45 {
+                    i = i + 1
+                    if i < n {
+                        e = string.char_at(list, i)
+                        if e >= 48 && e <= 57 {
+                            b = 0
+                            while i < n {
+                                d = string.char_at(list, i)
+                                if d < 48 || d > 57 { break }
+                                b = b * 10 + (d - 48)
+                                i = i + 1
+                            }
+                        }
+                    }
+                }
+            }
+            // inclusive range
+            lo = a
+            hi = b
+            if b < a { lo = b; hi = a }
+            add_it = 0
+            if is_reverse == 1 && want_reverse == 1 { add_it = 1 }
+            if is_reverse == 0 && want_reverse == 0 { add_it = 1 }
+            if add_it == 1 {
+                r = lo
+                while r <= hi {
+                    rs = rs_add(rs, r)
+                    r = r + 1
+                }
+            }
+            // skip remainder to next comma
+            while i < n {
+                d = string.char_at(list, i)
+                if d == 44 { break }
+                i = i + 1
+            }
+        }
+    }
+    return rs
+}
+
+// --- cancel_pairs: remove revs in both fwd and rev ------------------------
+
+// Walk both CSV sets; when we find a value in both, remove from both.
+// Returns the joined new pair as "fwd|rev" (we split on '|' at the
+// call site). Doing it this way keeps one fn one return.
+cancel_pairs(fwd: string, rev: string) -> string {
+    // For each rev in fwd, if also in rev, remove from both.
+    n = string.length(fwd)
+    new_fwd = fwd
+    new_rev = rev
+    i = 0
+    start = 0
+    while i <= n {
+        at_end = 0
+        c = 0
+        if i == n { at_end = 1 } else { c = string.char_at(fwd, i) }
+        is_sep = 0
+        if at_end == 1 { is_sep = 1 }
+        if c == 44 { is_sep = 1 }
+        if is_sep == 1 {
+            if i > start {
+                tok = string.substring(fwd, start, i)
+                v = parse_int(tok)
+                if rs_contains(new_rev, v) == 1 {
+                    new_fwd = rs_remove(new_fwd, v)
+                    new_rev = rs_remove(new_rev, v)
+                }
+            }
+            start = i + 1
+        }
+        i = i + 1
+    }
+    return string.concat(string.concat(new_fwd, "|"), new_rev)
+}
+
+// --- emit: collapse sorted CSV into contiguous "A-B" ranges ---------------
+
+emit_ranges(rs: string, is_reverse: int) -> string {
+    n = string.length(rs)
+    if n == 0 { return "" }
+    out = ""
+    i = 0
+    start = 0
+    prev_ok = 0
+    range_lo = 0
+    range_hi = 0
+    while i <= n {
+        at_end = 0
+        c = 0
+        if i == n { at_end = 1 } else { c = string.char_at(rs, i) }
+        is_sep = 0
+        if at_end == 1 { is_sep = 1 }
+        if c == 44 { is_sep = 1 }
+        if is_sep == 1 {
+            if i > start {
+                tok = string.substring(rs, start, i)
+                v = parse_int(tok)
+                if prev_ok == 0 {
+                    range_lo = v
+                    range_hi = v
+                    prev_ok = 1
+                } else {
+                    if v == range_hi + 1 {
+                        range_hi = v
+                    } else {
+                        // flush
+                        out = emit_one(out, range_lo, range_hi, is_reverse)
+                        range_lo = v
+                        range_hi = v
+                    }
+                }
+            }
+            start = i + 1
+        }
+        i = i + 1
+    }
+    if prev_ok == 1 {
+        out = emit_one(out, range_lo, range_hi, is_reverse)
+    }
+    return out
+}
+
+emit_one(dst: string, lo: int, hi: int, is_reverse: int) -> string {
+    piece = string.concat(string.concat(int_to_dec(lo), "-"), int_to_dec(hi))
+    if is_reverse == 1 { piece = string.concat("-", piece) }
+    return append_csv_str(dst, piece)
+}
+
+// --- parse existing property text: source:ranges\nsource:ranges ---------
+
+// Helper: find the first ':' byte in `s` between `from` and `until`.
+// Returns its index, or -1 if not found.
+find_colon(s: string, from: int, until: int) {
+    i = from
+    while i < until {
+        if string.char_at(s, i) == 58 { return i }
+        i = i + 1
+    }
+    return 0 - 1
+}
+
+// Find (fwd, rev) for `source` inside the existing mergeinfo text.
+// Returns "fwd|rev" with each side a sorted CSV, both possibly empty.
+extract_source_sets(existing: string, source: string) -> string {
+    n = string.length(existing)
+    if n == 0 { return "|" }
+    slen = string.length(source)
+    // Walk lines.
+    line_start = 0
+    fwd = ""
+    rev = ""
+    i = 0
+    while i <= n {
+        at_end = 0
+        c = 0
+        if i == n { at_end = 1 } else { c = string.char_at(existing, i) }
+        is_newline = 0
+        if at_end == 1 { is_newline = 1 }
+        if c == 10 { is_newline = 1 }
+        if is_newline == 1 {
+            if i > line_start {
+                colon = find_colon(existing, line_start, i)
+                if colon > line_start {
+                    this_len = colon - line_start
+                    if this_len == slen {
+                        // compare byte-by-byte
+                        j = 0
+                        is_match = 1
+                        while j < slen {
+                            if string.char_at(existing, line_start + j) != string.char_at(source, j) {
+                                is_match = 0
+                                break
+                            }
+                            j = j + 1
+                        }
+                        if is_match == 1 {
+                            list_str = string.substring(existing, colon + 1, i)
+                            fwd = parse_ranges(fwd, list_str, 0)
+                            rev = parse_ranges(rev, list_str, 1)
+                        }
+                    }
+                }
+            }
+            line_start = i + 1
+        }
+        i = i + 1
+    }
+    return string.concat(string.concat(fwd, "|"), rev)
+}
+
+// Split "fwd|rev" at the first '|'. Returns fwd-part.
+split_left(joined: string) -> string {
+    n = string.length(joined)
+    i = 0
+    while i < n {
+        if string.char_at(joined, i) == 124 { return string.substring(joined, 0, i) }
+        i = i + 1
+    }
+    return joined
+}
+
+split_right(joined: string) -> string {
+    n = string.length(joined)
+    i = 0
+    while i < n {
+        if string.char_at(joined, i) == 124 { return string.substring(joined, i + 1, n) }
+        i = i + 1
+    }
+    return ""
+}
+
+// --- main entry point -----------------------------------------------------
+
+// Add rev-range (lo, hi] to mergeinfo for `source`. Forward merge when
+// `reverse == 0`, reverse merge when `reverse == 1`. Returns the fresh
+// mergeinfo property text (possibly empty, meaning "delete the property").
+//
+// Preserves the source order of the input.
+export mergeinfo_add_range(existing: string, source: string, lo: int, hi: int, reverse: int) -> string {
+    // Extract this source's current (fwd, rev) sets, accumulate the new
+    // range, cancel pairs, then emit.
+    pair = extract_source_sets(existing, source)
+    new_fwd = split_left(pair)
+    new_rev = split_right(pair)
+
+    // Expand the new range into the appropriate set.
+    r = lo + 1
+    while r <= hi {
+        if reverse == 1 { new_rev = rs_add(new_rev, r) }
+        if reverse == 0 { new_fwd = rs_add(new_fwd, r) }
+        r = r + 1
+    }
+
+    // Cancel any rev that's now in both.
+    cancelled = cancel_pairs(new_fwd, new_rev)
+    new_fwd = split_left(cancelled)
+    new_rev = split_right(cancelled)
+
+    // Rebuild the full property. Walk existing line by line to preserve
+    // source order; replace our source's entry in place; emit other
+    // sources verbatim (but re-parsed + re-emitted so ranges collapse
+    // and any lingering pairs cancel there too).
+    n = string.length(existing)
+    out = ""
+    saw_source = 0
+    slen = string.length(source)
+    line_start = 0
+    i = 0
+    while i <= n {
+        at_end = 0
+        c = 0
+        if i == n { at_end = 1 } else { c = string.char_at(existing, i) }
+        is_newline = 0
+        if at_end == 1 { is_newline = 1 }
+        if c == 10 { is_newline = 1 }
+        if is_newline == 1 {
+            if i > line_start {
+                colon = find_colon(existing, line_start, i)
+                if colon > line_start {
+                    this_len = colon - line_start
+                    this_src = string.substring(existing, line_start, colon)
+                    is_ours = 0
+                    if this_len == slen {
+                        j = 0
+                        is_ours = 1
+                        while j < slen {
+                            if string.char_at(existing, line_start + j) != string.char_at(source, j) {
+                                is_ours = 0
+                                break
+                            }
+                            j = j + 1
+                        }
+                    }
+                    if is_ours == 1 {
+                        if saw_source == 0 {
+                            line = build_source_line(this_src, new_fwd, new_rev)
+                            if string.length(line) > 0 {
+                                if string.length(out) > 0 { out = string.concat(out, "\n") }
+                                out = string.concat(out, line)
+                            }
+                            saw_source = 1
+                        }
+                    } else {
+                        // re-serialize the other source's ranges (collapses adjacent,
+                        // cancels pairs)
+                        list_str = string.substring(existing, colon + 1, i)
+                        of = parse_ranges("", list_str, 0)
+                        or_ = parse_ranges("", list_str, 1)
+                        paircan = cancel_pairs(of, or_)
+                        of = split_left(paircan)
+                        or_ = split_right(paircan)
+                        line = build_source_line(this_src, of, or_)
+                        if string.length(line) > 0 {
+                            if string.length(out) > 0 { out = string.concat(out, "\n") }
+                            out = string.concat(out, line)
+                        }
+                    }
+                }
+            }
+            line_start = i + 1
+        }
+        i = i + 1
+    }
+    // If our source wasn't present in existing, append it.
+    if saw_source == 0 {
+        line = build_source_line(source, new_fwd, new_rev)
+        if string.length(line) > 0 {
+            if string.length(out) > 0 { out = string.concat(out, "\n") }
+            out = string.concat(out, line)
+        }
+    }
+    return out
+}
+
+build_source_line(src: string, fwd: string, rev: string) -> string {
+    if string.length(fwd) == 0 {
+        if string.length(rev) == 0 { return "" }
+    }
+    fwd_emit = emit_ranges(fwd, 0)
+    rev_emit = emit_ranges(rev, 1)
+    ranges = fwd_emit
+    if string.length(ranges) == 0 {
+        ranges = rev_emit
+    } else {
+        if string.length(rev_emit) > 0 {
+            ranges = string.concat(string.concat(ranges, ","), rev_emit)
+        }
+    }
+    if string.length(ranges) == 0 { return "" }
+    return string.concat(string.concat(src, ":"), ranges)
+}
+
+main() {
+    println("ae/wc/mergeinfo.ae is a library; not meant to run standalone")
+}

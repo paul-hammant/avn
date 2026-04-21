@@ -1,0 +1,17 @@
+# Regeneration recipe for Aether-as-library C sources under ae/wc/.
+#
+# These `.ae` files are compiled to C via `aetherc --emit=lib` and the
+# generated C is committed alongside the source. Run `make -f
+# Makefile.regen` after editing any `.ae` file to refresh the paired
+# `*_generated.c`.
+
+AETHERC ?= $(HOME)/scm/aether/build/aetherc
+
+GENERATED := mergeinfo_generated.c
+
+all: $(GENERATED)
+
+mergeinfo_generated.c: mergeinfo.ae
+	$(AETHERC) --emit=lib $< $@
+
+.PHONY: all
