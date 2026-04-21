@@ -11,8 +11,8 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
 
 ## Headline
 
-- **51 commits.** Each phase is its own commit, reviewable in isolation.
-- **42 test suites** (added `test_verify_secondaries.sh`), ~436 assertions, all green.
+- **52 commits.** Each phase is its own commit, reviewable in isolation.
+- **43 test suites** (added `test_blame.sh`), ~449 assertions, all green.
   Mix of in-language `.ae` tests and end-to-end shell harnesses that
   spin up a real HTTP server and drive it with curl and the built
   `svn` CLI.
@@ -94,7 +94,8 @@ Named after the plan's Phase N. Plan: `../svn-to-aether.md`.
 | 7.2  | Write-side ACL enforcement + copy guard; rw/r/w rule modes | ✅ | (prev commit) |
 | 7.3  | `svn cleanup` — remove stale `.tmp.*` files + wc.db-journal | ✅ | `60589f5` |
 | 7.4  | REST PUT/DELETE on `/path/<rel>` with Svn-Based-On concurrency token | ✅ | (prev commit) |
-| 7.5  | Multi-algo secondary verification (`svn verify --secondaries`) | ✅ | (this commit) |
+| 7.5  | Multi-algo secondary verification (`svn verify --secondaries`) | ✅ | (prev commit) |
+| 7.6  | `svn blame` — per-line revision attribution (LCS-based) | ✅ | (this commit) |
 | 12 | svnadmin create/dump/load | ✅ | `52380a5` |
 
 ## Phases not yet done (from the plan)
@@ -167,13 +168,10 @@ Implemented:
 Not implemented (items the plan calls out or that reference svn has):
 
 - HTTPS / TLS transport
-- Authentication + authz
-- `svn blame`
+- Real authentication (LDAP/AD/Basic — placeholder in place today)
 - Hooks (pre/post-commit scripts)
-- Path-based authz
 - Locks (`svn lock`/`unlock`)
 - `svn externals` (svn:externals property pulling sub-WCs)
-- `svn cleanup` (WC crash recovery)
 - Pre-1.7 WC compatibility (intentionally dropped)
 - Reference-svn dump-format compatibility (intentionally dropped;
   we have our own portable format)

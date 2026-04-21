@@ -416,6 +416,64 @@ svnae_ra_paths_free(struct svnae_ra_paths *P)
     free(P);
 }
 
+/* ---- blame handle (Phase 7.6) --------------------------------------- */
+
+struct blame_line_ra { int rev; char *author; char *text; };
+struct svnae_ra_blame { struct blame_line_ra *items; int n; };
+
+struct svnae_ra_blame *
+svnae_ra_blame(const char *base_url, const char *repo_name,
+              int rev, const char *path)
+{
+    char url[2048];
+    snprintf(url, sizeof url, "%s/repos/%s/rev/%d/blame/%s",
+             base_url, repo_name, rev, path);
+    char *body = NULL; size_t len = 0; int status = 0;
+    if (http_get(url, &body, &len, &status) != 0) return NULL;
+    if (status != 200) { free(body); return NULL; }
+
+    cJSON *root = cJSON_ParseWithLength(body, len);
+    free(body);
+    if (!root) return NULL;
+    cJSON *jlines = cJSON_GetObjectItemCaseSensitive(root, "lines");
+    if (!cJSON_IsArray(jlines)) { cJSON_Delete(root); return NULL; }
+
+    int n = cJSON_GetArraySize(jlines);
+    struct svnae_ra_blame *B = calloc(1, sizeof *B);
+    B->n = n;
+    B->items = calloc((size_t)(n > 0 ? n : 1), sizeof *B->items);
+    int i = 0;
+    cJSON *e;
+    cJSON_ArrayForEach(e, jlines) {
+        cJSON *jr = cJSON_GetObjectItemCaseSensitive(e, "rev");
+        cJSON *ja = cJSON_GetObjectItemCaseSensitive(e, "author");
+        cJSON *jt = cJSON_GetObjectItemCaseSensitive(e, "text");
+        B->items[i].rev    = cJSON_IsNumber(jr) ? jr->valueint : -1;
+        B->items[i].author = cJSON_IsString(ja) ? strdup(ja->valuestring) : strdup("");
+        B->items[i].text   = cJSON_IsString(jt) ? strdup(jt->valuestring) : strdup("");
+        i++;
+    }
+    cJSON_Delete(root);
+    return B;
+}
+
+int         svnae_ra_blame_count(const struct svnae_ra_blame *B) { return B ? B->n : 0; }
+int         svnae_ra_blame_rev  (const struct svnae_ra_blame *B, int i) {
+    return (B && i >= 0 && i < B->n) ? B->items[i].rev : -1;
+}
+const char *svnae_ra_blame_author(const struct svnae_ra_blame *B, int i) {
+    return (B && i >= 0 && i < B->n) ? B->items[i].author : "";
+}
+const char *svnae_ra_blame_text(const struct svnae_ra_blame *B, int i) {
+    return (B && i >= 0 && i < B->n) ? B->items[i].text : "";
+}
+void svnae_ra_blame_free(struct svnae_ra_blame *B) {
+    if (!B) return;
+    for (int i = 0; i < B->n; i++) { free(B->items[i].author); free(B->items[i].text); }
+    free(B->items);
+    free(B);
+}
+
 /* ---- info handle ----------------------------------------------------- */
 
 struct svnae_ra_info { int rev; char *author; char *date; char *msg; char *root; };

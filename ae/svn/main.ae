@@ -41,6 +41,13 @@ extern svnae_ra_paths_free(P: ptr)
 extern svnae_client_verify(base_url: string, repo_name: string, rev: int) -> int
 extern svnae_client_verify_full(base_url: string, repo_name: string, rev: int, with_secondaries: int) -> int
 
+extern svnae_ra_blame(base_url: string, repo_name: string, rev: int, path: string) -> ptr
+extern svnae_ra_blame_count(B: ptr) -> int
+extern svnae_ra_blame_rev(B: ptr, i: int) -> int
+extern svnae_ra_blame_author(B: ptr, i: int) -> string
+extern svnae_ra_blame_text(B: ptr, i: int) -> string
+extern svnae_ra_blame_free(B: ptr)
+
 extern svnae_ra_info_rev(base_url: string, repo_name: string, rev: int) -> ptr
 extern svnae_ra_info_rev_num(I: ptr) -> int
 extern svnae_ra_info_author(I: ptr) -> string
@@ -445,6 +452,72 @@ cmd_acl_clear(head: int, base: string, repo: string, path: string) {
         return 1
     }
     println("Committed revision ${new_rev}.")
+    return 0
+}
+
+// svn blame URL PATH [--rev N]
+// Per-line revision attribution. Prints "<rev> <author> <line>".
+cmd_blame(argv_start: int) {
+    url = ""
+    path = ""
+    k = argv_start
+    n_argv = aether_args_count()
+    while k < n_argv {
+        a = aether_args_get(k)
+        if string.length(a) > 0 {
+            if string.char_at(a, 0) != 45 {
+                if string.length(url) == 0 { url = a }
+                else {
+                    if string.length(path) == 0 { path = a }
+                }
+            }
+        }
+        k = k + 1
+    }
+    if string.length(url) == 0 {
+        println("svn blame: usage: svn blame URL [PATH] [--rev N]")
+        return 2
+    }
+    // Allow URL with embedded path, similar to `svn cat`.
+    base = url_base(url)
+    repo = url_repo(url)
+    // If PATH wasn't supplied separately, treat the URL's extra
+    // trailing segments (after the repo name) as the path. For now
+    // keep it simple: require PATH explicit.
+    if string.length(path) == 0 {
+        // Try extracting in-repo path from URL.
+        path = in_repo_path(url)
+    }
+    if string.length(path) == 0 {
+        println("svn blame: PATH required")
+        return 2
+    }
+    rev = -1
+    rev_str = find_flag("--rev", argv_start)
+    if string.length(rev_str) > 0 {
+        if string.try_int(rev_str) == 1 { rev = string.get_int(rev_str) }
+    }
+    if rev < 0 { rev = svnae_ra_head_rev(base, repo) }
+    if rev < 0 {
+        println("svn blame: could not contact server")
+        return 1
+    }
+    B = svnae_ra_blame(base, repo, rev, path)
+    if B == 0 {
+        println("svn blame: ${path} not found at r${rev}")
+        return 1
+    }
+    n = svnae_ra_blame_count(B)
+    i = 0
+    while i < n {
+        r = svnae_ra_blame_rev(B, i)
+        au = svnae_ra_blame_author(B, i)
+        t = svnae_ra_blame_text(B, i)
+        // Reference svn formats as "   <rev>   <author> <line>".
+        println("${r} ${au} ${t}")
+        i = i + 1
+    }
+    svnae_ra_blame_free(B)
     return 0
 }
 
@@ -1314,6 +1387,10 @@ main() {
     if string.equals(sub, "info") == 1     { exit(cmd_info(2)) }
     if string.equals(sub, "verify") == 1   { exit(cmd_verify(2)) }
     if string.equals(sub, "acl") == 1      { exit(cmd_acl(2)) }
+    if string.equals(sub, "blame") == 1    { exit(cmd_blame(2)) }
+    if string.equals(sub, "praise") == 1   { exit(cmd_blame(2)) }
+    if string.equals(sub, "annotate") == 1 { exit(cmd_blame(2)) }
+    if string.equals(sub, "ann") == 1      { exit(cmd_blame(2)) }
     if string.equals(sub, "log") == 1      { exit(cmd_log(2)) }
     if string.equals(sub, "ls") == 1       { exit(cmd_ls(2)) }
     if string.equals(sub, "cat") == 1      { exit(cmd_cat(2)) }

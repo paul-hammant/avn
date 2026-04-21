@@ -706,3 +706,256 @@ svnae_repos_resolve(const char *repo, int rev, const char *path,
     free(sha1);
     return 1;
 }
+
+/* --- blame -----------------------------------------------------------
+ *
+ * Per-line attribution: for every line of `path` at `rev`, determine
+ * the rev that first introduced that exact line.
+ *
+ * Algorithm, classic and straightforward:
+ *   1. Walk revs 1..rev. For each rev where `path` changed (per
+ *      svnae_repos_paths_changed), fetch both the prior and current
+ *      content.
+ *   2. Run a line-level LCS diff. Lines that survive from prior
+ *      keep their annotation; newly-added lines get (rev, author).
+ *   3. When the walk reaches `rev`, emit the final attribution list.
+ *
+ * The line annotations live in a simple array parallel to the lines
+ * of the file's current content at each rev. When the file is
+ * modified, we recompute. This is O(revs * lines^2) in the worst
+ * case; fine for small-to-medium files. Myers diff would bring it
+ * down to O(revs * (lines + edits)) but adds significant complexity.
+ */
+
+struct line_ann {
+    int   rev;
+    char *author;   /* borrowed from log; copied into the blame result */
+    char *text;     /* malloc'd copy of the line (no trailing \n) */
+};
+
+struct svnae_blame {
+    struct line_ann *items;
+    int n, cap;
+};
+
+static void
+ann_push(struct svnae_blame *B, int rev, const char *author, const char *text, int tlen)
+{
+    if (B->n == B->cap) {
+        int nc = B->cap ? B->cap * 2 : 64;
+        B->items = realloc(B->items, (size_t)nc * sizeof *B->items);
+        B->cap = nc;
+    }
+    B->items[B->n].rev = rev;
+    B->items[B->n].author = author ? strdup(author) : strdup("");
+    B->items[B->n].text = malloc((size_t)tlen + 1);
+    memcpy(B->items[B->n].text, text, (size_t)tlen);
+    B->items[B->n].text[tlen] = '\0';
+    B->n++;
+}
+
+/* Split `data[0..len]` into line ranges. Returns a malloc'd array of
+ * offsets into data + a parallel array of lengths. Trailing '\n' is
+ * NOT included in the line range. `*out_n` is the line count. */
+static void
+split_lines(const char *data, int len, int **out_off, int **out_len, int *out_n)
+{
+    int cap = 32, n = 0;
+    int *off = malloc((size_t)cap * sizeof *off);
+    int *lns = malloc((size_t)cap * sizeof *lns);
+    int i = 0;
+    while (i < len) {
+        int start = i;
+        while (i < len && data[i] != '\n') i++;
+        if (n == cap) {
+            cap *= 2;
+            off = realloc(off, (size_t)cap * sizeof *off);
+            lns = realloc(lns, (size_t)cap * sizeof *lns);
+        }
+        off[n] = start;
+        lns[n] = i - start;
+        n++;
+        if (i < len) i++;  /* skip '\n' */
+    }
+    *out_off = off;
+    *out_len = lns;
+    *out_n = n;
+}
+
+/* Line-level LCS to find common subsequence between `a` and `b`.
+ * Returns a malloc'd int array `match[0..na-1]` where match[i] is
+ * the index in b of a[i]'s match, or -1 if a[i] is unique to a.
+ * Standard dynamic-programming LCS; O(na*nb) time and space. */
+static int *
+lcs_match(const char *a_data, int *a_off, int *a_len, int na,
+          const char *b_data, int *b_off, int *b_len, int nb)
+{
+    /* dp[i][j] = length of LCS of a[0..i-1] and b[0..j-1]. */
+    int *dp = calloc((size_t)(na + 1) * (size_t)(nb + 1), sizeof *dp);
+    if (!dp) return NULL;
+    #define DP(i, j) dp[(i) * (nb + 1) + (j)]
+    for (int i = 1; i <= na; i++) {
+        for (int j = 1; j <= nb; j++) {
+            if (a_len[i-1] == b_len[j-1]
+                && memcmp(a_data + a_off[i-1], b_data + b_off[j-1], (size_t)a_len[i-1]) == 0) {
+                DP(i, j) = DP(i-1, j-1) + 1;
+            } else {
+                int u = DP(i-1, j);
+                int v = DP(i, j-1);
+                DP(i, j) = u > v ? u : v;
+            }
+        }
+    }
+    int *match = malloc((size_t)na * sizeof *match);
+    for (int i = 0; i < na; i++) match[i] = -1;
+    int i = na, j = nb;
+    while (i > 0 && j > 0) {
+        if (a_len[i-1] == b_len[j-1]
+            && memcmp(a_data + a_off[i-1], b_data + b_off[j-1], (size_t)a_len[i-1]) == 0) {
+            match[i-1] = j - 1;
+            i--; j--;
+        } else if (DP(i-1, j) >= DP(i, j-1)) {
+            i--;
+        } else {
+            j--;
+        }
+    }
+    #undef DP
+    free(dp);
+    return match;
+}
+
+struct svnae_blame *
+svnae_repos_blame(const char *repo, int target_rev, const char *path)
+{
+    if (target_rev < 0) target_rev = head_rev(repo);
+    if (target_rev < 1) return NULL;
+
+    /* Walk revs 1..target_rev, maintaining a current annotation list
+     * that mirrors the file's content at each step. Skip revs that
+     * don't touch `path`. */
+    struct svnae_blame *B = calloc(1, sizeof *B);
+    char *prev_body = NULL;
+    int   prev_len  = 0;
+    /* Parallel to prev_body's lines: each line's attribution. */
+    struct line_ann *prev_ann = NULL;
+    int prev_ann_n = 0;
+
+    for (int r = 1; r <= target_rev; r++) {
+        /* Did this rev touch `path`? */
+        struct svnae_paths *P = svnae_repos_paths_changed(repo, r);
+        int touches = 0;
+        char action = 0;
+        if (P) {
+            int pn = svnae_repos_paths_count(P);
+            for (int i = 0; i < pn; i++) {
+                if (strcmp(svnae_repos_paths_path(P, i), path) == 0) {
+                    touches = 1;
+                    action = svnae_repos_paths_action(P, i)[0];
+                    break;
+                }
+            }
+            svnae_repos_paths_free(P);
+        }
+        if (!touches) continue;
+        if (action == 'D') {
+            /* Deleted in this rev — clear state. If later added back,
+             * we start fresh. */
+            free(prev_body); prev_body = NULL; prev_len = 0;
+            for (int i = 0; i < prev_ann_n; i++) {
+                free(prev_ann[i].author); free(prev_ann[i].text);
+            }
+            free(prev_ann); prev_ann = NULL; prev_ann_n = 0;
+            continue;
+        }
+
+        /* Fetch content + author for this rev. */
+        char *body = svnae_repos_cat(repo, r, path);
+        if (!body) continue;
+        int body_len = (int)strlen(body);
+
+        struct svnae_info *I = svnae_repos_info_rev(repo, r);
+        const char *author = I ? svnae_repos_info_author(I) : "";
+
+        int *cur_off = NULL, *cur_lens = NULL, cur_n = 0;
+        split_lines(body, body_len, &cur_off, &cur_lens, &cur_n);
+
+        struct line_ann *cur_ann = calloc((size_t)(cur_n > 0 ? cur_n : 1), sizeof *cur_ann);
+
+        if (prev_body == NULL) {
+            /* First version — every line gets this rev. */
+            for (int i = 0; i < cur_n; i++) {
+                cur_ann[i].rev = r;
+                cur_ann[i].author = strdup(author);
+                cur_ann[i].text = malloc((size_t)cur_lens[i] + 1);
+                memcpy(cur_ann[i].text, body + cur_off[i], (size_t)cur_lens[i]);
+                cur_ann[i].text[cur_lens[i]] = '\0';
+            }
+        } else {
+            /* Diff prev_body → body, carry forward matched lines. */
+            int *prev_off = NULL, *prev_lns = NULL, prev_n = 0;
+            split_lines(prev_body, prev_len, &prev_off, &prev_lns, &prev_n);
+            /* LCS maps each cur line back to a prev line (or -1). */
+            int *match = lcs_match(body, cur_off, cur_lens, cur_n,
+                                   prev_body, prev_off, prev_lns, prev_n);
+            for (int i = 0; i < cur_n; i++) {
+                cur_ann[i].text = malloc((size_t)cur_lens[i] + 1);
+                memcpy(cur_ann[i].text, body + cur_off[i], (size_t)cur_lens[i]);
+                cur_ann[i].text[cur_lens[i]] = '\0';
+                if (match && match[i] >= 0 && match[i] < prev_ann_n) {
+                    cur_ann[i].rev = prev_ann[match[i]].rev;
+                    cur_ann[i].author = strdup(prev_ann[match[i]].author);
+                } else {
+                    cur_ann[i].rev = r;
+                    cur_ann[i].author = strdup(author);
+                }
+            }
+            free(match);
+            free(prev_off); free(prev_lns);
+        }
+
+        if (I) svnae_repos_info_free(I);
+
+        /* Free prev, swap cur → prev. */
+        free(prev_body);
+        for (int i = 0; i < prev_ann_n; i++) {
+            free(prev_ann[i].author); free(prev_ann[i].text);
+        }
+        free(prev_ann);
+        prev_body = body;
+        prev_len = body_len;
+        prev_ann = cur_ann;
+        prev_ann_n = cur_n;
+        free(cur_off); free(cur_lens);
+    }
+
+    /* Final: copy prev_ann into B. */
+    for (int i = 0; i < prev_ann_n; i++) {
+        ann_push(B, prev_ann[i].rev, prev_ann[i].author,
+                 prev_ann[i].text, (int)strlen(prev_ann[i].text));
+        free(prev_ann[i].author); free(prev_ann[i].text);
+    }
+    free(prev_ann);
+    free(prev_body);
+    return B;
+}
+
+int         svnae_blame_count(const struct svnae_blame *B) { return B ? B->n : 0; }
+int         svnae_blame_rev  (const struct svnae_blame *B, int i) {
+    return (B && i >= 0 && i < B->n) ? B->items[i].rev : -1;
+}
+const char *svnae_blame_author(const struct svnae_blame *B, int i) {
+    return (B && i >= 0 && i < B->n) ? B->items[i].author : "";
+}
+const char *svnae_blame_text (const struct svnae_blame *B, int i) {
+    return (B && i >= 0 && i < B->n) ? B->items[i].text : "";
+}
+void svnae_blame_free(struct svnae_blame *B) {
+    if (!B) return;
+    for (int i = 0; i < B->n; i++) {
+        free(B->items[i].author);
+        free(B->items[i].text);
+    }
+    free(B->items);
+    free(B);
+}

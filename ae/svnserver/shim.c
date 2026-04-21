@@ -88,6 +88,13 @@ char              *svnae_rep_lookup_secondary(const char *repo,
                                               const char *primary_hex,
                                               const char *algo);
 
+struct svnae_blame *svnae_repos_blame(const char *repo, int rev, const char *path);
+int         svnae_blame_count (const struct svnae_blame *B);
+int         svnae_blame_rev   (const struct svnae_blame *B, int i);
+const char *svnae_blame_author(const struct svnae_blame *B, int i);
+const char *svnae_blame_text  (const struct svnae_blame *B, int i);
+void        svnae_blame_free  (struct svnae_blame *B);
+
 struct svnae_list *svnae_repos_list(const char *repo, int rev, const char *path);
 int               svnae_repos_list_count(const struct svnae_list *L);
 const char       *svnae_repos_list_name(const struct svnae_list *L, int i);
@@ -952,6 +959,44 @@ handle_repo_rev(HttpRequest *req, HttpServerResponse *res, void *user_data)
         sb_puts(&s, "]}");
         svnae_repos_paths_free(P);
         respond_json(res, 200, s.data ? s.data : "{\"entries\":[]}");
+        free(s.data);
+        return;
+    }
+
+    /* /rev/N/blame/<path> → {"lines":[{"rev":..,"author":..,"text":..}]}
+     *
+     * Per-line attribution at `rev`. ACL applies: denied paths → 404.
+     * For very large files this is O(revs * lines^2) on the server;
+     * fine for typical source trees, revisit if that becomes a hot
+     * spot. */
+    if (strncmp(after, "/blame/", 7) == 0) {
+        const char *target = after + 7;
+        const char *bl_user = NULL;
+        int bl_is_super = auth_context(req, &bl_user);
+        if (!bl_is_super && !acl_allows(repo, rev, bl_user, target)) {
+            respond_error(res, 404, "not found");
+            return;
+        }
+
+        struct svnae_blame *B = svnae_repos_blame(repo, rev, target);
+        if (!B) { respond_error(res, 404, "not found"); return; }
+
+        struct sb s = {0};
+        sb_puts(&s, "{\"lines\":[");
+        int n = svnae_blame_count(B);
+        for (int i = 0; i < n; i++) {
+            if (i) sb_putc(&s, ',');
+            sb_puts(&s, "{\"rev\":");
+            sb_putjson_int(&s, svnae_blame_rev(B, i));
+            sb_puts(&s, ",\"author\":");
+            sb_putjson_string(&s, svnae_blame_author(B, i));
+            sb_puts(&s, ",\"text\":");
+            sb_putjson_string(&s, svnae_blame_text(B, i));
+            sb_putc(&s, '}');
+        }
+        sb_puts(&s, "]}");
+        svnae_blame_free(B);
+        respond_json(res, 200, s.data ? s.data : "{\"lines\":[]}");
         free(s.data);
         return;
     }
