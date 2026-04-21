@@ -513,6 +513,7 @@ extern const char *aether_info_prelude_json(int head, const char *name, const ch
 extern const char *aether_rev_info_json(int rev, const char *author, const char *date, const char *msg, const char *root);
 extern const char *aether_hashes_prelude_json(const char *algo, const char *primary_hash);
 extern const char *aether_secondary_entry_json(const char *algo, const char *hash);
+extern const char *aether_acl_response_json(const char *rules_body, const char *effective_from);
 
 static void
 sb_putjson_string(struct sb *s, const char *v)
@@ -1051,38 +1052,16 @@ handle_repo_rev(HttpRequest *req, HttpServerResponse *res, void *user_data)
         }
         svnae_rep_free(paths_body);
 
-        struct sb s = {0};
-        sb_puts(&s, "{\"rules\":[");
+        char *rules = NULL;
         if (eff_sha) {
-            char *rules = svnae_rep_read_blob(repo, eff_sha);
-            if (rules) {
-                int first = 1;
-                const char *p = rules;
-                while (*p) {
-                    const char *eol = strchr(p, '\n');
-                    size_t n = eol ? (size_t)(eol - p) : strlen(p);
-                    if (n > 0) {
-                        char line[128];
-                        if (n < sizeof line) {
-                            memcpy(line, p, n); line[n] = '\0';
-                            if (!first) sb_putc(&s, ',');
-                            sb_putjson_string(&s, line);
-                            first = 0;
-                        }
-                    }
-                    if (!eol) break;
-                    p = eol + 1;
-                }
-                svnae_rep_free(rules);
-            }
+            rules = svnae_rep_read_blob(repo, eff_sha);
             free(eff_sha);
         }
-        sb_puts(&s, "],\"effective_from\":");
-        sb_putjson_string(&s, eff_path ? eff_path : "");
-        sb_putc(&s, '}');
+        const char *body = aether_acl_response_json(rules ? rules : "",
+                                                     eff_path ? eff_path : "");
+        if (rules) svnae_rep_free(rules);
         free(eff_path);
-        respond_json(res, 200, s.data ? s.data : "{}");
-        free(s.data);
+        respond_json(res, 200, body ? body : "{}");
         return;
     }
 

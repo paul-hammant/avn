@@ -697,6 +697,68 @@ out = string_concat(out, "},\"secondaries\":[");
 }
 
 // Exported:
+const char* acl_response_json(const char* rules_body, const char* effective_from) {
+const char* out = "{\"rules\":[";
+    int _heap_out = 0; (void)_heap_out;
+int n = string_length(rules_body);
+int first = 1;
+int line_start = 0;
+int i = 0;
+    int at_end;
+    int c;
+    int is_eol;
+    const char* rule;
+while (i <= n) {
+        {
+at_end = 0;
+c = 0;
+if (i == n) {
+                {
+at_end = 1;
+                }
+            } else {
+                {
+c = string_char_at(rules_body, i);
+                }
+            }
+is_eol = 0;
+if (at_end == 1) {
+                {
+is_eol = 1;
+                }
+            }
+if (c == 10) {
+                {
+is_eol = 1;
+                }
+            }
+if (is_eol == 1) {
+                {
+if (i > line_start) {
+                        {
+rule = string_substring(rules_body, line_start, i);
+if (first == 0) {
+                                {
+out = string_concat(out, ",");
+                                }
+                            }
+first = 0;
+out = string_concat(out, json_escape_string_impl(rule));
+                        }
+                    }
+line_start = (i + 1);
+                }
+            }
+i = (i + 1);
+        }
+    }
+out = string_concat(out, "],\"effective_from\":");
+out = string_concat(out, json_escape_string_impl(effective_from));
+out = string_concat(out, "}");
+    return out;
+}
+
+// Exported:
 const char* secondary_entry_json(const char* algo, const char* hash) {
 const char* out = "{\"algo\":";
     int _heap_out = 0; (void)_heap_out;
@@ -816,6 +878,9 @@ const char* aether_path_change_entry_json(const char* action, const char* path) 
 }
 const char* aether_hashes_prelude_json(const char* algo, const char* primary_hash) {
     return hashes_prelude_json(algo, primary_hash);
+}
+const char* aether_acl_response_json(const char* rules_body, const char* effective_from) {
+    return acl_response_json(rules_body, effective_from);
 }
 const char* aether_secondary_entry_json(const char* algo, const char* hash) {
     return secondary_entry_json(algo, hash);
