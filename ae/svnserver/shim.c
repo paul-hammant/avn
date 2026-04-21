@@ -37,6 +37,7 @@
 
 #include <cjson/cJSON.h>
 #include <dirent.h>
+#include <sys/stat.h>
 #include <errno.h>
 #include <openssl/evp.h>
 #include <stdio.h>
@@ -693,20 +694,69 @@ handle_repo_info(HttpRequest *req, HttpServerResponse *res, void *user_data)
     sb_puts(&s, ",\"default_branch\":\"main\"");
     sb_puts(&s, ",\"branches\":[");
     {
+        /* `main` is always implicit in every repo, even ones seeded
+         * before the per-branch layout existed. We emit it first and
+         * suppress a duplicate if the on-disk dir also has a
+         * branches/main entry. */
+        sb_putjson_string(&s, "main");
         DIR *d = opendir(branches_dir);
         if (d) {
             struct dirent *de;
-            int first = 1;
             while ((de = readdir(d)) != NULL) {
                 if (de->d_name[0] == '.') continue;
-                if (!first) sb_putc(&s, ',');
-                first = 0;
+                if (strcmp(de->d_name, "main") == 0) continue;
+                sb_putc(&s, ',');
                 sb_putjson_string(&s, de->d_name);
             }
             closedir(d);
         }
     }
-    sb_puts(&s, "]");
+    sb_puts(&s, "],\"specs\":{");
+    {
+        /* Per-branch include globs. main has no spec (full tree)
+         * unless explicitly set — we emit [] for it in that case. */
+        int first = 1;
+        DIR *d = opendir(branches_dir);
+        if (d) {
+            struct dirent *de;
+            while ((de = readdir(d)) != NULL) {
+                if (de->d_name[0] == '.') continue;
+                char spec_path[PATH_MAX];
+                snprintf(spec_path, sizeof spec_path, "%s/%s/spec",
+                         branches_dir, de->d_name);
+                FILE *sf = fopen(spec_path, "r");
+                if (!first) sb_putc(&s, ',');
+                first = 0;
+                sb_putjson_string(&s, de->d_name);
+                sb_puts(&s, ":[");
+                if (sf) {
+                    char line[512];
+                    int any = 0;
+                    while (fgets(line, sizeof line, sf)) {
+                        size_t ll = strlen(line);
+                        while (ll > 0 && (line[ll-1] == '\n' || line[ll-1] == '\r'
+                                          || line[ll-1] == ' ')) line[--ll] = '\0';
+                        if (ll == 0) continue;
+                        if (any) sb_putc(&s, ',');
+                        any = 1;
+                        sb_putjson_string(&s, line);
+                    }
+                    fclose(sf);
+                }
+                sb_puts(&s, "]");
+            }
+            closedir(d);
+        }
+        /* If main wasn't already listed (no on-disk dir), emit [] for it. */
+        char main_spec[PATH_MAX];
+        snprintf(main_spec, sizeof main_spec, "%s/main", branches_dir);
+        struct stat mst;
+        if (stat(main_spec, &mst) != 0) {
+            if (!first) sb_putc(&s, ',');
+            sb_puts(&s, "\"main\":[]");
+        }
+    }
+    sb_puts(&s, "}");
     sb_puts(&s, "}");
     respond_json(res, 200, s.data ? s.data : "{}");
     free(s.data);
@@ -2117,6 +2167,89 @@ handle_repo_copy(HttpRequest *req, HttpServerResponse *res, void *user_data)
     respond_json(res, 200, buf);
 }
 
+/* Phase 8.2a: POST /repos/{r}/branches/<NAME>/create
+ *
+ *   Body: { "base": "main", "include": ["src/**", "README.md"] }
+ *
+ * Creates a new branch rooted on the given base branch, filtered
+ * through the include globs. Super-user only (branch creation is
+ * privileged by default; future phases may add branch-level ACLs).
+ */
+extern int svnae_branch_create(const char *repo, const char *name,
+                               const char *base,
+                               const char *const *globs, int n_globs,
+                               const char *author);
+
+static void
+handle_repo_branch_create(HttpRequest *req, HttpServerResponse *res,
+                          const char *branch_name)
+{
+    char name[128];
+    const char *tail = parse_repo_and_tail(req->path, name, sizeof name);
+    if (!tail) { respond_error(res, 404, "not found"); return; }
+    const char *repo = find_repo_path(name);
+    if (!repo) { respond_error(res, 404, "no such repo"); return; }
+    if (!branch_name || !*branch_name) {
+        respond_error(res, 400, "missing branch name"); return;
+    }
+
+    /* Super-user check. Branch creation is privileged. */
+    const char *user = NULL;
+    int is_super = auth_context(req, &user);
+    if (!is_super) { respond_error(res, 403, "forbidden"); return; }
+
+    if (!req->body || req->body_length == 0) {
+        respond_error(res, 400, "empty body"); return;
+    }
+    cJSON *root = cJSON_ParseWithLength(req->body, req->body_length);
+    if (!root) { respond_error(res, 400, "malformed JSON"); return; }
+
+    cJSON *jbase = cJSON_GetObjectItemCaseSensitive(root, "base");
+    cJSON *jinc  = cJSON_GetObjectItemCaseSensitive(root, "include");
+    if (!cJSON_IsString(jbase) || !cJSON_IsArray(jinc)) {
+        cJSON_Delete(root);
+        respond_error(res, 400, "need base:string and include:array");
+        return;
+    }
+    int n_inc = cJSON_GetArraySize(jinc);
+    if (n_inc <= 0) {
+        cJSON_Delete(root);
+        respond_error(res, 400, "include must be non-empty");
+        return;
+    }
+
+    /* Collect include globs as a flat C array. */
+    const char **globs = calloc((size_t)n_inc, sizeof *globs);
+    char **glob_copies = calloc((size_t)n_inc, sizeof *glob_copies);
+    int gi = 0;
+    for (int i = 0; i < n_inc; i++) {
+        cJSON *e = cJSON_GetArrayItem(jinc, i);
+        if (cJSON_IsString(e) && e->valuestring && *e->valuestring) {
+            glob_copies[gi] = strdup(e->valuestring);
+            globs[gi] = glob_copies[gi];
+            gi++;
+        }
+    }
+    char *base_copy = strdup(jbase->valuestring);
+    cJSON_Delete(root);
+
+    int new_rev = svnae_branch_create(repo, branch_name, base_copy,
+                                      globs, gi,
+                                      (user && *user) ? user : "super");
+
+    for (int i = 0; i < gi; i++) free(glob_copies[i]);
+    free(glob_copies); free(globs); free(base_copy);
+
+    if (new_rev < 0) {
+        respond_error(res, 400, "branch create failed (exists, bad base, or no globs?)");
+        return;
+    }
+    char buf[128];
+    snprintf(buf, sizeof buf, "{\"rev\":%d,\"branch\":\"%s\"}", new_rev, branch_name);
+    http_response_set_status(res, 201);
+    http_response_json(res, buf);
+}
+
 void *svnae_svnserver_handler_info(void) { return (void *)handle_repo_info; }
 void *svnae_svnserver_handler_log (void) { return (void *)handle_repo_log;  }
 void *svnae_svnserver_handler_rev (void) { return (void *)handle_repo_rev;  }
@@ -2141,6 +2274,23 @@ dispatch(HttpRequest *req, HttpServerResponse *res, void *user_data)
     if (strcmp(req->method, "POST") == 0) {
         if (strcmp(tail, "/commit") == 0) { handle_repo_commit(req, res, user_data); return; }
         if (strcmp(tail, "/copy")   == 0) { handle_repo_copy  (req, res, user_data); return; }
+
+        /* /branches/<NAME>/create — Phase 8.2a */
+        if (strncmp(tail, "/branches/", 10) == 0) {
+            const char *after = tail + 10;
+            const char *slash = strchr(after, '/');
+            if (slash && strcmp(slash, "/create") == 0) {
+                char br_name[128];
+                size_t nlen = (size_t)(slash - after);
+                if (nlen > 0 && nlen < sizeof br_name) {
+                    memcpy(br_name, after, nlen);
+                    br_name[nlen] = '\0';
+                    handle_repo_branch_create(req, res, br_name);
+                    return;
+                }
+            }
+        }
+
         respond_error(res, 404, "unknown POST route");
         return;
     }

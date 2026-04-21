@@ -33,6 +33,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <dirent.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -503,4 +504,376 @@ svnae_commit_finalise_on_branch(const char *repo, struct svnae_txn *txn,
 
     free(new_root);
     return next;
+}
+
+/* ---- branch create (Phase 8.2a) --------------------------------------
+ *
+ * Build a filtered copy of an existing branch's tree, using a set of
+ * glob patterns to decide which paths survive. Writes new dir blobs
+ * (content-addressed, so unchanged subtrees share with the source
+ * branch), creates the branch head and initial rev pointer.
+ *
+ * Spec grammar: one glob per line. Matches with fnmatch(3), FNM_PATHNAME.
+ * Examples:
+ *   src/main.c       exact file
+ *   README.md        exact file at root
+ *   src/*            top-level files under src, not nested
+ *   src/**           entire src subtree (we canonicalise "**" via a
+ *                    prefix test, since fnmatch doesn't do ** natively)
+ *
+ * Returns the new rev number, or -1 on failure.
+ */
+
+#include <fnmatch.h>
+
+/* Does `path` match any glob in `globs[0..n]`? Returns 1 on match,
+ * 0 on no match. A glob ending in "/**" matches the whole subtree
+ * under that prefix (shell-like behavior; fnmatch alone won't
+ * traverse). Exact paths also match their ancestor dirs — i.e.
+ * including "src/main.c" implicitly includes "src". */
+static int
+path_matches_any(const char *path, const char *const *globs, int n)
+{
+    for (int i = 0; i < n; i++) {
+        const char *g = globs[i];
+        size_t glen = strlen(g);
+
+        /* Handle "prefix/**" as a subtree include. */
+        if (glen >= 3 && strcmp(g + glen - 3, "/**") == 0) {
+            size_t plen = glen - 3;
+            if (strncmp(path, g, plen) == 0
+                && (path[plen] == '\0' || path[plen] == '/')) {
+                return 1;
+            }
+            continue;
+        }
+
+        /* Exact match via fnmatch. */
+        if (fnmatch(g, path, FNM_PATHNAME) == 0) return 1;
+
+        /* An exact file glob implicitly matches all its ancestor dirs.
+         * e.g. include "src/foo/bar.txt" needs "src" and "src/foo" in
+         * the filtered tree so the file can live somewhere. */
+        size_t plen = strlen(path);
+        if (plen < glen && g[plen] == '/'
+            && strncmp(g, path, plen) == 0) {
+            /* path is an ancestor of the globbed include — keep it. */
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Recursive dir filter. Reads the dir blob at `src_sha` (a dir in the
+ * source tree), emits a filtered dir blob, returns its new sha.
+ *
+ * `prefix` is the repo-relative path of this dir ("" for root).
+ *
+ * Returns malloc'd hex sha, or NULL on failure. On "no children
+ * survived" returns the sha of the empty-dir blob (""). */
+static char *
+filter_dir_recursive(const char *repo, const char *src_sha,
+                     const char *prefix,
+                     const char *const *globs, int n_globs)
+{
+    char *src_body = svnae_rep_read_blob(repo, src_sha);
+    if (!src_body) return NULL;
+
+    /* Build the filtered dir body line by line. */
+    size_t cap = 256, blen = 0;
+    char *body = malloc(cap);
+    body[0] = '\0';
+
+    const char *p = src_body;
+    while (*p) {
+        const char *eol = strchr(p, '\n');
+        size_t llen = eol ? (size_t)(eol - p) : strlen(p);
+        if (llen >= 4) {
+            char kind_c = p[0];
+            const char *sha_start = p + 2;
+            const char *sp2 = memchr(sha_start, ' ', llen - 2);
+            if (sp2) {
+                size_t sha_len = (size_t)(sp2 - sha_start);
+                size_t name_off = 2 + sha_len + 1;
+                size_t name_len = llen - name_off;
+                char child_sha[65], child_name[PATH_MAX];
+                if (sha_len < 65 && name_len < sizeof child_name) {
+                    memcpy(child_sha, sha_start, sha_len);
+                    child_sha[sha_len] = '\0';
+                    memcpy(child_name, p + name_off, name_len);
+                    child_name[name_len] = '\0';
+
+                    char child_path[PATH_MAX];
+                    if (*prefix)
+                        snprintf(child_path, sizeof child_path, "%s/%s", prefix, child_name);
+                    else
+                        snprintf(child_path, sizeof child_path, "%s", child_name);
+
+                    int include = 0;
+                    char emit_sha[65];
+                    emit_sha[0] = '\0';
+
+                    if (kind_c == 'f') {
+                        if (path_matches_any(child_path, globs, n_globs)) {
+                            include = 1;
+                            memcpy(emit_sha, child_sha, strlen(child_sha) + 1);
+                        }
+                    } else if (kind_c == 'd') {
+                        /* Recurse. Include the dir if (a) the dir
+                         * itself matches or (b) any descendant does.
+                         * filter_dir_recursive returns the empty-dir
+                         * sha if nothing survived — we detect that
+                         * and skip the dir. */
+                        char *sub = filter_dir_recursive(repo, child_sha,
+                                                         child_path,
+                                                         globs, n_globs);
+                        if (sub) {
+                            char *empty = svnae_rep_read_blob(repo, sub);
+                            int sub_is_empty = (empty && *empty == '\0');
+                            if (empty) svnae_rep_free(empty);
+                            if (!sub_is_empty
+                                || path_matches_any(child_path, globs, n_globs)) {
+                                include = 1;
+                                size_t sl = strlen(sub);
+                                if (sl < 65) {
+                                    memcpy(emit_sha, sub, sl + 1);
+                                }
+                            }
+                            free(sub);
+                        }
+                    }
+
+                    if (include) {
+                        char line[PATH_MAX + 96];
+                        int ln = snprintf(line, sizeof line, "%c %s %s\n",
+                                          kind_c, emit_sha, child_name);
+                        if (blen + (size_t)ln + 1 >= cap) {
+                            cap = (blen + ln + 1) * 2;
+                            body = realloc(body, cap);
+                        }
+                        memcpy(body + blen, line, ln);
+                        blen += ln;
+                        body[blen] = '\0';
+                    }
+                }
+            }
+        }
+        if (!eol) break;
+        p = eol + 1;
+    }
+    svnae_rep_free(src_body);
+
+    const char *new_sha = svnae_rep_write_blob(repo, body, (int)blen);
+    free(body);
+    if (!new_sha) return NULL;
+    return strdup(new_sha);
+}
+
+/* Create a new branch `name` from branch `base` at its current head,
+ * filtered through `globs`. Writes:
+ *   $repo/branches/<name>/spec         — glob per line
+ *   $repo/branches/<name>/head         — rev=N
+ *   $repo/branches/<name>/revs/00/00/NNNNNN — rev pointer
+ *
+ * Also writes a new rev blob with `branch: <name>` and the filtered
+ * root sha. Returns the new rev number on success, -1 on failure.
+ *
+ * Constraints:
+ *   - `name` must not already exist as a branch.
+ *   - `base` must exist.
+ *   - `globs` must be non-empty.
+ */
+int
+svnae_branch_create(const char *repo, const char *name, const char *base,
+                    const char *const *globs, int n_globs,
+                    const char *author)
+{
+    if (!name || !*name || !base || !*base || n_globs <= 0) return -1;
+
+    /* Reject if branch already exists. */
+    char br_dir[PATH_MAX];
+    snprintf(br_dir, sizeof br_dir, "%s/branches/%s", repo, name);
+    struct stat st;
+    if (stat(br_dir, &st) == 0) return -1;
+
+    /* Find base branch's head rev. Prefer the new per-branch head
+     * file; fall back to the legacy $repo/head when base == "main"
+     * and the per-branch file isn't there yet (e.g. for seeded repos
+     * whose first commit went through the Phase-8.1 machinery but
+     * whose seed didn't create the branches/main skeleton). */
+    char base_head_path[PATH_MAX];
+    snprintf(base_head_path, sizeof base_head_path, "%s/branches/%s/head", repo, base);
+    int base_rev = -1;
+    FILE *f = fopen(base_head_path, "r");
+    if (f) {
+        char head_line[64];
+        if (fgets(head_line, sizeof head_line, f)) {
+            const char *eq = strchr(head_line, '=');
+            if (eq) base_rev = atoi(eq + 1);
+        }
+        fclose(f);
+    }
+    if (base_rev < 0 && strcmp(base, "main") == 0) {
+        /* Legacy repos (seeded before Phase 8.1) have no $repo/branches/main/
+         * skeleton. We *must* read main's head from $repo/head here, but only
+         * if no other branches exist yet — once another branch exists, the
+         * legacy head file is the max rev across all branches, not main's
+         * head specifically. Auto-materialize branches/main/head on success
+         * so subsequent branch-creates find the per-branch file. */
+        char branches_root[PATH_MAX];
+        snprintf(branches_root, sizeof branches_root, "%s/branches", repo);
+        DIR *bd = opendir(branches_root);
+        int other_branches = 0;
+        if (bd) {
+            struct dirent *de;
+            while ((de = readdir(bd))) {
+                if (de->d_name[0] == '.') continue;
+                if (strcmp(de->d_name, "main") == 0) continue;
+                other_branches = 1;
+                break;
+            }
+            closedir(bd);
+        }
+        if (!other_branches) {
+            char legacy[PATH_MAX];
+            snprintf(legacy, sizeof legacy, "%s/head", repo);
+            FILE *fl = fopen(legacy, "r");
+            if (fl) {
+                char hl[32];
+                if (fgets(hl, sizeof hl, fl)) base_rev = atoi(hl);
+                fclose(fl);
+            }
+            if (base_rev >= 0) {
+                /* Materialize $repo/branches/main/head so future lookups
+                 * don't hit this fallback after another branch bumps the
+                 * legacy head. */
+                char main_dir[PATH_MAX];
+                snprintf(main_dir, sizeof main_dir, "%s/branches/main", repo);
+                (void)mkdir(branches_root, 0755);
+                (void)mkdir(main_dir, 0755);
+                char main_head[PATH_MAX];
+                snprintf(main_head, sizeof main_head, "%s/head", main_dir);
+                char hb[32];
+                int hl = snprintf(hb, sizeof hb, "rev=%d\n", base_rev);
+                (void)write_atomic(main_head, hb, hl);
+            }
+        }
+    }
+    if (base_rev < 0) return -1;
+
+    char *base_root = load_rev_root_sha1(repo, base_rev);
+    if (!base_root) return -1;
+
+    /* Filter base's tree. */
+    char *new_root = filter_dir_recursive(repo, base_root, "", globs, n_globs);
+    free(base_root);
+    if (!new_root) return -1;
+
+    /* Write the spec blob (newline-separated globs) on disk under
+     * $repo/branches/<name>/spec. */
+    /* Parent $repo/branches may not exist yet either (for repos seeded
+     * before Phase 8.1 landed). */
+    char parent[PATH_MAX];
+    snprintf(parent, sizeof parent, "%s/branches", repo);
+    if (mkdir(parent, 0755) != 0 && errno != EEXIST) { free(new_root); return -1; }
+    if (mkdir(br_dir, 0755) != 0 && errno != EEXIST) { free(new_root); return -1; }
+    char spec_path[PATH_MAX];
+    snprintf(spec_path, sizeof spec_path, "%s/spec", br_dir);
+    {
+        size_t cap = 128, slen = 0;
+        char *spec_body = malloc(cap);
+        spec_body[0] = '\0';
+        for (int i = 0; i < n_globs; i++) {
+            size_t need = strlen(globs[i]) + 2;
+            if (slen + need >= cap) {
+                cap = (slen + need) * 2;
+                spec_body = realloc(spec_body, cap);
+            }
+            slen += snprintf(spec_body + slen, cap - slen, "%s\n", globs[i]);
+        }
+        if (write_atomic(spec_path, spec_body, slen) != 0) {
+            free(spec_body); free(new_root); return -1;
+        }
+        free(spec_body);
+    }
+
+    /* Create the revs directory structure. */
+    char revs_dir[PATH_MAX];
+    snprintf(revs_dir, sizeof revs_dir, "%s/revs/00/00", br_dir);
+    /* mkdir -p. */
+    char tmp[PATH_MAX];
+    snprintf(tmp, sizeof tmp, "%s", revs_dir);
+    for (char *q = tmp + 1; *q; q++) {
+        if (*q == '/') {
+            *q = '\0';
+            if (mkdir(tmp, 0755) != 0 && errno != EEXIST) { free(new_root); return -1; }
+            *q = '/';
+        }
+    }
+    if (mkdir(tmp, 0755) != 0 && errno != EEXIST) { free(new_root); return -1; }
+
+    /* New rev number: one past the repo's current max.
+     *
+     * Cross-branch rev numbering is a deliberate design choice: rev
+     * numbers are per-repo, not per-branch. This is simpler to reason
+     * about (every rev has a unique int id) and matches Perforce's
+     * changelist numbering. Alternative: per-branch rev sequences —
+     * slightly cleaner but makes cross-branch merges ambiguous about
+     * "what rev number am I at". */
+    int new_rev = svnae_repos_head_rev(repo) + 1;
+
+    /* Write rev blob. */
+    const char *prev_props = "";
+    const char *prev_acl   = "";
+
+    char logmsg[256];
+    snprintf(logmsg, sizeof logmsg, "create branch %s from %s with %d include(s)",
+             name, base, n_globs);
+
+    size_t est = strlen(author) + strlen(logmsg) + strlen(name) + 320;
+    char *rev_body = malloc(est);
+    int rblen = snprintf(rev_body, est,
+                         "root: %s\nbranch: %s\nprops: %s\nacl: %s\nprev: %d\nauthor: %s\ndate: %s\nlog: %s\n",
+                         new_root, name, prev_props, prev_acl, base_rev,
+                         author, svnae_fsfs_now_iso8601(), logmsg);
+    const char *rev_sha = svnae_rep_write_blob(repo, rev_body, rblen);
+    free(rev_body);
+    if (!rev_sha) { free(new_root); return -1; }
+    char rev_sha_copy[65];
+    {
+        size_t rl = strlen(rev_sha);
+        if (rl >= sizeof rev_sha_copy) { free(new_root); return -1; }
+        memcpy(rev_sha_copy, rev_sha, rl + 1);
+    }
+
+    /* Rev pointer. */
+    char ptr_body[128];
+    int plen = snprintf(ptr_body, sizeof ptr_body, "%s\n", rev_sha_copy);
+    char ptr_path[PATH_MAX];
+    snprintf(ptr_path, sizeof ptr_path, "%s/%06d", revs_dir, new_rev);
+    if (write_atomic(ptr_path, ptr_body, plen) != 0) { free(new_root); return -1; }
+
+    /* Also write the legacy $repo/revs/NNNNNN pointer so the single-
+     * branch readers (e.g. the current /info and /log endpoints) can
+     * still traverse the rev space. */
+    char legacy_ptr[PATH_MAX];
+    snprintf(legacy_ptr, sizeof legacy_ptr, "%s/revs/%06d", repo, new_rev);
+    if (write_atomic(legacy_ptr, ptr_body, plen) != 0) { free(new_root); return -1; }
+
+    /* Branch head. */
+    char head_path[PATH_MAX];
+    snprintf(head_path, sizeof head_path, "%s/head", br_dir);
+    char head_body[64];
+    int hlen = snprintf(head_body, sizeof head_body, "rev=%d\n", new_rev);
+    if (write_atomic(head_path, head_body, hlen) != 0) { free(new_root); return -1; }
+
+    /* Legacy head file moves to max rev of any branch. */
+    char legacy_head[PATH_MAX];
+    snprintf(legacy_head, sizeof legacy_head, "%s/head", repo);
+    char lh[32];
+    int lhlen = snprintf(lh, sizeof lh, "%d\n", new_rev);
+    write_atomic(legacy_head, lh, lhlen);
+
+    free(new_root);
+    return new_rev;
 }

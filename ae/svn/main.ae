@@ -112,6 +112,7 @@ extern svnae_wc_diff(wc_root: string, rel_path_or_empty: string) -> int
 extern svnae_wc_cp(wc_root: string, src: string, dst: string) -> int
 extern svnae_wc_mv(wc_root: string, src: string, dst: string) -> int
 extern svnae_ra_server_copy(base_url: string, repo_name: string, base_rev: int, from_path: string, to_path: string, author: string, logmsg: string) -> int
+extern svnae_ra_branch_create(base_url: string, repo_name: string, name: string, base: string, includes_joined: string) -> int
 extern svnae_wc_merge(wc_root: string, source_path: string, rev_a: int, rev_b: int, target_path: string) -> int
 extern svnae_wc_resolve(wc_root: string, rel_path: string, accept: int) -> int
 
@@ -1405,10 +1406,108 @@ cmd_status(argv_start: int) {
     return 0
 }
 
-// svn branches URL
-// Phase 8.1 stub: lists branches via the server's /info endpoint.
-// Today every repo has exactly one branch ("main"). Phase 8.2 adds
-// creation.
+// svn branch <verb> ... — top-level dispatcher.
+//   svn branch create NAME URL --from BASE --include PATH [...]
+//   svn branch list URL
+cmd_branch(argv_start: int) {
+    if aether_args_count() <= argv_start {
+        println("svn branch: usage:")
+        println("  svn branch create NAME URL --from BASE --include PATH [--include PATH...]")
+        println("  svn branch list   URL")
+        return 2
+    }
+    verb = aether_args_get(argv_start)
+    if string.equals(verb, "create") == 1 {
+        return cmd_branch_create(argv_start + 1)
+    }
+    if string.equals(verb, "list") == 1 {
+        return cmd_branches(argv_start + 1)
+    }
+    println("svn branch: unknown verb '${verb}'")
+    return 2
+}
+
+// svn branch create NAME URL --from BASE --include PATH [--include PATH...]
+// Creates a new branch filtered through the given include globs.
+// Super-user only (SVN_SUPERUSER_TOKEN env var).
+cmd_branch_create(argv_start: int) {
+    // Need: NAME URL, plus flags.
+    name = ""
+    url = ""
+    from_branch = find_flag("--from", argv_start)
+    if string.length(from_branch) == 0 { from_branch = "main" }
+    k = argv_start
+    n_argv = aether_args_count()
+    while k < n_argv {
+        a = aether_args_get(k)
+        if string.length(a) > 0 {
+            // Skip flag+value pairs.
+            if string.equals(a, "--from") == 1 { k = k + 2 }
+            else {
+                if string.equals(a, "--include") == 1 { k = k + 2 }
+                else {
+                    if string.char_at(a, 0) != 45 {
+                        if string.length(name) == 0 { name = a }
+                        else {
+                            if string.length(url) == 0 { url = a }
+                        }
+                        k = k + 1
+                    } else { k = k + 1 }
+                }
+            }
+        } else { k = k + 1 }
+    }
+    if string.length(name) == 0 {
+        println("svn branch create: usage: svn branch create NAME URL --from BASE --include PATH [...]")
+        return 2
+    }
+    if string.length(url) == 0 {
+        println("svn branch create: URL required")
+        return 2
+    }
+
+    // Collect --include args into a newline-joined string (the RA
+    // helper expects that shape).
+    includes_joined = ""
+    k = argv_start
+    while k < n_argv {
+        a = aether_args_get(k)
+        if string.equals(a, "--include") == 1 {
+            if k + 1 < n_argv {
+                v = aether_args_get(k + 1)
+                if string.length(includes_joined) > 0 {
+                    includes_joined = "${includes_joined}\n${v}"
+                } else {
+                    includes_joined = v
+                }
+            }
+            k = k + 2
+        } else { k = k + 1 }
+    }
+    if string.length(includes_joined) == 0 {
+        println("svn branch create: at least one --include is required")
+        return 2
+    }
+
+    base_url = url_base(url)
+    repo = url_repo(url)
+    rc = svnae_ra_branch_create(base_url, repo, name, from_branch, includes_joined)
+    if rc < 0 {
+        println("svn branch create: failed (branch exists, bad base, or not super-user?)")
+        return 1
+    }
+    println("Created branch '${name}' at r${rc}")
+    return 0
+}
+
+// svn branch list URL   — lists branches (alias: svn branches URL).
+// Phase 8.2a: also shows each branch's include list parsed from the
+// server's /info "specs" map.
+//
+// Output format:
+//   main
+//   readme-only  (README)
+//   feat         (src/**, docs/**)
 cmd_branches(argv_start: int) {
     if aether_args_count() <= argv_start {
         println("svn branches: usage: svn branches URL")
@@ -1423,12 +1522,8 @@ cmd_branches(argv_start: int) {
         println("svn branches: could not contact server")
         return 1
     }
-    // Crude JSON extraction: find "branches":[...] and print each
-    // string. Proper JSON lib would be nicer but we already avoid
-    // pulling cJSON into the Aether side.
     idx = string.index_of(body, "\"branches\":[")
     if idx < 0 {
-        // Server predates Phase 8.1 — treat as single-branch "main".
         println("main")
         return 0
     }
@@ -1444,7 +1539,44 @@ cmd_branches(argv_start: int) {
                 j = j + 1
             }
             if j <= n {
-                println(string.substring(body, i + 1, j))
+                brname = string.substring(body, i + 1, j)
+                // Find this branch's spec in the "specs":{...} map.
+                specs = string.index_of(body, "\"specs\":{")
+                needle = "\"${brname}\":["
+                sp = -1
+                if specs >= 0 { sp = string.index_of(body, needle) }
+                if sp < 0 {
+                    println(brname)
+                } else {
+                    // Parse the array at sp + len(needle).
+                    k = sp + string.length(needle)
+                    globs = ""
+                    while k < n {
+                        ch = string.char_at(body, k)
+                        if ch == 93 { break }   // ']'
+                        if ch == 34 {
+                            m = k + 1
+                            while m < n {
+                                if string.char_at(body, m) == 34 { break }
+                                m = m + 1
+                            }
+                            g = string.substring(body, k + 1, m)
+                            if string.length(globs) > 0 {
+                                globs = "${globs}, ${g}"
+                            } else {
+                                globs = g
+                            }
+                            k = m + 1
+                        } else {
+                            k = k + 1
+                        }
+                    }
+                    if string.length(globs) > 0 {
+                        println("${brname}  (${globs})")
+                    } else {
+                        println(brname)
+                    }
+                }
                 i = j + 1
             } else { i = i + 1 }
         } else {
@@ -1532,6 +1664,7 @@ main() {
 
     if string.equals(sub, "info") == 1     { exit(cmd_info(2)) }
     if string.equals(sub, "branches") == 1 { exit(cmd_branches(2)) }
+    if string.equals(sub, "branch") == 1   { exit(cmd_branch(2)) }
     if string.equals(sub, "verify") == 1   { exit(cmd_verify(2)) }
     if string.equals(sub, "acl") == 1      { exit(cmd_acl(2)) }
     if string.equals(sub, "blame") == 1    { exit(cmd_blame(2)) }

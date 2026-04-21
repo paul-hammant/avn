@@ -329,12 +329,10 @@ main() {
     new_rev = commit_txn(repo, txn, "paul", "tweak util")
     svnae_txn_free(txn)
     fails = fails + expect_int("commit rev 2", new_rev, 2)
-    // Aether quirk: after calling commit_txn (which returns via
-    // svnae_txn_rebuild_root, a `string`-returning extern), the type of
-    // svnae_count_rep_files's return value at the next call site gets
-    // mis-inferred. Adding 0 before the call forces int arithmetic, which
-    // works around the issue.
-    after_x = 0 + svnae_count_rep_files(repo)
+    // (Used to need `0 + svnae_count_rep_files(repo)` to force int
+    // arithmetic — AETHER_ISSUES.md #14 worked around return-type
+    // inference poisoning. Resolved upstream in v0.76.0.)
+    after_x = svnae_count_rep_files(repo)
     fails = fails + expect_int("rev 2 added 5 .rep files", after_x - before, 5)
 
     fails = fails + expect_str("r2 util.c",         fsfs_read_file_at(repo, 2, "src/lib/util.c"),"void util(void) { /* updated */ }\n")
