@@ -877,3 +877,67 @@ svnae_branch_create(const char *repo, const char *name, const char *base,
     free(new_root);
     return new_rev;
 }
+
+/* Phase 8.2b: is `path` allowed by `branch`'s include spec?
+ *   - Empty or missing spec ⇒ allow (main's "full tree" case).
+ *   - Otherwise, use the same matcher as tree filtering at creation time.
+ *
+ * A branch's head rev number is fine for the spec lookup: specs are
+ * keyed by branch name on disk, not by rev. Specs aren't versioned yet
+ * (Phase 8.2; evolving specs across revs is a later concern).
+ *
+ * Returns 1 = allowed, 0 = denied, -1 on I/O error (caller treats as
+ * deny to be safe).
+ */
+int
+svnae_branch_spec_allows(const char *repo, const char *branch, const char *path)
+{
+    if (!repo || !branch || !path) return -1;
+    if (!*branch || !*path) return 1;
+
+    char spec_path[PATH_MAX];
+    snprintf(spec_path, sizeof spec_path, "%s/branches/%s/spec", repo, branch);
+    FILE *f = fopen(spec_path, "r");
+    if (!f) {
+        /* No spec file → behave like main: include-all. Applies to
+         * legacy seeded repos where $repo/branches/main/spec doesn't
+         * exist at all. */
+        return 1;
+    }
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (sz <= 0) { fclose(f); return 1; }   /* empty spec → include-all */
+
+    char *buf = malloc((size_t)sz + 1);
+    if (!buf) { fclose(f); return -1; }
+    size_t rd = fread(buf, 1, (size_t)sz, f);
+    fclose(f);
+    buf[rd] = '\0';
+
+    /* Count non-empty lines; tokenise into an array of const char*. */
+    int n = 0;
+    for (char *p = buf; *p; ) {
+        while (*p == '\n' || *p == '\r') p++;
+        if (!*p) break;
+        n++;
+        while (*p && *p != '\n' && *p != '\r') p++;
+    }
+    if (n == 0) { free(buf); return 1; }
+
+    const char **globs = calloc((size_t)n, sizeof *globs);
+    if (!globs) { free(buf); return -1; }
+    int i = 0;
+    for (char *p = buf; *p && i < n; ) {
+        while (*p == '\n' || *p == '\r') p++;
+        if (!*p) break;
+        globs[i++] = p;
+        while (*p && *p != '\n' && *p != '\r') p++;
+        if (*p) { *p = '\0'; p++; }
+    }
+
+    int ok = path_matches_any(path, globs, n);
+    free(globs);
+    free(buf);
+    return ok ? 1 : 0;
+}

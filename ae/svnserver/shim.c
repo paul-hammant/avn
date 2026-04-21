@@ -59,6 +59,9 @@ int  svnae_txn_delete(struct svnae_txn *t, const char *path);
 int  svnae_txn_copy  (struct svnae_txn *t, const char *path, const char *from_sha1, int from_kind);
 void svnae_txn_free(struct svnae_txn *t);
 
+/* Phase 8.2b enforcement. */
+int  svnae_branch_spec_allows(const char *repo, const char *branch, const char *path);
+
 int  svnae_commit_finalise(const char *repo, struct svnae_txn *txn,
                            const char *author, const char *logmsg);
 int  svnae_commit_finalise_with_props(const char *repo, struct svnae_txn *txn,
@@ -1469,6 +1472,26 @@ header_or_null(HttpRequest *req, const char *name)
     return (v && *v) ? v : NULL;
 }
 
+/* Phase 8.2b: pick the caller's branch for a mutation. Clients pass
+ * Svn-Branch: <name> when they're working against a non-main branch;
+ * absent header defaults to "main" (which on seeded repos with no
+ * spec means "allow everything", preserving legacy behaviour). */
+static const char *
+request_branch(HttpRequest *req)
+{
+    const char *b = header_or_null(req, "Svn-Branch");
+    return (b && *b) ? b : "main";
+}
+
+/* Wrapper that respects super-user bypass: super always allowed, non-super
+ * is checked against the branch's include spec. Returns 1 = allow. */
+static int
+spec_allows(const char *repo, const char *branch, const char *path, int is_super)
+{
+    if (is_super) return 1;
+    return svnae_branch_spec_allows(repo, branch, path) == 1;
+}
+
 /* GET /repos/{r}/path/<path>: convenience — returns HEAD content.
  * Internally a redirect-in-code to the /rev/HEAD/cat handler's logic.
  * We reimplement inline rather than fabricate a fake req because the
@@ -1583,6 +1606,12 @@ handle_repo_path_put(HttpRequest *req, HttpServerResponse *res)
         return;
     }
 
+    /* Phase 8.2b: path must fall inside the branch's include spec. */
+    if (!spec_allows(repo, request_branch(req), file_path, is_super)) {
+        respond_error(res, 403, "path outside branch spec");
+        return;
+    }
+
     /* Concurrency check. Super-user also respects based-on — it's
      * lighter than ACL, and skipping it would make scripting unsafe
      * in ways super-users might not expect. */
@@ -1644,6 +1673,12 @@ handle_repo_path_delete(HttpRequest *req, HttpServerResponse *res)
     int is_super = auth_context(req, &user);
     if (!is_super && !acl_allows_mode(repo, base_rev, user, file_path, 1)) {
         respond_error(res, 403, "forbidden");
+        return;
+    }
+
+    /* Phase 8.2b spec check. */
+    if (!spec_allows(repo, request_branch(req), file_path, is_super)) {
+        respond_error(res, 403, "path outside branch spec");
         return;
     }
 
@@ -1732,21 +1767,39 @@ handle_repo_commit(HttpRequest *req, HttpServerResponse *res, void *user_data)
     /* Write-ACL pre-scan (Phase 7.2): before building the txn, walk
      * every edit path (and every ACL-touched path, below) and confirm
      * the caller has write permission. Super-user bypasses. A denied
-     * path yields 403 for the whole commit — we don't partially apply. */
+     * path yields 403 for the whole commit — we don't partially apply.
+     *
+     * Phase 8.2b: same scan also enforces the branch include spec.
+     * Body may carry "branch": "<name>" (preferred); Svn-Branch header
+     * is the fallback. Absent both → "main". */
+    const char *commit_branch;
+    {
+        cJSON *jbranch = cJSON_GetObjectItemCaseSensitive(root, "branch");
+        commit_branch = (jbranch && cJSON_IsString(jbranch) && *jbranch->valuestring)
+                        ? jbranch->valuestring
+                        : request_branch(req);
+    }
     {
         const char *user = NULL;
         int is_super = auth_context(req, &user);
-        if (!is_super) {
-            cJSON *ck;
-            cJSON_ArrayForEach(ck, jedits) {
-                cJSON *jp = cJSON_GetObjectItemCaseSensitive(ck, "path");
-                if (cJSON_IsString(jp) &&
-                    !acl_allows_mode(repo, base_rev, user, jp->valuestring, 1)) {
-                    cJSON_Delete(root);
-                    respond_error(res, 403, "forbidden");
-                    return;
-                }
+        cJSON *ck;
+        cJSON_ArrayForEach(ck, jedits) {
+            cJSON *jp = cJSON_GetObjectItemCaseSensitive(ck, "path");
+            if (!cJSON_IsString(jp)) continue;
+            const char *epath = jp->valuestring;
+            if (!is_super &&
+                !acl_allows_mode(repo, base_rev, user, epath, 1)) {
+                cJSON_Delete(root);
+                respond_error(res, 403, "forbidden");
+                return;
             }
+            if (!spec_allows(repo, commit_branch, epath, is_super)) {
+                cJSON_Delete(root);
+                respond_error(res, 403, "path outside branch spec");
+                return;
+            }
+        }
+        if (!is_super) {
             /* ACL changes themselves require write on the target path —
              * otherwise a restricted user could self-elevate by setting
              * +alice on /secret. */
@@ -2138,6 +2191,17 @@ handle_repo_copy(HttpRequest *req, HttpServerResponse *res, void *user_data)
                 respond_error(res, 403, "forbidden");
                 return;
             }
+        }
+        /* Phase 8.2b: server-side cp must stay inside one branch. Both
+         * endpoints have to satisfy the branch's include spec. Cross-
+         * branch cp is refused — the user should use `svn branch create`
+         * to seed one branch from another. */
+        const char *cp_branch = request_branch(req);
+        if (!spec_allows(repo, cp_branch, from_path, is_super) ||
+            !spec_allows(repo, cp_branch, to_path,   is_super)) {
+            free(from_path); free(to_path); free(author); free(logmsg);
+            respond_error(res, 403, "cross-branch copy refused");
+            return;
         }
     }
 
