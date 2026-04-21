@@ -1,0 +1,12 @@
+# Regeneration recipe for Aether-as-library C sources under ae/svnadmin/.
+
+AETHERC ?= $(HOME)/scm/aether/build/aetherc
+
+GENERATED := dump_generated.c
+
+all: $(GENERATED)
+
+dump_generated.c: dump.ae
+	$(AETHERC) --emit=lib $< $@
+
+.PHONY: all

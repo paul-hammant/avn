@@ -388,6 +388,11 @@ write_all(int fd, const char *data, int len)
     return 0;
 }
 
+/* Dump header builders ported to Aether (ae/svnadmin/dump.ae). */
+extern const char *aether_dump_prelude(int head, int rev_count, int rep_count);
+extern const char *aether_rep_header(const char *sha, int size);
+extern const char *aether_rev_pointer_block(int rev, const char *pointer_sha);
+
 int
 svnae_svnadmin_dump(const char *repo, int out_fd)
 {
@@ -397,20 +402,16 @@ svnae_svnadmin_dump(const char *repo, int out_fd)
     struct svnae_rep_list *reps = list_reps(repo);
     if (!reps) return -1;
 
-    char hdr[256];
-    int hlen;
-    hlen = snprintf(hdr, sizeof hdr,
-        "SVNAE-DUMP 1\nFORMAT svnae-fsfs-1\nHEAD %d\nREV-COUNT %d\nREP-COUNT %d\n",
-        head, head + 1, reps->n);
-    if (write_all(out_fd, hdr, hlen) != 0) { free_rep_list(reps); return -1; }
+    const char *prelude = aether_dump_prelude(head, head + 1, reps->n);
+    if (write_all(out_fd, prelude, (int)strlen(prelude)) != 0) { free_rep_list(reps); return -1; }
 
     /* Each rep block. */
     for (int i = 0; i < reps->n; i++) {
         char *bytes = svnae_rep_read_blob(repo, reps->sha1s[i]);
         if (!bytes) { free_rep_list(reps); return -1; }
 
-        hlen = snprintf(hdr, sizeof hdr, "REP %s\nSIZE %d\n", reps->sha1s[i], reps->sizes[i]);
-        if (write_all(out_fd, hdr, hlen) != 0) { svnae_rep_free(bytes); free_rep_list(reps); return -1; }
+        const char *rep_hdr = aether_rep_header(reps->sha1s[i], reps->sizes[i]);
+        if (write_all(out_fd, rep_hdr, (int)strlen(rep_hdr)) != 0) { svnae_rep_free(bytes); free_rep_list(reps); return -1; }
         if (write_all(out_fd, bytes, reps->sizes[i]) != 0) { svnae_rep_free(bytes); free_rep_list(reps); return -1; }
         if (write_all(out_fd, "\n", 1) != 0) { svnae_rep_free(bytes); free_rep_list(reps); return -1; }
         svnae_rep_free(bytes);
@@ -425,9 +426,9 @@ svnae_svnadmin_dump(const char *repo, int out_fd)
         size_t n = strlen(body);
         while (n > 0 && (body[n-1] == '\n' || body[n-1] == '\r')) body[--n] = '\0';
 
-        hlen = snprintf(hdr, sizeof hdr, "REV %d\nPOINTER %s\n", r, body);
+        const char *block = aether_rev_pointer_block(r, body);
         free(body);
-        if (write_all(out_fd, hdr, hlen) != 0) { free_rep_list(reps); return -1; }
+        if (write_all(out_fd, block, (int)strlen(block)) != 0) { free_rep_list(reps); return -1; }
     }
 
     if (write_all(out_fd, "END\n", 4) != 0) { free_rep_list(reps); return -1; }
