@@ -297,53 +297,14 @@ req_header(HttpRequest *req, const char *name)
  * Returns 1 allow, 0 deny, -1 no-match. Precedence: explicit user
  * rule beats wildcard; deny beats allow at the same precedence level.
  */
+/* ACL rule evaluation ported to Aether (ae/svnserver/acl.ae). */
+extern int aether_acl_decide(const char *body, const char *user, int want_write);
+
 static int
 acl_body_decide(const char *body, const char *user, int want_write)
 {
-    if (!body) return -1;
-    int wild_allow = -1, wild_deny = -1;
-    int user_allow = -1, user_deny = -1;
-    const char *p = body;
-    while (*p) {
-        char sign = *p;
-        if (sign != '+' && sign != '-') {
-            const char *eol = strchr(p, '\n');
-            p = eol ? eol + 1 : p + strlen(p);
-            continue;
-        }
-        p++;
-        const char *eol = strchr(p, '\n');
-        size_t n = eol ? (size_t)(eol - p) : strlen(p);
-        char name[128];
-        if (n < sizeof name) {
-            memcpy(name, p, n); name[n] = '\0';
-            /* Split on ':' for mode suffix; default to "rw". */
-            char *colon = strchr(name, ':');
-            int has_r = 1, has_w = 1;
-            if (colon) {
-                *colon = '\0';
-                const char *modes = colon + 1;
-                has_r = (strchr(modes, 'r') != NULL);
-                has_w = (strchr(modes, 'w') != NULL);
-            }
-            int matches_mode = want_write ? has_w : has_r;
-            if (strcmp(name, "*") == 0) {
-                if (sign == '+' && matches_mode) wild_allow = 1;
-                else if (sign == '-')            wild_deny  = 1;
-            } else if (strcmp(name, user) == 0) {
-                if (sign == '+' && matches_mode) user_allow = 1;
-                else if (sign == '-')            user_deny  = 1;
-            }
-        }
-        if (!eol) break;
-        p = eol + 1;
-    }
-    /* Priority: explicit user rule > wildcard. Deny wins ties. */
-    if (user_deny  == 1) return 0;
-    if (user_allow == 1) return 1;
-    if (wild_deny  == 1) return 0;
-    if (wild_allow == 1) return 1;
-    return -1;
+    if (!body || !user) return -1;
+    return aether_acl_decide(body, user, want_write);
 }
 
 /* Paths-index lookup ported to Aether (ae/svnserver/paths_index.ae).
