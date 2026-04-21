@@ -287,6 +287,12 @@ svnae_strset_free(struct svnae_strset *s)
 char       *svnae_rep_read_blob(const char *repo, const char *sha1_hex);
 const char *svnae_rep_write_blob(const char *repo, const char *data, int len);
 
+/* Dir-blob line parser ported to Aether (ae/fs_fs/dirblob.ae). */
+extern int         aether_dir_count_entries(const char *body);
+extern int         aether_dir_entry_kind(const char *body, int i);
+extern const char *aether_dir_entry_sha(const char *body, int i);
+extern const char *aether_dir_entry_name(const char *body, int i);
+
 /* Split a txn's edit list into lookup helpers. */
 static int
 txn_find_edit(const struct svnae_txn *t, const char *path, int *out_kind)
@@ -425,42 +431,30 @@ rebuild_dir_c(const char *repo, const char *base_dir_sha1,
     if (base_dir_sha1 && base_dir_sha1[0]) {
         char *base_body = svnae_rep_read_blob(repo, base_dir_sha1);
         if (base_body) {
-            /* Parse each line "<k> <sha-hex> <name>\n" — the sha-hex
-             * width is whatever the repo's primary hash produces
-             * (40 for sha1, 64 for sha256). We locate the second space
-             * dynamically rather than assume a fixed prefix. */
-            char *p = base_body;
-            while (*p) {
-                char *eol = strchr(p, '\n');
-                if (!eol) break;
-                int llen = (int)(eol - p);
-                if (llen < 4) { p = eol + 1; continue; }
-                char kind = p[0];
-                /* p[1] is a space, p[2..] is the sha until the next space. */
-                const char *sha_start = p + 2;
-                const char *sp2 = memchr(sha_start, ' ', (size_t)(llen - 2));
-                if (!sp2) { p = eol + 1; continue; }
-                int sha_len = (int)(sp2 - sha_start);
-                if (sha_len >= 65) { p = eol + 1; continue; }
+            int n_entries = aether_dir_count_entries(base_body);
+            for (int ei = 0; ei < n_entries; ei++) {
+                char kind = (char)aether_dir_entry_kind(base_body, ei);
+                /* Snapshot — rebuild_dir_c recurses and will reuse the
+                 * Aether thread-local return buffers. */
                 char sha1[65];
-                memcpy(sha1, sha_start, (size_t)sha_len);
-                sha1[sha_len] = '\0';
-                int name_off = 2 + sha_len + 1;
-                int name_len = llen - name_off;
-                if (name_len <= 0) { p = eol + 1; continue; }
-                char *name = malloc((size_t)name_len + 1);
-                memcpy(name, p + name_off, (size_t)name_len);
-                name[name_len] = '\0';
+                const char *sha_ref = aether_dir_entry_sha(base_body, ei);
+                size_t sha_len = strlen(sha_ref);
+                if (sha_len >= sizeof sha1) continue;
+                memcpy(sha1, sha_ref, sha_len + 1);
+                const char *name_ref = aether_dir_entry_name(base_body, ei);
+                size_t name_len = strlen(name_ref);
+                char *name = malloc(name_len + 1);
+                memcpy(name, name_ref, name_len + 1);
 
                 /* full_path = prefix ? prefix+"/"+name : name */
                 const char *full_path;
                 char *full_alloc = NULL;
                 if (prefix[0]) {
                     size_t pl = strlen(prefix);
-                    full_alloc = malloc(pl + 1 + (size_t)name_len + 1);
+                    full_alloc = malloc(pl + 1 + name_len + 1);
                     memcpy(full_alloc, prefix, pl);
                     full_alloc[pl] = '/';
-                    memcpy(full_alloc + pl + 1, name, (size_t)name_len);
+                    memcpy(full_alloc + pl + 1, name, name_len);
                     full_alloc[pl + 1 + name_len] = '\0';
                     full_path = full_alloc;
                 } else {
@@ -489,7 +483,6 @@ rebuild_dir_c(const char *repo, const char *base_dir_sha1,
 
                 free(name);
                 free(full_alloc);
-                p = eol + 1;
             }
             free(base_body);
         }
