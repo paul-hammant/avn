@@ -122,6 +122,7 @@ typedef struct { float _0; const char* _1; } _tuple_float_string;
 int after_first_space(const char*);
 const char* rb_int_to_dec(int);
 const char* rb_digit_char(int);
+const char* pilins_insert_sorted(const char*, const char*, const char*);
 static _tuple_int_string string_to_int(const char*);
 static _tuple_int_string string_to_long(const char*);
 static _tuple_float_string string_to_float(const char*);
@@ -544,6 +545,190 @@ if (d == 9) {
     return "?";
 }
 
+// Exported:
+const char* paths_index_sort_by_path(const char* body) {
+int n = string_length(body);
+if (n == 0) {
+        {
+            return "";
+        }
+    }
+const char* entries = "";
+    int _heap_entries = 0; (void)_heap_entries;
+int line_start = 0;
+int i = 0;
+    int at_end;
+    int c;
+    int is_eol;
+    int sp;
+    const char* path;
+    const char* line;
+while (i <= n) {
+        {
+at_end = 0;
+c = 0;
+if (i == n) {
+                {
+at_end = 1;
+                }
+            } else {
+                {
+c = string_char_at(body, i);
+                }
+            }
+is_eol = 0;
+if (at_end == 1) {
+                {
+is_eol = 1;
+                }
+            }
+if (c == 10) {
+                {
+is_eol = 1;
+                }
+            }
+if (is_eol == 1) {
+                {
+if (i > line_start) {
+                        {
+sp = line_start;
+while (sp < i) {
+                                {
+if (string_char_at(body, sp) == 32) {
+                                        {
+                                            break;
+                                        }
+                                    }
+sp = (sp + 1);
+                                }
+                            }
+if ((sp > line_start) && (sp < i)) {
+                                {
+path = string_substring(body, (sp + 1), i);
+line = string_substring(body, line_start, i);
+entries = pilins_insert_sorted(entries, path, line);
+                                }
+                            }
+                        }
+                    }
+line_start = (i + 1);
+                }
+            }
+i = (i + 1);
+        }
+    }
+const char* out = "";
+    int _heap_out = 0; (void)_heap_out;
+int m = string_length(entries);
+int start = 0;
+int j = 0;
+    int cc;
+    int k;
+while (j < m) {
+        {
+cc = string_char_at(entries, j);
+if (cc == 9) {
+                {
+k = (j + 1);
+while (k < m) {
+                        {
+if (string_char_at(entries, k) == 10) {
+                                {
+                                    break;
+                                }
+                            }
+k = (k + 1);
+                        }
+                    }
+out = string_concat(out, string_substring(entries, (j + 1), k));
+out = string_concat(out, "\n");
+j = (k + 1);
+start = j;
+                }
+            } else {
+                {
+j = (j + 1);
+                }
+            }
+        }
+    }
+    return out;
+}
+
+const char* pilins_insert_sorted(const char* entries, const char* path, const char* line) {
+int n = string_length(entries);
+int plen = string_length(path);
+if (n == 0) {
+        {
+const char* out = string_concat(path, "\t");
+            int _heap_out = 0; (void)_heap_out;
+out = string_concat(out, line);
+            return string_concat(out, "\n");
+        }
+    }
+const char* out = "";
+    int _heap_out = 0; (void)_heap_out;
+int inserted = 0;
+int line_start = 0;
+int i = 0;
+    int tab;
+    int eol;
+    const char* this_path;
+    const char* one;
+while (i < n) {
+        {
+tab = line_start;
+while (tab < n) {
+                {
+if (string_char_at(entries, tab) == 9) {
+                        {
+                            break;
+                        }
+                    }
+tab = (tab + 1);
+                }
+            }
+eol = tab;
+while (eol < n) {
+                {
+if (string_char_at(entries, eol) == 10) {
+                        {
+                            break;
+                        }
+                    }
+eol = (eol + 1);
+                }
+            }
+this_path = string_substring(entries, line_start, tab);
+if (inserted == 0) {
+                {
+if (string_compare(path, this_path) < 0) {
+                        {
+one = string_concat(path, "\t");
+one = string_concat(one, line);
+one = string_concat(one, "\n");
+out = string_concat(out, one);
+inserted = 1;
+                        }
+                    }
+                }
+            }
+out = string_concat(out, string_substring(entries, line_start, (eol + 1)));
+line_start = (eol + 1);
+i = line_start;
+        }
+    }
+if (inserted == 0) {
+        {
+one = string_concat(path, "\t");
+one = string_concat(one, line);
+one = string_concat(one, "\n");
+out = string_concat(out, one);
+        }
+    }
+    return out;
+}
+
 static _tuple_int_string string_to_int(const char* s) {
 int ok = string_try_int(s);
 if (ok == 0) {
@@ -609,4 +794,10 @@ const char* aether_rb_int_to_dec(int32_t v) {
 }
 const char* aether_rb_digit_char(int32_t d) {
     return rb_digit_char(d);
+}
+const char* aether_paths_index_sort_by_path(const char* body) {
+    return paths_index_sort_by_path(body);
+}
+const char* aether_pilins_insert_sorted(const char* entries, const char* path, const char* line) {
+    return pilins_insert_sorted(entries, path, line);
 }

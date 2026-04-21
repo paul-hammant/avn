@@ -124,6 +124,7 @@ extern const char *aether_rev_blob_body(const char *root, const char *branch,
                                         const char *props, const char *acl,
                                         int prev, const char *author,
                                         const char *date, const char *log);
+extern const char *aether_paths_index_sort_by_path(const char *body);
 
 static char *
 rev_blob_field(const char *repo, int rev, const char *key)
@@ -216,76 +217,49 @@ svnae_build_acl_blob(const char *repo,
     return sha;
 }
 
-/* Build a paths-acl blob ("<acl-sha> <path>\n" per line, sorted by
- * path). Same wire shape as the paths-props blob. */
+/* Build a paths-acl blob. The per-line "<acl-sha> <path>" lines are
+ * assembled here, then sorted by path via aether_paths_index_sort_by_path
+ * (ae/fs_fs/format_line.ae). Same shape as the paths-props blob. */
+static const char *
+build_paths_index_blob(const char *repo,
+                       const char *const *paths,
+                       const char *const *shas,
+                       int n_paths)
+{
+    size_t cap = 256, len = 0;
+    char *body = malloc(cap);
+    body[0] = '\0';
+    for (int i = 0; i < n_paths; i++) {
+        size_t need = strlen(shas[i]) + 1 + strlen(paths[i]) + 1 + 1;
+        if (len + need >= cap) {
+            cap = (len + need) * 2;
+            body = realloc(body, cap);
+        }
+        len += (size_t)snprintf(body + len, cap - len, "%s %s\n",
+                                shas[i], paths[i]);
+    }
+    const char *sorted = aether_paths_index_sort_by_path(body);
+    free(body);
+    const char *sha = svnae_rep_write_blob(repo, sorted, (int)strlen(sorted));
+    return sha;
+}
+
 const char *
 svnae_build_paths_acl_blob(const char *repo,
                           const char *const *paths,
                           const char *const *acl_shas,
                           int n_paths)
 {
-    int *order = malloc(sizeof(int) * (size_t)(n_paths > 0 ? n_paths : 1));
-    for (int i = 0; i < n_paths; i++) order[i] = i;
-    for (int i = 0; i < n_paths; i++) {
-        for (int j = i + 1; j < n_paths; j++) {
-            if (strcmp(paths[order[i]], paths[order[j]]) > 0) {
-                int t = order[i]; order[i] = order[j]; order[j] = t;
-            }
-        }
-    }
-    size_t cap = 256, len = 0;
-    char *body = malloc(cap);
-    body[0] = '\0';
-    for (int i = 0; i < n_paths; i++) {
-        int idx = order[i];
-        size_t need = 64 + 1 + strlen(paths[idx]) + 1 + 1;
-        if (len + need >= cap) {
-            cap = (len + need) * 2;
-            body = realloc(body, cap);
-        }
-        len += (size_t)snprintf(body + len, cap - len, "%s %s\n",
-                                acl_shas[idx], paths[idx]);
-    }
-    free(order);
-    const char *sha = svnae_rep_write_blob(repo, body, (int)len);
-    free(body);
-    return sha;
+    return build_paths_index_blob(repo, paths, acl_shas, n_paths);
 }
 
-/* Build a paths-props blob ("<props-sha1> <path>\n" per line, sorted
- * by path), write to rep store, return its sha1. */
 const char *
 svnae_build_paths_props_blob(const char *repo,
                             const char *const *paths,
                             const char *const *props_shas,
                             int n_paths)
 {
-    int *order = malloc(sizeof(int) * (size_t)(n_paths > 0 ? n_paths : 1));
-    for (int i = 0; i < n_paths; i++) order[i] = i;
-    for (int i = 0; i < n_paths; i++) {
-        for (int j = i + 1; j < n_paths; j++) {
-            if (strcmp(paths[order[i]], paths[order[j]]) > 0) {
-                int t = order[i]; order[i] = order[j]; order[j] = t;
-            }
-        }
-    }
-    size_t cap = 256, len = 0;
-    char *body = malloc(cap);
-    body[0] = '\0';
-    for (int i = 0; i < n_paths; i++) {
-        int idx = order[i];
-        size_t need = 40 + 1 + strlen(paths[idx]) + 1 + 1;
-        if (len + need >= cap) {
-            cap = (len + need) * 2;
-            body = realloc(body, cap);
-        }
-        len += (size_t)snprintf(body + len, cap - len, "%s %s\n",
-                                props_shas[idx], paths[idx]);
-    }
-    free(order);
-    const char *sha = svnae_rep_write_blob(repo, body, (int)len);
-    free(body);
-    return sha;
+    return build_paths_index_blob(repo, paths, props_shas, n_paths);
 }
 
 int
