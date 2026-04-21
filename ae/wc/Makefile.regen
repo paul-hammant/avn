@@ -7,11 +7,14 @@
 
 AETHERC ?= $(HOME)/scm/aether/build/aetherc
 
-GENERATED := mergeinfo_generated.c
+GENERATED := mergeinfo_generated.c ignore_generated.c
 
 all: $(GENERATED)
 
 mergeinfo_generated.c: mergeinfo.ae
+	$(AETHERC) --emit=lib $< $@
+
+ignore_generated.c: ignore.ae
 	$(AETHERC) --emit=lib $< $@
 
 .PHONY: all

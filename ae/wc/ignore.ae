@@ -1,0 +1,81 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// permissions and limitations under the License.
+
+// svn:ignore pattern matcher — ported from matches_ignore in
+// ae/wc/status_shim.c. Compiled with --emit=lib.
+//
+// svn:ignore is a newline-separated list of fnmatch(3) patterns with no
+// FNM_PATHNAME (so `*` matches across `/` too — though in practice the
+// patterns are matched against bare basenames, one directory at a time).
+// Leading/trailing whitespace and empty/blank lines are ignored.
+
+import std.string
+
+// FFI to fnmatch(3) with flags=0 (no FNM_PATHNAME).
+extern svnae_fnmatch_plain(glob: string, path: string) -> int
+
+// Trim ASCII spaces, tabs, and '\r' from both ends of `s`.
+trim_ws(s: string) -> string {
+    n = string.length(s)
+    if n == 0 { return "" }
+    lo = 0
+    while lo < n {
+        c = string.char_at(s, lo)
+        if c != 32 && c != 9 && c != 13 { break }
+        lo = lo + 1
+    }
+    hi = n
+    while hi > lo {
+        c = string.char_at(s, hi - 1)
+        if c != 32 && c != 9 && c != 13 { break }
+        hi = hi - 1
+    }
+    if lo == 0 && hi == n { return s }
+    return string.substring(s, lo, hi)
+}
+
+// Does `name` match any fnmatch pattern in the newline-separated list
+// `patterns`? Returns 1 on match, 0 otherwise. Empty/whitespace-only
+// lines are skipped.
+export ignore_matches(patterns: string, name: string) -> int {
+    if string.length(patterns) == 0 { return 0 }
+    if string.length(name) == 0 { return 0 }
+    n = string.length(patterns)
+    start = 0
+    i = 0
+    while i <= n {
+        at_end = 0
+        c = 0
+        if i == n { at_end = 1 } else { c = string.char_at(patterns, i) }
+        is_eol = 0
+        if at_end == 1 { is_eol = 1 }
+        if c == 10 { is_eol = 1 }
+        if is_eol == 1 {
+            if i > start {
+                tok = trim_ws(string.substring(patterns, start, i))
+                if string.length(tok) > 0 {
+                    if svnae_fnmatch_plain(tok, name) == 1 { return 1 }
+                }
+            }
+            start = i + 1
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+main() {
+    println("ae/wc/ignore.ae is a library; not meant to run standalone")
+}

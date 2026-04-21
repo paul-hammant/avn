@@ -150,31 +150,25 @@ strset_clear(struct strset *s)
     s->items = NULL; s->n = 0; s->cap = 0;
 }
 
-/* Does `name` match any glob in the newline-separated pattern list?
- * Leading/trailing whitespace and empty lines are skipped. */
+/* FFI helper for ae/wc/ignore.ae — plain fnmatch(3) without
+ * FNM_PATHNAME, matching svn:ignore's semantics (basename-style
+ * patterns; `*` may span `/` characters if the caller ever passes
+ * a multi-segment name). */
+int32_t
+svnae_fnmatch_plain(const char *glob, const char *path)
+{
+    return fnmatch(glob, path, 0) == 0 ? 1 : 0;
+}
+
+/* matches_ignore has been ported to Aether (ae/wc/ignore.ae,
+ * --emit=lib). The C side just forwards to the Aether entry. */
+extern int32_t aether_ignore_matches(const char *patterns, const char *name);
+
 static int
 matches_ignore(const char *patterns, const char *name)
 {
-    if (!patterns || !*patterns) return 0;
-    const char *p = patterns;
-    while (*p) {
-        const char *eol = strchr(p, '\n');
-        size_t n = eol ? (size_t)(eol - p) : strlen(p);
-        /* Trim leading whitespace. */
-        while (n > 0 && (*p == ' ' || *p == '\t')) { p++; n--; }
-        /* Trim trailing whitespace. */
-        while (n > 0 && (p[n-1] == ' ' || p[n-1] == '\t' || p[n-1] == '\r')) n--;
-        if (n > 0) {
-            char pat[256];
-            if (n >= sizeof pat) n = sizeof pat - 1;
-            memcpy(pat, p, n);
-            pat[n] = '\0';
-            if (fnmatch(pat, name, 0) == 0) return 1;
-        }
-        if (!eol) break;
-        p = eol + 1;
-    }
-    return 0;
+    if (!patterns || !*patterns || !name) return 0;
+    return aether_ignore_matches(patterns, name);
 }
 
 static void
