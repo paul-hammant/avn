@@ -245,6 +245,19 @@ export path_change_entry_json(action: string, path: string) -> string {
     return out
 }
 
+// Prelude of /info: {"head":N,"name":"...","hash_algo":"...","default_branch":"main"
+// Stops before ,"branches":[...] so the C side can still stream the branch list.
+export info_prelude_json(head: int, name: string, hash_algo: string) -> string {
+    out = "{\"head\":"
+    out = string.concat(out, json_int_to_dec_impl(head))
+    out = string.concat(out, ",\"name\":")
+    out = string.concat(out, json_escape_string_impl(name))
+    out = string.concat(out, ",\"hash_algo\":")
+    out = string.concat(out, json_escape_string_impl(hash_algo))
+    out = string.concat(out, ",\"default_branch\":\"main\"")
+    return out
+}
+
 // {"rev":N,"author":"...","text":"..."}
 export blame_entry_json(rev: int, author: string, text: string) -> string {
     out = "{\"rev\":"

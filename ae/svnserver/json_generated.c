@@ -669,6 +669,19 @@ out = string_concat(out, "}");
 }
 
 // Exported:
+const char* info_prelude_json(int head, const char* name, const char* hash_algo) {
+const char* out = "{\"head\":";
+    int _heap_out = 0; (void)_heap_out;
+out = string_concat(out, json_int_to_dec_impl(head));
+out = string_concat(out, ",\"name\":");
+out = string_concat(out, json_escape_string_impl(name));
+out = string_concat(out, ",\"hash_algo\":");
+out = string_concat(out, json_escape_string_impl(hash_algo));
+out = string_concat(out, ",\"default_branch\":\"main\"");
+    return out;
+}
+
+// Exported:
 const char* blame_entry_json(int rev, const char* author, const char* text) {
 const char* out = "{\"rev\":";
     int _heap_out = 0; (void)_heap_out;
@@ -758,6 +771,9 @@ const char* aether_log_entry_json(int32_t rev, const char* author, const char* d
 }
 const char* aether_path_change_entry_json(const char* action, const char* path) {
     return path_change_entry_json(action, path);
+}
+const char* aether_info_prelude_json(int32_t head, const char* name, const char* hash_algo) {
+    return info_prelude_json(head, name, hash_algo);
 }
 const char* aether_blame_entry_json(int32_t rev, const char* author, const char* text) {
     return blame_entry_json(rev, author, text);

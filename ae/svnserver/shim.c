@@ -509,6 +509,7 @@ extern const char *aether_specs_to_json_array(const char *body);
 extern const char *aether_log_entry_json(int rev, const char *author, const char *date, const char *msg);
 extern const char *aether_path_change_entry_json(const char *action, const char *path);
 extern const char *aether_blame_entry_json(int rev, const char *author, const char *text);
+extern const char *aether_info_prelude_json(int head, const char *name, const char *hash_algo);
 
 static void
 sb_putjson_string(struct sb *s, const char *v)
@@ -618,13 +619,7 @@ handle_repo_info(HttpRequest *req, HttpServerResponse *res, void *user_data)
     char branches_dir[PATH_MAX];
     snprintf(branches_dir, sizeof branches_dir, "%s/branches", repo);
     struct sb s = {0};
-    sb_puts(&s, "{\"head\":");
-    sb_putjson_int(&s, head);
-    sb_puts(&s, ",\"name\":");
-    sb_putjson_string(&s, name);
-    sb_puts(&s, ",\"hash_algo\":");
-    sb_putjson_string(&s, svnae_repo_primary_hash(repo));
-    sb_puts(&s, ",\"default_branch\":\"main\"");
+    sb_puts(&s, aether_info_prelude_json(head, name, svnae_repo_primary_hash(repo)));
     sb_puts(&s, ",\"branches\":[");
     {
         /* `main` is always implicit in every repo, even ones seeded
