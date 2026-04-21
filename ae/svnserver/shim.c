@@ -511,6 +511,8 @@ extern const char *aether_path_change_entry_json(const char *action, const char 
 extern const char *aether_blame_entry_json(int rev, const char *author, const char *text);
 extern const char *aether_info_prelude_json(int head, const char *name, const char *hash_algo);
 extern const char *aether_rev_info_json(int rev, const char *author, const char *date, const char *msg, const char *root);
+extern const char *aether_hashes_prelude_json(const char *algo, const char *primary_hash);
+extern const char *aether_secondary_entry_json(const char *algo, const char *hash);
 
 static void
 sb_putjson_string(struct sb *s, const char *v)
@@ -984,11 +986,7 @@ handle_repo_rev(HttpRequest *req, HttpServerResponse *res, void *user_data)
 
         const char *algo = svnae_repo_primary_hash(repo);
         struct sb s = {0};
-        sb_puts(&s, "{\"primary\":{\"algo\":");
-        sb_putjson_string(&s, algo);
-        sb_puts(&s, ",\"hash\":");
-        sb_putjson_string(&s, node_sha);
-        sb_puts(&s, "},\"secondaries\":[");
+        sb_puts(&s, aether_hashes_prelude_json(algo, node_sha));
 
         /* Iterate declared secondaries in the format file, looking up
          * each one's stored hash for this blob. Missing entries
@@ -1002,11 +1000,7 @@ handle_repo_rev(HttpRequest *req, HttpServerResponse *res, void *user_data)
             if (shex && *shex) {
                 if (any) sb_putc(&s, ',');
                 any = 1;
-                sb_puts(&s, "{\"algo\":");
-                sb_putjson_string(&s, sec[i]);
-                sb_puts(&s, ",\"hash\":");
-                sb_putjson_string(&s, shex);
-                sb_putc(&s, '}');
+                sb_puts(&s, aether_secondary_entry_json(sec[i], shex));
             }
             free(shex);
         }

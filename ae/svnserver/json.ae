@@ -262,6 +262,27 @@ export path_change_entry_json(action: string, path: string) -> string {
     return out
 }
 
+// {"primary":{"algo":"sha1","hash":"..."},"secondaries":[
+// — everything up to the opening of the secondaries array.
+export hashes_prelude_json(algo: string, primary_hash: string) -> string {
+    out = "{\"primary\":{\"algo\":"
+    out = string.concat(out, json_escape_string_impl(algo))
+    out = string.concat(out, ",\"hash\":")
+    out = string.concat(out, json_escape_string_impl(primary_hash))
+    out = string.concat(out, "},\"secondaries\":[")
+    return out
+}
+
+// Single secondary entry: {"algo":"...","hash":"..."}
+export secondary_entry_json(algo: string, hash: string) -> string {
+    out = "{\"algo\":"
+    out = string.concat(out, json_escape_string_impl(algo))
+    out = string.concat(out, ",\"hash\":")
+    out = string.concat(out, json_escape_string_impl(hash))
+    out = string.concat(out, "}")
+    return out
+}
+
 // Prelude of /info: {"head":N,"name":"...","hash_algo":"...","default_branch":"main"
 // Stops before ,"branches":[...] so the C side can still stream the branch list.
 export info_prelude_json(head: int, name: string, hash_algo: string) -> string {

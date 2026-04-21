@@ -686,6 +686,28 @@ out = string_concat(out, "}");
 }
 
 // Exported:
+const char* hashes_prelude_json(const char* algo, const char* primary_hash) {
+const char* out = "{\"primary\":{\"algo\":";
+    int _heap_out = 0; (void)_heap_out;
+out = string_concat(out, json_escape_string_impl(algo));
+out = string_concat(out, ",\"hash\":");
+out = string_concat(out, json_escape_string_impl(primary_hash));
+out = string_concat(out, "},\"secondaries\":[");
+    return out;
+}
+
+// Exported:
+const char* secondary_entry_json(const char* algo, const char* hash) {
+const char* out = "{\"algo\":";
+    int _heap_out = 0; (void)_heap_out;
+out = string_concat(out, json_escape_string_impl(algo));
+out = string_concat(out, ",\"hash\":");
+out = string_concat(out, json_escape_string_impl(hash));
+out = string_concat(out, "}");
+    return out;
+}
+
+// Exported:
 const char* info_prelude_json(int head, const char* name, const char* hash_algo) {
 const char* out = "{\"head\":";
     int _heap_out = 0; (void)_heap_out;
@@ -791,6 +813,12 @@ const char* aether_log_entry_json(int32_t rev, const char* author, const char* d
 }
 const char* aether_path_change_entry_json(const char* action, const char* path) {
     return path_change_entry_json(action, path);
+}
+const char* aether_hashes_prelude_json(const char* algo, const char* primary_hash) {
+    return hashes_prelude_json(algo, primary_hash);
+}
+const char* aether_secondary_entry_json(const char* algo, const char* hash) {
+    return secondary_entry_json(algo, hash);
 }
 const char* aether_info_prelude_json(int32_t head, const char* name, const char* hash_algo) {
     return info_prelude_json(head, name, hash_algo);
