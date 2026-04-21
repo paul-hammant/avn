@@ -110,78 +110,57 @@ mkdir_p(const char *path)
     return 0;
 }
 
-/* Parse the second token out of $repo/format. The file looks like:
- *   svnae-fsfs-1\n                 (legacy — assumed sha1)
- *   svnae-fsfs-1 sha256\n          (primary = sha256)
- *   svnae-fsfs-1 sha256,sha1\n     (primary = sha256, sha1 kept as secondary)
- * Returns the primary algorithm name as a static-thread-local string
- * (caller copies before another call). On any parse failure or if the
- * file is missing, returns "sha1" for backward compatibility. */
+/* Format-line parsing ported to Aether (ae/fs_fs/format_line.ae). */
+extern const char *aether_format_primary_hash(const char *line);
+extern int         aether_format_secondary_count(const char *line);
+extern const char *aether_format_secondary_hash(const char *line, int i);
+
+/* Read + trim the first line of $repo/format. Returns 0 on success
+ * with the trimmed line in `out` (out_sz bytes), -1 if absent. */
+static int
+read_format_line(const char *repo, char *out, size_t out_sz)
+{
+    char fmt_path[PATH_MAX];
+    snprintf(fmt_path, sizeof fmt_path, "%s/format", repo);
+    FILE *f = fopen(fmt_path, "r");
+    if (!f) return -1;
+    if (!fgets(out, (int)out_sz, f)) { fclose(f); return -1; }
+    fclose(f);
+    size_t n = strlen(out);
+    while (n > 0 && (out[n-1] == '\n' || out[n-1] == '\r' || out[n-1] == ' ')) out[--n] = '\0';
+    return 0;
+}
+
 const char *
 svnae_repo_primary_hash(const char *repo)
 {
     static __thread char cache[32];
-    cache[0] = '\0';
-
-    char fmt_path[PATH_MAX];
-    snprintf(fmt_path, sizeof fmt_path, "%s/format", repo);
-    FILE *f = fopen(fmt_path, "r");
-    if (!f) { strcpy(cache, "sha1"); return cache; }
     char line[128];
-    if (!fgets(line, sizeof line, f)) { fclose(f); strcpy(cache, "sha1"); return cache; }
-    fclose(f);
-
-    /* Trim trailing whitespace. */
-    size_t n = strlen(line);
-    while (n > 0 && (line[n-1] == '\n' || line[n-1] == '\r' || line[n-1] == ' ')) line[--n] = '\0';
-
-    /* Look for a space after the tag. */
-    char *sp = strchr(line, ' ');
-    if (!sp) { strcpy(cache, "sha1"); return cache; }
-    const char *algos = sp + 1;
-    /* Primary is up to the first ',' (or end of line). */
-    const char *comma = strchr(algos, ',');
-    size_t plen = comma ? (size_t)(comma - algos) : strlen(algos);
-    if (plen == 0 || plen >= sizeof cache) { strcpy(cache, "sha1"); return cache; }
-    memcpy(cache, algos, plen);
-    cache[plen] = '\0';
+    if (read_format_line(repo, line, sizeof line) != 0) {
+        strcpy(cache, "sha1"); return cache;
+    }
+    const char *primary = aether_format_primary_hash(line);
+    if (!primary || !*primary) { strcpy(cache, "sha1"); return cache; }
+    size_t plen = strlen(primary);
+    if (plen >= sizeof cache) { strcpy(cache, "sha1"); return cache; }
+    memcpy(cache, primary, plen + 1);
     return cache;
 }
 
-/* Parse the comma-separated secondary algo list from the format file.
- * Writes into `out` (caller-sized); returns count of secondaries
- * (0 if only a primary is declared, or no format file). */
 int
 svnae_repo_secondary_hashes(const char *repo, char out[4][32])
 {
-    char fmt_path[PATH_MAX];
-    snprintf(fmt_path, sizeof fmt_path, "%s/format", repo);
-    FILE *f = fopen(fmt_path, "r");
-    if (!f) return 0;
     char line[256];
-    if (!fgets(line, sizeof line, f)) { fclose(f); return 0; }
-    fclose(f);
-    size_t n = strlen(line);
-    while (n > 0 && (line[n-1] == '\n' || line[n-1] == '\r' || line[n-1] == ' ')) line[--n] = '\0';
-
-    char *sp = strchr(line, ' ');
-    if (!sp) return 0;
-    /* Skip the primary (up to first comma). */
-    char *first = sp + 1;
-    char *comma = strchr(first, ',');
-    if (!comma) return 0;
+    if (read_format_line(repo, line, sizeof line) != 0) return 0;
+    int n = aether_format_secondary_count(line);
+    if (n > 4) n = 4;
     int count = 0;
-    const char *p = comma + 1;
-    while (*p && count < 4) {
-        const char *start = p;
-        const char *end   = strchr(p, ',');
-        size_t len_ = end ? (size_t)(end - start) : strlen(start);
-        if (len_ == 0 || len_ >= 32) break;
-        memcpy(out[count], start, len_);
-        out[count][len_] = '\0';
+    for (int i = 0; i < n; i++) {
+        const char *s = aether_format_secondary_hash(line, i);
+        size_t sl = strlen(s);
+        if (sl == 0 || sl >= 32) break;
+        memcpy(out[count], s, sl + 1);
         count++;
-        if (!end) break;
-        p = end + 1;
     }
     return count;
 }
