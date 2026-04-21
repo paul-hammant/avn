@@ -17,7 +17,7 @@ extra_sources = ["ae/subr/sqlite/shim.c", "ae/subr/io/shim.c", "ae/subr/checksum
 [[bin]]
 name = "aether-svnserver"
 path = "ae/svnserver/main.ae"
-extra_sources = ["ae/subr/sqlite/shim.c", "ae/subr/io/shim.c", "ae/subr/checksum/shim.c", "ae/subr/compress/shim.c", "ae/fs_fs/shim.c", "ae/fs_fs/txn_shim.c", "ae/fs_fs/rep_store_shim.c", "ae/fs_fs/commit_shim.c", "ae/fs_fs/spec_generated.c", "ae/repos/shim.c", "ae/repos/blobfield_generated.c", "ae/svnserver/shim.c", "ae/svnserver/json_generated.c"]
+extra_sources = ["ae/subr/sqlite/shim.c", "ae/subr/io/shim.c", "ae/subr/checksum/shim.c", "ae/subr/compress/shim.c", "ae/fs_fs/shim.c", "ae/fs_fs/txn_shim.c", "ae/fs_fs/rep_store_shim.c", "ae/fs_fs/commit_shim.c", "ae/fs_fs/spec_generated.c", "ae/repos/shim.c", "ae/repos/blobfield_generated.c", "ae/svnserver/shim.c", "ae/svnserver/json_generated.c", "ae/svnserver/paths_index_generated.c"]
 
 [[bin]]
 name = "svnae-seed"

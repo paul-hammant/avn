@@ -346,33 +346,17 @@ acl_body_decide(const char *body, const char *user, int want_write)
     return -1;
 }
 
-/* Scan the paths-acl blob body for a path entry. Returns a malloc'd
- * 64+NUL sha of the matching per-path ACL blob, or NULL if absent. */
+/* Paths-index lookup ported to Aether (ae/svnserver/paths_index.ae).
+ * Handles either sha1 (40) or sha256 (64) blobs without hardcoding a
+ * fixed width. */
+extern const char *aether_paths_index_lookup(const char *body, const char *path);
+
 static char *
 paths_acl_lookup(const char *body, const char *path)
 {
     if (!body) return NULL;
-    size_t plen = strlen(path);
-    const char *p = body;
-    while (*p) {
-        const char *eol = strchr(p, '\n');
-        size_t llen = eol ? (size_t)(eol - p) : strlen(p);
-        /* Format: "<sha-hex> <path>". Sha width is repo-algo-dependent. */
-        const char *sp = memchr(p, ' ', llen);
-        if (sp) {
-            size_t sha_len = (size_t)(sp - p);
-            size_t name_len = llen - sha_len - 1;
-            if (name_len == plen && memcmp(sp + 1, path, plen) == 0 && sha_len < 65) {
-                char *out = malloc(sha_len + 1);
-                memcpy(out, p, sha_len);
-                out[sha_len] = '\0';
-                return out;
-            }
-        }
-        if (!eol) break;
-        p = eol + 1;
-    }
-    return NULL;
+    const char *v = aether_paths_index_lookup(body, path);
+    return (v && *v) ? strdup(v) : NULL;
 }
 
 /* Decide whether `user` is allowed on `target_path` at `rev` in mode
@@ -841,31 +825,17 @@ load_rev_props_sha1(const char *repo, int rev)
     return load_rev_blob_field(repo, rev, "props");
 }
 
-/* Given a paths-props blob body and a target path, return the sha1 of
- * that path's per-path props blob (malloc'd), or NULL if missing. */
+/* Given a paths-props blob body and a target path, return the sha of
+ * that path's per-path props blob (malloc'd), or NULL if missing.
+ *
+ * Shares the paths_acl_lookup Aether port — both blobs share the
+ * "<sha> <path>\n" shape and the lookup handles any sha width. */
 static char *
 paths_props_lookup(const char *body, const char *path)
 {
     if (!body) return NULL;
-    size_t plen = strlen(path);
-    const char *p = body;
-    while (*p) {
-        const char *eol = strchr(p, '\n');
-        size_t llen = eol ? (size_t)(eol - p) : strlen(p);
-        /* format: "<40-char sha> <path>" */
-        if (llen > 41) {
-            size_t name_len = llen - 41;
-            if (name_len == plen && memcmp(p + 41, path, plen) == 0) {
-                char *out = malloc(41);
-                memcpy(out, p, 40);
-                out[40] = '\0';
-                return out;
-            }
-        }
-        if (!eol) break;
-        p = eol + 1;
-    }
-    return NULL;
+    const char *v = aether_paths_index_lookup(body, path);
+    return (v && *v) ? strdup(v) : NULL;
 }
 
 /* Given a per-path props blob (key=value\n lines), emit it as JSON

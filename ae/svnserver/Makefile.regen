@@ -2,11 +2,14 @@
 
 AETHERC ?= $(HOME)/scm/aether/build/aetherc
 
-GENERATED := json_generated.c
+GENERATED := json_generated.c paths_index_generated.c
 
 all: $(GENERATED)
 
 json_generated.c: json.ae
+	$(AETHERC) --emit=lib $< $@
+
+paths_index_generated.c: paths_index.ae
 	$(AETHERC) --emit=lib $< $@
 
 .PHONY: all
