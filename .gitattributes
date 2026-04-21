@@ -1,0 +1,4 @@
+# Mark aetherc --emit=lib output as generated so it's excluded from
+# language stats, diff stats, and code-review prompts.
+ae/**/*_generated.c linguist-generated=true
+ae/**/*_generated.c diff=generated

@@ -526,40 +526,26 @@ svnae_commit_finalise_on_branch(const char *repo, struct svnae_txn *txn,
 
 #include <fnmatch.h>
 
-/* Does `path` match any glob in `globs[0..n]`? Returns 1 on match,
- * 0 on no match. A glob ending in "/**" matches the whole subtree
- * under that prefix (shell-like behavior; fnmatch alone won't
- * traverse). Exact paths also match their ancestor dirs — i.e.
- * including "src/main.c" implicitly includes "src". */
+/* FFI helper the Aether spec matcher (ae/fs_fs/spec.ae) calls. Keeps
+ * fnmatch(3) on the C side since Aether has no binding for it. */
+int32_t
+svnae_fnmatch_pathname(const char *glob, const char *path)
+{
+    return fnmatch(glob, path, FNM_PATHNAME) == 0 ? 1 : 0;
+}
+
+/* Glob matcher ported to Aether (ae/fs_fs/spec.ae, --emit=lib). The
+ * C wrapper just loops over globs[] and delegates each one to the
+ * Aether per-glob matcher. The Aether side implements "prefix/**"
+ * subtree inclusion, fnmatch via the FFI helper above, and the
+ * ancestor-of-literal-glob rule. */
+extern int32_t aether_spec_path_matches_glob(const char *path, const char *glob);
+
 static int
 path_matches_any(const char *path, const char *const *globs, int n)
 {
     for (int i = 0; i < n; i++) {
-        const char *g = globs[i];
-        size_t glen = strlen(g);
-
-        /* Handle "prefix/**" as a subtree include. */
-        if (glen >= 3 && strcmp(g + glen - 3, "/**") == 0) {
-            size_t plen = glen - 3;
-            if (strncmp(path, g, plen) == 0
-                && (path[plen] == '\0' || path[plen] == '/')) {
-                return 1;
-            }
-            continue;
-        }
-
-        /* Exact match via fnmatch. */
-        if (fnmatch(g, path, FNM_PATHNAME) == 0) return 1;
-
-        /* An exact file glob implicitly matches all its ancestor dirs.
-         * e.g. include "src/foo/bar.txt" needs "src" and "src/foo" in
-         * the filtered tree so the file can live somewhere. */
-        size_t plen = strlen(path);
-        if (plen < glen && g[plen] == '/'
-            && strncmp(g, path, plen) == 0) {
-            /* path is an ancestor of the globbed include — keep it. */
-            return 1;
-        }
+        if (aether_spec_path_matches_glob(path, globs[i])) return 1;
     }
     return 0;
 }
@@ -878,6 +864,11 @@ svnae_branch_create(const char *repo, const char *name, const char *base,
     return new_rev;
 }
 
+/* The glob-parsing + matching is ported to Aether in ae/fs_fs/spec.ae.
+ * The C side keeps only the file I/O (std.fs is unavailable under
+ * --emit=lib) and hands the spec-file body to the Aether entry point. */
+extern int32_t aether_spec_matches_any(const char *path, const char *specs_joined);
+
 /* Phase 8.2b: is `path` allowed by `branch`'s include spec?
  *   - Empty or missing spec ⇒ allow (main's "full tree" case).
  *   - Otherwise, use the same matcher as tree filtering at creation time.
@@ -915,29 +906,7 @@ svnae_branch_spec_allows(const char *repo, const char *branch, const char *path)
     fclose(f);
     buf[rd] = '\0';
 
-    /* Count non-empty lines; tokenise into an array of const char*. */
-    int n = 0;
-    for (char *p = buf; *p; ) {
-        while (*p == '\n' || *p == '\r') p++;
-        if (!*p) break;
-        n++;
-        while (*p && *p != '\n' && *p != '\r') p++;
-    }
-    if (n == 0) { free(buf); return 1; }
-
-    const char **globs = calloc((size_t)n, sizeof *globs);
-    if (!globs) { free(buf); return -1; }
-    int i = 0;
-    for (char *p = buf; *p && i < n; ) {
-        while (*p == '\n' || *p == '\r') p++;
-        if (!*p) break;
-        globs[i++] = p;
-        while (*p && *p != '\n' && *p != '\r') p++;
-        if (*p) { *p = '\0'; p++; }
-    }
-
-    int ok = path_matches_any(path, globs, n);
-    free(globs);
+    int ok = aether_spec_matches_any(path, buf);
     free(buf);
     return ok ? 1 : 0;
 }

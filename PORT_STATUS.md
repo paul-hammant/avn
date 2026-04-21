@@ -11,8 +11,11 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
 
 ## Headline
 
-- **57 commits.** Each phase is its own commit, reviewable in isolation.
-- **47 test suites** (added `test_branch_enforce.sh`), ~507 assertions, all green.
+- **59 commits.** Each phase is its own commit, reviewable in isolation.
+- **47 test suites**, ~507 assertions, all green. First Aether-as-library
+  port landed (`ae/fs_fs/spec.ae`) via `aetherc --emit=lib` — the branch
+  include-spec glob matcher now lives in Aether and is linked into both
+  `aether-svnserver` and `svnadmin`.
   Mix of in-language `.ae` tests and end-to-end shell harnesses that
   spin up a real HTTP server and drive it with curl and the built
   `svn` CLI.
@@ -99,7 +102,8 @@ Named after the plan's Phase N. Plan: `../svn-to-aether.md`.
 | 7.7  | `svn cp` refuse-unless-RW-everywhere + ACL auto-follow | ✅ | (prev commit) |
 | 8.1  | Branch infrastructure + default `main` + path-rev index | ✅ | `795dfe8` |
 | 8.2a | `svn branch create` + include-glob spec storage (no enforcement yet) | ✅ | `7a698e2` |
-| 8.2b | Branch-spec enforcement on commits + cross-branch cp refusal | ✅ | (this commit) |
+| 8.2b | Branch-spec enforcement on commits + cross-branch cp refusal | ✅ | `0f57c60` |
+| 8.2c | First C→Aether port: branch-spec glob matcher (`spec.ae` + `aetherc --emit=lib`) | ✅ | (this commit) |
 | 12 | svnadmin create/dump/load | ✅ | `52380a5` |
 
 ## Phases not yet done (from the plan)
