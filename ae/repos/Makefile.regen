@@ -1,0 +1,12 @@
+# Regeneration recipe for Aether-as-library C sources under ae/repos/.
+
+AETHERC ?= $(HOME)/scm/aether/build/aetherc
+
+GENERATED := blobfield_generated.c
+
+all: $(GENERATED)
+
+blobfield_generated.c: blobfield.ae
+	$(AETHERC) --emit=lib $< $@
+
+.PHONY: all

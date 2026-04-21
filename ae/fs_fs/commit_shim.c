@@ -118,8 +118,9 @@ load_rev_root_sha1(const char *repo, int rev)
  * that pass "" always get the previous rev's props-sha1 carried
  * forward. */
 
-/* Read a "key: <value>\n" line from an existing revision blob (or
- * return NULL if not present). Caller frees. */
+/* Field extraction ported to Aether (ae/repos/blobfield.ae). */
+extern const char *aether_blobfield_get(const char *body, const char *key);
+
 static char *
 rev_blob_field(const char *repo, int rev, const char *key)
 {
@@ -135,19 +136,8 @@ rev_blob_field(const char *repo, int rev, const char *key)
 
     char *body = svnae_rep_read_blob(repo, buf);
     if (!body) return NULL;
-    size_t klen = strlen(key);
-    char needle[64];
-    snprintf(needle, sizeof needle, "%s: ", key);
-    char *p = strstr(body, needle);
-    char *out = NULL;
-    if (p) {
-        p += klen + 2;
-        char *eol = strchr(p, '\n');
-        size_t L = eol ? (size_t)(eol - p) : strlen(p);
-        out = malloc(L + 1);
-        memcpy(out, p, L);
-        out[L] = '\0';
-    }
+    const char *v = aether_blobfield_get(body, key);
+    char *out = (v && *v) ? strdup(v) : NULL;
     svnae_rep_free(body);
     return out;
 }

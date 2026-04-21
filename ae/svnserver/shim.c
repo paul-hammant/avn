@@ -810,8 +810,10 @@ handle_repo_log(HttpRequest *req, HttpServerResponse *res, void *user_data)
     free(s.data);
 }
 
-/* Load a "key: value" line from the rev blob of rev `rev`. Returns a
- * malloc'd value (caller frees with free()), or NULL if key absent. */
+/* Field extraction ported to Aether (ae/repos/blobfield.ae). The C side
+ * keeps the rev-pointer + rep-blob I/O. */
+extern const char *aether_blobfield_get(const char *body, const char *key);
+
 static char *
 load_rev_blob_field(const char *repo, int rev, const char *key)
 {
@@ -826,18 +828,8 @@ load_rev_blob_field(const char *repo, int rev, const char *key)
     while (n > 0 && (buf[n-1] == '\n' || buf[n-1] == '\r')) buf[--n] = '\0';
     char *body = svnae_rep_read_blob(repo, buf);
     if (!body) return NULL;
-    char needle[64];
-    snprintf(needle, sizeof needle, "%s: ", key);
-    char *p = strstr(body, needle);
-    char *out = NULL;
-    if (p) {
-        p += strlen(needle);
-        char *eol = strchr(p, '\n');
-        size_t L = eol ? (size_t)(eol - p) : strlen(p);
-        out = malloc(L + 1);
-        memcpy(out, p, L);
-        out[L] = '\0';
-    }
+    const char *v = aether_blobfield_get(body, key);
+    char *out = (v && *v) ? strdup(v) : NULL;
     svnae_rep_free(body);
     return out;
 }

@@ -127,29 +127,35 @@ rev_blob_sha1(const char *repo, int rev)
     return body;
 }
 
-/* Extract "key: value" from a line-oriented blob. Returns malloc'd value
- * or NULL if the key isn't present. */
+/* "key: value" extractor — ported to Aether (ae/repos/blobfield.ae).
+ * Wrapper preserves the original "malloc or NULL" contract: Aether
+ * returns "" for missing, so we map that back to NULL and otherwise
+ * copy (the Aether-owned string could be GC'd). */
+extern const char *aether_blobfield_get(const char *body, const char *key);
+
 static char *
 parse_field(const char *body, const char *key)
 {
-    size_t klen = strlen(key);
-    const char *p = body;
-    while (*p) {
-        if (strncmp(p, key, klen) == 0 && p[klen] == ':') {
-            const char *v = p + klen + 1;
-            while (*v == ' ' || *v == '\t') v++;
-            const char *eol = strchr(v, '\n');
-            size_t n = eol ? (size_t)(eol - v) : strlen(v);
-            char *out = malloc(n + 1);
-            memcpy(out, v, n);
-            out[n] = '\0';
-            return out;
+    if (!body) return NULL;
+    const char *v = aether_blobfield_get(body, key);
+    if (!v || !*v) {
+        /* Distinguish "present but empty" from "absent". Re-scan for
+         * "<key>:" presence; empty-valued keys are rare (author/date/log
+         * are always non-empty in a well-formed rev blob) but we stay
+         * byte-compatible with the old impl anyway. */
+        size_t klen = strlen(key);
+        const char *p = body;
+        int present = 0;
+        while (*p) {
+            if (strncmp(p, key, klen) == 0 && p[klen] == ':') { present = 1; break; }
+            const char *eol = strchr(p, '\n');
+            if (!eol) break;
+            p = eol + 1;
         }
-        const char *eol = strchr(p, '\n');
-        if (!eol) break;
-        p = eol + 1;
+        if (!present) return NULL;
+        return strdup("");
     }
-    return NULL;
+    return strdup(v);
 }
 
 /* --- log ---------------------------------------------------------------
