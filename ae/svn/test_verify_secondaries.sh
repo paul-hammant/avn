@@ -90,10 +90,26 @@ check "secondaries file count" "1" "$(echo "$out" | grep -c '1 file(s)' || true)
 kill "$SRV" 2>/dev/null || true
 wait "$SRV" 2>/dev/null || true
 
-# Find note.txt's primary hash via the dir blob, then corrupt its
-# secondary row. Easier: just corrupt a random secondary row.
+# Corrupt the secondary hash of note.txt's content blob specifically.
+# Ask the server for note.txt's primary hash via the cat endpoint's
+# header, then update the matching rep_cache_sec row. Picking a
+# specific file-blob guarantees --secondaries actually walks past
+# it (LIMIT 1 could hit a rev-blob row, which verify never touches).
+"$SERVER_BIN" demo "$REPO" "$PORT" >/tmp/svnae_test_sec_srv.log 2>&1 &
+TMP_SRV=$!
+sleep 1.2
+note_sha=$(curl -sD - -o /dev/null "$URL/../repos/demo/rev/1/cat/note.txt" 2>/dev/null \
+           | awk 'BEGIN{IGNORECASE=1} /X-Svnae-Node-Hash:/{gsub(/\r/,""); print $2}')
+if [ -z "$note_sha" ]; then
+    # Fallback: try the full URL
+    note_sha=$(curl -sD - -o /dev/null "http://127.0.0.1:$PORT/repos/demo/rev/1/cat/note.txt" 2>/dev/null \
+               | awk 'BEGIN{IGNORECASE=1} /X-Svnae-Node-Hash:/{gsub(/\r/,""); print $2}')
+fi
+kill "$TMP_SRV" 2>/dev/null || true
+wait "$TMP_SRV" 2>/dev/null || true
+
 sqlite3 "$REPO/rep-cache.db" \
-    "UPDATE rep_cache_sec SET secondary_hash='0000000000000000000000000000000000000000' WHERE algo='sha1' LIMIT 1"
+    "UPDATE rep_cache_sec SET secondary_hash='0000000000000000000000000000000000000000' WHERE algo='sha1' AND primary_hash='$note_sha'"
 
 "$SERVER_BIN" demo "$REPO" "$PORT" >/tmp/svnae_test_sec_srv.log 2>&1 &
 SRV=$!

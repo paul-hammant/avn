@@ -212,6 +212,53 @@ svnae_svnadmin_create_with_algos(const char *repo, const char *algos_spec)
 {
     if (create_bare(repo, algos_spec) != 0) return -1;
 
+    /* Phase 8.1: create the per-branch head layout alongside the
+     * legacy $repo/head + $repo/revs/NNNNNN. Existing code paths
+     * (commit finalise, server dispatch) still read the old layout
+     * today; the new layout is written in parallel so branch-aware
+     * code can come online incrementally.
+     *
+     * New layout:
+     *   $repo/branches/main/head         ← one line: "rev=0"
+     *   $repo/branches/main/revs/00/00/000000  ← rev pointer with fanout
+     *   $repo/branches/main/spec          ← empty (include-all)
+     *
+     * The path_rev index table lives in rep-cache.db and is created
+     * here so commit finalise can always INSERT without schema
+     * concerns. */
+    char p[PATH_MAX];
+    snprintf(p, sizeof p, "%s/branches", repo);
+    if (mkdir_p(p) != 0) return -1;
+    snprintf(p, sizeof p, "%s/branches/main", repo);
+    if (mkdir_p(p) != 0) return -1;
+    snprintf(p, sizeof p, "%s/branches/main/revs", repo);
+    if (mkdir_p(p) != 0) return -1;
+    snprintf(p, sizeof p, "%s/branches/main/revs/00/00", repo);
+    if (mkdir_p(p) != 0) return -1;
+    /* Empty spec file — means "include everything from parent," but
+     * for main (which has no parent) it means "full tree." */
+    snprintf(p, sizeof p, "%s/branches/main/spec", repo);
+    if (write_file_atomic(p, "", 0) != 0) return -1;
+
+    /* Path-rev secondary index for O(touched-revs) blame/log-of-path.
+     * Populated on every commit (see fs_fs/commit_shim.c Phase 8.1). */
+    {
+        char db_path[PATH_MAX];
+        snprintf(db_path, sizeof db_path, "%s/rep-cache.db", repo);
+        sqlite3 *db;
+        if (sqlite3_open_v2(db_path, &db, SQLITE_OPEN_READWRITE, NULL) == SQLITE_OK) {
+            sqlite3_exec(db,
+                "CREATE TABLE IF NOT EXISTS path_rev ("
+                "  branch TEXT NOT NULL,"
+                "  path   TEXT NOT NULL,"
+                "  rev    INTEGER NOT NULL,"
+                "  PRIMARY KEY (branch, path, rev));"
+                "CREATE INDEX IF NOT EXISTS path_rev_lookup ON path_rev (branch, path);",
+                NULL, NULL, NULL);
+            sqlite3_close(db);
+        }
+    }
+
     /* Seed rev 0: empty root dir + rev blob pointing at it. */
     const char *empty_sha = svnae_rep_write_blob(repo, "", 0);
     if (!empty_sha) return -1;
@@ -223,7 +270,7 @@ svnae_svnadmin_create_with_algos(const char *repo, const char *algos_spec)
 
     char rev0[512];
     int rev0_len = snprintf(rev0, sizeof rev0,
-        "root: %s\nprev: 0\nauthor: (init)\ndate: %s\nlog: initial empty revision\n",
+        "root: %s\nbranch: main\nprev: 0\nauthor: (init)\ndate: %s\nlog: initial empty revision\n",
         empty_copy, svnae_fsfs_now_iso8601());
     const char *rev0_sha = svnae_rep_write_blob(repo, rev0, rev0_len);
     if (!rev0_sha) return -1;
@@ -231,11 +278,28 @@ svnae_svnadmin_create_with_algos(const char *repo, const char *algos_spec)
     char ptr_body[128];   /* sha256 = 64 hex + \n + NUL */
     int plen = snprintf(ptr_body, sizeof ptr_body, "%s\n", rev0_sha);
     char path[PATH_MAX];
+
+    /* Legacy rev pointer — kept for Phase 8.1 so unmodified readers
+     * continue to work. Phase 8.2+ will drop this once every reader
+     * has moved to the per-branch layout. */
     snprintf(path, sizeof path, "%s/revs/000000", repo);
     if (write_file_atomic(path, ptr_body, plen) != 0) return -1;
 
+    /* New per-branch rev pointer. Two-level fanout: aa/bb/NNNNNN
+     * where aa = rev/65536, bb = (rev/256)%256. At rev 0 that's
+     * 00/00/000000. */
+    snprintf(path, sizeof path, "%s/branches/main/revs/00/00/000000", repo);
+    if (write_file_atomic(path, ptr_body, plen) != 0) return -1;
+
+    /* Legacy head file. */
     snprintf(path, sizeof path, "%s/head", repo);
     if (write_file_atomic(path, "0\n", 2) != 0) return -1;
+
+    /* New per-branch head file. Format: "rev=N\n". Richer than the
+     * legacy one-int form — leaves room for tree-sha / spec-sha
+     * caching in 8.2 without another format change. */
+    snprintf(path, sizeof path, "%s/branches/main/head", repo);
+    if (write_file_atomic(path, "rev=0\n", 6) != 0) return -1;
     return 0;
 }
 

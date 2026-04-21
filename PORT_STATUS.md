@@ -11,8 +11,8 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
 
 ## Headline
 
-- **53 commits.** Each phase is its own commit, reviewable in isolation.
-- **44 test suites** (added `test_acl_cp_follow.sh`), ~459 assertions, all green.
+- **55 commits.** Each phase is its own commit, reviewable in isolation.
+- **45 test suites** (added `test_branches_phase81.sh`), ~476 assertions, all green.
   Mix of in-language `.ae` tests and end-to-end shell harnesses that
   spin up a real HTTP server and drive it with curl and the built
   `svn` CLI.
@@ -96,7 +96,8 @@ Named after the plan's Phase N. Plan: `../svn-to-aether.md`.
 | 7.4  | REST PUT/DELETE on `/path/<rel>` with Svn-Based-On concurrency token | ✅ | (prev commit) |
 | 7.5  | Multi-algo secondary verification (`svn verify --secondaries`) | ✅ | (prev commit) |
 | 7.6  | `svn blame` — per-line revision attribution (LCS-based) | ✅ | (prev commit) |
-| 7.7  | `svn cp` refuse-unless-RW-everywhere + ACL auto-follow | ✅ | (this commit) |
+| 7.7  | `svn cp` refuse-unless-RW-everywhere + ACL auto-follow | ✅ | (prev commit) |
+| 8.1  | Branch infrastructure + default `main` + path-rev index | ✅ | (this commit) |
 | 12 | svnadmin create/dump/load | ✅ | `52380a5` |
 
 ## Phases not yet done (from the plan)

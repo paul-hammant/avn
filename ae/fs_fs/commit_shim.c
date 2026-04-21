@@ -11,6 +11,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <sqlite3.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -23,6 +24,7 @@
 #endif
 
 struct svnae_txn;
+struct svnae_paths;
 
 /* Forward-declared from other shims we depend on. */
 int   svnae_txn_base_rev(const struct svnae_txn *t);
@@ -294,6 +296,31 @@ svnae_commit_finalise_with_acl(const char *repo, struct svnae_txn *txn,
                                const char *author, const char *logmsg,
                                const char *props_sha1, const char *acl_sha1)
 {
+    return svnae_commit_finalise_on_branch(repo, txn, "main", author, logmsg,
+                                           props_sha1, acl_sha1);
+}
+
+/* Phase 8.1 branch-aware entry point. For every commit:
+ *   - rev blob gets a `branch:` field identifying the branch advanced.
+ *   - legacy $repo/revs/NNNNNN and $repo/head pointers are still
+ *     written (simplifies incremental rollout; readers that predate
+ *     branch support keep working).
+ *   - new per-branch layout written too:
+ *       $repo/branches/<name>/revs/aa/bb/NNNNNN
+ *       $repo/branches/<name>/head  ("rev=N\n")
+ *   - path_rev index gets one row per touched path in this rev.
+ *
+ * For Phase 8.1, `branch` is ignored beyond appearing in the rev
+ * blob and selecting the per-branch paths — only "main" exists.
+ * Phase 8.2 will add multi-branch create/switch. */
+int
+svnae_commit_finalise_on_branch(const char *repo, struct svnae_txn *txn,
+                               const char *branch,
+                               const char *author, const char *logmsg,
+                               const char *props_sha1, const char *acl_sha1)
+{
+    if (!branch || !*branch) branch = "main";
+
     int base_rev = svnae_txn_base_rev(txn);
     if (base_rev < 0) return -1;
     char *base_root = load_rev_root_sha1(repo, base_rev);
@@ -323,40 +350,140 @@ svnae_commit_finalise_with_acl(const char *repo, struct svnae_txn *txn,
         as = inherited_acl ? inherited_acl : "";
     }
 
-    /* Build revision blob. */
-    size_t est = strlen(author) + strlen(logmsg) + 256 + 64 + 64 + 64 + 32;
+    /* Build revision blob — now includes `branch:`. */
+    size_t est = strlen(author) + strlen(logmsg) + strlen(branch) + 320;
     char *rev_body = malloc(est);
     int n = snprintf(rev_body, est,
-                     "root: %s\nprops: %s\nacl: %s\nprev: %d\nauthor: %s\ndate: %s\nlog: %s\n",
-                     new_root, ps, as, prev, author, svnae_fsfs_now_iso8601(), logmsg);
+                     "root: %s\nbranch: %s\nprops: %s\nacl: %s\nprev: %d\nauthor: %s\ndate: %s\nlog: %s\n",
+                     new_root, branch, ps, as, prev, author,
+                     svnae_fsfs_now_iso8601(), logmsg);
     if (n >= (int)est) {
         free(rev_body);
         rev_body = malloc((size_t)n + 1);
         snprintf(rev_body, (size_t)n + 1,
-                 "root: %s\nprops: %s\nacl: %s\nprev: %d\nauthor: %s\ndate: %s\nlog: %s\n",
-                 new_root, ps, as, prev, author, svnae_fsfs_now_iso8601(), logmsg);
+                 "root: %s\nbranch: %s\nprops: %s\nacl: %s\nprev: %d\nauthor: %s\ndate: %s\nlog: %s\n",
+                 new_root, branch, ps, as, prev, author,
+                 svnae_fsfs_now_iso8601(), logmsg);
     }
     free(inherited_props);
     free(inherited_acl);
 
     const char *rev_sha = svnae_rep_write_blob(repo, rev_body, (int)strlen(rev_body));
     free(rev_body);
-    free(new_root);
-    if (!rev_sha) return -1;
+    if (!rev_sha) { free(new_root); return -1; }
+    /* Copy out of the thread-local buffer before it's reused for
+     * subsequent blob writes (path_rev secondary-hash inserts may
+     * call svnae_rep_write_blob again downstream). */
+    char rev_sha_copy[65];
+    {
+        size_t rl = strlen(rev_sha);
+        if (rl >= sizeof rev_sha_copy) { free(new_root); return -1; }
+        memcpy(rev_sha_copy, rev_sha, rl + 1);
+    }
 
-    /* revs/NNNNNN pointer file. */
+    /* Legacy pointer. */
     char ptr_path[PATH_MAX];
     snprintf(ptr_path, sizeof ptr_path, "%s/revs/%06d", repo, next);
-    char ptr_body[128];   /* sha256 hex is 64; keep some slack */
-    int plen = snprintf(ptr_body, sizeof ptr_body, "%s\n", rev_sha);
-    if (write_atomic(ptr_path, ptr_body, plen) != 0) return -1;
+    char ptr_body[128];
+    int plen = snprintf(ptr_body, sizeof ptr_body, "%s\n", rev_sha_copy);
+    if (write_atomic(ptr_path, ptr_body, plen) != 0) { free(new_root); return -1; }
 
-    /* head. */
+    /* Per-branch pointer with two-level fanout: aa/bb/NNNNNN where
+     * aa = hex(rev >> 16), bb = hex((rev >> 8) & 0xff). At rev 10M
+     * this gives ~150 files per leaf dir. */
+    int aa = (next >> 16) & 0xff;
+    int bb = (next >> 8) & 0xff;
+    char branch_dir[PATH_MAX];
+    snprintf(branch_dir, sizeof branch_dir, "%s/branches/%s/revs/%02x/%02x",
+             repo, branch, aa, bb);
+    /* mkdir -p. write_atomic writes to a tempfile + rename, so the
+     * parent dir must exist first. */
+    {
+        char tmp[PATH_MAX];
+        snprintf(tmp, sizeof tmp, "%s", branch_dir);
+        for (char *q = tmp + 1; *q; q++) {
+            if (*q == '/') {
+                *q = '\0';
+                if (mkdir(tmp, 0755) != 0 && errno != EEXIST) { free(new_root); return -1; }
+                *q = '/';
+            }
+        }
+        if (mkdir(tmp, 0755) != 0 && errno != EEXIST) { free(new_root); return -1; }
+    }
+    char branch_ptr[PATH_MAX];
+    snprintf(branch_ptr, sizeof branch_ptr, "%s/%06d", branch_dir, next);
+    if (write_atomic(branch_ptr, ptr_body, plen) != 0) { free(new_root); return -1; }
+
+    /* Legacy head. */
     char head_path[PATH_MAX];
     snprintf(head_path, sizeof head_path, "%s/head", repo);
     char head_body[32];
     int hlen = snprintf(head_body, sizeof head_body, "%d\n", next);
-    if (write_atomic(head_path, head_body, hlen) != 0) return -1;
+    if (write_atomic(head_path, head_body, hlen) != 0) { free(new_root); return -1; }
 
+    /* Per-branch head. */
+    char br_head_path[PATH_MAX];
+    snprintf(br_head_path, sizeof br_head_path, "%s/branches/%s/head", repo, branch);
+    char br_head_body[64];
+    int bhl = snprintf(br_head_body, sizeof br_head_body, "rev=%d\n", next);
+    if (write_atomic(br_head_path, br_head_body, bhl) != 0) { free(new_root); return -1; }
+
+    /* Populate path_rev index: one row per path this rev touched.
+     * We derive the set from a tree-diff against base_rev's root,
+     * reusing svnae_repos_paths_changed. Falls through silently if
+     * the table doesn't exist yet (old repos), so this is safe
+     * during the gradual migration. */
+    {
+        extern struct svnae_paths *svnae_repos_paths_changed(const char *repo, int rev);
+        extern int                 svnae_repos_paths_count(const struct svnae_paths *P);
+        extern const char         *svnae_repos_paths_path(const struct svnae_paths *P, int i);
+        extern void                svnae_repos_paths_free(struct svnae_paths *P);
+
+        /* We just wrote the rev's pointer file, so paths_changed(next)
+         * will diff new_root against prev's root. */
+        struct svnae_paths *P = svnae_repos_paths_changed(repo, next);
+        if (P) {
+            int pn = svnae_repos_paths_count(P);
+            if (pn > 0) {
+                char cache_path[PATH_MAX];
+                snprintf(cache_path, sizeof cache_path, "%s/rep-cache.db", repo);
+                sqlite3 *db = NULL;
+                if (sqlite3_open_v2(cache_path, &db, SQLITE_OPEN_READWRITE, NULL) == SQLITE_OK) {
+                    /* Create the index table on demand. Seeded-from-scratch
+                     * repos (via seed.ae) don't go through svnadmin/create,
+                     * so their rep-cache.db won't have this table yet. */
+                    sqlite3_exec(db,
+                        "CREATE TABLE IF NOT EXISTS path_rev ("
+                        "  branch TEXT NOT NULL,"
+                        "  path   TEXT NOT NULL,"
+                        "  rev    INTEGER NOT NULL,"
+                        "  PRIMARY KEY (branch, path, rev));"
+                        "CREATE INDEX IF NOT EXISTS path_rev_lookup "
+                        "  ON path_rev (branch, path);",
+                        NULL, NULL, NULL);
+                    sqlite3_exec(db, "BEGIN", NULL, NULL, NULL);
+                    sqlite3_stmt *st = NULL;
+                    if (sqlite3_prepare_v2(db,
+                            "INSERT OR IGNORE INTO path_rev (branch, path, rev) VALUES (?, ?, ?)",
+                            -1, &st, NULL) == SQLITE_OK) {
+                        for (int i = 0; i < pn; i++) {
+                            sqlite3_bind_text(st, 1, branch, -1, SQLITE_TRANSIENT);
+                            sqlite3_bind_text(st, 2, svnae_repos_paths_path(P, i),
+                                              -1, SQLITE_TRANSIENT);
+                            sqlite3_bind_int (st, 3, next);
+                            sqlite3_step(st);
+                            sqlite3_reset(st);
+                        }
+                        sqlite3_finalize(st);
+                    }
+                    sqlite3_exec(db, "COMMIT", NULL, NULL, NULL);
+                    sqlite3_close(db);
+                }
+            }
+            svnae_repos_paths_free(P);
+        }
+    }
+
+    free(new_root);
     return next;
 }

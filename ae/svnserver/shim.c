@@ -19,6 +19,7 @@
  */
 
 #include <cjson/cJSON.h>
+#include <dirent.h>
 #include <errno.h>
 #include <openssl/evp.h>
 #include <stdio.h>
@@ -661,6 +662,10 @@ handle_repo_info(HttpRequest *req, HttpServerResponse *res, void *user_data)
         respond_error(res, 500, "cannot read head");
         return;
     }
+    /* Enumerate branches by listing $repo/branches/. Phase 8.1 has
+     * only `main`, but the enumeration is future-proof. */
+    char branches_dir[PATH_MAX];
+    snprintf(branches_dir, sizeof branches_dir, "%s/branches", repo);
     struct sb s = {0};
     sb_puts(&s, "{\"head\":");
     sb_putjson_int(&s, head);
@@ -668,6 +673,23 @@ handle_repo_info(HttpRequest *req, HttpServerResponse *res, void *user_data)
     sb_putjson_string(&s, name);
     sb_puts(&s, ",\"hash_algo\":");
     sb_putjson_string(&s, svnae_repo_primary_hash(repo));
+    sb_puts(&s, ",\"default_branch\":\"main\"");
+    sb_puts(&s, ",\"branches\":[");
+    {
+        DIR *d = opendir(branches_dir);
+        if (d) {
+            struct dirent *de;
+            int first = 1;
+            while ((de = readdir(d)) != NULL) {
+                if (de->d_name[0] == '.') continue;
+                if (!first) sb_putc(&s, ',');
+                first = 0;
+                sb_putjson_string(&s, de->d_name);
+            }
+            closedir(d);
+        }
+    }
+    sb_puts(&s, "]");
     sb_puts(&s, "}");
     respond_json(res, 200, s.data ? s.data : "{}");
     free(s.data);

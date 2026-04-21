@@ -241,6 +241,88 @@ in_repo_path(url: string) {
     return ""
 }
 
+// Phase 8.1 URL grammar.
+//
+// New form:  http://host/repo/BRANCH[;PATH]
+// Legacy:    http://host/repo[/PATH]          (implicit branch "main")
+//
+// `branch_of` returns the branch name. If the URL carries the new
+// `;`-separator form, the segment before `;` is the branch. If there's
+// no `;`, this function returns "" — meaning "implicit main; no
+// branch-explicit syntax in use". Callers that need a concrete
+// branch name substitute "main" when this returns "".
+//
+// `path_of` returns everything after the `;`. If no `;`, returns "".
+//
+// Peg-rev suffix (@N) is stripped first; it can follow the path.
+branch_of(url: string) {
+    url = strip_rev_suffix(url)
+    ts = third_slash(url)
+    if ts < 0 { return "" }
+    // Skip the repo name: advance to the slash after it.
+    rest = string.substring(url, ts + 1, string.length(url))
+    m = string.length(rest)
+    i = 0
+    // Find the first '/' in rest — that's the one between repo and branch.
+    sep = -1
+    while i < m {
+        if string.char_at(rest, i) == 47 { sep = i; break }
+        i = i + 1
+    }
+    if sep < 0 { return "" }
+    // Now scan from sep+1 for either ';' (branch ends) or '/' (no ;).
+    j = sep + 1
+    while j < m {
+        c = string.char_at(rest, j)
+        if c == 59 {   // ';'
+            return string.substring(rest, sep + 1, j)
+        }
+        if c == 47 {
+            // legacy form — no explicit branch
+            return ""
+        }
+        j = j + 1
+    }
+    // End of string without ';' or '/' — the whole tail is the branch.
+    return string.substring(rest, sep + 1, m)
+}
+
+path_of(url: string) {
+    url = strip_rev_suffix(url)
+    n = string.length(url)
+    // Find the last ';' in the string. (First would also do — only
+    // one `;` is semantically significant — but last is safer if
+    // someone has literal `;` elsewhere.)
+    i = 0
+    while i < n {
+        if string.char_at(url, i) == 59 {
+            return string.substring(url, i + 1, n)
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// Return the repo URL (everything up to and including the repo name)
+// stripped of any branch/path suffix. Used when we need the bare
+// `http://host/repo` root that the current server endpoints expect.
+repo_url(url: string) {
+    url = strip_rev_suffix(url)
+    ts = third_slash(url)
+    if ts < 0 { return url }
+    rest = string.substring(url, ts + 1, string.length(url))
+    m = string.length(rest)
+    i = 0
+    while i < m {
+        if string.char_at(rest, i) == 47 {
+            return string.substring(url, 0, ts + 1 + i)
+        }
+        i = i + 1
+    }
+    // No slash after the repo name — it's already bare.
+    return url
+}
+
 // --- options parsing ------------------------------------------------------
 //
 // We scan argv linearly; no getopt. Each subcommand has its own parser
@@ -1308,6 +1390,55 @@ cmd_status(argv_start: int) {
     return 0
 }
 
+// svn branches URL
+// Phase 8.1 stub: lists branches via the server's /info endpoint.
+// Today every repo has exactly one branch ("main"). Phase 8.2 adds
+// creation.
+cmd_branches(argv_start: int) {
+    if aether_args_count() <= argv_start {
+        println("svn branches: usage: svn branches URL")
+        return 2
+    }
+    url = aether_args_get(argv_start)
+    base = url_base(url)
+    repo = url_repo(url)
+    info_url = "${base}/repos/${repo}/info"
+    body = http_get_body(info_url)
+    if string.length(body) == 0 {
+        println("svn branches: could not contact server")
+        return 1
+    }
+    // Crude JSON extraction: find "branches":[...] and print each
+    // string. Proper JSON lib would be nicer but we already avoid
+    // pulling cJSON into the Aether side.
+    idx = string.index_of(body, "\"branches\":[")
+    if idx < 0 {
+        // Server predates Phase 8.1 — treat as single-branch "main".
+        println("main")
+        return 0
+    }
+    i = idx + string.length("\"branches\":[")
+    n = string.length(body)
+    while i < n {
+        c = string.char_at(body, i)
+        if c == 93 { break }   // ']'
+        if c == 34 {           // '"'
+            j = i + 1
+            while j < n {
+                if string.char_at(body, j) == 34 { break }
+                j = j + 1
+            }
+            if j <= n {
+                println(string.substring(body, i + 1, j))
+                i = j + 1
+            } else { i = i + 1 }
+        } else {
+            i = i + 1
+        }
+    }
+    return 0
+}
+
 cmd_checkout(argv_start: int) {
     url = aether_args_get(argv_start)
     rev_str = find_flag("--rev", argv_start)
@@ -1385,6 +1516,7 @@ main() {
     // Most subcommands have URL at argv[2]; status/add/rm don't.
 
     if string.equals(sub, "info") == 1     { exit(cmd_info(2)) }
+    if string.equals(sub, "branches") == 1 { exit(cmd_branches(2)) }
     if string.equals(sub, "verify") == 1   { exit(cmd_verify(2)) }
     if string.equals(sub, "acl") == 1      { exit(cmd_acl(2)) }
     if string.equals(sub, "blame") == 1    { exit(cmd_blame(2)) }
