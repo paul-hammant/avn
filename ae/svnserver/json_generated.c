@@ -120,6 +120,7 @@ typedef struct { float _0; const char* _1; } _tuple_float_string;
 
 // Forward declarations
 const char* json_escape_string_impl(const char*);
+const char* json_int_to_dec_impl(int);
 const char* escape_byte(int);
 const char* digit_char(int);
 const char* hex_char(int);
@@ -307,6 +308,10 @@ const char* json_escape_string(const char* v) {
 
 // Exported:
 const char* json_int_to_dec(int v) {
+    return json_int_to_dec_impl(v);
+}
+
+const char* json_int_to_dec_impl(int v) {
 if (v == 0) {
         {
             return "0";
@@ -637,6 +642,45 @@ out = string_concat(out, "]");
     return out;
 }
 
+// Exported:
+const char* log_entry_json(int rev, const char* author, const char* date, const char* msg) {
+const char* out = "{\"rev\":";
+    int _heap_out = 0; (void)_heap_out;
+out = string_concat(out, json_int_to_dec_impl(rev));
+out = string_concat(out, ",\"author\":");
+out = string_concat(out, json_escape_string_impl(author));
+out = string_concat(out, ",\"date\":");
+out = string_concat(out, json_escape_string_impl(date));
+out = string_concat(out, ",\"msg\":");
+out = string_concat(out, json_escape_string_impl(msg));
+out = string_concat(out, "}");
+    return out;
+}
+
+// Exported:
+const char* path_change_entry_json(const char* action, const char* path) {
+const char* out = "{\"action\":";
+    int _heap_out = 0; (void)_heap_out;
+out = string_concat(out, json_escape_string_impl(action));
+out = string_concat(out, ",\"path\":");
+out = string_concat(out, json_escape_string_impl(path));
+out = string_concat(out, "}");
+    return out;
+}
+
+// Exported:
+const char* blame_entry_json(int rev, const char* author, const char* text) {
+const char* out = "{\"rev\":";
+    int _heap_out = 0; (void)_heap_out;
+out = string_concat(out, json_int_to_dec_impl(rev));
+out = string_concat(out, ",\"author\":");
+out = string_concat(out, json_escape_string_impl(author));
+out = string_concat(out, ",\"text\":");
+out = string_concat(out, json_escape_string_impl(text));
+out = string_concat(out, "}");
+    return out;
+}
+
 static _tuple_int_string string_to_int(const char* s) {
 int ok = string_try_int(s);
 if (ok == 0) {
@@ -691,6 +735,9 @@ const char* aether_json_escape_string(const char* v) {
 const char* aether_json_int_to_dec(int32_t v) {
     return json_int_to_dec(v);
 }
+const char* aether_json_int_to_dec_impl(int32_t v) {
+    return json_int_to_dec_impl(v);
+}
 const char* aether_escape_byte(int32_t c) {
     return escape_byte(c);
 }
@@ -705,4 +752,13 @@ const char* aether_props_blob_to_json(const char* body) {
 }
 const char* aether_specs_to_json_array(const char* body) {
     return specs_to_json_array(body);
+}
+const char* aether_log_entry_json(int32_t rev, const char* author, const char* date, const char* msg) {
+    return log_entry_json(rev, author, date, msg);
+}
+const char* aether_path_change_entry_json(const char* action, const char* path) {
+    return path_change_entry_json(action, path);
+}
+const char* aether_blame_entry_json(int32_t rev, const char* author, const char* text) {
+    return blame_entry_json(rev, author, text);
 }

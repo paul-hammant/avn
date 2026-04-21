@@ -506,6 +506,9 @@ extern const char *aether_json_escape_string(const char *v);
 extern const char *aether_json_int_to_dec(int v);
 extern const char *aether_props_blob_to_json(const char *body);
 extern const char *aether_specs_to_json_array(const char *body);
+extern const char *aether_log_entry_json(int rev, const char *author, const char *date, const char *msg);
+extern const char *aether_path_change_entry_json(const char *action, const char *path);
+extern const char *aether_blame_entry_json(int rev, const char *author, const char *text);
 
 static void
 sb_putjson_string(struct sb *s, const char *v)
@@ -750,15 +753,10 @@ handle_repo_log(HttpRequest *req, HttpServerResponse *res, void *user_data)
         if (!visible) continue;
         if (any) sb_putc(&s, ',');
         any = 1;
-        sb_puts(&s, "{\"rev\":");
-        sb_putjson_int(&s, rev);
-        sb_puts(&s, ",\"author\":");
-        sb_putjson_string(&s, svnae_repos_log_author(lg, i));
-        sb_puts(&s, ",\"date\":");
-        sb_putjson_string(&s, svnae_repos_log_date(lg, i));
-        sb_puts(&s, ",\"msg\":");
-        sb_putjson_string(&s, svnae_repos_log_msg(lg, i));
-        sb_putc(&s, '}');
+        sb_puts(&s, aether_log_entry_json(rev,
+                                          svnae_repos_log_author(lg, i),
+                                          svnae_repos_log_date(lg, i),
+                                          svnae_repos_log_msg(lg, i)));
     }
     sb_puts(&s, "]}");
     svnae_repos_log_free(lg);
@@ -930,11 +928,7 @@ handle_repo_rev(HttpRequest *req, HttpServerResponse *res, void *user_data)
             if (!is_super && !acl_allows(repo, rev, user, path)) continue;
             if (any) sb_putc(&s, ',');
             any = 1;
-            sb_puts(&s, "{\"action\":");
-            sb_putjson_string(&s, svnae_repos_paths_action(P, i));
-            sb_puts(&s, ",\"path\":");
-            sb_putjson_string(&s, path);
-            sb_putc(&s, '}');
+            sb_puts(&s, aether_path_change_entry_json(svnae_repos_paths_action(P, i), path));
         }
         sb_puts(&s, "]}");
         svnae_repos_paths_free(P);
@@ -966,13 +960,9 @@ handle_repo_rev(HttpRequest *req, HttpServerResponse *res, void *user_data)
         int n = svnae_blame_count(B);
         for (int i = 0; i < n; i++) {
             if (i) sb_putc(&s, ',');
-            sb_puts(&s, "{\"rev\":");
-            sb_putjson_int(&s, svnae_blame_rev(B, i));
-            sb_puts(&s, ",\"author\":");
-            sb_putjson_string(&s, svnae_blame_author(B, i));
-            sb_puts(&s, ",\"text\":");
-            sb_putjson_string(&s, svnae_blame_text(B, i));
-            sb_putc(&s, '}');
+            sb_puts(&s, aether_blame_entry_json(svnae_blame_rev(B, i),
+                                                svnae_blame_author(B, i),
+                                                svnae_blame_text(B, i)));
         }
         sb_puts(&s, "]}");
         svnae_blame_free(B);

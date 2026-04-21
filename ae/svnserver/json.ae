@@ -54,13 +54,17 @@ json_escape_string_impl(v: string) -> string {
     return out
 }
 
-// Public wrapper — exported to C as aether_json_escape_string.
+// Public wrappers — exported to C as aether_json_escape_string / aether_json_int_to_dec.
 export json_escape_string(v: string) -> string {
     return json_escape_string_impl(v)
 }
 
-// Write `v` as decimal (no surrounding quotes).
 export json_int_to_dec(v: int) -> string {
+    return json_int_to_dec_impl(v)
+}
+
+// Local: write `v` as decimal (no surrounding quotes).
+json_int_to_dec_impl(v: int) -> string {
     if v == 0 { return "0" }
     neg = 0
     n = v
@@ -208,6 +212,48 @@ export specs_to_json_array(body: string) -> string {
         i = i + 1
     }
     out = string.concat(out, "]")
+    return out
+}
+
+// --- per-entry record formatters ----------------------------------------
+//
+// Thin wrappers that assemble a single JSON object from the fields the
+// caller already has as C strings. Each was a 4-6 line sb_puts/sb_putjson_*
+// run at the svnserver emit site.
+
+// {"rev":N,"author":"...","date":"...","msg":"..."}
+export log_entry_json(rev: int, author: string, date: string, msg: string) -> string {
+    out = "{\"rev\":"
+    out = string.concat(out, json_int_to_dec_impl(rev))
+    out = string.concat(out, ",\"author\":")
+    out = string.concat(out, json_escape_string_impl(author))
+    out = string.concat(out, ",\"date\":")
+    out = string.concat(out, json_escape_string_impl(date))
+    out = string.concat(out, ",\"msg\":")
+    out = string.concat(out, json_escape_string_impl(msg))
+    out = string.concat(out, "}")
+    return out
+}
+
+// {"action":"A","path":"..."}
+export path_change_entry_json(action: string, path: string) -> string {
+    out = "{\"action\":"
+    out = string.concat(out, json_escape_string_impl(action))
+    out = string.concat(out, ",\"path\":")
+    out = string.concat(out, json_escape_string_impl(path))
+    out = string.concat(out, "}")
+    return out
+}
+
+// {"rev":N,"author":"...","text":"..."}
+export blame_entry_json(rev: int, author: string, text: string) -> string {
+    out = "{\"rev\":"
+    out = string.concat(out, json_int_to_dec_impl(rev))
+    out = string.concat(out, ",\"author\":")
+    out = string.concat(out, json_escape_string_impl(author))
+    out = string.concat(out, ",\"text\":")
+    out = string.concat(out, json_escape_string_impl(text))
+    out = string.concat(out, "}")
     return out
 }
 
