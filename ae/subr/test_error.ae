@@ -15,16 +15,9 @@
 
 // Test error chain, defined inline in the same file.
 //
-// Aether v0.70.0 quirks documented for this port:
-//   (1) User function definitions with typed params AND a `-> Type` return
-//       annotation miscount arguments at call sites. Workaround: omit the
-//       return annotation — Aether infers it correctly. Use types on params.
-//   (2) `message` is a reserved keyword (actor model) — can't use as a name.
-//   (3) No __FILE__/__LINE__; call sites pass them explicitly.
-//   (4) Cross-module imports with typed params silently untype them to int
-//       (which truncates pointers). Internal helpers are safer in-file for
-//       Phase 0; we'll revisit once the module-type system stabilises or
-//       we write everything through extern-only module boundaries.
+// Aether has no __FILE__/__LINE__ (AETHER_ISSUES.md #4), so every call
+// site passes the location explicitly. `message` is still a reserved
+// keyword, so we use `msg` for the message-text parameter.
 
 extern svnae_error_create(code: int, msg: string, cause: ptr, file: string, line: int) -> ptr
 extern svnae_error_code(err: ptr) -> int

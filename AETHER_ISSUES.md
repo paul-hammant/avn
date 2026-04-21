@@ -23,10 +23,10 @@ Originally filed against **Aether v0.70.0**. Status lines triaged against
 | 10 | Block-local `{ }` scoping leaks | minor | ✅ FIXED (PR #194) |
 | 11 | `string.concat("", s)` is strlen-based | missing API | ⏳ Not yet investigated (likely still present) |
 | 12 | `extra_sources` array must be single-line | minor | ⏳ Known limitation in `get_extra_sources_for_bin` |
-| 13 | Return-type inference breaks for recursive string fns | blocker | ❌ Does not reproduce on v0.76.0 |
-| 14 | Return-type inference poisons subsequent extern call sites | blocker | ❌ Does not reproduce on v0.76.0 |
+| 13 | Return-type inference breaks for recursive string fns | blocker | ❌ Did not reproduce in isolated repro; port still leaves rebuild_dir in C pending a full unwind attempt |
+| 14 | Return-type inference poisons subsequent extern call sites | blocker | ❌ Did not reproduce in isolated repro; unwound for test_txn.ae |
 | 15 | `!` only works on already-boolean values | minor | ❌ Does not reproduce on v0.76.0 |
-| 16 | `extern` with 6+ params drops the last | blocker | ❌ Does not reproduce on v0.76.0 |
+| 16 | `extern` with 6+ params drops the last | blocker | ⏳ STILL reproduces for the port's actual shape (retracted triage 2026-04-21) |
 
 **Legend:** ✅ fixed on main &middot; ❌ does not reproduce &middot; ⏳ open / needs work &middot; 📝 deferred with design notes
 
@@ -446,7 +446,19 @@ will reach for `!` first.
 
 ## 16. `extern` declarations with 6 or more params drop the last param
 
-**STATUS: ❌ DOES NOT REPRODUCE** on v0.76.0. Tested the reporter's exact 6-param signature: `extern my_fn(a: ptr, b: string, c: int, d: int, e: string, f: int) -> int`. Generated C declaration has all six params, calls with six args compile and run correctly (probe returned the 6th arg value, 99). No arity drop.
+**STATUS: ⏳ STILL REPRODUCES** on v0.76.0 for externs matching the port's actual shape. Shim-snip attempt on 2026-04-21 tried to remove the packed-int workaround for `svnae_wc_db_upsert_node`; the direct 6-param extern `(db: ptr, path: string, kind: int, base_rev: int, base_sha1: string, state: int) -> int` regenerates the original failure:
+
+```
+/tmp/svnae_test_db.c:402:6: error: variable or field 'rc' declared void
+/tmp/svnae_test_db.c:264:6: note: declared here
+  264 | void svnae_wc_db_upsert_node(void*, const char*, int, int, const char*);
+```
+
+Two separate symptoms visible:
+  - 6th param (`state: int`) silently dropped from the emitted forward-declaration.
+  - `-> int` return annotation dropped too; declaration is `void`.
+
+The earlier "does not reproduce" triage was done with an isolated extern that happened not to trigger the bug. The shape that still breaks is: 6 params, mixed ptr/string/int, with a `-> int` return annotation, imported at the top of a `main()`-bearing `.ae` file. The packed-int workaround (`ks = (state << 4) | kind`) has been kept in place.
 
 **Severity: blocker for wide APIs.**
 

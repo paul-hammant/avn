@@ -24,7 +24,8 @@ import std.string
 const SLASH = 47
 const DOT   = 46
 
-// --- copy of path.ae (same-file workaround) --------------------------------
+// --- copy of path.ae (inlined; TODO: switch to `import path` once the
+// subr module layout is unified) --------------------------------------------
 
 relpath_pop_last(p: string) {
     n = string.length(p)
@@ -142,11 +143,8 @@ relpath_is_ancestor(parent: string, child: string) {
     cn = string.length(child)
     if cn < pn { return 0 }
     i = 0
-    // Aether v0.70.0 bug (#8): two char_at calls in one expression hang.
     while i < pn {
-        a = string.char_at(parent, i)
-        b = string.char_at(child, i)
-        if a != b { return 0 }
+        if string.char_at(parent, i) != string.char_at(child, i) { return 0 }
         i = i + 1
     }
     if cn == pn { return 1 }
@@ -218,8 +216,8 @@ dirent_dirname(p: string) {
 // --- test harness ----------------------------------------------------------
 //
 // Each expect_* helper returns 0 on pass, 1 on fail; main sums the returns.
-// Aether v0.70.0 has no module-level mutable variables, so threading the
-// counter through returns is the simplest way.
+// Aether has no module-level mutable variables, so we thread the counter
+// through returns.
 
 expect_str(label: string, got: string, want: string) {
     if string.equals(got, want) == 1 {

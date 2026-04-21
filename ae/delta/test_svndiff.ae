@@ -19,10 +19,6 @@
 // through delta→apply and recover the original." These tests build the
 // op list by hand; xdelta (producing ops from arbitrary source/target)
 // comes in the next step.
-//
-// Aether v0.70.0 note: block-local scoping with { ... } doesn't isolate
-// variable names — redeclaring a local in a sibling block errors. Each
-// test case lives in its own function to get a fresh scope.
 
 import std.string
 

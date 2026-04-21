@@ -271,40 +271,15 @@ svnae_strset_free(struct svnae_strset *s)
 
 /* ---- rebuild_dir in C --------------------------------------------------
  *
- * The commit algorithm is pointer-heavy string processing. Aether's forward-
- * reference return-type inference can't handle a recursive function that
- * returns string (see AETHER_ISSUES.md #1 / forward-decl limitations), so we
- * do the recursion here in C and expose a single entry point.
+ * Recursive tree rebuild: read a base dir blob, apply the txn's edit list,
+ * and emit a new dir blob whose sha1 roots the commit's new tree.
  *
- * The rebuild_dir C function needs callbacks into Aether for:
- *   read_blob(sha1) -> body
- *   write_blob_text(data) -> sha1
- *   write_blob_bytes(data, len) -> sha1
- * plus access to the txn's edit list.
- *
- * Rather than invent a callback mechanism (which Aether externs don't model),
- * we pass in already-hashed SHA-1s for the file contents: Aether does the
- * hashing/writing of the LEAF blobs (files) up front, populating the txn's
- * content field with a sentinel that encodes the already-written sha1.
- *
- * Actually simpler: the shim calls back out to a pair of C helpers that
- * shell-out to a small set of exported C functions exposed by test code /
- * Aether shims. Cleanest form: have Aether install the repo path before
- * calling rebuild, then the shim reads/writes blobs directly via file I/O
- * and a small rep-cache protocol.
- *
- * For Phase 3.3 we do the simplest thing: the Aether side pre-hashes every
- * file's content (writing to the rep store), and sets the txn entry's
- * content to the sha1 as plain ASCII. The shim then:
- *   - for reads: uses a helper that reads+decompresses a rep blob given
- *     only the repo path and the sha1.
- *   - for writes (directory blobs): produces text + writes via the same
- *     helpers.
- *
- * That requires replicating the rep-store read/write in C. We do that in
- * a minimal way — no rep-cache.db involvement for reads (we compute the
- * path from sha1 + check on-disk), and for writes we call back into a
- * small helper exposed below.
+ * Originally placed in C because recursive string-returning Aether
+ * functions were broken (AETHER_ISSUES.md #13); that's fixed in Aether
+ * v0.76.0, so this is a candidate to move back to Aether — tracked under
+ * the shim-snip sweep. For now the C version stays: it's load-bearing
+ * for commit and well-tested, and the recursive structure (~330 lines
+ * with reclist + sbuf helpers) is non-trivial to port.
  */
 
 /* Forward-declared helpers we expect to exist (from elsewhere in the

@@ -135,8 +135,6 @@ extern svnae_wc_statuslist_free(L: ptr)
 //
 // "http://host:port/reponame" -> ("http://host:port", "reponame").
 // We scan for the last '/' whose position is > 7 (past "http://").
-// Aether v0.70.0 note: recursive/nested functions that return string
-// are hazardous (AETHER_ISSUES.md #13), so this is a single pass.
 
 url_base(url: string) {
     n = string.length(url)
@@ -962,12 +960,8 @@ cmd_resolve(argv_start: int) {
 
 // Parse a revision range from three possible sources, in order of
 // precedence: --rev/-r A:B, -c N (cherry-pick), or URL@A:B suffix.
-// Returns 0 on success with rev_a/rev_b written via globals, or -1.
-//
-// Aether v0.70.0 has no out-parameters, so we return a packed int
-// (rev_a << 32) | rev_b isn't viable either (#13). Simplest: keep the
-// parsing inline in cmd_merge. Below is a dedicated helper for each
-// branch that returns a two-element int list.
+// Parsing stays inline in cmd_merge since Aether has no out-parameters
+// and a packed-int return would lose the clarity.
 cmd_merge(argv_start: int) {
     // Parse flags first so we know which form is in use.
     r_flag = find_flag("--rev", argv_start)

@@ -16,11 +16,6 @@
 // End-to-end test: create a repo, write blobs, verify rep-sharing,
 // read blobs back, and verify zlib compression kicks in for compressible
 // payloads and not for incompressible ones.
-//
-// The implementation below is an inlined copy of ae/fs_fs/repo/module.ae.
-// (Aether v0.70.0's cross-module typed-param bug — AETHER_ISSUES.md #2 —
-// means we can't `import repo` cleanly yet.) Keep the two in sync manually
-// until the upstream fix lands.
 
 import std.fs
 import std.string
