@@ -11,11 +11,16 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
 
 ## Headline
 
-- **59 commits.** Each phase is its own commit, reviewable in isolation.
-- **47 test suites**, ~507 assertions, all green. First Aether-as-library
-  port landed (`ae/fs_fs/spec.ae`) via `aetherc --emit=lib` — the branch
-  include-spec glob matcher now lives in Aether and is linked into both
-  `aether-svnserver` and `svnadmin`.
+- **67 commits.** Each phase is its own commit, reviewable in isolation.
+- **47 test suites**, ~507 assertions, all green.
+- **C→Aether port round 2** (8 leaf ports, 1 per commit): the spec
+  matcher, mergeinfo arithmetic, svn:ignore pattern matcher, JSON
+  escaping, rev-blob field extractor, paths-index lookup, props-blob
+  → JSON transform, per-path ACL rule evaluator, and /info specs
+  emitter all now live in Aether sources under `ae/*/<name>.ae`,
+  compiled with `aetherc --emit=lib` and linked into their respective
+  binaries. Hand-written C%: **82% → 75%** (derivation in the
+  per-commit messages).
   Mix of in-language `.ae` tests and end-to-end shell harnesses that
   spin up a real HTTP server and drive it with curl and the built
   `svn` CLI.
