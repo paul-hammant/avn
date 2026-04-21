@@ -1,0 +1,10 @@
+AETHERC ?= $(HOME)/scm/aether/build/aetherc
+
+GENERATED := urls_generated.c
+
+all: $(GENERATED)
+
+urls_generated.c: urls.ae
+	$(AETHERC) --emit=lib $< $@
+
+.PHONY: all

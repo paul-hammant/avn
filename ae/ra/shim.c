@@ -48,6 +48,15 @@
 static char *g_client_user = NULL;
 static char *g_client_super_token = NULL;
 
+/* URL builders ported to Aether (ae/ra/urls.ae). */
+extern const char *aether_url_rev_info(const char *base, const char *repo, int rev);
+extern const char *aether_url_rev_paths(const char *base, const char *repo, int rev);
+extern const char *aether_url_rev_cat(const char *base, const char *repo, int rev, const char *path);
+extern const char *aether_url_rev_list(const char *base, const char *repo, int rev, const char *path);
+extern const char *aether_url_rev_props(const char *base, const char *repo, int rev, const char *path);
+extern const char *aether_url_rev_blame(const char *base, const char *repo, int rev, const char *path);
+extern const char *aether_url_branches_create(const char *base, const char *repo, const char *branch_name);
+
 void svnae_ra_set_user(const char *user) {
     free(g_client_user);
     g_client_user = user && *user ? strdup(user) : NULL;
@@ -372,8 +381,7 @@ struct svnae_ra_paths { struct path_change_ra *items; int n; };
 struct svnae_ra_paths *
 svnae_ra_paths_changed(const char *base_url, const char *repo_name, int rev)
 {
-    char url[1024];
-    snprintf(url, sizeof url, "%s/repos/%s/rev/%d/paths", base_url, repo_name, rev);
+    const char *url = aether_url_rev_paths(base_url, repo_name, rev);
     char *body = NULL; size_t len = 0; int status = 0;
     if (http_get(url, &body, &len, &status) != 0) return NULL;
     if (status != 200) { free(body); return NULL; }
@@ -442,9 +450,7 @@ struct svnae_ra_blame *
 svnae_ra_blame(const char *base_url, const char *repo_name,
               int rev, const char *path)
 {
-    char url[2048];
-    snprintf(url, sizeof url, "%s/repos/%s/rev/%d/blame/%s",
-             base_url, repo_name, rev, path);
+    const char *url = aether_url_rev_blame(base_url, repo_name, rev, path);
     char *body = NULL; size_t len = 0; int status = 0;
     if (http_get(url, &body, &len, &status) != 0) return NULL;
     if (status != 200) { free(body); return NULL; }
@@ -498,8 +504,7 @@ struct svnae_ra_info { int rev; char *author; char *date; char *msg; char *root;
 struct svnae_ra_info *
 svnae_ra_info_rev(const char *base_url, const char *repo_name, int rev)
 {
-    char url[1024];
-    snprintf(url, sizeof url, "%s/repos/%s/rev/%d/info", base_url, repo_name, rev);
+    const char *url = aether_url_rev_info(base_url, repo_name, rev);
     char *body = NULL; size_t len = 0; int status = 0;
     if (http_get(url, &body, &len, &status) != 0) return NULL;
     if (status != 200) { free(body); return NULL; }
@@ -550,8 +555,7 @@ svnae_ra_cat(const char *base_url, const char *repo_name, int rev, const char *p
 {
     /* Skip leading '/' in the user path so URLs look clean. */
     while (*path == '/') path++;
-    char url[2048];
-    snprintf(url, sizeof url, "%s/repos/%s/rev/%d/cat/%s", base_url, repo_name, rev, path);
+    const char *url = aether_url_rev_cat(base_url, repo_name, rev, path);
     char *body = NULL; size_t len = 0; int status = 0;
     if (http_get(url, &body, &len, &status) != 0) return NULL;
     if (status != 200) { free(body); return NULL; }
@@ -574,14 +578,7 @@ svnae_ra_get_props(const char *base_url, const char *repo_name,
                    int rev, const char *path)
 {
     while (*path == '/') path++;
-    char url[2048];
-    if (*path) {
-        snprintf(url, sizeof url, "%s/repos/%s/rev/%d/props/%s",
-                 base_url, repo_name, rev, path);
-    } else {
-        snprintf(url, sizeof url, "%s/repos/%s/rev/%d/props",
-                 base_url, repo_name, rev);
-    }
+    const char *url = aether_url_rev_props(base_url, repo_name, rev, path);
     char *body = NULL; size_t len = 0; int status = 0;
     if (http_get(url, &body, &len, &status) != 0) return NULL;
     if (status != 200) { free(body); return NULL; }
@@ -690,9 +687,7 @@ svnae_ra_branch_create(const char *base_url, const char *repo_name,
     char *json = cJSON_PrintUnformatted(body);
     cJSON_Delete(body);
 
-    char url[1024];
-    snprintf(url, sizeof url, "%s/repos/%s/branches/%s/create",
-             base_url, repo_name, name);
+    const char *url = aether_url_branches_create(base_url, repo_name, name);
     char *resp = NULL; size_t len = 0; int status = 0;
     int rc = http_post_json(url, json, &resp, &len, &status);
     free(json);
@@ -719,12 +714,7 @@ struct svnae_ra_list *
 svnae_ra_list(const char *base_url, const char *repo_name, int rev, const char *path)
 {
     while (*path == '/') path++;
-    char url[2048];
-    if (*path) {
-        snprintf(url, sizeof url, "%s/repos/%s/rev/%d/list/%s", base_url, repo_name, rev, path);
-    } else {
-        snprintf(url, sizeof url, "%s/repos/%s/rev/%d/list", base_url, repo_name, rev);
-    }
+    const char *url = aether_url_rev_list(base_url, repo_name, rev, path);
     char *body = NULL; size_t len = 0; int status = 0;
     if (http_get(url, &body, &len, &status) != 0) return NULL;
     if (status != 200) { free(body); return NULL; }
@@ -1155,9 +1145,7 @@ static int
 verify_file(const char *base_url, const char *repo, int rev,
             const char *algo, const char *rel, char **out_sha)
 {
-    char url[2048];
-    snprintf(url, sizeof url, "%s/repos/%s/rev/%d/cat/%s",
-             base_url, repo, rev, rel);
+    const char *url = aether_url_rev_cat(base_url, repo, rev, rel);
     char *body = NULL; size_t len = 0; int status = 0; char *hdr = NULL;
     if (http_get_ex(url, &body, &len, &status, &hdr) != 0 || status != 200) {
         free(body); free(hdr);
@@ -1196,11 +1184,7 @@ verify_dir(const char *base_url, const char *repo, int rev,
     /* GET /rev/N/list/<path> — listing tells us the immediate children
      * (names + kinds). The response header carries the server's view
      * of *this* dir's blob sha. */
-    char url[2048];
-    if (*rel) snprintf(url, sizeof url, "%s/repos/%s/rev/%d/list/%s",
-                       base_url, repo, rev, rel);
-    else      snprintf(url, sizeof url, "%s/repos/%s/rev/%d/list",
-                       base_url, repo, rev);
+    const char *url = aether_url_rev_list(base_url, repo, rev, rel);
 
     char *body = NULL; size_t len = 0; int status = 0; char *dir_hdr = NULL;
     if (http_get_ex(url, &body, &len, &status, &dir_hdr) != 0 || status != 200) {
@@ -1311,11 +1295,7 @@ verify_secondaries_in_dir(const char *base_url, const char *repo, int rev,
                           const char *rel, int *out_files_checked,
                           int *out_secondary_count)
 {
-    char url[2048];
-    if (*rel) snprintf(url, sizeof url, "%s/repos/%s/rev/%d/list/%s",
-                       base_url, repo, rev, rel);
-    else      snprintf(url, sizeof url, "%s/repos/%s/rev/%d/list",
-                       base_url, repo, rev);
+    const char *url = aether_url_rev_list(base_url, repo, rev, rel);
     char *body = NULL; size_t len = 0; int status = 0;
     if (http_get_ex(url, &body, &len, &status, NULL) != 0 || status != 200) {
         free(body);
