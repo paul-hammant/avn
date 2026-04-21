@@ -27,7 +27,7 @@ import std.string
 // Return the JSON-escaped form of `v` including surrounding double
 // quotes. Handles the six short-form escapes and \u00XX for any other
 // control byte < 0x20.
-export json_escape_string(v: string) -> string {
+json_escape_string_impl(v: string) -> string {
     out = "\""
     n = string.length(v)
     run_start = 0
@@ -52,6 +52,11 @@ export json_escape_string(v: string) -> string {
     }
     out = string.concat(out, "\"")
     return out
+}
+
+// Public wrapper — exported to C as aether_json_escape_string.
+export json_escape_string(v: string) -> string {
+    return json_escape_string_impl(v)
 }
 
 // Write `v` as decimal (no surrounding quotes).
@@ -113,6 +118,56 @@ hex_char(d: int) -> string {
     if d == 14 { return "e" }
     if d == 15 { return "f" }
     return "?"
+}
+
+// --- props blob → JSON object --------------------------------------------
+//
+// Per-path props blobs are line-oriented "key=value\n". Emit them as a
+// JSON object body {"k":"v", ...}. Used by GET /rev/N/props.
+//
+// Lines without an '=' are skipped. Keys longer than 255 bytes are
+// emitted as "" (matching the C fallback).
+
+export props_blob_to_json(body: string) -> string {
+    out = "{"
+    n = string.length(body)
+    first = 1
+    line_start = 0
+    i = 0
+    while i <= n {
+        at_end = 0
+        c = 0
+        if i == n { at_end = 1 } else { c = string.char_at(body, i) }
+        is_eol = 0
+        if at_end == 1 { is_eol = 1 }
+        if c == 10 { is_eol = 1 }
+        if is_eol == 1 {
+            // body[line_start..i) is one line; split on first '='.
+            eq = line_start
+            found_eq = 0
+            while eq < i {
+                if string.char_at(body, eq) == 61 { found_eq = 1; break }
+                eq = eq + 1
+            }
+            if found_eq == 1 {
+                if first == 0 { out = string.concat(out, ",") }
+                first = 0
+                key = string.substring(body, line_start, eq)
+                val = string.substring(body, eq + 1, i)
+                if string.length(key) >= 256 {
+                    out = string.concat(out, "\"\"")
+                } else {
+                    out = string.concat(out, json_escape_string_impl(key))
+                }
+                out = string.concat(out, ":")
+                out = string.concat(out, json_escape_string_impl(val))
+            }
+            line_start = i + 1
+        }
+        i = i + 1
+    }
+    out = string.concat(out, "}")
+    return out
 }
 
 main() {

@@ -119,6 +119,7 @@ typedef struct { int _0; const char* _1; } _tuple_int_string;
 typedef struct { float _0; const char* _1; } _tuple_float_string;
 
 // Forward declarations
+const char* json_escape_string_impl(const char*);
 const char* escape_byte(int);
 const char* digit_char(int);
 const char* hex_char(int);
@@ -249,8 +250,7 @@ int string_try_double(const char*);
 double string_get_double(const char*);
 
 
-// Exported:
-const char* json_escape_string(const char* v) {
+const char* json_escape_string_impl(const char* v) {
 const char* out = "\"";
     int _heap_out = 0; (void)_heap_out;
 int n = string_length(v);
@@ -298,6 +298,11 @@ out = string_concat(out, string_substring(v, run_start, n));
     }
 out = string_concat(out, "\"");
     return out;
+}
+
+// Exported:
+const char* json_escape_string(const char* v) {
+    return json_escape_string_impl(v);
 }
 
 // Exported:
@@ -471,6 +476,93 @@ if (d == 15) {
     return "?";
 }
 
+// Exported:
+const char* props_blob_to_json(const char* body) {
+const char* out = "{";
+    int _heap_out = 0; (void)_heap_out;
+int n = string_length(body);
+int first = 1;
+int line_start = 0;
+int i = 0;
+    int at_end;
+    int c;
+    int is_eol;
+    int eq;
+    int found_eq;
+    const char* key;
+    const char* val;
+while (i <= n) {
+        {
+at_end = 0;
+c = 0;
+if (i == n) {
+                {
+at_end = 1;
+                }
+            } else {
+                {
+c = string_char_at(body, i);
+                }
+            }
+is_eol = 0;
+if (at_end == 1) {
+                {
+is_eol = 1;
+                }
+            }
+if (c == 10) {
+                {
+is_eol = 1;
+                }
+            }
+if (is_eol == 1) {
+                {
+eq = line_start;
+found_eq = 0;
+while (eq < i) {
+                        {
+if (string_char_at(body, eq) == 61) {
+                                {
+found_eq = 1;
+                                    break;
+                                }
+                            }
+eq = (eq + 1);
+                        }
+                    }
+if (found_eq == 1) {
+                        {
+if (first == 0) {
+                                {
+out = string_concat(out, ",");
+                                }
+                            }
+first = 0;
+key = string_substring(body, line_start, eq);
+val = string_substring(body, (eq + 1), i);
+if (string_length(key) >= 256) {
+                                {
+out = string_concat(out, "\"\"");
+                                }
+                            } else {
+                                {
+out = string_concat(out, json_escape_string_impl(key));
+                                }
+                            }
+out = string_concat(out, ":");
+out = string_concat(out, json_escape_string_impl(val));
+                        }
+                    }
+line_start = (i + 1);
+                }
+            }
+i = (i + 1);
+        }
+    }
+out = string_concat(out, "}");
+    return out;
+}
+
 static _tuple_int_string string_to_int(const char* s) {
 int ok = string_try_int(s);
 if (ok == 0) {
@@ -516,6 +608,9 @@ if (ok == 0) {
 #include <stdint.h>
 typedef struct AetherValue AetherValue;  /* opaque */
 
+const char* aether_json_escape_string_impl(const char* v) {
+    return json_escape_string_impl(v);
+}
 const char* aether_json_escape_string(const char* v) {
     return json_escape_string(v);
 }
@@ -530,4 +625,7 @@ const char* aether_digit_char(int32_t d) {
 }
 const char* aether_hex_char(int32_t d) {
     return hex_char(d);
+}
+const char* aether_props_blob_to_json(const char* body) {
+    return props_blob_to_json(body);
 }

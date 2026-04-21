@@ -838,40 +838,13 @@ paths_props_lookup(const char *body, const char *path)
     return (v && *v) ? strdup(v) : NULL;
 }
 
-/* Given a per-path props blob (key=value\n lines), emit it as JSON
- * {"k":"v",...} into sb. */
+/* props-blob → JSON transform ported to Aether (ae/svnserver/json.ae). */
+extern const char *aether_props_blob_to_json(const char *body);
+
 static void
 sb_put_props_as_json(struct sb *s, const char *body)
 {
-    sb_putc(s, '{');
-    int first = 1;
-    const char *p = body;
-    while (*p) {
-        const char *eol = strchr(p, '\n');
-        size_t llen = eol ? (size_t)(eol - p) : strlen(p);
-        const char *eq = memchr(p, '=', llen);
-        if (eq) {
-            size_t klen = (size_t)(eq - p);
-            size_t vlen = llen - klen - 1;
-            if (!first) sb_putc(s, ',');
-            first = 0;
-            char kbuf[256];
-            if (klen < sizeof kbuf) {
-                memcpy(kbuf, p, klen); kbuf[klen] = '\0';
-                sb_putjson_string(s, kbuf);
-            } else {
-                sb_puts(s, "\"\"");
-            }
-            sb_putc(s, ':');
-            char *vbuf = malloc(vlen + 1);
-            memcpy(vbuf, eq + 1, vlen); vbuf[vlen] = '\0';
-            sb_putjson_string(s, vbuf);
-            free(vbuf);
-        }
-        if (!eol) break;
-        p = eol + 1;
-    }
-    sb_putc(s, '}');
+    sb_puts(s, aether_props_blob_to_json(body ? body : ""));
 }
 
 /* GET /repos/{r}/rev/:rev/info  → info_rev JSON
