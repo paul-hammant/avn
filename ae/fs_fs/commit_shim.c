@@ -547,6 +547,11 @@ path_matches_any(const char *path, const char *const *globs, int n)
  *
  * Returns malloc'd hex sha, or NULL on failure. On "no children
  * survived" returns the sha of the empty-dir blob (""). */
+extern int         aether_dir_count_entries(const char *body);
+extern int         aether_dir_entry_kind(const char *body, int i);
+extern const char *aether_dir_entry_sha(const char *body, int i);
+extern const char *aether_dir_entry_name(const char *body, int i);
+
 static char *
 filter_dir_recursive(const char *repo, const char *src_sha,
                      const char *prefix,
@@ -560,82 +565,73 @@ filter_dir_recursive(const char *repo, const char *src_sha,
     char *body = malloc(cap);
     body[0] = '\0';
 
-    const char *p = src_body;
-    while (*p) {
-        const char *eol = strchr(p, '\n');
-        size_t llen = eol ? (size_t)(eol - p) : strlen(p);
-        if (llen >= 4) {
-            char kind_c = p[0];
-            const char *sha_start = p + 2;
-            const char *sp2 = memchr(sha_start, ' ', llen - 2);
-            if (sp2) {
-                size_t sha_len = (size_t)(sp2 - sha_start);
-                size_t name_off = 2 + sha_len + 1;
-                size_t name_len = llen - name_off;
-                char child_sha[65], child_name[PATH_MAX];
-                if (sha_len < 65 && name_len < sizeof child_name) {
-                    memcpy(child_sha, sha_start, sha_len);
-                    child_sha[sha_len] = '\0';
-                    memcpy(child_name, p + name_off, name_len);
-                    child_name[name_len] = '\0';
+    int n_entries = aether_dir_count_entries(src_body);
+    for (int ei = 0; ei < n_entries; ei++) {
+        char kind_c = (char)aether_dir_entry_kind(src_body, ei);
+        /* Snapshot child_sha / child_name — aether_* return pointers
+         * into thread-local buffers that any later aether_* call (e.g.
+         * the recursive one below) will overwrite. */
+        char child_sha[65], child_name[PATH_MAX];
+        const char *sha_ref = aether_dir_entry_sha(src_body, ei);
+        size_t sha_len = strlen(sha_ref);
+        if (sha_len >= sizeof child_sha) continue;
+        memcpy(child_sha, sha_ref, sha_len + 1);
+        const char *name_ref = aether_dir_entry_name(src_body, ei);
+        size_t name_len = strlen(name_ref);
+        if (name_len >= sizeof child_name) continue;
+        memcpy(child_name, name_ref, name_len + 1);
 
-                    char child_path[PATH_MAX];
-                    if (*prefix)
-                        snprintf(child_path, sizeof child_path, "%s/%s", prefix, child_name);
-                    else
-                        snprintf(child_path, sizeof child_path, "%s", child_name);
+        char child_path[PATH_MAX];
+        if (*prefix)
+            snprintf(child_path, sizeof child_path, "%s/%s", prefix, child_name);
+        else
+            snprintf(child_path, sizeof child_path, "%s", child_name);
 
-                    int include = 0;
-                    char emit_sha[65];
-                    emit_sha[0] = '\0';
+        int include = 0;
+        char emit_sha[65];
+        emit_sha[0] = '\0';
 
-                    if (kind_c == 'f') {
-                        if (path_matches_any(child_path, globs, n_globs)) {
-                            include = 1;
-                            memcpy(emit_sha, child_sha, strlen(child_sha) + 1);
-                        }
-                    } else if (kind_c == 'd') {
-                        /* Recurse. Include the dir if (a) the dir
-                         * itself matches or (b) any descendant does.
-                         * filter_dir_recursive returns the empty-dir
-                         * sha if nothing survived — we detect that
-                         * and skip the dir. */
-                        char *sub = filter_dir_recursive(repo, child_sha,
-                                                         child_path,
-                                                         globs, n_globs);
-                        if (sub) {
-                            char *empty = svnae_rep_read_blob(repo, sub);
-                            int sub_is_empty = (empty && *empty == '\0');
-                            if (empty) svnae_rep_free(empty);
-                            if (!sub_is_empty
-                                || path_matches_any(child_path, globs, n_globs)) {
-                                include = 1;
-                                size_t sl = strlen(sub);
-                                if (sl < 65) {
-                                    memcpy(emit_sha, sub, sl + 1);
-                                }
-                            }
-                            free(sub);
-                        }
-                    }
-
-                    if (include) {
-                        char line[PATH_MAX + 96];
-                        int ln = snprintf(line, sizeof line, "%c %s %s\n",
-                                          kind_c, emit_sha, child_name);
-                        if (blen + (size_t)ln + 1 >= cap) {
-                            cap = (blen + ln + 1) * 2;
-                            body = realloc(body, cap);
-                        }
-                        memcpy(body + blen, line, ln);
-                        blen += ln;
-                        body[blen] = '\0';
+        if (kind_c == 'f') {
+            if (path_matches_any(child_path, globs, n_globs)) {
+                include = 1;
+                memcpy(emit_sha, child_sha, sha_len + 1);
+            }
+        } else if (kind_c == 'd') {
+            /* Recurse. Include the dir if (a) the dir itself matches
+             * or (b) any descendant does. filter_dir_recursive returns
+             * the empty-dir sha if nothing survived — detect that and
+             * skip the dir. */
+            char *sub = filter_dir_recursive(repo, child_sha,
+                                             child_path,
+                                             globs, n_globs);
+            if (sub) {
+                char *empty = svnae_rep_read_blob(repo, sub);
+                int sub_is_empty = (empty && *empty == '\0');
+                if (empty) svnae_rep_free(empty);
+                if (!sub_is_empty
+                    || path_matches_any(child_path, globs, n_globs)) {
+                    include = 1;
+                    size_t sl = strlen(sub);
+                    if (sl < 65) {
+                        memcpy(emit_sha, sub, sl + 1);
                     }
                 }
+                free(sub);
             }
         }
-        if (!eol) break;
-        p = eol + 1;
+
+        if (include) {
+            char line[PATH_MAX + 96];
+            int ln = snprintf(line, sizeof line, "%c %s %s\n",
+                              kind_c, emit_sha, child_name);
+            if (blen + (size_t)ln + 1 >= cap) {
+                cap = (blen + ln + 1) * 2;
+                body = realloc(body, cap);
+            }
+            memcpy(body + blen, line, ln);
+            blen += ln;
+            body[blen] = '\0';
+        }
     }
     svnae_rep_free(src_body);
 
