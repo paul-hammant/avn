@@ -11,16 +11,18 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
 
 ## Headline
 
-- **67 commits.** Each phase is its own commit, reviewable in isolation.
+- **81 commits.** Each phase is its own commit, reviewable in isolation.
 - **47 test suites**, ~507 assertions, all green.
-- **C→Aether port round 2** (8 leaf ports, 1 per commit): the spec
-  matcher, mergeinfo arithmetic, svn:ignore pattern matcher, JSON
-  escaping, rev-blob field extractor, paths-index lookup, props-blob
-  → JSON transform, per-path ACL rule evaluator, and /info specs
-  emitter all now live in Aether sources under `ae/*/<name>.ae`,
-  compiled with `aetherc --emit=lib` and linked into their respective
-  binaries. Hand-written C%: **82% → 75%** (derivation in the
-  per-commit messages).
+- **C→Aether port, rounds 2 + 3** (22 leaf ports, 1 per commit): branch
+  spec matcher, mergeinfo arithmetic, svn:ignore matcher, JSON
+  escape/ints/records, blobfield extractor, paths-index lookup + sort,
+  props-blob → JSON, ACL rule evaluator, /info specs emitter, dir-blob
+  line parser (replacing 8 near-duplicate C scanners), $repo/format
+  line parser, /info prelude, /rev/N/info body, /rev/N/hashes body,
+  /rev/N/acl body, rev-blob body assembly, svnadmin dump-header
+  builders, RA URL builders. Each lives in an Aether source under
+  `ae/*/<name>.ae`, compiled with `aetherc --emit=lib` and linked into
+  its consumers. Hand-written C%: **82% → 72%**.
   Mix of in-language `.ae` tests and end-to-end shell harnesses that
   spin up a real HTTP server and drive it with curl and the built
   `svn` CLI.
