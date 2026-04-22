@@ -48,13 +48,19 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
   a feedback pass from this port (`~/scm/aether/stdlib_wish.md`), so
   std.fs is now reachable from our `.ae` files. `ae/subr/io.ae`
   exports atomic-write / mkdir-p / slurp / file_size / is_regular
-  over `std.fs`. The matching helpers have been folded out of 9
-  shims: svnadmin, fs_fs/commit, fs_fs/rep_store, fs_fs/shim,
-  wc/checkout, wc/merge, wc/merge3, wc/pristine, wc/revert,
-  wc/update, wc/diff. rep_store_shim and pristine_shim use the
-  TLS-buffered `fs_try_read_binary` for binary-safe blob reads
-  (the string wrapper `fs.read_binary` copies via string_concat
-  which would truncate at embedded NULs).
+  / listdir / stat_kind / exists / unlink / rmdir / rename over
+  `std.fs` and `std.dir`. **All direct I/O syscalls are gone from
+  the shims.** A grep for `open|fopen|stat|lstat|fstat|mkdir|unlink|
+  rmdir|opendir|readdir|rename|fsync` across `ae/*/shim.c` +
+  `ae/*/*_shim.c` now finds zero hits; every hand-rolled
+  write-atomic, mkdir-p, slurp, dir-walk, copy-file, and
+  existence-check has been folded through the Aether io layer.
+  rep_store_shim and pristine_shim use the TLS-buffered
+  `fs_try_read_binary` for binary-safe blob reads (the string
+  wrapper `fs.read_binary` copies via string_concat which would
+  truncate at embedded NULs).
+  Hand-written C%: now **~57%** of tracked source (from 68% at
+  round-7 baseline).
   Mix of in-language `.ae` tests and end-to-end shell harnesses that
   spin up a real HTTP server and drive it with curl and the built
   `svn` CLI.
