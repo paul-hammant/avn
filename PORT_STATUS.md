@@ -37,13 +37,24 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
   JSON parsers in the verify path all ported. Issue #16's
   packed-int workaround unwound after discovering the real cause
   was `state` being a reserved keyword.  Hand-written C%: now
-  **58%** of tracked source (generated `_generated.c` files are
+  **57%** of tracked source (generated `_generated.c` files are
   gitignored and not counted toward either side).
 - **Round 7** (current): ported the svnserver /rev/N URL-tail parser
   (ae/svnserver/url_parse.ae), dropped four copies of hand-rolled
   `int_to_dec` + `digit_char` in favour of `std.string.from_int` now
   that it's available, and ported the WC pristine-store path builder
   to ae/wc/pristine_path.ae (handles the two-level XX/YY/ fanout).
+- **Round 8** (current): Aether shipped `--emit=lib --with=fs` after
+  a feedback pass from this port (`~/scm/aether/stdlib_wish.md`), so
+  std.fs is now reachable from our `.ae` files. `ae/subr/io.ae`
+  exports atomic-write / mkdir-p / slurp / file_size / is_regular
+  over `std.fs`. The matching helpers have been folded out of 9
+  shims: svnadmin, fs_fs/commit, fs_fs/rep_store, fs_fs/shim,
+  wc/checkout, wc/merge, wc/merge3, wc/pristine, wc/revert,
+  wc/update, wc/diff. rep_store_shim and pristine_shim use the
+  TLS-buffered `fs_try_read_binary` for binary-safe blob reads
+  (the string wrapper `fs.read_binary` copies via string_concat
+  which would truncate at embedded NULs).
   Mix of in-language `.ae` tests and end-to-end shell harnesses that
   spin up a real HTTP server and drive it with curl and the built
   `svn` CLI.
