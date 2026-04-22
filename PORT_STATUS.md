@@ -44,17 +44,21 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
   `int_to_dec` + `digit_char` in favour of `std.string.from_int` now
   that it's available, and ported the WC pristine-store path builder
   to ae/wc/pristine_path.ae (handles the two-level XX/YY/ fanout).
-- **Round 11** (current): **Aether crosses parity — 49.9% C,
-  50.1% Aether.** Started the session at 68% C. Aether 0.81.0 made
-  std.http request/response accessors tolerate externally-
-  constructed `HttpRequest*`/`HttpServerResponse*` pointers, so
-  C-dispatched handlers can flow all the way through Aether.
-  `handler_info.ae`, `handler_log.ae`, and `handler_rev_info.ae`
-  are the first three fully-ported handlers — URL parse, auth
-  check, data fetch, body build, response emit all in `.ae`.
-  Aether 0.82.0's `fs.read_binary` NUL-preservation fix retired
-  the TLS-buffer escape hatch carried in three places. `std.intarr`
-  landed but we haven't used it yet (blame LCS would).
+- **Round 11** (current): **Aether crosses parity and widens the
+  lead — 48.85% C, 51.14% Aether.** Started the session at 68% C.
+  Aether 0.81.0 made std.http request/response accessors tolerate
+  externally-constructed `HttpRequest*`/`HttpServerResponse*`
+  pointers, so C-dispatched handlers can flow all the way through
+  Aether. Nine svnserver handlers now fully ported — URL parse,
+  auth check, data fetch, body build, response emit all in `.ae`:
+  `handler_info`, `handler_log`, `handler_rev_info`,
+  `handler_rev_cat`, `handler_rev_list`, `handler_rev_paths`,
+  `handler_rev_hashes`, `handler_rev_acl`, `handler_rev_props`.
+  Each C branch is now a 3–10-line `aether_*_handle(req, res,
+  repo, rev, ...)` wrapper. Aether 0.82.0's `fs.read_binary`
+  NUL-preservation fix retired the TLS-buffer escape hatch carried
+  in three places. `std.intarr` landed but we haven't used it yet
+  (blame LCS would).
 
 - **Round 10**: svnserver JSON body builders move to Aether.
   Each handler's body-building logic lives in a dedicated
