@@ -25,12 +25,16 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
   scan, svnadmin dump-header builders, algos-spec comma split, full RA
   URL builder family. Each lives in an Aether source under
   `ae/*/<name>.ae`, compiled with `aetherc --emit=lib` and linked into
-  its consumers. Hand-written C%: **82% → 70%**.
-
-  The remaining 70% is almost all I/O and FFI glue — sqlite, curl,
-  openssl, diff3(1), file-system. Further reduction needs a material
-  rewrite pass (port RA JSON parsing to std.json, or replace openssl
-  with an Aether hash impl) rather than more leaf ports.
+  its consumers. Hand-written C%: **82% → 69%** by end of round 5.
+- **Rounds 4/5** (Aether 0.78.0/0.79.0): cjson was replaced with
+  Aether's std.json in both `ra/shim.c` and `svnserver/shim.c` via a
+  local compat layer; the `-lcjson` link-line dependency is gone
+  entirely. FFI shims consolidated into `ae/ffi/{openssl,sqlite,
+  zlib,utf8proc}/`. WC conflict-sidecar classifier, svn-status
+  decision table, dir-blob find-by-name, svnadmin dump-line
+  parsers, and several hand-written JSON parsers in the verify
+  path all ported. Issue #16's packed-int workaround unwound after
+  discovering the real cause was `state` being a reserved keyword.
   Mix of in-language `.ae` tests and end-to-end shell harnesses that
   spin up a real HTTP server and drive it with curl and the built
   `svn` CLI.
