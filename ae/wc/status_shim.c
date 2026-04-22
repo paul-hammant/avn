@@ -170,14 +170,14 @@ matches_ignore(const char *patterns, const char *name)
     return aether_ignore_matches(patterns, name);
 }
 
+extern const char *aether_path_join_rel(const char *prefix, const char *name);
+
 static void
 walk_unversioned(const char *wc_root, const char *rel,
                  const struct strset *tracked,
                  struct svnae_wc_statuslist *out)
 {
-    char dir_path[PATH_MAX];
-    if (*rel) snprintf(dir_path, sizeof dir_path, "%s/%s", wc_root, rel);
-    else      snprintf(dir_path, sizeof dir_path, "%s", wc_root);
+    const char *dir_path = aether_path_join_rel(wc_root, rel);
 
     /* Fetch svn:ignore for this directory. An empty `rel` is the WC
      * root — the db stores its props under the empty string iff we
@@ -200,12 +200,8 @@ walk_unversioned(const char *wc_root, const char *rel,
             if (aether_is_sidecar_name(e->d_name)) continue;
         }
 
-        char child_rel[PATH_MAX];
-        if (*rel) snprintf(child_rel, sizeof child_rel, "%s/%s", rel, e->d_name);
-        else      snprintf(child_rel, sizeof child_rel, "%s", e->d_name);
-
-        char child_fs[PATH_MAX];
-        snprintf(child_fs, sizeof child_fs, "%s/%s", wc_root, child_rel);
+        const char *child_rel = aether_path_join_rel(rel, e->d_name);
+        const char *child_fs  = aether_path_join_rel(wc_root, child_rel);
         struct stat st;
         if (lstat(child_fs, &st) != 0) continue;
 

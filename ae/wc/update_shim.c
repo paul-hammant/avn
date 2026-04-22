@@ -250,13 +250,12 @@ walk_remote(const char *base_url, const char *repo, int rev,
 {
     struct svnae_ra_list *L = svnae_ra_list(base_url, repo, rev, prefix);
     if (!L) return -1;
+    extern const char *aether_path_join_rel(const char *prefix, const char *name);
     int n = svnae_ra_list_count(L);
     for (int i = 0; i < n; i++) {
         const char *name = svnae_ra_list_name(L, i);
         const char *kind = svnae_ra_list_kind(L, i);
-        char rel[PATH_MAX];
-        if (*prefix) snprintf(rel, sizeof rel, "%s/%s", prefix, name);
-        else         snprintf(rel, sizeof rel, "%s", name);
+        const char *rel = aether_path_join_rel(prefix, name);
 
         if (strcmp(kind, "dir") == 0) {
             rtree_add(rt, rel, 1, NULL, 0);

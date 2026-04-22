@@ -199,9 +199,8 @@ walk_remote(const char *base_url, const char *repo, int rev,
             const char *source_path, const char *sub_prefix,
             struct rtree *rt)
 {
-    char full[PATH_MAX];
-    if (*sub_prefix) snprintf(full, sizeof full, "%s/%s", source_path, sub_prefix);
-    else             snprintf(full, sizeof full, "%s",    source_path);
+    extern const char *aether_path_join_rel(const char *prefix, const char *name);
+    const char *full = aether_path_join_rel(source_path, sub_prefix);
 
     struct svnae_ra_list *L = svnae_ra_list(base_url, repo, rev, full);
     if (!L) return -1;
@@ -209,9 +208,7 @@ walk_remote(const char *base_url, const char *repo, int rev,
     for (int i = 0; i < n; i++) {
         const char *name = svnae_ra_list_name(L, i);
         const char *kind = svnae_ra_list_kind(L, i);
-        char rel[PATH_MAX];
-        if (*sub_prefix) snprintf(rel, sizeof rel, "%s/%s", sub_prefix, name);
-        else             snprintf(rel, sizeof rel, "%s",    name);
+        const char *rel = aether_path_join_rel(sub_prefix, name);
 
         if (strcmp(kind, "dir") == 0) {
             rt_add(rt, rel, 1, NULL, 0);
@@ -219,9 +216,7 @@ walk_remote(const char *base_url, const char *repo, int rev,
                 svnae_ra_list_free(L); return -1;
             }
         } else {
-            char remote_full[PATH_MAX];
-            if (*sub_prefix) snprintf(remote_full, sizeof remote_full, "%s/%s/%s", source_path, sub_prefix, name);
-            else             snprintf(remote_full, sizeof remote_full, "%s/%s",    source_path, name);
+            const char *remote_full = aether_path_join_rel(full, name);
             char *data = svnae_ra_cat(base_url, repo, rev, remote_full);
             if (!data) { svnae_ra_list_free(L); return -1; }
             rt_add(rt, rel, 0, data, (int)strlen(data));
