@@ -7,7 +7,7 @@
 
 AETHERC ?= $(HOME)/scm/aether/build/aetherc
 
-GENERATED := mergeinfo_generated.c ignore_generated.c sidecar_generated.c
+GENERATED := mergeinfo_generated.c ignore_generated.c sidecar_generated.c status_code_generated.c
 
 all: $(GENERATED)
 
@@ -18,6 +18,9 @@ ignore_generated.c: ignore.ae
 	$(AETHERC) --emit=lib $< $@
 
 sidecar_generated.c: sidecar.ae
+	$(AETHERC) --emit=lib $< $@
+
+status_code_generated.c: status_code.ae
 	$(AETHERC) --emit=lib $< $@
 
 .PHONY: all

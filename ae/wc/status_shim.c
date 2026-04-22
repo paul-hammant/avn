@@ -261,18 +261,21 @@ svnae_wc_status(const char *wc_root)
         struct stat st;
         int on_disk = (lstat(disk, &st) == 0);
 
-        /* Conflicted trumps other states — show 'C' regardless. */
-        if (conflicted) { add_entry(out, rel, 'C'); continue; }
-
-        if (state == 1 /*added*/) { add_entry(out, rel, 'A'); continue; }
-        if (state == 2 /*deleted*/) { add_entry(out, rel, 'D'); continue; }
-        /* Normal: compare. */
-        if (!on_disk) { add_entry(out, rel, '!'); continue; }
-        if (kind == 1 /*dir*/) { continue; }
-        /* Tracked file: hash it. */
-        char cur[65];
-        if (sha1_of_file(disk, cur) != 0) { add_entry(out, rel, '!'); continue; }
-        if (strcmp(cur, base_sha) != 0) add_entry(out, rel, 'M');
+        /* Hash the file (if needed) so the classifier has all its inputs.
+         * Avoid the I/O when we won't use the result — only normal-state
+         * file nodes that are on disk actually care about the sha. */
+        int sha_read = 0, sha_ok = 0;
+        if (!conflicted && state == 0 && on_disk && kind == 0 /*file*/) {
+            char cur[65];
+            if (sha1_of_file(disk, cur) == 0) {
+                sha_read = 1;
+                sha_ok = (strcmp(cur, base_sha) == 0);
+            }
+        }
+        extern int aether_status_code(int conflicted, int st, int kind,
+                                       int on_disk, int sha_read, int sha_ok);
+        int code = aether_status_code(conflicted, state, kind, on_disk, sha_read, sha_ok);
+        if (code != ' ') add_entry(out, rel, (char)code);
     }
     svnae_wc_nodelist_free(L);
 
