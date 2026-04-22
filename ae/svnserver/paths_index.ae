@@ -76,6 +76,33 @@ export paths_index_lookup(body: string, path: string) -> string {
     return ""
 }
 
+// Find the nearest ancestor match and return "sha\tprefix". Empty
+// string if nothing matches. Used by /acl to report effective_from.
+export paths_index_ancestor_nearest(body: string, target: string) -> string {
+    path = target
+    while 1 == 1 {
+        sha = paths_index_lookup_impl(body, path)
+        if string.length(sha) > 0 {
+            out = string.concat(sha, "\t")
+            return string.concat(out, path)
+        }
+        n = string.length(path)
+        if n == 0 { return "" }
+        cut = 0 - 1
+        i = n - 1
+        while i >= 0 {
+            if string.char_at(path, i) == 47 { cut = i; break }
+            i = i - 1
+        }
+        if cut < 0 {
+            path = ""
+        } else {
+            path = string.substring(path, 0, cut)
+        }
+    }
+    return ""
+}
+
 // For each ancestor of `target` (including target itself, then its
 // parent, grandparent, …, "") look up the acl_sha in `body` and emit
 // "<sha>\n" lines for the hits (deepest first). The caller uses these

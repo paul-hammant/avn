@@ -348,6 +348,57 @@ i = (i + 1);
 }
 
 // Exported:
+const char* paths_index_ancestor_nearest(const char* body, const char* target) {
+const char* path = target;
+    int _heap_path = 0; (void)_heap_path;
+    const char* sha;
+    const char* out;
+    int n;
+    int cut;
+    int i;
+while (1 == 1) {
+        {
+sha = paths_index_lookup_impl(body, path);
+if (string_length(sha) > 0) {
+                {
+out = string_concat(sha, "\t");
+                    return string_concat(out, path);
+                }
+            }
+n = string_length(path);
+if (n == 0) {
+                {
+                    return "";
+                }
+            }
+cut = -1;
+i = (n - 1);
+while (i >= 0) {
+                {
+if (string_char_at(path, i) == 47) {
+                        {
+cut = i;
+                            break;
+                        }
+                    }
+i = (i - 1);
+                }
+            }
+if (cut < 0) {
+                {
+path = "";
+                }
+            } else {
+                {
+path = string_substring(path, 0, cut);
+                }
+            }
+        }
+    }
+    return "";
+}
+
+// Exported:
 const char* paths_index_ancestor_shas(const char* body, const char* target) {
 const char* out = "";
     int _heap_out = 0; (void)_heap_out;
@@ -603,6 +654,9 @@ typedef struct AetherValue AetherValue;  /* opaque */
 
 const char* aether_paths_index_lookup(const char* body, const char* path) {
     return paths_index_lookup(body, path);
+}
+const char* aether_paths_index_ancestor_nearest(const char* body, const char* target) {
+    return paths_index_ancestor_nearest(body, target);
 }
 const char* aether_paths_index_ancestor_shas(const char* body, const char* target) {
     return paths_index_ancestor_shas(body, target);

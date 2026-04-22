@@ -318,6 +318,7 @@ acl_body_decide(const char *body, const char *user, int want_write)
  * fixed width. */
 extern const char *aether_paths_index_lookup(const char *body, const char *path);
 extern const char *aether_paths_index_ancestor_shas(const char *body, const char *target);
+extern const char *aether_paths_index_ancestor_nearest(const char *body, const char *target);
 
 static char *
 paths_acl_lookup(const char *body, const char *path)
@@ -1038,20 +1039,18 @@ handle_repo_rev(HttpRequest *req, HttpServerResponse *res, void *user_data)
             respond_json(res, 200, "{\"rules\":[],\"effective_from\":\"\"}");
             return;
         }
-        char buf[PATH_MAX];
-        size_t tl = strlen(target);
-        if (tl >= sizeof buf) { svnae_rep_free(paths_body); respond_error(res, 400, "path too long"); return; }
-        memcpy(buf, target, tl + 1);
-
+        /* "sha\tprefix" of the nearest ancestor match; empty → no match. */
+        const char *nearest = aether_paths_index_ancestor_nearest(paths_body, target);
         char *eff_path = NULL;
         char *eff_sha = NULL;
-        for (;;) {
-            eff_sha = paths_acl_lookup(paths_body, buf);
-            if (eff_sha) { eff_path = strdup(buf); break; }
-            if (!*buf) break;
-            char *last = strrchr(buf, '/');
-            if (last) *last = '\0';
-            else      buf[0] = '\0';
+        if (nearest && *nearest) {
+            const char *tab = strchr(nearest, '\t');
+            if (tab) {
+                size_t sl = (size_t)(tab - nearest);
+                eff_sha = malloc(sl + 1);
+                memcpy(eff_sha, nearest, sl); eff_sha[sl] = '\0';
+                eff_path = strdup(tab + 1);
+            }
         }
         svnae_rep_free(paths_body);
 
