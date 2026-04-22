@@ -770,6 +770,42 @@ out = string_concat(out, "}");
 }
 
 // Exported:
+const char* error_response_json(const char* msg) {
+const char* out = "{\"error\":";
+    int _heap_out = 0; (void)_heap_out;
+out = string_concat(out, json_escape_string_impl(msg));
+    return string_concat(out, "}");
+}
+
+// Exported:
+const char* rev_response_json(int rev) {
+const char* out = "{\"rev\":";
+    int _heap_out = 0; (void)_heap_out;
+out = string_concat(out, json_int_to_dec_impl(rev));
+    return string_concat(out, "}");
+}
+
+// Exported:
+const char* rev_sha_response_json(int rev, const char* sha) {
+const char* out = "{\"rev\":";
+    int _heap_out = 0; (void)_heap_out;
+out = string_concat(out, json_int_to_dec_impl(rev));
+out = string_concat(out, ",\"sha\":");
+out = string_concat(out, json_escape_string_impl(sha));
+    return string_concat(out, "}");
+}
+
+// Exported:
+const char* rev_branch_response_json(int rev, const char* branch) {
+const char* out = "{\"rev\":";
+    int _heap_out = 0; (void)_heap_out;
+out = string_concat(out, json_int_to_dec_impl(rev));
+out = string_concat(out, ",\"branch\":");
+out = string_concat(out, json_escape_string_impl(branch));
+    return string_concat(out, "}");
+}
+
+// Exported:
 const char* info_prelude_json(int head, const char* name, const char* hash_algo) {
 const char* out = "{\"head\":";
     int _heap_out = 0; (void)_heap_out;
@@ -884,6 +920,18 @@ const char* aether_acl_response_json(const char* rules_body, const char* effecti
 }
 const char* aether_secondary_entry_json(const char* algo, const char* hash) {
     return secondary_entry_json(algo, hash);
+}
+const char* aether_error_response_json(const char* msg) {
+    return error_response_json(msg);
+}
+const char* aether_rev_response_json(int32_t rev) {
+    return rev_response_json(rev);
+}
+const char* aether_rev_sha_response_json(int32_t rev, const char* sha) {
+    return rev_sha_response_json(rev, sha);
+}
+const char* aether_rev_branch_response_json(int32_t rev, const char* branch) {
+    return rev_branch_response_json(rev, branch);
 }
 const char* aether_info_prelude_json(int32_t head, const char* name, const char* hash_algo) {
     return info_prelude_json(head, name, hash_algo);

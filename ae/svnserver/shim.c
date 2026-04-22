@@ -68,6 +68,28 @@ extern int         aether_dir_entry_kind(const char *body, int i);
 extern const char *aether_dir_entry_sha(const char *body, int i);
 extern const char *aether_dir_entry_name(const char *body, int i);
 
+/* All other aether_* externs used throughout. Consolidated here so
+ * every call site (including respond_error which lives very early) has
+ * the declarations in scope. */
+extern const char *aether_json_escape_string(const char *v);
+extern const char *aether_json_int_to_dec(int v);
+extern const char *aether_props_blob_to_json(const char *body);
+extern const char *aether_specs_to_json_array(const char *body);
+extern const char *aether_log_entry_json(int rev, const char *author, const char *date, const char *msg);
+extern const char *aether_path_change_entry_json(const char *action, const char *path);
+extern const char *aether_blame_entry_json(int rev, const char *author, const char *text);
+extern const char *aether_info_prelude_json(int head, const char *name, const char *hash_algo);
+extern const char *aether_rev_info_json(int rev, const char *author, const char *date, const char *msg, const char *root);
+extern const char *aether_error_response_json(const char *msg);
+extern const char *aether_rev_response_json(int rev);
+extern const char *aether_rev_sha_response_json(int rev, const char *sha);
+extern const char *aether_rev_branch_response_json(int rev, const char *branch);
+extern const char *aether_hashes_prelude_json(const char *algo, const char *primary_hash);
+extern const char *aether_secondary_entry_json(const char *algo, const char *hash);
+extern const char *aether_acl_response_json(const char *rules_body, const char *effective_from);
+extern const char *aether_copy_acl_follow(const char *body, const char *from_path, const char *to_path);
+extern const char *aether_paths_index_sort_by_path(const char *body);
+
 int  svnae_commit_finalise(const char *repo, struct svnae_txn *txn,
                            const char *author, const char *logmsg);
 int  svnae_commit_finalise_with_props(const char *repo, struct svnae_txn *txn,
@@ -207,9 +229,7 @@ respond_json(HttpServerResponse *res, int code, const char *json)
 static void
 respond_error(HttpServerResponse *res, int code, const char *message)
 {
-    char buf[256];
-    snprintf(buf, sizeof buf, "{\"error\":\"%s\"}", message);
-    respond_json(res, code, buf);
+    respond_json(res, code, aether_error_response_json(message ? message : ""));
 }
 
 /* Attach Merkle-verification headers describing the node being
@@ -504,21 +524,6 @@ static void sb_puts(struct sb *s, const char *p) { sb_push(s, p, strlen(p)); }
 /* JSON formatting ported to Aether (ae/svnserver/json.ae, --emit=lib).
  * The C entry points are now thin wrappers so none of the 35-ish call
  * sites need to change. */
-extern const char *aether_json_escape_string(const char *v);
-extern const char *aether_json_int_to_dec(int v);
-extern const char *aether_props_blob_to_json(const char *body);
-extern const char *aether_specs_to_json_array(const char *body);
-extern const char *aether_log_entry_json(int rev, const char *author, const char *date, const char *msg);
-extern const char *aether_path_change_entry_json(const char *action, const char *path);
-extern const char *aether_blame_entry_json(int rev, const char *author, const char *text);
-extern const char *aether_info_prelude_json(int head, const char *name, const char *hash_algo);
-extern const char *aether_rev_info_json(int rev, const char *author, const char *date, const char *msg, const char *root);
-extern const char *aether_hashes_prelude_json(const char *algo, const char *primary_hash);
-extern const char *aether_secondary_entry_json(const char *algo, const char *hash);
-extern const char *aether_acl_response_json(const char *rules_body, const char *effective_from);
-extern const char *aether_copy_acl_follow(const char *body, const char *from_path, const char *to_path);
-extern const char *aether_paths_index_sort_by_path(const char *body);
-
 static void
 sb_putjson_string(struct sb *s, const char *v)
 {
@@ -1474,10 +1479,8 @@ handle_repo_path_put(HttpRequest *req, HttpServerResponse *res)
     char new_kind = 0;
     svnae_repos_resolve(repo, new_rev, file_path, new_sha, &new_kind);
 
-    char buf[256];
-    snprintf(buf, sizeof buf, "{\"rev\":%d,\"sha\":\"%s\"}", new_rev, new_sha);
     http_response_set_status(res, 201);
-    http_response_json(res, buf);
+    http_response_json(res, aether_rev_sha_response_json(new_rev, new_sha));
 }
 
 /* DELETE /repos/{r}/path/<path>: remove file or subtree from HEAD.
@@ -1536,9 +1539,7 @@ handle_repo_path_delete(HttpRequest *req, HttpServerResponse *res)
         return;
     }
 
-    char buf[64];
-    snprintf(buf, sizeof buf, "{\"rev\":%d}", new_rev);
-    respond_json(res, 200, buf);
+    respond_json(res, 200, aether_rev_response_json(new_rev));
 }
 
 /* --- commit handler --------------------------------------------------- *
@@ -1794,9 +1795,7 @@ handle_repo_commit(HttpRequest *req, HttpServerResponse *res, void *user_data)
         return;
     }
 
-    char buf[64];
-    snprintf(buf, sizeof buf, "{\"rev\":%d}", new_rev);
-    respond_json(res, 200, buf);
+    respond_json(res, 200, aether_rev_response_json(new_rev));
 }
 
 /* Recursively walk `path` at `rev` and confirm that `user` has RW on
@@ -1979,9 +1978,7 @@ handle_repo_copy(HttpRequest *req, HttpServerResponse *res, void *user_data)
     free(new_acl_sha);
 
     if (new_rev < 0) { respond_error(res, 500, "copy commit failed"); return; }
-    char buf[64];
-    snprintf(buf, sizeof buf, "{\"rev\":%d}", new_rev);
-    respond_json(res, 200, buf);
+    respond_json(res, 200, aether_rev_response_json(new_rev));
 }
 
 /* Phase 8.2a: POST /repos/{r}/branches/<NAME>/create
@@ -2061,10 +2058,8 @@ handle_repo_branch_create(HttpRequest *req, HttpServerResponse *res,
         respond_error(res, 400, "branch create failed (exists, bad base, or no globs?)");
         return;
     }
-    char buf[128];
-    snprintf(buf, sizeof buf, "{\"rev\":%d,\"branch\":\"%s\"}", new_rev, branch_name);
     http_response_set_status(res, 201);
-    http_response_json(res, buf);
+    http_response_json(res, aether_rev_branch_response_json(new_rev, branch_name));
 }
 
 void *svnae_svnserver_handler_info(void) { return (void *)handle_repo_info; }

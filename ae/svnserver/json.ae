@@ -315,6 +315,35 @@ export secondary_entry_json(algo: string, hash: string) -> string {
     return out
 }
 
+// Tiny response builders for mutation endpoints.
+export error_response_json(msg: string) -> string {
+    out = "{\"error\":"
+    out = string.concat(out, json_escape_string_impl(msg))
+    return string.concat(out, "}")
+}
+
+export rev_response_json(rev: int) -> string {
+    out = "{\"rev\":"
+    out = string.concat(out, json_int_to_dec_impl(rev))
+    return string.concat(out, "}")
+}
+
+export rev_sha_response_json(rev: int, sha: string) -> string {
+    out = "{\"rev\":"
+    out = string.concat(out, json_int_to_dec_impl(rev))
+    out = string.concat(out, ",\"sha\":")
+    out = string.concat(out, json_escape_string_impl(sha))
+    return string.concat(out, "}")
+}
+
+export rev_branch_response_json(rev: int, branch: string) -> string {
+    out = "{\"rev\":"
+    out = string.concat(out, json_int_to_dec_impl(rev))
+    out = string.concat(out, ",\"branch\":")
+    out = string.concat(out, json_escape_string_impl(branch))
+    return string.concat(out, "}")
+}
+
 // Prelude of /info: {"head":N,"name":"...","hash_algo":"...","default_branch":"main"
 // Stops before ,"branches":[...] so the C side can still stream the branch list.
 export info_prelude_json(head: int, name: string, hash_algo: string) -> string {
