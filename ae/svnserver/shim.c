@@ -876,31 +876,17 @@ handle_repo_rev(HttpRequest *req, HttpServerResponse *res, void *user_data)
         return;
     }
 
-    /* /rev/N/props/<path> — lookup + body in Aether. Returns
-     * "<per-path-sha>\x01<json>"; we split to set the Merkle header
-     * and emit the body. */
+    /* /rev/N/props/<path> — ported to ae/svnserver/handler_rev_props.ae. */
     if (strncmp(after, "/props/", 7) == 0 || strcmp(after, "/props") == 0) {
         const char *target = strcmp(after, "/props") == 0 ? "" : after + 7;
         const char *p_user = NULL;
         int p_is_super = auth_context(req, &p_user);
-        if (!p_is_super && !acl_allows(repo, rev, p_user, target)) {
-            respond_json(res, 200, "{}");
-            return;
-        }
-        extern const char *aether_props_resolve(const char *repo, int rev,
-                                                 const char *target);
-        const char *packed = aether_props_resolve(repo, rev, target);
-        const char *sep = packed ? strchr(packed, '\x01') : NULL;
-        if (sep && sep > packed) {
-            char sha[65];
-            size_t sl = (size_t)(sep - packed);
-            if (sl < sizeof sha) {
-                memcpy(sha, packed, sl); sha[sl] = '\0';
-                set_merkle_headers(res, svnae_repo_primary_hash(repo),
-                                   "props", sha);
-            }
-        }
-        respond_json(res, 200, sep ? sep + 1 : "{}");
+        extern void aether_props_handle(void *req, void *res,
+                                         const char *repo, int rev,
+                                         const char *target,
+                                         const char *user, int is_super);
+        aether_props_handle(req, res, repo, rev, target,
+                            p_user ? p_user : "", p_is_super);
         return;
     }
 
