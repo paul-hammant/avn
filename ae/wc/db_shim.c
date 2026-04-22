@@ -136,13 +136,7 @@ void svnae_wc_db_close(sqlite3 *db) { if (db) sqlite3_close(db); }
 
 /* --- node CRUD -------------------------------------------------------- */
 
-/* Insert or replace a node row. Returns 0 on success.
- *
- * Aether v0.70.0 (issue #16) truncates extern declarations at 5 params.
- * We pack `kind` (0..1) and `state` (0..3) into a single int as
- *   kind_state = (state << 4) | kind
- * so the call-site only needs 5 Aether args. The C-level function
- * takes them unpacked for clarity. */
+/* Insert or replace a node row. Returns 0 on success. */
 int
 svnae_wc_db_upsert_node(sqlite3 *db,
                         const char *path, int kind, int base_rev,
@@ -164,18 +158,6 @@ svnae_wc_db_upsert_node(sqlite3 *db,
     int rc = sqlite3_step(st);
     sqlite3_finalize(st);
     return rc == SQLITE_DONE ? 0 : -1;
-}
-
-/* 5-arg wrapper for Aether. `ks` packs (state << 4) | kind; this matches
- * the issue-#16 workaround. */
-int
-svnae_wc_db_upsert_node_packed(sqlite3 *db,
-                               const char *path, int ks, int base_rev,
-                               const char *base_sha1)
-{
-    int kind  = ks & 0xf;
-    int state = (ks >> 4) & 0xf;
-    return svnae_wc_db_upsert_node(db, path, kind, base_rev, base_sha1, state);
 }
 
 int

@@ -64,7 +64,7 @@ extra_sources = ["ae/subr/io/shim.c"]
 [[bin]]
 name = "test_utf8"
 path = "ae/subr/test_utf8.ae"
-extra_sources = ["ae/subr/utf8/shim.c"]
+extra_sources = ["ae/ffi/utf8proc/shim.c"]
 
 [[bin]]
 name = "test_svndiff"

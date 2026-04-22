@@ -22,9 +22,10 @@ extern system(cmd: string) -> int
 
 extern svnae_wc_db_open(wc_root: string) -> ptr
 extern svnae_wc_db_close(db: ptr)
-// Aether v0.70.0 (issue #16): externs with 6+ params silently drop the
-// last. We use the packed 5-arg wrapper (kind+state packed into one int).
-extern svnae_wc_db_upsert_node_packed(db: ptr, path: string, ks: int, base_rev: int, base_sha1: string) -> int
+// 6-param extern. `state` is a reserved keyword (actor model), so we
+// use `st` in the Aether-side signature; the C side still exposes both
+// the full `state`-named function and the packed alias for back-compat.
+extern svnae_wc_db_upsert_node(db: ptr, path: string, kind: int, base_rev: int, base_sha1: string, st: int) -> int
 extern svnae_wc_db_delete_node(db: ptr, path: string) -> int
 extern svnae_wc_db_node_exists(db: ptr, path: string) -> int
 extern svnae_wc_db_get_node(db: ptr, path: string) -> ptr
@@ -74,9 +75,9 @@ main() {
     // Initially empty.
     fails = fails + expect_int("no nodes yet", svnae_wc_db_node_exists(db, "README"), 0)
 
-    // Insert a file node. ks = (state << 4) | kind = (0 << 4) | 0 = 0
-    rc = svnae_wc_db_upsert_node_packed(db, "README", 0, 1,
-                                 "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+    // Insert a file node. kind=0 (file), state=0 (normal).
+    rc = svnae_wc_db_upsert_node(db, "README", 0, 1,
+                                 "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d", 0)
     fails = fails + expect_int("upsert README", rc, 0)
     fails = fails + expect_int("exists README", svnae_wc_db_node_exists(db, "README"), 1)
 
@@ -90,21 +91,20 @@ main() {
     fails = fails + expect_int("node state=normal", svnae_wc_node_state(n), 0)
     svnae_wc_node_free(n)
 
-    // Upsert overwrites. ks = (1 << 4) | 0 = 16 (state=added, kind=file)
-    svnae_wc_db_upsert_node_packed(db, "README", 16, 2,
-                            "0000000000000000000000000000000000000000")
+    // Upsert overwrites. state=1 (added), kind=0 (file).
+    svnae_wc_db_upsert_node(db, "README", 0, 2,
+                            "0000000000000000000000000000000000000000", 1)
     n = svnae_wc_db_get_node(db, "README")
     fails = fails + expect_int("after re-upsert state=added", svnae_wc_node_state(n), 1)
     fails = fails + expect_int("after re-upsert base_rev=2",  svnae_wc_node_base_rev(n), 2)
     svnae_wc_node_free(n)
 
     // Insert more; list gives them sorted.
-    // dir:  ks = (0<<4)|1 = 1.  file: ks = 0.
-    svnae_wc_db_upsert_node_packed(db, "src",        1, 1, "")
-    svnae_wc_db_upsert_node_packed(db, "src/main.c", 0, 1,
-                            "5e5d5c5b5a59585756555453525150494847464544434241")
-    svnae_wc_db_upsert_node_packed(db, "LICENSE",    0, 1,
-                            "11112222333344445555666677778888999900001111aaaa")
+    svnae_wc_db_upsert_node(db, "src",        1, 1, "", 0)
+    svnae_wc_db_upsert_node(db, "src/main.c", 0, 1,
+                            "5e5d5c5b5a59585756555453525150494847464544434241", 0)
+    svnae_wc_db_upsert_node(db, "LICENSE",    0, 1,
+                            "11112222333344445555666677778888999900001111aaaa", 0)
 
     L = svnae_wc_db_list_nodes(db)
     fails = fails + expect_int("list count", svnae_wc_nodelist_count(L), 4)
