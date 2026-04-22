@@ -130,6 +130,33 @@ paths_changed_json_impl(repo: string, rev: int, paths: ptr,
     return string.concat(out, "]}")
 }
 
+// /rev/N/blame/<path> response body. Straight iteration, no filter —
+// ACL already checked at the path level by the caller.
+extern svnae_blame_count(b: ptr) -> int
+extern svnae_blame_rev(b: ptr, i: int) -> int
+extern svnae_blame_author(b: ptr, i: int) -> string
+extern svnae_blame_text(b: ptr, i: int) -> string
+extern aether_blame_entry_json(rev: int, author: string, text: string) -> string
+
+export blame_json(blame: ptr) -> string {
+    return blame_json_impl(blame)
+}
+
+blame_json_impl(blame: ptr) -> string {
+    out = "{\"lines\":["
+    n = svnae_blame_count(blame)
+    i = 0
+    while i < n {
+        if i > 0 { out = string.concat(out, ",") }
+        out = string.concat(out, aether_blame_entry_json(
+            svnae_blame_rev(blame, i),
+            svnae_blame_author(blame, i),
+            svnae_blame_text(blame, i)))
+        i = i + 1
+    }
+    return string.concat(out, "]}")
+}
+
 main() {
     println("ae/svnserver/log_json.ae is a library; not meant to run standalone")
 }

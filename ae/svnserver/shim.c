@@ -824,19 +824,10 @@ handle_repo_rev(HttpRequest *req, HttpServerResponse *res, void *user_data)
         struct svnae_blame *B = svnae_repos_blame(repo, rev, target);
         if (!B) { respond_error(res, 404, "not found"); return; }
 
-        struct sb s = {0};
-        sb_puts(&s, "{\"lines\":[");
-        int n = svnae_blame_count(B);
-        for (int i = 0; i < n; i++) {
-            if (i) sb_putc(&s, ',');
-            sb_puts(&s, aether_blame_entry_json(svnae_blame_rev(B, i),
-                                                svnae_blame_author(B, i),
-                                                svnae_blame_text(B, i)));
-        }
-        sb_puts(&s, "]}");
+        extern const char *aether_blame_json(const void *blame);
+        const char *body = aether_blame_json(B);
         svnae_blame_free(B);
-        respond_json(res, 200, s.data ? s.data : "{\"lines\":[]}");
-        free(s.data);
+        respond_json(res, 200, body ? body : "{\"lines\":[]}");
         return;
     }
 
