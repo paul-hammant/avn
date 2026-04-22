@@ -271,22 +271,18 @@ svnae_wc_pristine_get(const char *wc_root, const char *sha1)
     char path[PATH_MAX];
     build_path(wc_root, sha1, path, sizeof path);
 
-    int fd = open(path, O_RDONLY);
-    if (fd < 0) return NULL;
-    struct stat st;
-    if (fstat(fd, &st) != 0) { close(fd); return NULL; }
-    if (st.st_size < 5) { close(fd); return NULL; }
-
-    char *file = malloc((size_t)st.st_size);
-    ssize_t got = 0;
-    while (got < st.st_size) {
-        ssize_t n = read(fd, file + got, (size_t)(st.st_size - got));
-        if (n < 0) { if (errno == EINTR) continue; close(fd); free(file); return NULL; }
-        if (n == 0) break;
-        got += n;
-    }
-    close(fd);
-    if (got != st.st_size) { free(file); return NULL; }
+    /* Binary-safe read via std.fs's TLS-buffered read_binary. */
+    extern int fs_try_read_binary(const char *path);
+    extern const char *fs_get_read_binary(void);
+    extern int fs_get_read_binary_length(void);
+    extern void fs_release_read_binary(void);
+    if (!fs_try_read_binary(path)) return NULL;
+    int fsize = fs_get_read_binary_length();
+    if (fsize < 5) { fs_release_read_binary(); return NULL; }
+    char *file = malloc((size_t)fsize);
+    if (!file) { fs_release_read_binary(); return NULL; }
+    memcpy(file, fs_get_read_binary(), (size_t)fsize);
+    fs_release_read_binary();
 
     char header = file[0];
     int uncompressed = (int)(unsigned char)file[1]
@@ -298,13 +294,13 @@ svnae_wc_pristine_get(const char *wc_root, const char *sha1)
     if (!out) { free(file); return NULL; }
 
     if (header == 'R') {
-        if ((int)st.st_size - 5 != uncompressed) { free(file); free(out); return NULL; }
+        if (fsize - 5 != uncompressed) { free(file); free(out); return NULL; }
         memcpy(out, file + 5, (size_t)uncompressed);
     } else if (header == 'Z') {
         uLongf produced = (uLongf)uncompressed;
         int rc = uncompress((Bytef *)out, &produced,
                             (const Bytef *)(file + 5),
-                            (uLong)(st.st_size - 5));
+                            (uLong)(fsize - 5));
         if (rc != Z_OK || (int)produced != uncompressed) {
             free(file); free(out); return NULL;
         }
