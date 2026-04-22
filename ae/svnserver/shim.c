@@ -769,14 +769,18 @@ extern const char *aether_blobfield_get(const char *body, const char *key);
 static char *
 load_rev_blob_field(const char *repo, int rev, const char *key)
 {
+    extern const char *aether_io_read_file(const char *p);
+    extern int aether_io_file_size(const char *p);
     char path[PATH_MAX];
     snprintf(path, sizeof path, "%s/revs/%06d", repo, rev);
-    FILE *f = fopen(path, "r");
-    if (!f) return NULL;
+    if (aether_io_file_size(path) < 0) return NULL;
+    const char *src = aether_io_read_file(path);
     char buf[128];
-    if (!fgets(buf, sizeof buf, f)) { fclose(f); return NULL; }
-    fclose(f);
-    size_t n = strlen(buf);
+    size_t slen = strlen(src);
+    if (slen >= sizeof buf) slen = sizeof buf - 1;
+    memcpy(buf, src, slen);
+    buf[slen] = '\0';
+    size_t n = slen;
     while (n > 0 && (buf[n-1] == '\n' || buf[n-1] == '\r')) buf[--n] = '\0';
     char *body = svnae_rep_read_blob(repo, buf);
     if (!body) return NULL;

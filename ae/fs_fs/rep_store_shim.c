@@ -84,17 +84,24 @@ extern const char *aether_format_secondary_hash(const char *line, int i);
 
 /* Read + trim the first line of $repo/format. Returns 0 on success
  * with the trimmed line in `out` (out_sz bytes), -1 if absent. */
+extern const char *aether_io_read_file(const char *p);
+extern int aether_io_file_size(const char *p);
+
 static int
 read_format_line(const char *repo, char *out, size_t out_sz)
 {
     char fmt_path[PATH_MAX];
     snprintf(fmt_path, sizeof fmt_path, "%s/format", repo);
-    FILE *f = fopen(fmt_path, "r");
-    if (!f) return -1;
-    if (!fgets(out, (int)out_sz, f)) { fclose(f); return -1; }
-    fclose(f);
-    size_t n = strlen(out);
-    while (n > 0 && (out[n-1] == '\n' || out[n-1] == '\r' || out[n-1] == ' ')) out[--n] = '\0';
+    if (aether_io_file_size(fmt_path) < 0) return -1;
+    const char *src = aether_io_read_file(fmt_path);
+    /* Take first line only — the format file is always single-line,
+     * but fgets' semantics required "first line or bust", so preserve
+     * that by clipping at the first newline. */
+    size_t n = 0;
+    while (src[n] && src[n] != '\n' && n < out_sz - 1) { out[n] = src[n]; n++; }
+    out[n] = '\0';
+    /* Trim trailing whitespace. */
+    while (n > 0 && (out[n-1] == '\r' || out[n-1] == ' ')) out[--n] = '\0';
     return 0;
 }
 

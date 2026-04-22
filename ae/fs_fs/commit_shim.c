@@ -64,18 +64,23 @@ static int write_atomic(const char *path, const char *data, int len)
 
 /* Read the root-dir sha1 for a given revision. Returns malloc'd string
  * or NULL. */
+extern const char *aether_io_read_file(const char *path);
+extern int aether_io_file_size(const char *path);
+
 static char *
 load_rev_root_sha1(const char *repo, int rev)
 {
     char path[PATH_MAX];
     snprintf(path, sizeof path, "%s/revs/%06d", repo, rev);
-    FILE *f = fopen(path, "r");
-    if (!f) return NULL;
+    if (aether_io_file_size(path) < 0) return NULL;
+    const char *src = aether_io_read_file(path);
     char buf[128];
-    if (!fgets(buf, sizeof buf, f)) { fclose(f); return NULL; }
-    fclose(f);
+    size_t slen = strlen(src);
+    if (slen >= sizeof buf) slen = sizeof buf - 1;
+    memcpy(buf, src, slen);
+    buf[slen] = '\0';
     /* trim trailing whitespace */
-    size_t n = strlen(buf);
+    size_t n = slen;
     while (n > 0 && (buf[n-1] == '\n' || buf[n-1] == '\r' || buf[n-1] == ' ')) buf[--n] = '\0';
 
     char *rev_body = svnae_rep_read_blob(repo, buf);
@@ -117,12 +122,14 @@ rev_blob_field(const char *repo, int rev, const char *key)
 {
     char path[PATH_MAX];
     snprintf(path, sizeof path, "%s/revs/%06d", repo, rev);
-    FILE *f = fopen(path, "r");
-    if (!f) return NULL;
+    if (aether_io_file_size(path) < 0) return NULL;
+    const char *src = aether_io_read_file(path);
     char buf[128];
-    if (!fgets(buf, sizeof buf, f)) { fclose(f); return NULL; }
-    fclose(f);
-    size_t n = strlen(buf);
+    size_t slen = strlen(src);
+    if (slen >= sizeof buf) slen = sizeof buf - 1;
+    memcpy(buf, src, slen);
+    buf[slen] = '\0';
+    size_t n = slen;
     while (n > 0 && (buf[n-1] == '\n' || buf[n-1] == '\r')) buf[--n] = '\0';
 
     char *body = svnae_rep_read_blob(repo, buf);
@@ -625,14 +632,10 @@ svnae_branch_create(const char *repo, const char *name, const char *base,
     char base_head_path[PATH_MAX];
     snprintf(base_head_path, sizeof base_head_path, "%s/branches/%s/head", repo, base);
     int base_rev = -1;
-    FILE *f = fopen(base_head_path, "r");
-    if (f) {
-        char head_line[64];
-        if (fgets(head_line, sizeof head_line, f)) {
-            const char *eq = strchr(head_line, '=');
-            if (eq) base_rev = atoi(eq + 1);
-        }
-        fclose(f);
+    if (aether_io_file_size(base_head_path) >= 0) {
+        const char *head_line = aether_io_read_file(base_head_path);
+        const char *eq = strchr(head_line, '=');
+        if (eq) base_rev = atoi(eq + 1);
     }
     if (base_rev < 0 && strcmp(base, "main") == 0) {
         /* Legacy repos (seeded before Phase 8.1) have no $repo/branches/main/
@@ -663,11 +666,8 @@ svnae_branch_create(const char *repo, const char *name, const char *base,
         if (!other_branches) {
             char legacy[PATH_MAX];
             snprintf(legacy, sizeof legacy, "%s/head", repo);
-            FILE *fl = fopen(legacy, "r");
-            if (fl) {
-                char hl[32];
-                if (fgets(hl, sizeof hl, fl)) base_rev = atoi(hl);
-                fclose(fl);
+            if (aether_io_file_size(legacy) >= 0) {
+                base_rev = atoi(aether_io_read_file(legacy));
             }
             if (base_rev >= 0) {
                 /* Materialize $repo/branches/main/head so future lookups
@@ -825,25 +825,16 @@ svnae_branch_spec_allows(const char *repo, const char *branch, const char *path)
 
     char spec_path[PATH_MAX];
     snprintf(spec_path, sizeof spec_path, "%s/branches/%s/spec", repo, branch);
-    FILE *f = fopen(spec_path, "r");
-    if (!f) {
+    int sz = aether_io_file_size(spec_path);
+    if (sz < 0) {
         /* No spec file → behave like main: include-all. Applies to
          * legacy seeded repos where $repo/branches/main/spec doesn't
          * exist at all. */
         return 1;
     }
-    fseek(f, 0, SEEK_END);
-    long sz = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    if (sz <= 0) { fclose(f); return 1; }   /* empty spec → include-all */
+    if (sz == 0) return 1;   /* empty spec → include-all */
 
-    char *buf = malloc((size_t)sz + 1);
-    if (!buf) { fclose(f); return -1; }
-    size_t rd = fread(buf, 1, (size_t)sz, f);
-    fclose(f);
-    buf[rd] = '\0';
-
+    const char *buf = aether_io_read_file(spec_path);
     int ok = aether_spec_matches_any(path, buf);
-    free(buf);
     return ok ? 1 : 0;
 }
