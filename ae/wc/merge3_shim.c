@@ -155,12 +155,12 @@ svnae_merge3(const char *mine,   int mine_len,
 {
     char mp[PATH_MAX], bp[PATH_MAX], tp[PATH_MAX];
     if (write_tmp(mine,   mine_len,   mp, sizeof mp)   != 0) return -1;
-    if (write_tmp(base,   base_len,   bp, sizeof bp)   != 0) { unlink(mp); return -1; }
-    if (write_tmp(theirs, theirs_len, tp, sizeof tp)   != 0) { unlink(mp); unlink(bp); return -1; }
+    if (write_tmp(base,   base_len,   bp, sizeof bp)   != 0) { aether_io_unlink(mp); return -1; }
+    if (write_tmp(theirs, theirs_len, tp, sizeof tp)   != 0) { aether_io_unlink(mp); aether_io_unlink(bp); return -1; }
 
     int rc = run_diff3(mp, bp, tp, out_merged, out_len);
 
-    unlink(mp); unlink(bp); unlink(tp);
+    aether_io_unlink(mp); aether_io_unlink(bp); aether_io_unlink(tp);
     return rc;
 }
 

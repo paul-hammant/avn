@@ -204,8 +204,8 @@ svnae_wc_diff(const char *wc_root, const char *rel_path_or_empty)
         fflush(stdout);
         run_diff(label_before, label_after, before_path, after_path);
 
-        if (need_cleanup_before) unlink(before_path);
-        if (need_cleanup_after)  unlink(after_path);
+        if (need_cleanup_before) aether_io_unlink(before_path);
+        if (need_cleanup_after)  aether_io_unlink(after_path);
         free(before_path);
         free(after_path);
     }

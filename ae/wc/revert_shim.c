@@ -197,7 +197,7 @@ walk_and_clean(const char *root)
         if (kind == 2) {
             count += walk_and_clean(full);
         } else if (kind == 1 && is_stale_tmp(name)) {
-            if (unlink(full) == 0) count++;
+            if (aether_io_unlink(full) == 0) count++;
         }
     }
     aether_io_listdir_free(d);
@@ -232,7 +232,7 @@ svnae_wc_cleanup(const char *wc_root)
     char journal[PATH_MAX];
     snprintf(journal, sizeof journal, "%s/.svn/wc.db-journal", wc_root);
     if (aether_io_is_regular_file(journal)) {
-        if (unlink(journal) == 0) count++;
+        if (aether_io_unlink(journal) == 0) count++;
     }
 
     return count;

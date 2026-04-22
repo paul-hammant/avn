@@ -110,7 +110,7 @@ remove_sidecars(const char *wc_root, const char *rel_path)
         if (!aether_is_sidecar_suffix(name + blen + 1)) continue;
         char full[PATH_MAX];
         snprintf(full, sizeof full, "%s/%s", dirpath, name);
-        unlink(full);
+        aether_io_unlink(full);
     }
     aether_io_listdir_free(d);
 }
