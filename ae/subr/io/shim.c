@@ -84,6 +84,13 @@ int svnae_stderr_write(const char *buf, int n) {
     return (int)w;
 }
 
+/* NUL-terminated stderr write. Wraps svnae_stderr_write for Aether
+ * callers where passing a length is awkward (short trace strings). */
+int svnae_stderr_puts(const char *s) {
+    if (!s) return 0;
+    return svnae_stderr_write(s, (int)strlen(s));
+}
+
 /* Same for stdout, for the CLI's binary-safe cat output. */
 int svnae_stdout_write(const char *buf, int n) {
     ssize_t w = write(1, buf, (size_t)n);

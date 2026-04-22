@@ -128,27 +128,16 @@ extern int svnae_wc_hash_file (const char *wc_root, const char *path, char *out)
 
 static __thread const char *g_wc_root = NULL;
 
-static int
-sha1_of_file(const char *path, char out[65])
-{
-    if (!g_wc_root) return -1;
-    return svnae_wc_hash_file(g_wc_root, path, out);
-}
-
+/* sha1_of_bytes is still used by walk_remote (populates the
+ * remote_tree's per-file sha during RA fetch). The file-hashing
+ * and atomic-write / mkdir-p helpers moved into the Aether apply
+ * pass (ae/wc/update_apply.ae) so the C side no longer needs
+ * them. */
 static void
 sha1_of_bytes(const char *data, int len, char out[65])
 {
     out[0] = '\0';
     if (g_wc_root) svnae_wc_hash_bytes(g_wc_root, data, len, out);
-}
-
-/* mkdir_p + atomic write ported to Aether (ae/subr/io.ae). */
-extern int aether_io_mkdir_p(const char *path);
-extern int aether_io_write_atomic(const char *path, const char *data, int length);
-
-static int mkdir_p(const char *path) { return aether_io_mkdir_p(path) == 0 ? 0 : -1; }
-static int write_file_atomic(const char *path, const char *data, int len) {
-    return aether_io_write_atomic(path, data, len) == 0 ? 0 : -1;
 }
 
 /* --- remote tree map --------------------------------------------------- *
@@ -214,6 +203,42 @@ rtree_find(const struct remote_tree *rt, const char *path)
     for (int i = 0; i < rt->n; i++)
         if (strcmp(rt->items[i].path, path) == 0) return &rt->items[i];
     return NULL;
+}
+
+/* Accessors for the Aether apply-pass port. Indexed by position in
+ * the remote_tree list (0..rtree_count-1). The data pointer+length
+ * pair works like std.fs's TLS buffer: valid for the lifetime of
+ * the remote_tree, safe to pass directly to rep-store writes. */
+int rtree_count(const struct remote_tree *rt) { return rt ? rt->n : 0; }
+const char *rtree_path_at(const struct remote_tree *rt, int i) {
+    if (!rt || i < 0 || i >= rt->n) return "";
+    return rt->items[i].path;
+}
+int rtree_kind_at(const struct remote_tree *rt, int i) {
+    if (!rt || i < 0 || i >= rt->n) return -1;
+    return rt->items[i].kind;
+}
+const char *rtree_sha_at(const struct remote_tree *rt, int i) {
+    if (!rt || i < 0 || i >= rt->n) return "";
+    return rt->items[i].sha1;
+}
+const char *rtree_data_at(const struct remote_tree *rt, int i) {
+    if (!rt || i < 0 || i >= rt->n) return "";
+    return rt->items[i].data ? rt->items[i].data : "";
+}
+int rtree_data_len_at(const struct remote_tree *rt, int i) {
+    if (!rt || i < 0 || i >= rt->n) return 0;
+    return rt->items[i].data_len;
+}
+
+/* Linear scan by path (Aether needs this to decide "skip if already
+ * seen in pass A"). Returns the index or -1. */
+int rtree_find_by_path(const struct remote_tree *rt, const char *path) {
+    if (!rt || !path) return -1;
+    for (int i = 0; i < rt->n; i++) {
+        if (strcmp(rt->items[i].path, path) == 0) return i;
+    }
+    return -1;
 }
 
 /* Recursive walk of the remote tree. Prefix is relative to repo root;
@@ -287,6 +312,29 @@ ingest_props(const char *base_url, const char *repo, int rev,
     if (P) svnae_ra_props_free(P);
 }
 
+/* Aether-callable wrapper around ingest_props. The RA-props /
+ * WC-proplist handles are opaque C structs that don't round-trip
+ * cleanly through Aether FFI, so the apply-pass port calls this
+ * wrapper once per path-that-changed. */
+void
+update_ingest_props(const char *base_url, const char *repo, int rev,
+                    const char *wc_root, const char *rel)
+{
+    ingest_props(base_url, repo, rev, wc_root, rel);
+}
+
+/* Aether-callable disk-file hash. Returns a TLS scratch string with
+ * the 65-byte hex (empty on failure). Mirrors the `sha1_of_file`
+ * helper that's now pass-A-only. */
+const char *
+update_sha1_of_file(const char *wc_root, const char *path)
+{
+    static __thread char buf[65];
+    buf[0] = '\0';
+    if (svnae_wc_hash_file(wc_root, path, buf) != 0) buf[0] = '\0';
+    return buf;
+}
+
 /* --- conflict detection + apply --------------------------------------- */
 
 int
@@ -326,123 +374,27 @@ svnae_wc_update(const char *wc_root, int target_rev)
     int n_local = svnae_wc_nodelist_count(L);
 
 
-    /* 3. Scan for files where both local and remote changed. For each
-     *    such file we'll attempt a 3-way text merge when we apply.
-     *    Collect the list here so the apply pass knows which paths to
-     *    route through merge3 instead of straight overwrite. */
-    /* (No pre-scan rejection anymore — that's Phase 5.7 behaviour.
-     *  The apply pass decides per-file: clean overwrite vs 3-way merge
-     *  vs conflict.) */
-    int had_conflict = 0;
-
-    /* 4. Apply. Pass A: handle local-only and overlap. */
-    for (int i = 0; i < n_local; i++) {
-        const char *rel      = svnae_wc_nodelist_path(L, i);
-        int         kind     = svnae_wc_nodelist_kind(L, i);
-        int         state    = svnae_wc_nodelist_state(L, i);
-        const char *base_sha = svnae_wc_nodelist_base_sha1(L, i);
-
-        if (state == 1 || state == 2) continue;  /* added/deleted — user's work */
-
-        const struct remote_node *r = rtree_find(&rt, rel);
-        if (!r) {
-            /* Remote removed it. Delete locally (only safe if clean,
-             * which we verified above). */
-            extern int aether_io_unlink(const char *p);
-            extern int aether_io_rmdir(const char *p);
-            char disk[PATH_MAX];
-            snprintf(disk, sizeof disk, "%s/%s", wc_root, rel);
-            if (kind == 0) (void)aether_io_unlink(disk);
-            else           (void)aether_io_rmdir(disk);
-            svnae_wc_db_delete_node(db, rel);
-            continue;
-        }
-        if (kind != r->kind) {
-            /* Kind switched (file became dir or vice versa). Reference
-             * svn treats this as a tree-conflict; we just skip for this
-             * phase. Log it and move on. */
-            fprintf(stderr, "warning: kind change not handled: %s\n", rel);
-            continue;
-        }
-        if (kind == 0 && strcmp(r->sha1, base_sha) != 0) {
-            /* Remote newer. Decide: clean overwrite, or 3-way merge. */
-            char disk[PATH_MAX];
-            snprintf(disk, sizeof disk, "%s/%s", wc_root, rel);
-            char disk_sha[65];
-            int local_clean = (sha1_of_file(disk, disk_sha) == 0
-                               && strcmp(disk_sha, base_sha) == 0);
-
-            if (local_clean) {
-                /* Straight overwrite. */
-                if (write_file_atomic(disk, r->data, r->data_len) != 0) continue;
-                svnae_wc_pristine_put(wc_root, r->data, r->data_len);
-                svnae_wc_db_upsert_node(db, rel, 0, target_rev, r->sha1, 0);
-                ingest_props(base_url, repo, target_rev, wc_root, rel);
-            } else {
-                /* Local modified. 3-way merge: base = pristine,
-                 * theirs = remote, mine = disk. */
-                int base_len = svnae_wc_pristine_size(wc_root, base_sha);
-                char *base_buf = svnae_wc_pristine_get(wc_root, base_sha);
-                if (!base_buf) {
-                    /* Can't get base — fall back to rejecting this path. */
-                    svnae_wc_db_upsert_node(db, rel, kind, target_rev, base_sha, 0);
-                    continue;
-                }
-                int m3rc = svnae_merge3_apply(disk,
-                                              base_buf, base_len,
-                                              svnae_wc_nodelist_base_rev(L, i),
-                                              r->data, r->data_len, target_rev);
-                svnae_wc_pristine_free(base_buf);
-                if (m3rc == 0) {
-                    /* Clean merge. Pristine becomes remote; base_rev advances;
-                     * disk contains the merged text (now equal to remote). */
-                    svnae_wc_pristine_put(wc_root, r->data, r->data_len);
-                    svnae_wc_db_upsert_node(db, rel, 0, target_rev, r->sha1, 0);
-                    ingest_props(base_url, repo, target_rev, wc_root, rel);
-                } else if (m3rc == 1) {
-                    /* Conflict. Pristine advances to remote (so the file's
-                     * "base" for next operations is the new remote), but we
-                     * flag the node conflicted so status/commit know. The
-                     * disk file currently holds marker-annotated text. */
-                    svnae_wc_pristine_put(wc_root, r->data, r->data_len);
-                    svnae_wc_db_upsert_node(db, rel, 0, target_rev, r->sha1, 0);
-                    svnae_wc_db_set_conflicted(db, rel, 1);
-                    had_conflict = 1;
-                    fprintf(stderr, "C    %s\n", rel);
-                } else {
-                    fprintf(stderr, "error merging %s; left alone\n", rel);
-                }
-            }
-        } else {
-            /* Unchanged — just bump base_rev. Props may still have
-             * changed for this path, so re-ingest them. */
-            svnae_wc_db_upsert_node(db, rel, kind, target_rev, base_sha, 0);
-            ingest_props(base_url, repo, target_rev, wc_root, rel);
-        }
-    }
-
-    /* Pass B: remote-only additions. */
-    for (int i = 0; i < rt.n; i++) {
-        const struct remote_node *r = &rt.items[i];
-        /* Skip if already present locally (handled in pass A). */
-        int found = 0;
-        for (int j = 0; j < n_local; j++) {
-            if (strcmp(svnae_wc_nodelist_path(L, j), r->path) == 0) { found = 1; break; }
-        }
-        if (found) continue;
-
-        char disk[PATH_MAX];
-        snprintf(disk, sizeof disk, "%s/%s", wc_root, r->path);
-        if (r->kind == 1) {
-            if (mkdir_p(disk) != 0) continue;
-            svnae_wc_db_upsert_node(db, r->path, 1, target_rev, "", 0);
-        } else {
-            if (write_file_atomic(disk, r->data, r->data_len) != 0) continue;
-            svnae_wc_pristine_put(wc_root, r->data, r->data_len);
-            svnae_wc_db_upsert_node(db, r->path, 0, target_rev, r->sha1, 0);
-        }
-        ingest_props(base_url, repo, target_rev, wc_root, r->path);
-    }
+    /* 3. + 4. The two-pass apply (local → remote diff, then
+     * remote-only additions) is in Aether now
+     * (ae/wc/update_apply.ae). The C side keeps walk_remote, the
+     * remote_tree struct, the wc.db/nodelist handles, and the prop
+     * ingest helper — everything with opaque-handle or curl-bound
+     * state. */
+    extern int aether_update_apply_pass_a(const char *wc_root,
+                                          const char *base_url,
+                                          const char *repo, int target_rev,
+                                          const struct remote_tree *rt,
+                                          const struct svnae_wc_nodelist *L,
+                                          sqlite3 *db);
+    extern void aether_update_apply_pass_b(const char *wc_root,
+                                           const char *base_url,
+                                           const char *repo, int target_rev,
+                                           const struct remote_tree *rt,
+                                           const struct svnae_wc_nodelist *L,
+                                           sqlite3 *db);
+    int had_conflict = aether_update_apply_pass_a(wc_root, base_url, repo,
+                                                  target_rev, &rt, L, db);
+    aether_update_apply_pass_b(wc_root, base_url, repo, target_rev, &rt, L, db);
 
     /* 5. Bump base_rev in info. */
     char buf[16]; snprintf(buf, sizeof buf, "%d", target_rev);
