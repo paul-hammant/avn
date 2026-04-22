@@ -926,17 +926,9 @@ svnae_ra_commit_set_prop(struct svnae_ra_commit *cb,
     return 0;
 }
 
-/* base64 encode for the wire. OpenSSL EVP_EncodeBlock returns a padded
- * length; the buffer we pass must be 4*((n+2)/3)+1 bytes. */
-static char *
-b64_encode(const unsigned char *src, int len)
-{
-    int out_cap = 4 * ((len + 2) / 3) + 1;
-    char *out = malloc((size_t)out_cap);
-    int n = EVP_EncodeBlock((unsigned char *)out, src, len);
-    out[n] = '\0';
-    return out;
-}
+/* Consolidated in ae/ffi/openssl/shim.c. */
+extern char *svnae_openssl_b64_encode(const unsigned char *src, int len);
+#define b64_encode svnae_openssl_b64_encode
 
 /* Commit: serialise edits into JSON body, POST to the server, parse the
  * response. Returns the new revision number or -1 on any failure. Frees
@@ -1067,7 +1059,6 @@ svnae_ra_commit_finish(struct svnae_ra_commit *cb,
  */
 
 #include <ctype.h>
-#include <openssl/evp.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1095,36 +1086,9 @@ char *svnae_ra_hash_algo(const char *base_url, const char *repo);
 extern int http_get_ex(const char *url, char **out_body, size_t *out_len,
                        int *out_status, char **out_node_hash);
 
-/* ---- hashing: inlined golden list (match ae/subr/checksum/shim.c) -- */
-
-static char *
-hash_hex(const char *algo, const char *data, int data_len)
-{
-    const EVP_MD *md = NULL;
-    if      (strcmp(algo, "sha1")   == 0) md = EVP_sha1();
-    else if (strcmp(algo, "sha256") == 0) md = EVP_sha256();
-    if (!md) return NULL;
-    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
-    if (!ctx) return NULL;
-    unsigned char dig[EVP_MAX_MD_SIZE];
-    unsigned int dlen = 0;
-    char *out = NULL;
-    if (EVP_DigestInit_ex(ctx, md, NULL) == 1
-        && EVP_DigestUpdate(ctx, data, (size_t)data_len) == 1
-        && EVP_DigestFinal_ex(ctx, dig, &dlen) == 1) {
-        out = malloc((size_t)dlen * 2 + 1);
-        if (out) {
-            static const char hex[] = "0123456789abcdef";
-            for (unsigned int i = 0; i < dlen; i++) {
-                out[i * 2]     = hex[dig[i] >> 4];
-                out[i * 2 + 1] = hex[dig[i] & 0x0f];
-            }
-            out[dlen * 2] = '\0';
-        }
-    }
-    EVP_MD_CTX_free(ctx);
-    return out;
-}
+/* Hashing consolidated in ae/ffi/openssl/shim.c. */
+extern char *svnae_openssl_hash_hex(const char *algo, const char *data, int len);
+#define hash_hex svnae_openssl_hash_hex
 
 /* Sort helper for dir entries so the re-assembled blob matches the
  * server's canonical line order. */

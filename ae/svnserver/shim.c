@@ -39,7 +39,6 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #include <errno.h>
-#include <openssl/evp.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -401,26 +400,13 @@ acl_allows(const char *repo, int rev, const char *user, const char *target_path)
 
 /* Compute the algorithm's hex digest of `data[0..len]` into `out`.
  * `out` is [65] bytes. Returns hex length or 0. */
+/* Consolidated in ae/ffi/openssl/shim.c. */
+extern int svnae_openssl_hash_hex_into(const char *algo, const char *data, int len, char *out);
+
 static int
 hex_digest(const char *algo, const char *data, int len, char *out)
 {
-    const EVP_MD *md = NULL;
-    if      (strcmp(algo, "sha1")   == 0) md = EVP_sha1();
-    else if (strcmp(algo, "sha256") == 0) md = EVP_sha256();
-    if (!md) { out[0] = '\0'; return 0; }
-    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
-    unsigned char dig[EVP_MAX_MD_SIZE]; unsigned int dlen = 0;
-    EVP_DigestInit_ex(ctx, md, NULL);
-    EVP_DigestUpdate(ctx, data, (size_t)len);
-    EVP_DigestFinal_ex(ctx, dig, &dlen);
-    EVP_MD_CTX_free(ctx);
-    static const char hex[] = "0123456789abcdef";
-    for (unsigned int i = 0; i < dlen; i++) {
-        out[i * 2]     = hex[dig[i] >> 4];
-        out[i * 2 + 1] = hex[dig[i] & 0x0f];
-    }
-    out[dlen * 2] = '\0';
-    return (int)dlen * 2;
+    return svnae_openssl_hash_hex_into(algo, data, len, out);
 }
 
 /* Recursively compute the redacted-for-`user` sha of the dir at
@@ -1206,24 +1192,10 @@ handle_repo_rev(HttpRequest *req, HttpServerResponse *res, void *user_data)
             set_merkle_headers(res, algo, "dir", dir_sha);
         } else {
             char rehash[65] = {0};
-            const EVP_MD *md = NULL;
-            if      (strcmp(algo, "sha1")   == 0) md = EVP_sha1();
-            else if (strcmp(algo, "sha256") == 0) md = EVP_sha256();
-            if (md) {
-                EVP_MD_CTX *ctx = EVP_MD_CTX_new();
-                unsigned char dig[EVP_MAX_MD_SIZE]; unsigned int dlen = 0;
-                EVP_DigestInit_ex(ctx, md, NULL);
-                EVP_DigestUpdate(ctx, redact.data ? redact.data : "",
-                                 redact.data ? redact.len : 0);
-                EVP_DigestFinal_ex(ctx, dig, &dlen);
-                EVP_MD_CTX_free(ctx);
-                static const char hex[] = "0123456789abcdef";
-                for (unsigned int i = 0; i < dlen; i++) {
-                    rehash[i*2]   = hex[dig[i] >> 4];
-                    rehash[i*2+1] = hex[dig[i] & 0x0f];
-                }
-                rehash[dlen*2] = '\0';
-            }
+            svnae_openssl_hash_hex_into(algo,
+                                        redact.data ? redact.data : "",
+                                        redact.data ? (int)redact.len : 0,
+                                        rehash);
             set_merkle_headers(res, algo, "dir", rehash);
         }
 
@@ -1244,33 +1216,10 @@ handle_repo_rev(HttpRequest *req, HttpServerResponse *res, void *user_data)
  * Each returns a void* so Aether's ptr type system can carry it.
  */
 
-/* --- base64 decode (OpenSSL) -----------------------------------------
- *
- * For the commit endpoint, file content travels as base64 inside JSON.
- * OpenSSL's EVP_DecodeBlock is the simplest one-shot decoder. It writes
- * at most 3n/4 bytes for n input bytes (minus padding). */
-
-static int
-b64_decode(const char *src, int src_len, unsigned char **out, int *out_len)
-{
-    /* EVP_DecodeBlock pads output; strip trailing '=' to compute true length. */
-    int raw_len = src_len;
-    int pad = 0;
-    while (raw_len > 0 && src[raw_len - 1] == '=') { raw_len--; pad++; }
-    int expected = (src_len / 4) * 3 - pad;
-    unsigned char *buf = malloc((size_t)expected + 1);
-    if (!buf) return -1;
-    int n = EVP_DecodeBlock(buf, (const unsigned char *)src, src_len);
-    if (n < 0) { free(buf); return -1; }
-    /* EVP_DecodeBlock's returned length includes padding-bytes as zeros;
-     * the real length is n - pad. */
-    n -= pad;
-    if (n < 0) n = 0;
-    buf[n] = '\0';
-    *out = buf;
-    *out_len = n;
-    return 0;
-}
+/* Base64 decode consolidated in ae/ffi/openssl/shim.c. */
+extern int svnae_openssl_b64_decode(const char *src, int src_len,
+                                    unsigned char **out, int *out_len);
+#define b64_decode svnae_openssl_b64_decode
 
 /* --- REST node edit handlers (Phase 7.4) -----------------------------
  *

@@ -43,7 +43,6 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
-#include <openssl/evp.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -74,35 +73,9 @@ extern void     svnae_wc_info_free(char *s);
  * being pulled into the link. Keeping the list in sync with
  * ae/subr/checksum/shim.c's evp_by_name is the golden list: {sha1,
  * sha256}. */
-static char *
-local_hash_hex(const char *algo, const char *data, int data_len)
-{
-    const EVP_MD *md = NULL;
-    if      (strcmp(algo, "sha1")   == 0) md = EVP_sha1();
-    else if (strcmp(algo, "sha256") == 0) md = EVP_sha256();
-    if (!md) return NULL;
-    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
-    if (!ctx) return NULL;
-    unsigned char dig[EVP_MAX_MD_SIZE];
-    unsigned int dlen = 0;
-    char *out = NULL;
-    if (EVP_DigestInit_ex(ctx, md, NULL) == 1
-        && EVP_DigestUpdate(ctx, data, (size_t)data_len) == 1
-        && EVP_DigestFinal_ex(ctx, dig, &dlen) == 1) {
-        out = malloc((size_t)dlen * 2 + 1);
-        if (out) {
-            static const char hex[] = "0123456789abcdef";
-            for (unsigned int i = 0; i < dlen; i++) {
-                out[i * 2]     = hex[dig[i] >> 4];
-                out[i * 2 + 1] = hex[dig[i] & 0x0f];
-            }
-            out[dlen * 2] = '\0';
-        }
-    }
-    EVP_MD_CTX_free(ctx);
-    return out;
-}
-#define svnae_hash_hex local_hash_hex
+/* Consolidated in ae/ffi/openssl/shim.c. */
+extern char *svnae_openssl_hash_hex(const char *algo, const char *data, int len);
+#define svnae_hash_hex svnae_openssl_hash_hex
 
 const char *
 svnae_wc_hash_algo(const char *wc_root)
@@ -174,27 +147,6 @@ svnae_wc_hash_file(const char *wc_root, const char *path, char *out)
     int rc = wc_hash(wc_root, buf, (int)got, out) ? 0 : -1;
     free(buf);
     return rc;
-}
-
-/* Legacy shim: old callers passing a plain char[41] and no wc_root.
- * Still sha1, kept for the handful of call sites that never needed the
- * configured algo (e.g. in-process tests). */
-static void
-sha1_hex(const char *data, int len, char out[41])
-{
-    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
-    unsigned char buf[EVP_MAX_MD_SIZE];
-    unsigned int n = 0;
-    EVP_DigestInit_ex(ctx, EVP_sha1(), NULL);
-    EVP_DigestUpdate(ctx, data, (size_t)len);
-    EVP_DigestFinal_ex(ctx, buf, &n);
-    EVP_MD_CTX_free(ctx);
-    static const char hex[] = "0123456789abcdef";
-    for (unsigned int i = 0; i < 20; i++) {
-        out[i*2]   = hex[buf[i] >> 4];
-        out[i*2+1] = hex[buf[i] & 0xf];
-    }
-    out[40] = '\0';
 }
 
 /* Build $wc_root/.svn/pristine/aa/bb/<sha1>.rep into `out`.

@@ -42,7 +42,6 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
-#include <openssl/evp.h>
 #include <sqlite3.h>
 #include <stdio.h>
 #include <stdlib.h>

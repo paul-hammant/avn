@@ -36,7 +36,6 @@
 
 #include <errno.h>
 #include <fcntl.h>
-#include <openssl/evp.h>
 #include <sqlite3.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -166,30 +165,14 @@ svnae_repo_secondary_hashes(const char *repo, char out[4][32])
 }
 
 /* Hex-encode digest into out (>= 65 bytes). */
+/* Hash → hex lives in ae/ffi/openssl/shim.c; thin alias kept for
+ * back-compat with the call sites in this file. */
+extern int svnae_openssl_hash_hex_into(const char *algo, const char *data, int len, char *out);
+
 static int
 hex_of_algo(const char *algo, const char *data, int len, char out[65])
 {
-    const EVP_MD *md = NULL;
-    if      (strcmp(algo, "sha1")   == 0) md = EVP_sha1();
-    else if (strcmp(algo, "sha256") == 0) md = EVP_sha256();
-    if (!md) return 0;
-    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
-    if (!ctx) return 0;
-    unsigned char dig[EVP_MAX_MD_SIZE];
-    unsigned int dlen = 0;
-    int ok = (EVP_DigestInit_ex(ctx, md, NULL) == 1
-              && EVP_DigestUpdate(ctx, data, (size_t)len) == 1
-              && EVP_DigestFinal_ex(ctx, dig, &dlen) == 1);
-    EVP_MD_CTX_free(ctx);
-    if (!ok) return 0;
-    if ((int)dlen * 2 >= 65) return 0;
-    static const char hex[] = "0123456789abcdef";
-    for (unsigned int i = 0; i < dlen; i++) {
-        out[i * 2]     = hex[dig[i] >> 4];
-        out[i * 2 + 1] = hex[dig[i] & 0x0f];
-    }
-    out[dlen * 2] = '\0';
-    return (int)dlen * 2;
+    return svnae_openssl_hash_hex_into(algo, data, len, out);
 }
 
 /* Hash `data` using the repo's primary algorithm. `out` must be at
