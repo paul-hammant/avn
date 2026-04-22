@@ -61,6 +61,13 @@ export url_rev_blame(base: string, repo: string, rev: int, path: string) -> stri
     return string.concat(out, path)
 }
 
+// "<base>/repos/<repo>/rev/<N>/hashes/<path>"
+export url_rev_hashes(base: string, repo: string, rev: int, path: string) -> string {
+    out = rev_prefix(base, repo, rev)
+    out = string.concat(out, "/hashes/")
+    return string.concat(out, path)
+}
+
 // "<base>/repos/<repo>/info"
 export url_info(base: string, repo: string) -> string {
     out = string.concat(base, "/repos/")

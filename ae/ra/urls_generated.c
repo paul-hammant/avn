@@ -306,6 +306,14 @@ out = string_concat(out, "/blame/");
 }
 
 // Exported:
+const char* url_rev_hashes(const char* base, const char* repo, int rev, const char* path) {
+const char* out = rev_prefix(base, repo, rev);
+    int _heap_out = 0; (void)_heap_out;
+out = string_concat(out, "/hashes/");
+    return string_concat(out, path);
+}
+
+// Exported:
 const char* url_info(const char* base, const char* repo) {
 const char* out = string_concat(base, "/repos/");
     int _heap_out = 0; (void)_heap_out;
@@ -503,6 +511,9 @@ const char* aether_url_rev_props(const char* base, const char* repo, int32_t rev
 }
 const char* aether_url_rev_blame(const char* base, const char* repo, int32_t rev, const char* path) {
     return url_rev_blame(base, repo, rev, path);
+}
+const char* aether_url_rev_hashes(const char* base, const char* repo, int32_t rev, const char* path) {
+    return url_rev_hashes(base, repo, rev, path);
 }
 const char* aether_url_info(const char* base, const char* repo) {
     return url_info(base, repo);

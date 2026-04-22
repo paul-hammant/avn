@@ -60,6 +60,7 @@ extern const char *aether_url_info(const char *base, const char *repo);
 extern const char *aether_url_log(const char *base, const char *repo);
 extern const char *aether_url_commit(const char *base, const char *repo);
 extern const char *aether_url_copy(const char *base, const char *repo);
+extern const char *aether_url_rev_hashes(const char *base, const char *repo, int rev, const char *path);
 
 void svnae_ra_set_user(const char *user) {
     free(g_client_user);
@@ -1340,9 +1341,7 @@ verify_secondaries_in_dir(const char *base_url, const char *repo, int rev,
             if (rc != 0 && overall == 0) overall = rc;
         } else {
             /* Fetch /cat and /hashes; re-hash for each declared secondary. */
-            char cat_url[2048];
-            snprintf(cat_url, sizeof cat_url, "%s/repos/%s/rev/%d/cat/%s",
-                     base_url, repo, rev, child_rel);
+            const char *cat_url = aether_url_rev_cat(base_url, repo, rev, child_rel);
             char *cbody = NULL; size_t clen = 0; int cstatus = 0;
             if (http_get_ex(cat_url, &cbody, &clen, &cstatus, NULL) != 0
                 || cstatus != 200) {
@@ -1351,9 +1350,7 @@ verify_secondaries_in_dir(const char *base_url, const char *repo, int rev,
             }
             int body_len = (int)strlen(cbody);
 
-            char h_url[2048];
-            snprintf(h_url, sizeof h_url, "%s/repos/%s/rev/%d/hashes/%s",
-                     base_url, repo, rev, child_rel);
+            const char *h_url = aether_url_rev_hashes(base_url, repo, rev, child_rel);
             char *hbody = NULL; size_t hlen = 0; int hstatus = 0;
             if (http_get_ex(h_url, &hbody, &hlen, &hstatus, NULL) != 0
                 || hstatus != 200) {
