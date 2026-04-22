@@ -56,6 +56,10 @@ extern const char *aether_url_rev_list(const char *base, const char *repo, int r
 extern const char *aether_url_rev_props(const char *base, const char *repo, int rev, const char *path);
 extern const char *aether_url_rev_blame(const char *base, const char *repo, int rev, const char *path);
 extern const char *aether_url_branches_create(const char *base, const char *repo, const char *branch_name);
+extern const char *aether_url_info(const char *base, const char *repo);
+extern const char *aether_url_log(const char *base, const char *repo);
+extern const char *aether_url_commit(const char *base, const char *repo);
+extern const char *aether_url_copy(const char *base, const char *repo);
 
 void svnae_ra_set_user(const char *user) {
     free(g_client_user);
@@ -249,8 +253,7 @@ http_post_json(const char *url, const char *body, char **out_resp, size_t *out_l
 int
 svnae_ra_head_rev(const char *base_url, const char *repo_name)
 {
-    char url[1024];
-    snprintf(url, sizeof url, "%s/repos/%s/info", base_url, repo_name);
+    const char *url = aether_url_info(base_url, repo_name);
     char *body = NULL; size_t len = 0; int status = 0;
     if (http_get(url, &body, &len, &status) != 0) return -1;
     if (status != 200) { free(body); return -1; }
@@ -271,8 +274,7 @@ svnae_ra_head_rev(const char *base_url, const char *repo_name)
 char *
 svnae_ra_hash_algo(const char *base_url, const char *repo_name)
 {
-    char url[1024];
-    snprintf(url, sizeof url, "%s/repos/%s/info", base_url, repo_name);
+    const char *url = aether_url_info(base_url, repo_name);
     char *body = NULL; size_t len = 0; int status = 0;
     if (http_get(url, &body, &len, &status) != 0) return NULL;
     if (status != 200) { free(body); return NULL; }
@@ -296,8 +298,7 @@ struct svnae_ra_log { struct log_entry *entries; int n; };
 struct svnae_ra_log *
 svnae_ra_log(const char *base_url, const char *repo_name)
 {
-    char url[1024];
-    snprintf(url, sizeof url, "%s/repos/%s/log", base_url, repo_name);
+    const char *url = aether_url_log(base_url, repo_name);
     char *body = NULL; size_t len = 0; int status = 0;
     if (http_get(url, &body, &len, &status) != 0) return NULL;
     if (status != 200) { free(body); return NULL; }
@@ -635,8 +636,7 @@ svnae_ra_server_copy(const char *base_url, const char *repo_name,
     char *json = cJSON_PrintUnformatted(body);
     cJSON_Delete(body);
 
-    char url[1024];
-    snprintf(url, sizeof url, "%s/repos/%s/copy", base_url, repo_name);
+    const char *url = aether_url_copy(base_url, repo_name);
     char *resp = NULL; size_t len = 0; int status = 0;
     int rc = http_post_json(url, json, &resp, &len, &status);
     free(json);
@@ -995,8 +995,7 @@ svnae_ra_commit_finish(struct svnae_ra_commit *cb,
     char *json = cJSON_PrintUnformatted(body);
     cJSON_Delete(body);
 
-    char url[1024];
-    snprintf(url, sizeof url, "%s/repos/%s/commit", base_url, repo_name);
+    const char *url = aether_url_commit(base_url, repo_name);
 
     char *resp = NULL; size_t len = 0; int status = 0;
     int rc = http_post_json(url, json, &resp, &len, &status);

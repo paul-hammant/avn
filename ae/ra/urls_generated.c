@@ -306,6 +306,38 @@ out = string_concat(out, "/blame/");
 }
 
 // Exported:
+const char* url_info(const char* base, const char* repo) {
+const char* out = string_concat(base, "/repos/");
+    int _heap_out = 0; (void)_heap_out;
+out = string_concat(out, repo);
+    return string_concat(out, "/info");
+}
+
+// Exported:
+const char* url_log(const char* base, const char* repo) {
+const char* out = string_concat(base, "/repos/");
+    int _heap_out = 0; (void)_heap_out;
+out = string_concat(out, repo);
+    return string_concat(out, "/log");
+}
+
+// Exported:
+const char* url_commit(const char* base, const char* repo) {
+const char* out = string_concat(base, "/repos/");
+    int _heap_out = 0; (void)_heap_out;
+out = string_concat(out, repo);
+    return string_concat(out, "/commit");
+}
+
+// Exported:
+const char* url_copy(const char* base, const char* repo) {
+const char* out = string_concat(base, "/repos/");
+    int _heap_out = 0; (void)_heap_out;
+out = string_concat(out, repo);
+    return string_concat(out, "/copy");
+}
+
+// Exported:
 const char* url_branches_create(const char* base, const char* repo, const char* branch_name) {
 const char* out = string_concat(base, "/repos/");
     int _heap_out = 0; (void)_heap_out;
@@ -471,6 +503,18 @@ const char* aether_url_rev_props(const char* base, const char* repo, int32_t rev
 }
 const char* aether_url_rev_blame(const char* base, const char* repo, int32_t rev, const char* path) {
     return url_rev_blame(base, repo, rev, path);
+}
+const char* aether_url_info(const char* base, const char* repo) {
+    return url_info(base, repo);
+}
+const char* aether_url_log(const char* base, const char* repo) {
+    return url_log(base, repo);
+}
+const char* aether_url_commit(const char* base, const char* repo) {
+    return url_commit(base, repo);
+}
+const char* aether_url_copy(const char* base, const char* repo) {
+    return url_copy(base, repo);
 }
 const char* aether_url_branches_create(const char* base, const char* repo, const char* branch_name) {
     return url_branches_create(base, repo, branch_name);
