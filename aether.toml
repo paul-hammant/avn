@@ -12,12 +12,12 @@ extra_sources = ["ae/ra/shim.c", "ae/ra/urls_generated.c", "ae/subr/io/shim.c", 
 [[bin]]
 name = "svnadmin"
 path = "ae/svnadmin/main.ae"
-extra_sources = ["ae/ffi/sqlite/shim.c", "ae/subr/io/shim.c", "ae/subr/io_generated.c", "ae/subr/checksum/shim.c", "ae/ffi/zlib/shim.c", "ae/fs_fs/shim.c", "ae/fs_fs/txn_shim.c", "ae/fs_fs/pathutil_generated.c", "ae/fs_fs/rep_store_shim.c", "ae/fs_fs/reppath_generated.c", "ae/fs_fs/commit_shim.c", "ae/fs_fs/spec_generated.c", "ae/fs_fs/dirblob_generated.c", "ae/fs_fs/format_line_generated.c", "ae/repos/shim.c", "ae/repos/blobfield_generated.c", "ae/svnadmin/shim.c", "ae/svnadmin/dump_generated.c", "ae/ffi/openssl/shim.c"]
+extra_sources = ["ae/ffi/sqlite/shim.c", "ae/subr/io/shim.c", "ae/subr/io_generated.c", "ae/subr/checksum/shim.c", "ae/ffi/zlib/shim.c", "ae/fs_fs/shim.c", "ae/fs_fs/txn_shim.c", "ae/fs_fs/pathutil_generated.c", "ae/fs_fs/rep_store_shim.c", "ae/fs_fs/reppath_generated.c", "ae/fs_fs/commit_shim.c", "ae/fs_fs/filter_generated.c", "ae/fs_fs/spec_generated.c", "ae/fs_fs/dirblob_generated.c", "ae/fs_fs/format_line_generated.c", "ae/repos/shim.c", "ae/repos/blobfield_generated.c", "ae/svnadmin/shim.c", "ae/svnadmin/dump_generated.c", "ae/ffi/openssl/shim.c"]
 
 [[bin]]
 name = "aether-svnserver"
 path = "ae/svnserver/main.ae"
-extra_sources = ["ae/ffi/sqlite/shim.c", "ae/subr/io/shim.c", "ae/subr/io_generated.c", "ae/subr/checksum/shim.c", "ae/ffi/zlib/shim.c", "ae/fs_fs/shim.c", "ae/fs_fs/txn_shim.c", "ae/fs_fs/pathutil_generated.c", "ae/fs_fs/rep_store_shim.c", "ae/fs_fs/reppath_generated.c", "ae/fs_fs/commit_shim.c", "ae/fs_fs/spec_generated.c", "ae/fs_fs/dirblob_generated.c", "ae/fs_fs/format_line_generated.c", "ae/repos/shim.c", "ae/repos/blobfield_generated.c", "ae/svnserver/shim.c", "ae/svnserver/json_generated.c", "ae/svnserver/paths_index_generated.c", "ae/svnserver/acl_generated.c", "ae/svnserver/copy_acl_generated.c", "ae/svnserver/url_parse_generated.c", "ae/ffi/openssl/shim.c"]
+extra_sources = ["ae/ffi/sqlite/shim.c", "ae/subr/io/shim.c", "ae/subr/io_generated.c", "ae/subr/checksum/shim.c", "ae/ffi/zlib/shim.c", "ae/fs_fs/shim.c", "ae/fs_fs/txn_shim.c", "ae/fs_fs/pathutil_generated.c", "ae/fs_fs/rep_store_shim.c", "ae/fs_fs/reppath_generated.c", "ae/fs_fs/commit_shim.c", "ae/fs_fs/filter_generated.c", "ae/fs_fs/spec_generated.c", "ae/fs_fs/dirblob_generated.c", "ae/fs_fs/format_line_generated.c", "ae/repos/shim.c", "ae/repos/blobfield_generated.c", "ae/svnserver/shim.c", "ae/svnserver/json_generated.c", "ae/svnserver/paths_index_generated.c", "ae/svnserver/acl_generated.c", "ae/svnserver/copy_acl_generated.c", "ae/svnserver/url_parse_generated.c", "ae/ffi/openssl/shim.c"]
 
 [[bin]]
 name = "svnae-seed"

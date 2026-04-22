@@ -473,119 +473,8 @@ svnae_fnmatch_pathname(const char *glob, const char *path)
     return fnmatch(glob, path, FNM_PATHNAME) == 0 ? 1 : 0;
 }
 
-/* Glob matcher ported to Aether (ae/fs_fs/spec.ae, --emit=lib). The
- * C wrapper just loops over globs[] and delegates each one to the
- * Aether per-glob matcher. The Aether side implements "prefix/**"
- * subtree inclusion, fnmatch via the FFI helper above, and the
- * ancestor-of-literal-glob rule. */
-extern int32_t aether_spec_path_matches_glob(const char *path, const char *glob);
-
-static int
-path_matches_any(const char *path, const char *const *globs, int n)
-{
-    for (int i = 0; i < n; i++) {
-        if (aether_spec_path_matches_glob(path, globs[i])) return 1;
-    }
-    return 0;
-}
-
-/* Recursive dir filter. Reads the dir blob at `src_sha` (a dir in the
- * source tree), emits a filtered dir blob, returns its new sha.
- *
- * `prefix` is the repo-relative path of this dir ("" for root).
- *
- * Returns malloc'd hex sha, or NULL on failure. On "no children
- * survived" returns the sha of the empty-dir blob (""). */
-extern int         aether_dir_count_entries(const char *body);
-extern int         aether_dir_entry_kind(const char *body, int i);
-extern const char *aether_dir_entry_sha(const char *body, int i);
-extern const char *aether_dir_entry_name(const char *body, int i);
-
-static char *
-filter_dir_recursive(const char *repo, const char *src_sha,
-                     const char *prefix,
-                     const char *const *globs, int n_globs)
-{
-    char *src_body = svnae_rep_read_blob(repo, src_sha);
-    if (!src_body) return NULL;
-
-    /* Build the filtered dir body line by line. */
-    size_t cap = 256, blen = 0;
-    char *body = malloc(cap);
-    body[0] = '\0';
-
-    int n_entries = aether_dir_count_entries(src_body);
-    for (int ei = 0; ei < n_entries; ei++) {
-        char kind_c = (char)aether_dir_entry_kind(src_body, ei);
-        /* Snapshot child_sha / child_name — aether_* return pointers
-         * into thread-local buffers that any later aether_* call (e.g.
-         * the recursive one below) will overwrite. */
-        char child_sha[65], child_name[PATH_MAX];
-        const char *sha_ref = aether_dir_entry_sha(src_body, ei);
-        size_t sha_len = strlen(sha_ref);
-        if (sha_len >= sizeof child_sha) continue;
-        memcpy(child_sha, sha_ref, sha_len + 1);
-        const char *name_ref = aether_dir_entry_name(src_body, ei);
-        size_t name_len = strlen(name_ref);
-        if (name_len >= sizeof child_name) continue;
-        memcpy(child_name, name_ref, name_len + 1);
-
-        extern const char *aether_path_join_rel(const char *prefix, const char *name);
-        const char *child_path = aether_path_join_rel(prefix, child_name);
-
-        int include = 0;
-        char emit_sha[65];
-        emit_sha[0] = '\0';
-
-        if (kind_c == 'f') {
-            if (path_matches_any(child_path, globs, n_globs)) {
-                include = 1;
-                memcpy(emit_sha, child_sha, sha_len + 1);
-            }
-        } else if (kind_c == 'd') {
-            /* Recurse. Include the dir if (a) the dir itself matches
-             * or (b) any descendant does. filter_dir_recursive returns
-             * the empty-dir sha if nothing survived — detect that and
-             * skip the dir. */
-            char *sub = filter_dir_recursive(repo, child_sha,
-                                             child_path,
-                                             globs, n_globs);
-            if (sub) {
-                char *empty = svnae_rep_read_blob(repo, sub);
-                int sub_is_empty = (empty && *empty == '\0');
-                if (empty) svnae_rep_free(empty);
-                if (!sub_is_empty
-                    || path_matches_any(child_path, globs, n_globs)) {
-                    include = 1;
-                    size_t sl = strlen(sub);
-                    if (sl < 65) {
-                        memcpy(emit_sha, sub, sl + 1);
-                    }
-                }
-                free(sub);
-            }
-        }
-
-        if (include) {
-            extern const char *aether_dir_entry_line(int kind, const char *sha, const char *name);
-            const char *line = aether_dir_entry_line((int)kind_c, emit_sha, child_name);
-            size_t ln = strlen(line);
-            if (blen + ln + 1 >= cap) {
-                cap = (blen + ln + 1) * 2;
-                body = realloc(body, cap);
-            }
-            memcpy(body + blen, line, ln);
-            blen += ln;
-            body[blen] = '\0';
-        }
-    }
-    svnae_rep_free(src_body);
-
-    const char *new_sha = svnae_rep_write_blob(repo, body, (int)blen);
-    free(body);
-    if (!new_sha) return NULL;
-    return strdup(new_sha);
-}
+/* Recursive dir filter ported to Aether (ae/fs_fs/filter.ae).
+ * svnae_branch_create calls aether_filter_dir directly now. */
 
 /* Create a new branch `name` from branch `base` at its current head,
  * filtered through `globs`. Writes:
@@ -679,8 +568,27 @@ svnae_branch_create(const char *repo, const char *name, const char *base,
     char *base_root = load_rev_root_sha1(repo, base_rev);
     if (!base_root) return -1;
 
-    /* Filter base's tree. */
-    char *new_root = filter_dir_recursive(repo, base_root, "", globs, n_globs);
+    /* Filter base's tree via the Aether recursive filter
+     * (ae/fs_fs/filter.ae). It takes globs newline-joined rather than
+     * a C char-array. */
+    extern const char *aether_filter_dir(const char *repo, const char *src_sha,
+                                         const char *prefix,
+                                         const char *globs_joined);
+    size_t glen = 0;
+    for (int i = 0; i < n_globs; i++) glen += strlen(globs[i]) + 1;
+    char *globs_joined = malloc(glen + 1);
+    if (!globs_joined) { free(base_root); return -1; }
+    size_t gpos = 0;
+    for (int i = 0; i < n_globs; i++) {
+        size_t gl = strlen(globs[i]);
+        memcpy(globs_joined + gpos, globs[i], gl);
+        gpos += gl;
+        globs_joined[gpos++] = '\n';
+    }
+    globs_joined[gpos] = '\0';
+    const char *new_root_ref = aether_filter_dir(repo, base_root, "", globs_joined);
+    char *new_root = (new_root_ref && *new_root_ref) ? strdup(new_root_ref) : NULL;
+    free(globs_joined);
     free(base_root);
     if (!new_root) return -1;
 
