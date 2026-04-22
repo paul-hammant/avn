@@ -235,20 +235,23 @@ svnae_svnadmin_create_with_algos(const char *repo, const char *algos_spec)
         }
     }
 
-    /* Seed rev 0: empty root dir + rev blob pointing at it. */
+    /* Seed rev 0: empty root dir + rev blob pointing at it. Use the
+     * shared Aether rev-blob builder so the format stays in one place. */
     const char *empty_sha = svnae_rep_write_blob(repo, "", 0);
     if (!empty_sha) return -1;
-    /* Hash output sized for sha256 (64 hex) + NUL. */
     char empty_copy[65];
     size_t n = strlen(empty_sha);
     if (n >= sizeof empty_copy) return -1;
     memcpy(empty_copy, empty_sha, n + 1);
 
-    char rev0[512];
-    int rev0_len = snprintf(rev0, sizeof rev0,
-        "root: %s\nbranch: main\nprev: 0\nauthor: (init)\ndate: %s\nlog: initial empty revision\n",
-        empty_copy, svnae_fsfs_now_iso8601());
-    const char *rev0_sha = svnae_rep_write_blob(repo, rev0, rev0_len);
+    extern const char *aether_rev_blob_body(const char *root, const char *branch,
+                                            const char *props, const char *acl,
+                                            int prev, const char *author,
+                                            const char *date, const char *log);
+    const char *rev0 = aether_rev_blob_body(empty_copy, "main", "", "", 0,
+                                            "(init)", svnae_fsfs_now_iso8601(),
+                                            "initial empty revision");
+    const char *rev0_sha = svnae_rep_write_blob(repo, rev0, (int)strlen(rev0));
     if (!rev0_sha) return -1;
 
     char ptr_body[128];   /* sha256 = 64 hex + \n + NUL */
