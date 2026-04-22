@@ -588,9 +588,10 @@ svnae_branch_create(const char *repo, const char *name, const char *base,
     globs_joined[gpos] = '\0';
     const char *new_root_ref = aether_filter_dir(repo, base_root, "", globs_joined);
     char *new_root = (new_root_ref && *new_root_ref) ? strdup(new_root_ref) : NULL;
-    free(globs_joined);
+    /* Don't free globs_joined yet — same bytes are written as the
+     * branch's spec file below. */
     free(base_root);
-    if (!new_root) return -1;
+    if (!new_root) { free(globs_joined); return -1; }
 
     /* Write the spec blob (newline-separated globs) on disk under
      * $repo/branches/<name>/spec. */
@@ -599,23 +600,12 @@ svnae_branch_create(const char *repo, const char *name, const char *base,
     if (aether_io_mkdir_p(br_dir) != 0) { free(new_root); return -1; }
     char spec_path[PATH_MAX];
     snprintf(spec_path, sizeof spec_path, "%s/spec", br_dir);
-    {
-        size_t cap = 128, slen = 0;
-        char *spec_body = malloc(cap);
-        spec_body[0] = '\0';
-        for (int i = 0; i < n_globs; i++) {
-            size_t need = strlen(globs[i]) + 2;
-            if (slen + need >= cap) {
-                cap = (slen + need) * 2;
-                spec_body = realloc(spec_body, cap);
-            }
-            slen += snprintf(spec_body + slen, cap - slen, "%s\n", globs[i]);
-        }
-        if (write_atomic(spec_path, spec_body, slen) != 0) {
-            free(spec_body); free(new_root); return -1;
-        }
-        free(spec_body);
+    /* globs_joined is already "glob1\nglob2\n...\n" — perfect spec-file
+     * content. Write and release. */
+    if (write_atomic(spec_path, globs_joined, (int)strlen(globs_joined)) != 0) {
+        free(globs_joined); free(new_root); return -1;
     }
+    free(globs_joined);
 
     /* Create the revs directory structure. */
     char revs_dir[PATH_MAX];
