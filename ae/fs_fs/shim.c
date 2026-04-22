@@ -54,31 +54,22 @@ buf_from(const unsigned char *src, int n)
     return b;
 }
 
-/* Read the full file at `path` into a buf. Binary-safe but in Phase 3.2
- * we only read plain-text revision/head files, so Aether strings work. */
+/* Read the full file at `path` into a buf — ported to Aether
+ * (ae/subr/io.ae). We check io_is_regular_file + io_file_size first
+ * so missing/empty/not-a-file stays distinguishable. */
+extern int aether_io_is_regular_file(const char *path);
+extern int aether_io_file_size(const char *path);
+extern const char *aether_io_read_file(const char *path);
+
 struct svnae_buf *
 svnae_fsfs_read_small_file(const char *path)
 {
-    int fd = open(path, O_RDONLY);
-    if (fd < 0) return NULL;
-    struct stat st;
-    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)) { close(fd); return NULL; }
-    size_t size = (size_t)st.st_size;
-    char *mem = malloc(size + 1);
-    if (!mem) { close(fd); return NULL; }
-    size_t got = 0;
-    while (got < size) {
-        ssize_t n = read(fd, mem + got, size - got);
-        if (n < 0) { if (errno == EINTR) continue; free(mem); close(fd); return NULL; }
-        if (n == 0) break;
-        got += (size_t)n;
-    }
-    close(fd);
-    if (got != size) { free(mem); return NULL; }
-    mem[size] = '\0';
-    struct svnae_buf *b = buf_from((const unsigned char *)mem, (int)size);
-    free(mem);
-    return b;
+    if (!aether_io_is_regular_file(path)) return NULL;
+    int size = aether_io_file_size(path);
+    if (size < 0) return NULL;
+    const char *src = aether_io_read_file(path);
+    if (!src) return NULL;
+    return buf_from((const unsigned char *)src, size);
 }
 
 int         svnae_fsfs_buf_length(const struct svnae_buf *b) { return b ? b->length : 0; }

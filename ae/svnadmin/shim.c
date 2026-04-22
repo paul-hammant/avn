@@ -104,25 +104,17 @@ static int write_file_atomic(const char *path, const char *data, int len)
     return aether_io_write_atomic(path, data, len) == 0 ? 0 : -1;
 }
 
+/* Slurp ported to Aether (ae/subr/io.ae). Distinguish missing (NULL)
+ * from empty via io_file_size. */
+extern const char *aether_io_read_file(const char *path);
+extern int aether_io_file_size(const char *path);
+
 static char *
 slurp_small(const char *path)
 {
-    int fd = open(path, O_RDONLY);
-    if (fd < 0) return NULL;
-    struct stat st;
-    if (fstat(fd, &st) != 0) { close(fd); return NULL; }
-    char *buf = malloc((size_t)st.st_size + 1);
-    ssize_t got = 0;
-    while (got < st.st_size) {
-        ssize_t n = read(fd, buf + got, (size_t)(st.st_size - got));
-        if (n < 0) { if (errno == EINTR) continue; free(buf); close(fd); return NULL; }
-        if (n == 0) break;
-        got += n;
-    }
-    close(fd);
-    if (got != st.st_size) { free(buf); return NULL; }
-    buf[got] = '\0';
-    return buf;
+    if (aether_io_file_size(path) < 0) return NULL;
+    const char *src = aether_io_read_file(path);
+    return strdup(src ? src : "");
 }
 
 /* parse_int moved to ae/svnadmin/dump.ae::parse_tagged_int. */

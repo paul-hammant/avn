@@ -56,29 +56,20 @@ void  svnae_rep_free(char *p);
 
 /* --- helpers --------------------------------------------------------- */
 
-/* Slurp an entire small file (head, revs/NNNNNN pointer). Returns
- * malloc'd NUL-terminated bytes or NULL. Caller frees. */
+/* Slurp an entire small file ported to Aether (ae/subr/io.ae). The
+ * Aether side returns an empty string on any error, and we need NULL
+ * to distinguish "missing" from "empty" — so check io_file_size first
+ * and strdup the result (the Aether-owned string is ref-counted but
+ * callers here expect malloc'd). */
+extern const char *aether_io_read_file(const char *path);
+extern int aether_io_file_size(const char *path);
+
 static char *
 read_small(const char *path)
 {
-    int fd = open(path, O_RDONLY);
-    if (fd < 0) return NULL;
-    struct stat st;
-    if (fstat(fd, &st) != 0) { close(fd); return NULL; }
-    size_t size = (size_t)st.st_size;
-    char *buf = malloc(size + 1);
-    if (!buf) { close(fd); return NULL; }
-    size_t got = 0;
-    while (got < size) {
-        ssize_t n = read(fd, buf + got, size - got);
-        if (n < 0) { if (errno == EINTR) continue; free(buf); close(fd); return NULL; }
-        if (n == 0) break;
-        got += (size_t)n;
-    }
-    close(fd);
-    if (got != size) { free(buf); return NULL; }
-    buf[size] = '\0';
-    return buf;
+    if (aether_io_file_size(path) < 0) return NULL;
+    const char *src = aether_io_read_file(path);
+    return strdup(src ? src : "");
 }
 
 static void
