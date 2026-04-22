@@ -54,26 +54,12 @@ void        svnae_rep_free(char *p);
 const char *svnae_fsfs_now_iso8601(void);
 int         svnae_repos_head_rev(const char *repo);
 
-/* Atomic write + fsync — re-used here so we don't introduce a dep edge
- * from this shim back to the one that owns the util. */
-static int
-write_atomic(const char *path, const char *data, int len)
+/* Atomic write ported to Aether (ae/subr/io.ae, --emit=lib --with=fs). */
+extern int aether_io_write_atomic(const char *path, const char *data, int length);
+
+static int write_atomic(const char *path, const char *data, int len)
 {
-    char tmp[PATH_MAX];
-    snprintf(tmp, sizeof tmp, "%s.tmp.%d", path, (int)getpid());
-    int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    if (fd < 0) return -errno;
-    const char *p = data;
-    int rem = len;
-    while (rem > 0) {
-        ssize_t w = write(fd, p, (size_t)rem);
-        if (w < 0) { if (errno == EINTR) continue; close(fd); unlink(tmp); return -errno; }
-        p += w; rem -= (int)w;
-    }
-    if (fsync(fd) != 0) { int rc = -errno; close(fd); unlink(tmp); return rc; }
-    if (close(fd) != 0) return -errno;
-    if (rename(tmp, path) != 0) { unlink(tmp); return -errno; }
-    return 0;
+    return aether_io_write_atomic(path, data, len) == 0 ? 0 : -1;
 }
 
 /* Read the root-dir sha1 for a given revision. Returns malloc'd string

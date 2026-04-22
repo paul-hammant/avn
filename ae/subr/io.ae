@@ -13,59 +13,95 @@
 // implied. See the License for the specific language governing
 // permissions and limitations under the License.
 
-// io.ae — atomic file writes for svn's on-disk formats.
+// io.ae — durable-write / mkdir -p / small-file slurp primitives used
+// across every C shim in the port.
 //
-// svn writes revisions, pristines, and rep-cache blobs using the same
-// durable-write pattern:
-//     1. pick a temp path in the target directory (same filesystem → rename
-//        is atomic; cross-FS renames would fall back to copy+unlink, which
-//        is NOT atomic, so we keep the temp alongside the final).
-//     2. write all bytes, fsync.
-//     3. rename(tmp → final) — atomic replace from the reader's POV.
-//     4. (optional) fsync the containing directory to persist the rename.
-//        Phase 0 skips the directory fsync; Phase 3 fs_fs will want it.
+// Before Aether gained `--emit=lib --with=fs` (changelog [current]),
+// write_file_atomic + mkdir_p + read_small were duplicated verbatim in
+// commit_shim, rep_store_shim, pristine_shim, checkout_shim, svnadmin,
+// txn_shim, and merge_shim. This module delegates to std.fs so the
+// copies can go away.
 //
-// The temp name is "${path}.tmp.${pid}.${counter}". Counter is thread-local
-// and monotonic within a process; pid is cheap uniqueness across processes.
+// Must be compiled with `--with=fs` (the fs_fs/wc/svnserver Makefile
+// .regen files all pass that flag now).
 
 import std.fs
 import std.string
 
-extern svnae_rename(from: string, to: string) -> int
-extern svnae_write_and_fsync(path: string, data: string, len: int) -> int
-extern svnae_getpid() -> int
-extern svnae_is_regular_file(path: string) -> int
-extern svnae_remove(path: string) -> int
-
-// Monotonically growing counter to avoid colliding temp files when the
-// same process writes several atomically in quick succession. Module-level
-// mutable state isn't supported (AETHER_ISSUES.md — see test_path), so we
-// take `seq` as an input for now; callers that don't care can pass 0.
-
-// Build a temp path next to `final_path`.
-tmp_path_for(final_path: string, seq: int) {
-    pid = svnae_getpid()
-    return "${final_path}.tmp.${pid}.${seq}"
-}
-
-// Atomically write `data` to `final_path`. Returns 0 on success, non-zero
-// (a negated errno from the shim) on failure.
-atomic_write(final_path: string, data: string, seq: int) {
-    tmp = tmp_path_for(final_path, seq)
-    n = string.length(data)
-    rc = svnae_write_and_fsync(tmp, data, n)
-    if rc != 0 {
-        svnae_remove(tmp)
-        return rc
-    }
-    rc = svnae_rename(tmp, final_path)
-    if rc != 0 {
-        svnae_remove(tmp)
-        return rc
-    }
+// Atomic write: stage to <path>.tmp.<pid>, fsync, rename. Binary-safe —
+// length is the byte count; embedded NULs fine. Returns 0 on success,
+// 1 on any failure.
+export io_write_atomic(path: string, data: string, length: int) -> int {
+    err = fs.write_atomic(path, data, length)
+    if string.length(err) > 0 { return 1 }
     return 0
 }
 
-// Accessors re-exported for callers that don't want to extern directly.
-is_regular_file(path: string)   { return svnae_is_regular_file(path) }
-remove_if_present(path: string) { return svnae_remove(path) }
+// mkdir -p: create `path` and any missing parents, 0755. Treats
+// existing directory as success. Returns 0 on success, 1 on failure.
+export io_mkdir_p(path: string) -> int {
+    err = fs.mkdir_p(path)
+    if string.length(err) > 0 { return 1 }
+    return 0
+}
+
+// Slurp a file's entire contents. Returns "" on any error; callers
+// that need to distinguish empty-file from missing-file pair this
+// with io_file_exists.
+export io_read_file(path: string) -> string {
+    content, _n, err = fs.read_binary(path)
+    if string.length(err) > 0 { return "" }
+    return content
+}
+
+// Byte length of a file, or -1 if missing. Sidecar for io_read_file
+// so callers with binary content (rep blobs with embedded NULs) can
+// find the true length.
+export io_file_size(path: string) -> int {
+    _k, size, _m, err = fs.file_stat(path)
+    if string.length(err) > 0 { return 0 - 1 }
+    return size
+}
+
+// 1 if `path` exists and is a regular file, 0 otherwise.
+export io_is_regular_file(path: string) -> int {
+    kind, _s, _m, err = fs.file_stat(path)
+    if string.length(err) > 0 { return 0 }
+    if kind == 1 { return 1 }
+    return 0
+}
+
+// 1 if `path` exists and is a directory, 0 otherwise.
+export io_is_directory(path: string) -> int {
+    kind, _s, _m, err = fs.file_stat(path)
+    if string.length(err) > 0 { return 0 }
+    if kind == 2 { return 1 }
+    return 0
+}
+
+// Remove a file. Returns 0 on success, 1 on failure.
+export io_unlink(path: string) -> int {
+    err = fs.delete(path)
+    if string.length(err) > 0 { return 1 }
+    return 0
+}
+
+// Remove an empty directory. Returns 0 on success, 1 on failure
+// (includes "directory not empty").
+export io_rmdir(path: string) -> int {
+    err = fs.delete_dir(path)
+    if string.length(err) > 0 { return 1 }
+    return 0
+}
+
+// Rename from → to (atomic within one filesystem). Returns 0 on
+// success, 1 on failure.
+export io_rename(from: string, to: string) -> int {
+    err = fs.rename(from, to)
+    if string.length(err) > 0 { return 1 }
+    return 0
+}
+
+main() {
+    println("ae/subr/io.ae is a library; not meant to run standalone")
+}

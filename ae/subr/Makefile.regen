@@ -1,0 +1,18 @@
+# Regeneration recipe for Aether-as-library C sources under ae/subr/.
+#
+# io.ae imports std.fs and so must be compiled with --with=fs. That
+# flag is a capability opt-in (landed in Aether after 0.79.0) that
+# tells the compiler a library build is free to call filesystem
+# primitives — the default --emit=lib build refuses std.fs imports
+# for the embedded-DSL safety posture.
+
+AETHERC ?= $(HOME)/scm/aether/build/aetherc
+
+GENERATED := io_generated.c
+
+all: $(GENERATED)
+
+io_generated.c: io.ae
+	$(AETHERC) --emit=lib --with=fs $< $@
+
+.PHONY: all
