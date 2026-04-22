@@ -204,6 +204,38 @@ svnae_txn_edit_content(const struct svnae_txn *t, int i)
                     t->edits[i].content_len);
 }
 
+/* Raw-pointer accessors for the Aether rebuild_dir port. The Aether
+ * side needs to pass content and copy_from_sha1 through to the rep
+ * store writer without going through the opaque svnae_buf wrapper
+ * (Aether strings + explicit lengths compose better). */
+const char *
+svnae_txn_edit_content_data(const struct svnae_txn *t, int i)
+{
+    if (!t || i < 0 || i >= t->n) return "";
+    return t->edits[i].content ? t->edits[i].content : "";
+}
+
+int
+svnae_txn_edit_content_len(const struct svnae_txn *t, int i)
+{
+    if (!t || i < 0 || i >= t->n) return 0;
+    return t->edits[i].content_len;
+}
+
+const char *
+svnae_txn_edit_copy_sha(const struct svnae_txn *t, int i)
+{
+    if (!t || i < 0 || i >= t->n) return "";
+    return t->edits[i].copy_from_sha1 ? t->edits[i].copy_from_sha1 : "";
+}
+
+int
+svnae_txn_edit_copy_kind(const struct svnae_txn *t, int i)
+{
+    if (!t || i < 0 || i >= t->n) return 0;
+    return t->edits[i].copy_kind;
+}
+
 void
 svnae_txn_free(struct svnae_txn *t)
 {
@@ -269,297 +301,26 @@ svnae_strset_free(struct svnae_strset *s)
     free(s);
 }
 
-/* ---- rebuild_dir in C --------------------------------------------------
+/* ---- rebuild_dir now in Aether (ae/fs_fs/rebuild.ae) -------------------
  *
- * Recursive tree rebuild: read a base dir blob, apply the txn's edit list,
- * and emit a new dir blob whose sha1 roots the commit's new tree.
- *
- * Originally placed in C because recursive string-returning Aether
- * functions were broken (AETHER_ISSUES.md #13); that's fixed in Aether
- * v0.76.0, so this is a candidate to move back to Aether — tracked under
- * the shim-snip sweep. For now the C version stays: it's load-bearing
- * for commit and well-tested, and the recursive structure (~330 lines
- * with reclist + sbuf helpers) is non-trivial to port.
+ * The recursive tree rebuilder moved to Aether once std.fs landed and
+ * the reclist + sbuf + sort-and-emit machinery could be expressed as
+ * string operations over the "K SHA NAME\n" dir-blob format. The
+ * rep-store read/write stays in C; Aether calls through externs.
  */
 
-/* Forward-declared helpers we expect to exist (from elsewhere in the
- * program's link closure): */
-char       *svnae_rep_read_blob(const char *repo, const char *sha1_hex);
-const char *svnae_rep_write_blob(const char *repo, const char *data, int len);
+extern const char *aether_rebuild_dir(const char *repo,
+                                      const char *base_dir_sha,
+                                      const char *prefix,
+                                      const struct svnae_txn *txn);
 
-/* Dir-blob line parser ported to Aether (ae/fs_fs/dirblob.ae). */
-extern int         aether_dir_count_entries(const char *body);
-extern int         aether_dir_entry_kind(const char *body, int i);
-extern const char *aether_dir_entry_sha(const char *body, int i);
-extern const char *aether_dir_entry_name(const char *body, int i);
-
-/* Split a txn's edit list into lookup helpers. */
-static int
-txn_find_edit(const struct svnae_txn *t, const char *path, int *out_kind)
-{
-    for (int i = 0; i < t->n; i++) {
-        if (strcmp(t->edits[i].path, path) == 0) {
-            *out_kind = t->edits[i].kind;
-            return i;
-        }
-    }
-    *out_kind = 0;
-    return -1;
-}
-
-/* Path predicates now live in ae/fs_fs/pathutil.ae. */
-extern int         aether_path_is_immediate_child(const char *path, const char *pfx);
-extern const char *aether_path_basename_after    (const char *path, const char *pfx);
-extern int         aether_path_covers            (const char *path, const char *pfx);
-
-/* Does any edit path match `prefix` or start with `prefix + "/"`? */
-static int
-edits_touch_subtree_c(const struct svnae_txn *t, const char *prefix)
-{
-    for (int i = 0; i < t->n; i++) {
-        if (aether_path_covers(t->edits[i].path, prefix)) return 1;
-    }
-    return 0;
-}
-
-static int
-is_immediate_child_c(const char *path, const char *dir_prefix)
-{
-    return aether_path_is_immediate_child(path, dir_prefix);
-}
-
-static const char *
-basename_after_c(const char *path, const char *dir_prefix)
-{
-    return aether_path_basename_after(path, dir_prefix);
-}
-
-/* A growable char buffer. */
-struct sbuf { char *data; int len, cap; };
-static void sbuf_push(struct sbuf *s, const char *t, int n)
-{
-    if (s->len + n + 1 > s->cap) {
-        int nc = s->cap ? s->cap * 2 : 128;
-        while (nc < s->len + n + 1) nc *= 2;
-        s->data = realloc(s->data, nc);
-        s->cap = nc;
-    }
-    memcpy(s->data + s->len, t, n);
-    s->len += n;
-    s->data[s->len] = '\0';
-}
-static void sbuf_push_cstr(struct sbuf *s, const char *t) { sbuf_push(s, t, (int)strlen(t)); }
-
-/* A simple sorted list of (name, kind, sha1) records. */
-struct rec { char *name; char kind; char sha1[65]; };
-struct reclist { struct rec *items; int n, cap; };
-
-static void reclist_add(struct reclist *r, const char *name, char kind, const char *sha1)
-{
-    size_t slen = strlen(sha1);
-    if (slen >= 65) slen = 64;
-
-    /* Replace if name already present. */
-    for (int i = 0; i < r->n; i++) {
-        if (strcmp(r->items[i].name, name) == 0) {
-            r->items[i].kind = kind;
-            memcpy(r->items[i].sha1, sha1, slen);
-            r->items[i].sha1[slen] = '\0';
-            return;
-        }
-    }
-    if (r->n == r->cap) {
-        int nc = r->cap ? r->cap * 2 : 8;
-        r->items = realloc(r->items, (size_t)nc * sizeof *r->items);
-        r->cap = nc;
-    }
-    r->items[r->n].name = strdup(name);
-    r->items[r->n].kind = kind;
-    memcpy(r->items[r->n].sha1, sha1, slen);
-    r->items[r->n].sha1[slen] = '\0';
-    r->n++;
-}
-
-static void reclist_remove(struct reclist *r, const char *name)
-{
-    for (int i = 0; i < r->n; i++) {
-        if (strcmp(r->items[i].name, name) == 0) {
-            free(r->items[i].name);
-            r->items[i] = r->items[r->n - 1];
-            r->n--;
-            return;
-        }
-    }
-}
-
-static int rec_cmp(const void *a, const void *b)
-{
-    return strcmp(((const struct rec *)a)->name, ((const struct rec *)b)->name);
-}
-
-static void reclist_free(struct reclist *r)
-{
-    for (int i = 0; i < r->n; i++) free(r->items[i].name);
-    free(r->items);
-}
-
-/* Recursively rebuild a directory.
- * Returns a malloc'd 40-char SHA-1 string (caller frees), or NULL on error.
- * `base_dir_sha1_or_null` may be "" meaning "no base dir here". */
-static char *
-rebuild_dir_c(const char *repo, const char *base_dir_sha1,
-              const char *prefix, const struct svnae_txn *txn)
-{
-    struct reclist rl = {0};
-
-    /* Step 1: start from base entries. */
-    if (base_dir_sha1 && base_dir_sha1[0]) {
-        char *base_body = svnae_rep_read_blob(repo, base_dir_sha1);
-        if (base_body) {
-            int n_entries = aether_dir_count_entries(base_body);
-            for (int ei = 0; ei < n_entries; ei++) {
-                char kind = (char)aether_dir_entry_kind(base_body, ei);
-                /* Snapshot — rebuild_dir_c recurses and will reuse the
-                 * Aether thread-local return buffers. */
-                char sha1[65];
-                const char *sha_ref = aether_dir_entry_sha(base_body, ei);
-                size_t sha_len = strlen(sha_ref);
-                if (sha_len >= sizeof sha1) continue;
-                memcpy(sha1, sha_ref, sha_len + 1);
-                const char *name_ref = aether_dir_entry_name(base_body, ei);
-                size_t name_len = strlen(name_ref);
-                char *name = malloc(name_len + 1);
-                memcpy(name, name_ref, name_len + 1);
-
-                /* full_path = prefix ? prefix+"/"+name : name */
-                const char *full_path;
-                char *full_alloc = NULL;
-                if (prefix[0]) {
-                    size_t pl = strlen(prefix);
-                    full_alloc = malloc(pl + 1 + name_len + 1);
-                    memcpy(full_alloc, prefix, pl);
-                    full_alloc[pl] = '/';
-                    memcpy(full_alloc + pl + 1, name, name_len);
-                    full_alloc[pl + 1 + name_len] = '\0';
-                    full_path = full_alloc;
-                } else {
-                    full_path = name;
-                }
-
-                int k;
-                int idx = txn_find_edit(txn, full_path, &k);
-                if (idx >= 0 && k == EDIT_DELETE) {
-                    /* skip */
-                } else if (idx >= 0 && k == EDIT_ADD_FILE) {
-                    /* override — handled in step 2 */
-                } else if (kind == 'd' && edits_touch_subtree_c(txn, full_path)) {
-                    char *new_sub = rebuild_dir_c(repo, sha1, full_path, txn);
-                    if (new_sub) {
-                        reclist_add(&rl, name, 'd', new_sub);
-                        free(new_sub);
-                    } else {
-                        /* Empty subtree — keep as empty dir. */
-                        const char *empty_sha = svnae_rep_write_blob(repo, "", 0);
-                        reclist_add(&rl, name, 'd', empty_sha);
-                    }
-                } else {
-                    reclist_add(&rl, name, kind, sha1);
-                }
-
-                free(name);
-                free(full_alloc);
-            }
-            free(base_body);
-        }
-    }
-
-    /* Step 2: apply edits whose immediate parent is this dir. */
-    for (int i = 0; i < txn->n; i++) {
-        const struct edit *e = &txn->edits[i];
-        if (!is_immediate_child_c(e->path, prefix)) continue;
-        const char *name = basename_after_c(e->path, prefix);
-        if (e->kind == EDIT_ADD_FILE) {
-            const char *sha1 = svnae_rep_write_blob(repo, e->content, e->content_len);
-            if (!sha1) continue;
-            reclist_add(&rl, name, 'f', sha1);
-        } else if (e->kind == EDIT_MKDIR) {
-            /* Avoid overwriting an existing dir entry whose SHA will be
-             * computed by recursion on descendants. */
-            int exists = 0;
-            for (int j = 0; j < rl.n; j++)
-                if (strcmp(rl.items[j].name, name) == 0 && rl.items[j].kind == 'd') { exists = 1; break; }
-            if (!exists) {
-                const char *empty = svnae_rep_write_blob(repo, "", 0);
-                reclist_add(&rl, name, 'd', empty);
-            }
-        } else if (e->kind == EDIT_DELETE) {
-            reclist_remove(&rl, name);
-        } else if (e->kind == EDIT_COPY) {
-            char k = e->copy_kind == 1 ? 'd' : 'f';
-            reclist_add(&rl, name, k, e->copy_from_sha1);
-        }
-    }
-
-    /* Step 3: also handle edits that create entries in sub-trees that
-     * don't yet exist in base (e.g. add_file inside a just-mkdir'd dir).
-     * We need to recurse into those new subtrees too. */
-    for (int i = 0; i < rl.n; i++) {
-        if (rl.items[i].kind != 'd') continue;
-        /* Compute the full path this entry represents. */
-        char *subprefix;
-        if (prefix[0]) {
-            size_t pl = strlen(prefix), nl = strlen(rl.items[i].name);
-            subprefix = malloc(pl + 1 + nl + 1);
-            memcpy(subprefix, prefix, pl);
-            subprefix[pl] = '/';
-            memcpy(subprefix + pl + 1, rl.items[i].name, nl + 1);
-        } else {
-            subprefix = strdup(rl.items[i].name);
-        }
-
-        /* If any edit is rooted inside this subprefix AND the dir's current
-         * sha1 is the empty-dir one OR hasn't been recursed-through above,
-         * run the recursion now using the current sha1 as the base. */
-        if (edits_touch_subtree_c(txn, subprefix)) {
-            char *new_sub = rebuild_dir_c(repo, rl.items[i].sha1, subprefix, txn);
-            if (new_sub) {
-                size_t nl = strlen(new_sub);
-                if (nl >= sizeof rl.items[i].sha1) nl = sizeof rl.items[i].sha1 - 1;
-                memcpy(rl.items[i].sha1, new_sub, nl);
-                rl.items[i].sha1[nl] = '\0';
-                free(new_sub);
-            }
-        }
-        free(subprefix);
-    }
-
-    /* Step 4: sort and serialise. sha width is variable — sha1 is 40
-     * hex, sha256 is 64 — so don't clamp the sha with "%.40s". */
-    qsort(rl.items, (size_t)rl.n, sizeof *rl.items, rec_cmp);
-
-    extern const char *aether_dir_entry_line(int kind, const char *sha, const char *name);
-    struct sbuf body = {0};
-    for (int i = 0; i < rl.n; i++) {
-        sbuf_push_cstr(&body, aether_dir_entry_line((int)rl.items[i].kind,
-                                                    rl.items[i].sha1,
-                                                    rl.items[i].name));
-    }
-
-    const char *dir_sha = svnae_rep_write_blob(repo, body.data ? body.data : "", body.len);
-    char *out = dir_sha ? strdup(dir_sha) : NULL;
-
-    free(body.data);
-    reclist_free(&rl);
-    return out;
-}
-
-/* Aether-facing entry point. Returns a malloc'd 40-char hex SHA-1 (Aether
- * takes ownership and will eventually need to free it via a helper; for
- * tests we accept the tiny leak). Returns NULL on failure. */
 char *
 svnae_txn_rebuild_root(const char *repo, const char *base_root_sha1,
                        const struct svnae_txn *txn)
 {
-    return rebuild_dir_c(repo, base_root_sha1, "", txn);
+    const char *sha = aether_rebuild_dir(repo,
+                                         base_root_sha1 ? base_root_sha1 : "",
+                                         "", txn);
+    return (sha && *sha) ? strdup(sha) : NULL;
 }
 
