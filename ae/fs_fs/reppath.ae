@@ -1,0 +1,62 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// permissions and limitations under the License.
+
+// Rep-store path builders for ae/fs_fs/rep_store_shim.c.
+//
+// Layout (inside a bare svn-aether repo):
+//   <repo>/reps/<s0s1>/<s2s3>/<sha>.rep        full file path
+//   <repo>/reps/<s0s1>/<s2s3>                  parent dir (for mkdir -p)
+//   <s0s1>/<s2s3>/<sha>.rep                    rel_path stored in rep-cache
+//
+// Two-level fanout over the first four hex nibbles of the content sha.
+// Shas are sha1 (40 hex) or sha256 (64 hex); shorter inputs return "".
+
+import std.string
+
+export rep_path(repo: string, sha: string) -> string {
+    if string.length(sha) < 4 { return "" }
+    out = string.concat(repo, "/reps/")
+    out = string.concat(out, string.substring(sha, 0, 2))
+    out = string.concat(out, "/")
+    out = string.concat(out, string.substring(sha, 2, 4))
+    out = string.concat(out, "/")
+    out = string.concat(out, sha)
+    return string.concat(out, ".rep")
+}
+
+export rep_dir(repo: string, sha: string) -> string {
+    if string.length(sha) < 4 { return "" }
+    out = string.concat(repo, "/reps/")
+    out = string.concat(out, string.substring(sha, 0, 2))
+    out = string.concat(out, "/")
+    out = string.concat(out, string.substring(sha, 2, 4))
+    return out
+}
+
+// Relative path (no repo prefix) used as rel_path in the rep_cache row.
+//   XX/YY/<sha>.rep
+export rep_rel_path(sha: string) -> string {
+    if string.length(sha) < 4 { return "" }
+    out = string.substring(sha, 0, 2)
+    out = string.concat(out, "/")
+    out = string.concat(out, string.substring(sha, 2, 4))
+    out = string.concat(out, "/")
+    out = string.concat(out, sha)
+    return string.concat(out, ".rep")
+}
+
+main() {
+    println("ae/fs_fs/reppath.ae is a library; not meant to run standalone")
+}

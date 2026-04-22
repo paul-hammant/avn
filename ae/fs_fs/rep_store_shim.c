@@ -327,20 +327,27 @@ svnae_rep_write_blob(const char *repo, const char *data, int len)
         }
     }
 
-    /* Write .rep file. */
+    /* Path assembly ported to Aether (ae/fs_fs/reppath.ae). */
+    extern const char *aether_rep_rel_path(const char *sha);
+    extern const char *aether_rep_path(const char *repo, const char *sha);
+    extern const char *aether_rep_dir(const char *repo, const char *sha);
     char rel_path[80];
-    snprintf(rel_path, sizeof rel_path,
-             "%c%c/%c%c/%s.rep",
-             sha1_buf[0], sha1_buf[1], sha1_buf[2], sha1_buf[3], sha1_buf);
-
+    {
+        const char *rp = aether_rep_rel_path(sha1_buf);
+        size_t n = strlen(rp);
+        if (n >= sizeof rel_path) { free(zbuf); sqlite3_close(db); return NULL; }
+        memcpy(rel_path, rp, n + 1);
+    }
     char full_path[PATH_MAX];
-    snprintf(full_path, sizeof full_path, "%s/reps/%s", repo, rel_path);
+    {
+        const char *fp = aether_rep_path(repo, sha1_buf);
+        size_t n = strlen(fp);
+        if (n >= sizeof full_path) { free(zbuf); sqlite3_close(db); return NULL; }
+        memcpy(full_path, fp, n + 1);
+    }
 
     /* mkdir -p the parent dirs. */
-    char parent[PATH_MAX];
-    snprintf(parent, sizeof parent, "%s/reps/%c%c/%c%c",
-             repo, sha1_buf[0], sha1_buf[1], sha1_buf[2], sha1_buf[3]);
-    if (mkdir_p(parent) != 0) {
+    if (mkdir_p(aether_rep_dir(repo, sha1_buf)) != 0) {
         free(zbuf); sqlite3_close(db); return NULL;
     }
 
@@ -398,9 +405,14 @@ svnae_rep_read_blob(const char *repo, const char *sha1_hex)
     }
     sqlite3_close(db);
 
+    extern const char *aether_rep_path(const char *repo, const char *sha);
     char path[PATH_MAX];
-    snprintf(path, sizeof path, "%s/reps/%c%c/%c%c/%s.rep",
-             repo, sha1_hex[0], sha1_hex[1], sha1_hex[2], sha1_hex[3], sha1_hex);
+    {
+        const char *rp = aether_rep_path(repo, sha1_hex);
+        size_t n = strlen(rp);
+        if (n >= sizeof path) return NULL;
+        memcpy(path, rp, n + 1);
+    }
 
     int fd = open(path, O_RDONLY);
     if (fd < 0) return NULL;
