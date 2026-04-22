@@ -11,18 +11,20 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
 
 ## Headline
 
-- **81 commits.** Each phase is its own commit, reviewable in isolation.
+- **88 commits.** Each phase is its own commit, reviewable in isolation.
 - **47 test suites**, ~507 assertions, all green.
-- **C→Aether port, rounds 2 + 3** (22 leaf ports, 1 per commit): branch
+- **C→Aether port, rounds 2 + 3** (26 leaf ports, 1 per commit): branch
   spec matcher, mergeinfo arithmetic, svn:ignore matcher, JSON
-  escape/ints/records, blobfield extractor, paths-index lookup + sort,
-  props-blob → JSON, ACL rule evaluator, /info specs emitter, dir-blob
-  line parser (replacing 8 near-duplicate C scanners), $repo/format
-  line parser, /info prelude, /rev/N/info body, /rev/N/hashes body,
-  /rev/N/acl body, rev-blob body assembly, svnadmin dump-header
-  builders, RA URL builders. Each lives in an Aether source under
-  `ae/*/<name>.ae`, compiled with `aetherc --emit=lib` and linked into
-  its consumers. Hand-written C%: **82% → 72%**.
+  escape/ints/records/responses, blobfield extractor, paths-index
+  lookup + sort + ancestor-walk, props-blob → JSON, ACL rule evaluator
+  + ancestor walker, /info specs emitter, dir-blob line parser
+  (replacing 8 near-duplicate C scanners), $repo/format line parser,
+  /info prelude, /rev/N/info body, /rev/N/hashes body, /rev/N/acl body,
+  rev-blob body assembly, paths-index sort for acl/props blobs, svn cp
+  ACL-auto-follow body scan, svnadmin dump-header builders, RA URL
+  builders. Each lives in an Aether source under `ae/*/<name>.ae`,
+  compiled with `aetherc --emit=lib` and linked into its consumers.
+  Hand-written C%: **82% → 70%**.
   Mix of in-language `.ae` tests and end-to-end shell harnesses that
   spin up a real HTTP server and drive it with curl and the built
   `svn` CLI.
