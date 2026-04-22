@@ -382,24 +382,21 @@ svnae_rep_read_blob(const char *repo, const char *sha1_hex)
         memcpy(path, rp, n + 1);
     }
 
-    int fd = open(path, O_RDONLY);
-    if (fd < 0) return NULL;
-    struct stat st;
-    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)) { close(fd); return NULL; }
-    size_t fsize = (size_t)st.st_size;
-    if (fsize < 1) { close(fd); return NULL; }
-
+    /* Binary-safe read through std.fs's TLS buffer. fs_try_read_binary
+     * loads the whole file, fs_get_read_binary + _length let us copy
+     * it out, and fs_release_read_binary drops the TLS copy. */
+    extern int fs_try_read_binary(const char *path);
+    extern const char *fs_get_read_binary(void);
+    extern int fs_get_read_binary_length(void);
+    extern void fs_release_read_binary(void);
+    if (!fs_try_read_binary(path)) return NULL;
+    int fsize_i = fs_get_read_binary_length();
+    if (fsize_i < 1) { fs_release_read_binary(); return NULL; }
+    size_t fsize = (size_t)fsize_i;
     char *file_buf = malloc(fsize);
-    if (!file_buf) { close(fd); return NULL; }
-    size_t got = 0;
-    while (got < fsize) {
-        ssize_t n = read(fd, file_buf + got, fsize - got);
-        if (n < 0) { if (errno == EINTR) continue; free(file_buf); close(fd); return NULL; }
-        if (n == 0) break;
-        got += (size_t)n;
-    }
-    close(fd);
-    if (got != fsize) { free(file_buf); return NULL; }
+    if (!file_buf) { fs_release_read_binary(); return NULL; }
+    memcpy(file_buf, fs_get_read_binary(), fsize);
+    fs_release_read_binary();
 
     char header = file_buf[0];
     const char *payload = file_buf + 1;
