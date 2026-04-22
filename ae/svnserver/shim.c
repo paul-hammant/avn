@@ -474,6 +474,18 @@ const char *svnserver_load_rev_props_sha(const char *repo, int rev) {
     return buf;
 }
 
+const char *svnserver_load_rev_root_sha(const char *repo, int rev) {
+    static __thread char buf[65];
+    buf[0] = '\0';
+    char *sha = load_rev_blob_field(repo, rev, "root");
+    if (sha) {
+        size_t n = strlen(sha);
+        if (n < sizeof buf) { memcpy(buf, sha, n + 1); }
+        free(sha);
+    }
+    return buf;
+}
+
 /* Recursively compute the redacted-for-`user` sha of the dir at
  * `dir_sha`. Writes 65-byte hex into `out`. Returns 0 on success.
  * Ported to Aether (ae/svnserver/redact.ae); the wrapper preserves
@@ -722,31 +734,19 @@ handle_repo_rev(HttpRequest *req, HttpServerResponse *res, void *user_data)
     /* /rev/N/info */
     if (strcmp(after, "/info") == 0) {
         struct svnae_info *I = svnae_repos_info_rev(repo, rev);
-        if (!I) { respond_error(res, 404, "no such rev"); return; }
-
-        /* Root sha, possibly redacted if the caller is a non-super-user
-         * and any subtree is denied to them. Matters because `svn verify`
-         * anchors the Merkle walk here; the user's recomputed root has
-         * to equal what /info claims. */
+        /* Body + root-sha redaction ported to Aether (ae/svnserver/handler_rev_info.ae). */
+        svnae_repos_info_free(I);   /* rev_info_json will re-fetch */
         const char *user = NULL;
         int is_super = auth_context(req, &user);
-        char *root_sha = load_rev_blob_field(repo, rev, "root");
-        char redacted[65] = {0};
-        const char *reported_root = root_sha ? root_sha : "";
-        if (root_sha && *root_sha && !is_super) {
-            if (compute_redacted_dir_sha(repo, rev, user, root_sha, "", redacted) == 0
-                && *redacted) {
-                reported_root = redacted;
-            }
+        extern const char *aether_rev_info_json_full(const char *repo, int rev,
+                                                     const char *user, int is_super);
+        const char *body = aether_rev_info_json_full(repo, rev,
+                                                     user ? user : "", is_super);
+        if (!body || !*body) {
+            respond_error(res, 404, "no such rev");
+            return;
         }
-        const char *body = aether_rev_info_json(svnae_repos_info_rev_num(I),
-                                                svnae_repos_info_author(I),
-                                                svnae_repos_info_date(I),
-                                                svnae_repos_info_msg(I),
-                                                reported_root);
-        free(root_sha);
-        svnae_repos_info_free(I);
-        respond_json(res, 200, body ? body : "{}");
+        respond_json(res, 200, body);
         return;
     }
 
