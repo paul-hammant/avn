@@ -78,6 +78,10 @@ extern const char *aether_specs_to_json_array(const char *body);
 extern const char *aether_log_entry_json(int rev, const char *author, const char *date, const char *msg);
 extern const char *aether_path_change_entry_json(const char *action, const char *path);
 extern const char *aether_blame_entry_json(int rev, const char *author, const char *text);
+extern const char *aether_list_entry_visible_json(const char *name, int kind_c);
+extern const char *aether_list_entry_hidden_json(const char *sha);
+extern const char *aether_redact_line_visible(int kind_c, const char *sha, const char *name);
+extern const char *aether_redact_line_hidden(const char *sha);
 extern const char *aether_info_prelude_json(int head, const char *name, const char *hash_algo);
 extern const char *aether_rev_info_json(int rev, const char *author, const char *date, const char *msg, const char *root);
 extern const char *aether_error_response_json(const char *msg);
@@ -1185,26 +1189,11 @@ handle_repo_rev(HttpRequest *req, HttpServerResponse *res, void *user_data)
             if (any) sb_putc(&body, ',');
             any = 1;
             if (allowed) {
-                sb_puts(&body, "{\"name\":");
-                sb_putjson_string(&body, child_name);
-                sb_puts(&body, ",\"kind\":");
-                sb_puts(&body, kind_c == 'd' ? "\"dir\"" : "\"file\"");
-                sb_putc(&body, '}');
-
-                /* Preserve the raw line verbatim in the redact buffer. */
-                char line[PATH_MAX + 96];
-                snprintf(line, sizeof line, "%c %s %s\n",
-                         kind_c, child_sha, child_name);
-                sb_puts(&redact, line);
+                sb_puts(&body, aether_list_entry_visible_json(child_name, (int)(unsigned char)kind_c));
+                sb_puts(&redact, aether_redact_line_visible((int)(unsigned char)kind_c, child_sha, child_name));
             } else {
-                sb_puts(&body, "{\"kind\":\"hidden\",\"sha\":");
-                sb_putjson_string(&body, child_sha);
-                sb_putc(&body, '}');
-
-                /* Redacted form: "H <sha>\n" — no name. */
-                char line[96];
-                snprintf(line, sizeof line, "H %s\n", child_sha);
-                sb_puts(&redact, line);
+                sb_puts(&body, aether_list_entry_hidden_json(child_sha));
+                sb_puts(&redact, aether_redact_line_hidden(child_sha));
             }
         }
         sb_puts(&body, "]}");

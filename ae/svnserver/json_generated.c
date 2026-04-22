@@ -819,6 +819,59 @@ out = string_concat(out, ",\"default_branch\":\"main\"");
 }
 
 // Exported:
+const char* list_entry_visible_json(const char* name, int kind_c) {
+const char* out = "{\"name\":";
+    int _heap_out = 0; (void)_heap_out;
+out = string_concat(out, json_escape_string_impl(name));
+out = string_concat(out, ",\"kind\":");
+if (kind_c == 100) {
+        {
+out = string_concat(out, "\"dir\"");
+        }
+    } else {
+        {
+out = string_concat(out, "\"file\"");
+        }
+    }
+    return string_concat(out, "}");
+}
+
+// Exported:
+const char* list_entry_hidden_json(const char* sha) {
+const char* out = "{\"kind\":\"hidden\",\"sha\":";
+    int _heap_out = 0; (void)_heap_out;
+out = string_concat(out, json_escape_string_impl(sha));
+    return string_concat(out, "}");
+}
+
+// Exported:
+const char* redact_line_visible(int kind_c, const char* sha, const char* name) {
+const char* out = "";
+    int _heap_out = 0; (void)_heap_out;
+if (kind_c == 100) {
+        {
+out = "d ";
+        }
+    } else {
+        {
+out = "f ";
+        }
+    }
+out = string_concat(out, sha);
+out = string_concat(out, " ");
+out = string_concat(out, name);
+    return string_concat(out, "\n");
+}
+
+// Exported:
+const char* redact_line_hidden(const char* sha) {
+const char* out = "H ";
+    int _heap_out = 0; (void)_heap_out;
+out = string_concat(out, sha);
+    return string_concat(out, "\n");
+}
+
+// Exported:
 const char* blame_entry_json(int rev, const char* author, const char* text) {
 const char* out = "{\"rev\":";
     int _heap_out = 0; (void)_heap_out;
@@ -935,6 +988,18 @@ const char* aether_rev_branch_response_json(int32_t rev, const char* branch) {
 }
 const char* aether_info_prelude_json(int32_t head, const char* name, const char* hash_algo) {
     return info_prelude_json(head, name, hash_algo);
+}
+const char* aether_list_entry_visible_json(const char* name, int32_t kind_c) {
+    return list_entry_visible_json(name, kind_c);
+}
+const char* aether_list_entry_hidden_json(const char* sha) {
+    return list_entry_hidden_json(sha);
+}
+const char* aether_redact_line_visible(int32_t kind_c, const char* sha, const char* name) {
+    return redact_line_visible(kind_c, sha, name);
+}
+const char* aether_redact_line_hidden(const char* sha) {
+    return redact_line_hidden(sha);
 }
 const char* aether_blame_entry_json(int32_t rev, const char* author, const char* text) {
     return blame_entry_json(rev, author, text);

@@ -357,6 +357,46 @@ export info_prelude_json(head: int, name: string, hash_algo: string) -> string {
     return out
 }
 
+// Dir list entries, both shapes. {"name":"...","kind":"file"|"dir"} for
+// visible children; {"kind":"hidden","sha":"..."} for denied.
+export list_entry_visible_json(name: string, kind_c: int) -> string {
+    out = "{\"name\":"
+    out = string.concat(out, json_escape_string_impl(name))
+    out = string.concat(out, ",\"kind\":")
+    if kind_c == 100 {   // 'd'
+        out = string.concat(out, "\"dir\"")
+    } else {
+        out = string.concat(out, "\"file\"")
+    }
+    return string.concat(out, "}")
+}
+
+export list_entry_hidden_json(sha: string) -> string {
+    out = "{\"kind\":\"hidden\",\"sha\":"
+    out = string.concat(out, json_escape_string_impl(sha))
+    return string.concat(out, "}")
+}
+
+// Redacted dir-blob lines: "<kind> <sha> <name>\n" or "H <sha>\n".
+export redact_line_visible(kind_c: int, sha: string, name: string) -> string {
+    out = ""
+    if kind_c == 100 {
+        out = "d "
+    } else {
+        out = "f "
+    }
+    out = string.concat(out, sha)
+    out = string.concat(out, " ")
+    out = string.concat(out, name)
+    return string.concat(out, "\n")
+}
+
+export redact_line_hidden(sha: string) -> string {
+    out = "H "
+    out = string.concat(out, sha)
+    return string.concat(out, "\n")
+}
+
 // {"rev":N,"author":"...","text":"..."}
 export blame_entry_json(rev: int, author: string, text: string) -> string {
     out = "{\"rev\":"
