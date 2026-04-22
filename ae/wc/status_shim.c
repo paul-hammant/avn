@@ -185,45 +185,46 @@ walk_unversioned(const char *wc_root, const char *rel,
      * propget returns NULL and no patterns apply. */
     char *ignore_prop = svnae_wc_propget(wc_root, rel, "svn:ignore");
 
-    DIR *d = opendir(dir_path);
+    extern void *aether_io_listdir(const char *path);
+    extern int aether_io_listdir_count(void *handle);
+    extern const char *aether_io_listdir_name(void *handle, int index);
+    extern void aether_io_listdir_free(void *handle);
+    extern int aether_io_stat_kind(const char *path);
+    extern int aether_is_sidecar_name(const char *name);
+
+    void *d = aether_io_listdir(dir_path);
     if (!d) { svnae_wc_props_free(ignore_prop); return; }
-    struct dirent *e;
-    while ((e = readdir(d)) != NULL) {
-        if (e->d_name[0] == '.' && (e->d_name[1] == '\0'
-            || (e->d_name[1] == '.' && e->d_name[2] == '\0'))) continue;
-        if (strcmp(e->d_name, ".svn") == 0) continue;
+    int n_entries = aether_io_listdir_count(d);
+    for (int i = 0; i < n_entries; i++) {
+        const char *name = aether_io_listdir_name(d, i);
+        if (strcmp(name, ".svn") == 0) continue;
 
         /* Skip conflict sidecars — .mine and .r<N>. They'll be cleaned
          * up by `svn resolve`. */
-        {
-            extern int aether_is_sidecar_name(const char *name);
-            if (aether_is_sidecar_name(e->d_name)) continue;
-        }
+        if (aether_is_sidecar_name(name)) continue;
 
-        const char *child_rel = aether_path_join_rel(rel, e->d_name);
+        const char *child_rel = aether_path_join_rel(rel, name);
         const char *child_fs  = aether_path_join_rel(wc_root, child_rel);
-        struct stat st;
-        if (lstat(child_fs, &st) != 0) continue;
+        int kind = aether_io_stat_kind(child_fs);  /* 1=file 2=dir */
+        if (kind == 0) continue;
 
         int is_tracked = strset_has(tracked, child_rel);
         int ignored = 0;
         if (!is_tracked && ignore_prop) {
-            ignored = matches_ignore(ignore_prop, e->d_name);
+            ignored = matches_ignore(ignore_prop, name);
         }
 
-        if (S_ISDIR(st.st_mode)) {
+        if (kind == 2) {
             if (!is_tracked) {
                 if (!ignored) add_entry(out, child_rel, '?');
-                /* Don't recurse into unversioned dirs — reference svn
-                 * reports the dir once (or suppresses it) and stops. */
             } else {
                 walk_unversioned(wc_root, child_rel, tracked, out);
             }
-        } else if (S_ISREG(st.st_mode)) {
+        } else if (kind == 1) {
             if (!is_tracked && !ignored) add_entry(out, child_rel, '?');
         }
     }
-    closedir(d);
+    aether_io_listdir_free(d);
     svnae_wc_props_free(ignore_prop);
 }
 

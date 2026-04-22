@@ -635,22 +635,29 @@ handle_repo_info(HttpRequest *req, HttpServerResponse *res, void *user_data)
     struct sb s = {0};
     sb_puts(&s, aether_info_prelude_json(head, name, svnae_repo_primary_hash(repo)));
     sb_puts(&s, ",\"branches\":[");
+    extern void *aether_io_listdir(const char *p);
+    extern int aether_io_listdir_count(void *h);
+    extern const char *aether_io_listdir_name(void *h, int i);
+    extern void aether_io_listdir_free(void *h);
+    extern const char *aether_io_read_file(const char *p);
+    extern int aether_io_file_size(const char *p);
+
     {
         /* `main` is always implicit in every repo, even ones seeded
          * before the per-branch layout existed. We emit it first and
          * suppress a duplicate if the on-disk dir also has a
          * branches/main entry. */
         sb_putjson_string(&s, "main");
-        DIR *d = opendir(branches_dir);
+        void *d = aether_io_listdir(branches_dir);
         if (d) {
-            struct dirent *de;
-            while ((de = readdir(d)) != NULL) {
-                if (de->d_name[0] == '.') continue;
-                if (strcmp(de->d_name, "main") == 0) continue;
+            int n_br = aether_io_listdir_count(d);
+            for (int i = 0; i < n_br; i++) {
+                const char *nm = aether_io_listdir_name(d, i);
+                if (strcmp(nm, "main") == 0) continue;
                 sb_putc(&s, ',');
-                sb_putjson_string(&s, de->d_name);
+                sb_putjson_string(&s, nm);
             }
-            closedir(d);
+            aether_io_listdir_free(d);
         }
     }
     sb_puts(&s, "],\"specs\":{");
@@ -658,48 +665,30 @@ handle_repo_info(HttpRequest *req, HttpServerResponse *res, void *user_data)
         /* Per-branch include globs. main has no spec (full tree)
          * unless explicitly set — we emit [] for it in that case. */
         int first = 1;
-        DIR *d = opendir(branches_dir);
+        void *d = aether_io_listdir(branches_dir);
         if (d) {
-            struct dirent *de;
-            while ((de = readdir(d)) != NULL) {
-                if (de->d_name[0] == '.') continue;
+            int n_br = aether_io_listdir_count(d);
+            for (int i = 0; i < n_br; i++) {
+                const char *nm = aether_io_listdir_name(d, i);
                 char spec_path[PATH_MAX];
                 snprintf(spec_path, sizeof spec_path, "%s/%s/spec",
-                         branches_dir, de->d_name);
-                FILE *sf = fopen(spec_path, "r");
+                         branches_dir, nm);
                 if (!first) sb_putc(&s, ',');
                 first = 0;
-                sb_putjson_string(&s, de->d_name);
+                sb_putjson_string(&s, nm);
                 sb_puts(&s, ":[");
-                if (sf) {
-                    /* Slurp the whole (small) spec file and hand it to
-                     * the Aether specs_to_json_array transform, which
-                     * handles the line-split + trim + escape + array
-                     * framing. We re-open the brackets here so the
-                     * helper can own both the "[" and the "]". */
-                    fseek(sf, 0, SEEK_END);
-                    long spec_sz = ftell(sf);
-                    fseek(sf, 0, SEEK_SET);
-                    if (spec_sz > 0 && spec_sz < 65536) {
-                        char *spec_buf = malloc((size_t)spec_sz + 1);
-                        if (spec_buf) {
-                            size_t rd = fread(spec_buf, 1, (size_t)spec_sz, sf);
-                            spec_buf[rd] = '\0';
-                            /* Strip the leading '[' we already emitted
-                             * (Aether helper emits its own brackets). */
-                            sb_puts(&s, aether_specs_to_json_array(spec_buf) + 1);
-                            free(spec_buf);
-                            /* aether_specs_to_json_array emits trailing ']'
-                             * so we don't need our own. */
-                            fclose(sf);
-                            continue;
-                        }
+                int spec_sz = aether_io_file_size(spec_path);
+                if (spec_sz > 0 && spec_sz < 65536) {
+                    const char *spec_buf = aether_io_read_file(spec_path);
+                    if (spec_buf && *spec_buf) {
+                        /* Strip the leading '[' we already emitted. */
+                        sb_puts(&s, aether_specs_to_json_array(spec_buf) + 1);
+                        continue;
                     }
-                    fclose(sf);
                 }
                 sb_puts(&s, "]");
             }
-            closedir(d);
+            aether_io_listdir_free(d);
         }
         /* If main wasn't already listed (no on-disk dir), emit [] for it. */
         extern int aether_io_exists(const char *p);

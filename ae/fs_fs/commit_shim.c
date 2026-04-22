@@ -641,19 +641,24 @@ svnae_branch_create(const char *repo, const char *name, const char *base,
          * legacy head file is the max rev across all branches, not main's
          * head specifically. Auto-materialize branches/main/head on success
          * so subsequent branch-creates find the per-branch file. */
+        extern void *aether_io_listdir(const char *path);
+        extern int aether_io_listdir_count(void *h);
+        extern const char *aether_io_listdir_name(void *h, int i);
+        extern void aether_io_listdir_free(void *h);
+
         char branches_root[PATH_MAX];
         snprintf(branches_root, sizeof branches_root, "%s/branches", repo);
-        DIR *bd = opendir(branches_root);
+        void *bd = aether_io_listdir(branches_root);
         int other_branches = 0;
         if (bd) {
-            struct dirent *de;
-            while ((de = readdir(bd))) {
-                if (de->d_name[0] == '.') continue;
-                if (strcmp(de->d_name, "main") == 0) continue;
+            int n_br = aether_io_listdir_count(bd);
+            for (int i = 0; i < n_br; i++) {
+                const char *nm = aether_io_listdir_name(bd, i);
+                if (strcmp(nm, "main") == 0) continue;
                 other_branches = 1;
                 break;
             }
-            closedir(bd);
+            aether_io_listdir_free(bd);
         }
         if (!other_branches) {
             char legacy[PATH_MAX];
