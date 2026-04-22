@@ -319,19 +319,15 @@ resolve_path(const char *repo, const char *root_sha1, const char *path,
         if (*p == '/') p++;
 
         /* Walk cur_body entries looking for `seg`. */
-        char found_kind = 0;
+        extern int         aether_dir_find_kind(const char *body, const char *name);
+        extern const char *aether_dir_find_sha (const char *body, const char *name);
+        char found_kind = (char)aether_dir_find_kind(cur_body, seg);
         char found_sha1[65] = {0};
-        int n_entries = aether_dir_count_entries(cur_body);
-        for (int ei = 0; ei < n_entries; ei++) {
-            const char *name = aether_dir_entry_name(cur_body, ei);
-            if (strlen(name) == seg_len && memcmp(name, seg, seg_len) == 0) {
-                found_kind = (char)aether_dir_entry_kind(cur_body, ei);
-                const char *sha = aether_dir_entry_sha(cur_body, ei);
-                size_t sha_len = strlen(sha);
-                if (sha_len >= sizeof found_sha1) { svnae_rep_free(cur_body); return 0; }
-                memcpy(found_sha1, sha, sha_len + 1);
-                break;
-            }
+        if (found_kind) {
+            const char *sha = aether_dir_find_sha(cur_body, seg);
+            size_t sha_len = strlen(sha);
+            if (sha_len >= sizeof found_sha1) { svnae_rep_free(cur_body); return 0; }
+            memcpy(found_sha1, sha, sha_len + 1);
         }
         svnae_rep_free(cur_body);
         cur_body = NULL;

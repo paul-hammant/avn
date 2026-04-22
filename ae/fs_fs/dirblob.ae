@@ -42,7 +42,7 @@ import std.string
 //   kind ' ' sha-hex ' ' name
 // i.e. at least one char for kind, one space, some non-empty sha,
 // one space, some non-empty name.
-export dir_count_entries(body: string) -> int {
+dir_count_entries_impl(body: string) -> int {
     n = string.length(body)
     if n == 0 { return 0 }
     count = 0
@@ -140,14 +140,14 @@ locate_line_end(body: string, target: int) -> int {
 }
 
 // Return the kind char (ASCII value) at line `i`. 0 if out of range.
-export dir_entry_kind(body: string, i: int) -> int {
+dir_entry_kind_impl(body: string, i: int) -> int {
     start = locate_line_start(body, i)
     if start < 0 { return 0 }
     return string.char_at(body, start)
 }
 
 // Return the sha-hex at line `i`. "" if out of range.
-export dir_entry_sha(body: string, i: int) -> string {
+dir_entry_sha_impl(body: string, i: int) -> string {
     start = locate_line_start(body, i)
     if start < 0 { return "" }
     end = locate_line_end(body, i)
@@ -161,7 +161,7 @@ export dir_entry_sha(body: string, i: int) -> string {
 }
 
 // Return the name at line `i`. "" if out of range.
-export dir_entry_name(body: string, i: int) -> string {
+dir_entry_name_impl(body: string, i: int) -> string {
     start = locate_line_start(body, i)
     if start < 0 { return "" }
     end = locate_line_end(body, i)
@@ -172,6 +172,57 @@ export dir_entry_name(body: string, i: int) -> string {
     }
     if j >= end { return "" }
     return string.substring(body, j + 1, end)
+}
+
+// Find the entry named `name` (exact match). Returns the kind char
+// Public wrappers over the _impl variants. `_impl` is the private form
+// we can call internally; `export` is what the C side sees as
+// aether_dir_*.
+export dir_count_entries(body: string) -> int {
+    return dir_count_entries_impl(body)
+}
+export dir_entry_kind(body: string, i: int) -> int {
+    return dir_entry_kind_impl(body, i)
+}
+export dir_entry_sha(body: string, i: int) -> string {
+    return dir_entry_sha_impl(body, i)
+}
+export dir_entry_name(body: string, i: int) -> string {
+    return dir_entry_name_impl(body, i)
+}
+
+// (ASCII 'f'/'d') as an int, or 0 if absent.
+export dir_find_kind(body: string, name: string) -> int {
+    n = dir_count_entries_impl(body)
+    nlen = string.length(name)
+    i = 0
+    while i < n {
+        ename = dir_entry_name_impl(body, i)
+        if string.length(ename) == nlen {
+            if string.equals(ename, name) == 1 {
+                return dir_entry_kind_impl(body, i)
+            }
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+// Find the entry named `name` and return its sha-hex. "" if absent.
+export dir_find_sha(body: string, name: string) -> string {
+    n = dir_count_entries_impl(body)
+    nlen = string.length(name)
+    i = 0
+    while i < n {
+        ename = dir_entry_name_impl(body, i)
+        if string.length(ename) == nlen {
+            if string.equals(ename, name) == 1 {
+                return dir_entry_sha_impl(body, i)
+            }
+        }
+        i = i + 1
+    }
+    return ""
 }
 
 main() {
