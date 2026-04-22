@@ -26,6 +26,7 @@
 // .regen files all pass that flag now).
 
 import std.fs
+import std.dir
 import std.string
 
 // Atomic write: stage to <path>.tmp.<pid>, fsync, rename. Binary-safe —
@@ -93,6 +94,28 @@ export io_stat_kind(path: string) -> int {
     kind, _s, _m, err = fs.file_stat(path)
     if string.length(err) > 0 { return 0 }
     return kind
+}
+
+// Directory listing. Returns an opaque handle (ptr). Returns null
+// if the directory can't be opened. Caller must:
+//   - iterate with io_listdir_count + io_listdir_name
+//   - free with io_listdir_free
+// Entries are filenames only ("file.txt", "subdir") with no "." or ".."
+// included. Order is filesystem-dependent (readdir order, not sorted).
+export io_listdir(path: string) -> ptr {
+    return dir_list_raw(path)
+}
+
+export io_listdir_count(handle: ptr) -> int {
+    return dir_list_count(handle)
+}
+
+export io_listdir_name(handle: ptr, index: int) -> string {
+    return dir_list_get(handle, index)
+}
+
+export io_listdir_free(handle: ptr) {
+    dir_list_free(handle)
 }
 
 // Remove a file. Returns 0 on success, 1 on failure.

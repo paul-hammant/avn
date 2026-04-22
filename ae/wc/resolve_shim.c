@@ -50,6 +50,11 @@ sqlite3 *svnae_wc_db_open(const char *wc_root);
 void     svnae_wc_db_close(sqlite3 *db);
 int      svnae_wc_db_set_conflicted(sqlite3 *db, const char *path, int conflicted);
 
+extern void *aether_io_listdir(const char *path);
+extern int aether_io_listdir_count(void *handle);
+extern const char *aether_io_listdir_name(void *handle, int index);
+extern void aether_io_listdir_free(void *handle);
+
 struct svnae_wc_node;
 struct svnae_wc_node *svnae_wc_db_get_node(sqlite3 *db, const char *path);
 int         svnae_wc_node_conflicted(const struct svnae_wc_node *n);
@@ -100,18 +105,19 @@ remove_sidecars(const char *wc_root, const char *rel_path)
 
     extern int aether_is_sidecar_suffix(const char *s);
 
-    DIR *d = opendir(dirpath);
+    void *d = aether_io_listdir(dirpath);
     if (!d) return;
-    struct dirent *e;
-    while ((e = readdir(d)) != NULL) {
-        if (strncmp(e->d_name, base, blen) != 0) continue;
-        if (e->d_name[blen] != '.') continue;
-        if (!aether_is_sidecar_suffix(e->d_name + blen + 1)) continue;
+    int n_entries = aether_io_listdir_count(d);
+    for (int i = 0; i < n_entries; i++) {
+        const char *name = aether_io_listdir_name(d, i);
+        if (strncmp(name, base, blen) != 0) continue;
+        if (name[blen] != '.') continue;
+        if (!aether_is_sidecar_suffix(name + blen + 1)) continue;
         char full[PATH_MAX];
-        snprintf(full, sizeof full, "%s/%s", dirpath, e->d_name);
+        snprintf(full, sizeof full, "%s/%s", dirpath, name);
         unlink(full);
     }
-    closedir(d);
+    aether_io_listdir_free(d);
 }
 
 /* Find the `<base>.r<N>` sidecar that isn't the base rev. There are
@@ -135,16 +141,17 @@ find_theirs_sidecar(const char *wc_root, const char *rel_path, char *out, size_t
     size_t blen = strlen(base);
 
     int best_rev = -1;
-    DIR *d = opendir(dirpath);
+    void *d = aether_io_listdir(dirpath);
     if (!d) return -1;
-    struct dirent *e;
-    while ((e = readdir(d)) != NULL) {
-        if (strncmp(e->d_name, base, blen) != 0) continue;
-        if (e->d_name[blen] != '.') continue;
-        int n = aether_sidecar_rev(e->d_name + blen + 1);
+    int n_entries = aether_io_listdir_count(d);
+    for (int i = 0; i < n_entries; i++) {
+        const char *name = aether_io_listdir_name(d, i);
+        if (strncmp(name, base, blen) != 0) continue;
+        if (name[blen] != '.') continue;
+        int n = aether_sidecar_rev(name + blen + 1);
         if (n > best_rev) best_rev = n;
     }
-    closedir(d);
+    aether_io_listdir_free(d);
     if (best_rev < 0) return -1;
     snprintf(out, out_sz, "%s/%s.r%d", dirpath, base, best_rev);
     return 0;

@@ -173,29 +173,33 @@ is_stale_tmp(const char *name)
     return 1;
 }
 
+/* Dir walk ported to std.fs via aether_io_listdir. */
+extern void *aether_io_listdir(const char *path);
+extern int aether_io_listdir_count(void *handle);
+extern const char *aether_io_listdir_name(void *handle, int index);
+extern void aether_io_listdir_free(void *handle);
+extern int aether_io_stat_kind(const char *path);
+
 static int
 walk_and_clean(const char *root)
 {
-    DIR *d = opendir(root);
+    void *d = aether_io_listdir(root);
     if (!d) return 0;
     int count = 0;
-    struct dirent *e;
-    while ((e = readdir(d)) != NULL) {
-        if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0) continue;
+    int n_entries = aether_io_listdir_count(d);
+    for (int i = 0; i < n_entries; i++) {
+        const char *name = aether_io_listdir_name(d, i);
         char full[PATH_MAX];
-        int n = snprintf(full, sizeof full, "%s/%s", root, e->d_name);
+        int n = snprintf(full, sizeof full, "%s/%s", root, name);
         if (n < 0 || n >= (int)sizeof full) continue;
-
-        struct stat st;
-        if (lstat(full, &st) != 0) continue;
-
-        if (S_ISDIR(st.st_mode)) {
+        int kind = aether_io_stat_kind(full);   /* 1=file 2=dir 3=symlink */
+        if (kind == 2) {
             count += walk_and_clean(full);
-        } else if (S_ISREG(st.st_mode) && is_stale_tmp(e->d_name)) {
+        } else if (kind == 1 && is_stale_tmp(name)) {
             if (unlink(full) == 0) count++;
         }
     }
-    closedir(d);
+    aether_io_listdir_free(d);
     return count;
 }
 
