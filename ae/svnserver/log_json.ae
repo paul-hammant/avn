@@ -1,0 +1,100 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// permissions and limitations under the License.
+
+// /log response body builder. Ported from handle_repo_log in
+// ae/svnserver/shim.c.
+//
+// Shape:
+//   { "entries": [ {rev, author, date, msg}, ... ] }
+//
+// Visibility filter: a rev is shown iff super-user OR the caller
+// has read access on at least one path touched by the rev. r0 is
+// always visible (no paths to filter on).
+
+import std.string
+
+// Log-list accessors from the C side.
+extern svnae_repos_log_count(lg: ptr) -> int
+extern svnae_repos_log_rev(lg: ptr, i: int) -> int
+extern svnae_repos_log_author(lg: ptr, i: int) -> string
+extern svnae_repos_log_date(lg: ptr, i: int) -> string
+extern svnae_repos_log_msg(lg: ptr, i: int) -> string
+
+// Paths-changed list (C-owned).
+extern svnae_repos_paths_changed(repo: string, rev: int) -> ptr
+extern svnae_repos_paths_count(p: ptr) -> int
+extern svnae_repos_paths_path(p: ptr, i: int) -> string
+extern svnae_repos_paths_free(p: ptr)
+
+// ACL decider (C-side).
+extern svnserver_acl_allows(repo: string, rev: int, user: string,
+                            path: string) -> int
+
+// JSON entry builder already in Aether.
+extern aether_log_entry_json(rev: int, author: string, date: string,
+                             msg: string) -> string
+
+export log_json(repo: string, lg: ptr, user: string, is_super: int) -> string {
+    return log_json_impl(repo, lg, user, is_super)
+}
+
+log_json_impl(repo: string, lg: ptr, user: string, is_super: int) -> string {
+    out = "{\"entries\":["
+    n = svnae_repos_log_count(lg)
+    any = 0
+    i = 0
+    while i < n {
+        rev = svnae_repos_log_rev(lg, i)
+
+        // Visibility: super shows everything. Non-super sees a rev iff
+        // at least one of its touched paths is ACL-visible. r0 has no
+        // paths so is always visible.
+        visible = 1
+        if is_super == 0 {
+            if rev > 0 {
+                visible = 0
+                paths = svnae_repos_paths_changed(repo, rev)
+                if paths != null {
+                    pn = svnae_repos_paths_count(paths)
+                    j = 0
+                    while j < pn {
+                        path = svnae_repos_paths_path(paths, j)
+                        if svnserver_acl_allows(repo, rev, user, path) == 1 {
+                            visible = 1
+                            break
+                        }
+                        j = j + 1
+                    }
+                    svnae_repos_paths_free(paths)
+                }
+            }
+        }
+
+        if visible == 1 {
+            if any == 1 { out = string.concat(out, ",") }
+            any = 1
+            out = string.concat(out, aether_log_entry_json(rev,
+                svnae_repos_log_author(lg, i),
+                svnae_repos_log_date(lg, i),
+                svnae_repos_log_msg(lg, i)))
+        }
+        i = i + 1
+    }
+    return string.concat(out, "]}")
+}
+
+main() {
+    println("ae/svnserver/log_json.ae is a library; not meant to run standalone")
+}

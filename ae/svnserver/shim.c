@@ -639,41 +639,12 @@ handle_repo_log(HttpRequest *req, HttpServerResponse *res, void *user_data)
     const char *user = NULL;
     int is_super = auth_context(req, &user);
 
-    struct sb s = {0};
-    sb_puts(&s, "{\"entries\":[");
-    int n = svnae_repos_log_count(lg);
-    int any = 0;
-    for (int i = 0; i < n; i++) {
-        int rev = svnae_repos_log_rev(lg, i);
-        /* A rev is shown to the caller iff at least one of its touched
-         * paths is visible. r0 (the empty init commit) has no paths;
-         * always show that. Super-user shows everything. */
-        int visible = 1;
-        if (!is_super && rev > 0) {
-            visible = 0;
-            struct svnae_paths *P = svnae_repos_paths_changed(repo, rev);
-            if (P) {
-                int pn = svnae_repos_paths_count(P);
-                for (int j = 0; j < pn; j++) {
-                    if (acl_allows(repo, rev, user, svnae_repos_paths_path(P, j))) {
-                        visible = 1; break;
-                    }
-                }
-                svnae_repos_paths_free(P);
-            }
-        }
-        if (!visible) continue;
-        if (any) sb_putc(&s, ',');
-        any = 1;
-        sb_puts(&s, aether_log_entry_json(rev,
-                                          svnae_repos_log_author(lg, i),
-                                          svnae_repos_log_date(lg, i),
-                                          svnae_repos_log_msg(lg, i)));
-    }
-    sb_puts(&s, "]}");
+    /* Body + visibility filter ported to Aether (ae/svnserver/log_json.ae). */
+    extern const char *aether_log_json(const char *repo, const void *lg,
+                                       const char *user, int is_super);
+    const char *body = aether_log_json(repo, lg, user ? user : "", is_super);
     svnae_repos_log_free(lg);
-    respond_json(res, 200, s.data ? s.data : "{\"entries\":[]}");
-    free(s.data);
+    respond_json(res, 200, body ? body : "{\"entries\":[]}");
 }
 
 /* Field extraction ported to Aether (ae/repos/blobfield.ae). The C side
