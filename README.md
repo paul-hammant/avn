@@ -33,38 +33,45 @@ Full phase map and feature matrix: **[PORT_STATUS.md](./PORT_STATUS.md)**.
 
 ## Quickstart
 
-Assumes `aether` is built at `~/scm/aether/build/ae`. Adjust the paths
-if yours lives somewhere else.
+Assumes `aether` is built at `~/scm/aether/build/`. Adjust via `AE=...` /
+`AETHERC=...` env vars if yours lives elsewhere.
 
 ```bash
-ae=~/scm/aether/build/ae
-
-# Build everything
-for f in ae/svn/main.ae ae/svnserver/main.ae ae/svnserver/seed.ae \
-         ae/svnadmin/main.ae; do
-    "$ae" build "$f" -o "/tmp/$(basename "${f%.ae}")"
-done
+# Build every binary. The wrapper regenerates ae/**/_generated.c first
+# (from the paired .ae sources via aetherc --emit=lib) and then invokes
+# `ae build` for each [[bin]] in aether.toml. Outputs land under /tmp/.
+./build.sh                       # all binaries
+./build.sh svn                   # just the svn CLI
 
 # Create an empty repo (or seed a known test tree)
-/tmp/main create /srv/repo                 # that's svnadmin
+/tmp/svnadmin create /srv/repo
 # or:
-/tmp/seed /srv/repo                        # three-commit known tree
+/tmp/svnae-seed /srv/repo        # three-commit known tree
 
 # Serve it
-/tmp/main demo /srv/repo 8080 &            # that's aether-svnserver
+/tmp/aether-svnserver demo /srv/repo 8080 &
 
 # Use it
-/tmp/main checkout http://localhost:8080/demo wc
+/tmp/svn checkout http://localhost:8080/demo wc
 cd wc
 echo "hi" >> README
-/tmp/main commit --author alice --log "tweak"
+/tmp/svn commit --author alice --log "tweak"
 ```
 
-Run all test suites:
+Run all test suites (each script calls `./regen.sh` before it builds,
+so you can run them straight from a fresh clone):
 
 ```bash
 for t in ae/*/test_*.sh; do sleep 0.3; bash "$t" || break; done
 ```
+
+### Generated sources
+
+Some `.c` files under `ae/` are produced by `aetherc --emit=lib` from
+paired `.ae` sources (grep for `_generated.c`). They're **not checked
+into git** — `./regen.sh` rebuilds them on demand. Never hand-edit
+one; the next regen will blow your changes away. Edit the `.ae` source
+and run `./regen.sh --force`.
 
 ## What's intentionally different from reference svn
 

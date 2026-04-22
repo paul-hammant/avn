@@ -1,2 +1,6 @@
 target/
 .svn/
+
+# aetherc --emit=lib output — regenerated from *.ae via ./regen.sh.
+# Never hand-edit these; they will be overwritten. See README.md.
+ae/**/*_generated.c

@@ -31,6 +31,7 @@ CLIENT_BIN=/tmp/svnae_test_ra_client
 trap 'pkill -f "${SERVER_BIN} demo ${REPO} ${PORT}" 2>/dev/null || true' EXIT
 
 echo "[*] Building server + seeder + RA client..."
+./regen.sh >/dev/null
 "$AE" build ae/svnserver/main.ae -o "$SERVER_BIN" >/dev/null 2>&1
 "$AE" build ae/svnserver/seed.ae -o "$SEED_BIN"  >/dev/null 2>&1
 "$AE" build ae/ra/test_ra.ae     -o "$CLIENT_BIN" >/dev/null 2>&1

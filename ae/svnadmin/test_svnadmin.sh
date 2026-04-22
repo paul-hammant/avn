@@ -38,6 +38,7 @@ trap 'pkill -f "${SERVER_BIN} .* ${PORT}" 2>/dev/null || true
       pkill -f "${SERVER_BIN} .* $((PORT+1))" 2>/dev/null || true' EXIT
 
 echo "[*] Build..."
+./regen.sh >/dev/null
 "$AE" build ae/svnserver/seed.ae -o "$SEED_BIN"   >/dev/null 2>&1
 "$AE" build ae/svnadmin/main.ae  -o "$ADMIN_BIN"  >/dev/null 2>&1
 "$AE" build ae/svnserver/main.ae -o "$SERVER_BIN" >/dev/null 2>&1

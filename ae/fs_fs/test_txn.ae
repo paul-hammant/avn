@@ -185,7 +185,7 @@ commit_txn(repo: string, txn: ptr, author: string, logmsg: string) {
 //
 // Walk a directory tree to fetch the file content at (rev, path).
 
-dir_entry_kind(dir_body: string, name: string) {
+local_dir_entry_kind(dir_body: string, name: string) {
     n = string.length(dir_body)
     i = 0
     while i < n {
@@ -207,7 +207,7 @@ dir_entry_kind(dir_body: string, name: string) {
     return ""
 }
 
-dir_entry_sha1(dir_body: string, name: string) {
+local_dir_entry_sha1(dir_body: string, name: string) {
     n = string.length(dir_body)
     i = 0
     while i < n {
@@ -250,9 +250,9 @@ fsfs_read_file_at(repo: string, rev: int, path: string) {
             pos = pos + 1
         }
         seg = string.substring(p, ss, pos)
-        kind = dir_entry_kind(cur_body, seg)
+        kind = local_dir_entry_kind(cur_body, seg)
         if string.equals(kind, "") == 1 { return "" }
-        sub_sha1 = dir_entry_sha1(cur_body, seg)
+        sub_sha1 = local_dir_entry_sha1(cur_body, seg)
         at_end = 0
         if pos >= n { at_end = 1 }
         pos = pos + 1
