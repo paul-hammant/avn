@@ -76,6 +76,120 @@ export paths_index_lookup(body: string, path: string) -> string {
     return ""
 }
 
+// For each ancestor of `target` (including target itself, then its
+// parent, grandparent, …, "") look up the acl_sha in `body` and emit
+// "<sha>\n" lines for the hits (deepest first). The caller uses these
+// to walk the ACL chain from most-specific to most-general.
+//
+// Callers that want the matching prefix for reporting can use
+// paths_index_lookup directly after; this helper keeps the return
+// shape simple (just the shas, in priority order).
+export paths_index_ancestor_shas(body: string, target: string) -> string {
+    out = ""
+    // Work on a mutable-via-substring path string.
+    path = target
+    while 1 == 1 {
+        sha = paths_index_lookup_impl(body, path)
+        if string.length(sha) > 0 {
+            out = string.concat(out, sha)
+            out = string.concat(out, "\n")
+        }
+        // Strip last '/'-separated segment.
+        n = string.length(path)
+        if n == 0 { break }
+        cut = 0 - 1
+        i = n - 1
+        while i >= 0 {
+            if string.char_at(path, i) == 47 { cut = i; break }
+            i = i - 1
+        }
+        if cut < 0 {
+            path = ""
+        } else {
+            path = string.substring(path, 0, cut)
+        }
+    }
+    return out
+}
+
+// Local alias — paths_index_lookup is exported so we can't call it
+// from another exported fn.
+paths_index_lookup_impl(body: string, path: string) -> string {
+    n = string.length(body)
+    plen = string.length(path)
+    if n == 0 { return "" }
+    if plen == 0 {
+        // empty-path entry: match "<sha> \n" where path section is empty.
+        // Rare; our ACL storage doesn't store the root that way — it
+        // stores it as an empty path too. We still honour it: look for
+        // a line where the space is the last char before '\n'.
+        line_start = 0
+        i = 0
+        while i <= n {
+            at_end = 0
+            c = 0
+            if i == n { at_end = 1 } else { c = string.char_at(body, i) }
+            is_eol = 0
+            if at_end == 1 { is_eol = 1 }
+            if c == 10 { is_eol = 1 }
+            if is_eol == 1 {
+                if i > line_start {
+                    sp = line_start
+                    while sp < i {
+                        if string.char_at(body, sp) == 32 { break }
+                        sp = sp + 1
+                    }
+                    if sp > line_start && sp == i - 1 {
+                        return string.substring(body, line_start, sp)
+                    }
+                }
+                line_start = i + 1
+            }
+            i = i + 1
+        }
+        return ""
+    }
+    line_start = 0
+    i = 0
+    while i <= n {
+        at_end = 0
+        c = 0
+        if i == n { at_end = 1 } else { c = string.char_at(body, i) }
+        is_eol = 0
+        if at_end == 1 { is_eol = 1 }
+        if c == 10 { is_eol = 1 }
+        if is_eol == 1 {
+            sp = line_start
+            while sp < i {
+                if string.char_at(body, sp) == 32 { break }
+                sp = sp + 1
+            }
+            if sp > line_start && sp < i {
+                sha_len = sp - line_start
+                name_off = sp + 1
+                name_len = i - name_off
+                if name_len == plen {
+                    is_match = 1
+                    j = 0
+                    while j < plen {
+                        if string.char_at(body, name_off + j) != string.char_at(path, j) {
+                            is_match = 0
+                            break
+                        }
+                        j = j + 1
+                    }
+                    if is_match == 1 {
+                        return string.substring(body, line_start, line_start + sha_len)
+                    }
+                }
+            }
+            line_start = i + 1
+        }
+        i = i + 1
+    }
+    return ""
+}
+
 main() {
     println("ae/svnserver/paths_index.ae is a library; not meant to run standalone")
 }

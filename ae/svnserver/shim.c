@@ -317,6 +317,7 @@ acl_body_decide(const char *body, const char *user, int want_write)
  * Handles either sha1 (40) or sha256 (64) blobs without hardcoding a
  * fixed width. */
 extern const char *aether_paths_index_lookup(const char *body, const char *path);
+extern const char *aether_paths_index_ancestor_shas(const char *body, const char *target);
 
 static char *
 paths_acl_lookup(const char *body, const char *path)
@@ -340,16 +341,18 @@ acl_allows_mode(const char *repo, int rev, const char *user,
     free(acl_root);
     if (!paths_body) return 1;
 
-    char buf[PATH_MAX];
-    size_t n = strlen(target_path);
-    if (n >= sizeof buf) { svnae_rep_free(paths_body); return 1; }
-    memcpy(buf, target_path, n + 1);
-
-    for (;;) {
-        char *acl_sha = paths_acl_lookup(paths_body, buf);
-        if (acl_sha) {
-            char *rules = svnae_rep_read_blob(repo, acl_sha);
-            free(acl_sha);
+    /* Aether returns newline-separated acl shas in deepest-first order
+     * (ae/svnserver/paths_index.ae :: paths_index_ancestor_shas). The
+     * C side just reads each one's rule blob and asks Aether to decide. */
+    const char *shas = aether_paths_index_ancestor_shas(paths_body, target_path);
+    const char *p = shas;
+    while (*p) {
+        const char *eol = strchr(p, '\n');
+        size_t slen = eol ? (size_t)(eol - p) : strlen(p);
+        if (slen > 0 && slen < 65) {
+            char sha[65];
+            memcpy(sha, p, slen); sha[slen] = '\0';
+            char *rules = svnae_rep_read_blob(repo, sha);
             if (rules) {
                 int d = acl_body_decide(rules, user, want_write);
                 svnae_rep_free(rules);
@@ -357,10 +360,8 @@ acl_allows_mode(const char *repo, int rev, const char *user,
                 if (d == 1) { svnae_rep_free(paths_body); return 1; }
             }
         }
-        if (!*buf) break;
-        char *last = strrchr(buf, '/');
-        if (last) *last = '\0';
-        else      buf[0] = '\0';
+        if (!eol) break;
+        p = eol + 1;
     }
     svnae_rep_free(paths_body);
     return 1;

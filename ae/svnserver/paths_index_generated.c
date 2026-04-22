@@ -119,6 +119,7 @@ typedef struct { int _0; const char* _1; } _tuple_int_string;
 typedef struct { float _0; const char* _1; } _tuple_float_string;
 
 // Forward declarations
+const char* paths_index_lookup_impl(const char*, const char*);
 static _tuple_int_string string_to_int(const char*);
 static _tuple_int_string string_to_long(const char*);
 static _tuple_float_string string_to_float(const char*);
@@ -346,6 +347,215 @@ i = (i + 1);
     return "";
 }
 
+// Exported:
+const char* paths_index_ancestor_shas(const char* body, const char* target) {
+const char* out = "";
+    int _heap_out = 0; (void)_heap_out;
+const char* path = target;
+    int _heap_path = 0; (void)_heap_path;
+    const char* sha;
+    int n;
+    int cut;
+    int i;
+while (1 == 1) {
+        {
+sha = paths_index_lookup_impl(body, path);
+if (string_length(sha) > 0) {
+                {
+out = string_concat(out, sha);
+out = string_concat(out, "\n");
+                }
+            }
+n = string_length(path);
+if (n == 0) {
+                {
+                    break;
+                }
+            }
+cut = -1;
+i = (n - 1);
+while (i >= 0) {
+                {
+if (string_char_at(path, i) == 47) {
+                        {
+cut = i;
+                            break;
+                        }
+                    }
+i = (i - 1);
+                }
+            }
+if (cut < 0) {
+                {
+path = "";
+                }
+            } else {
+                {
+path = string_substring(path, 0, cut);
+                }
+            }
+        }
+    }
+    return out;
+}
+
+const char* paths_index_lookup_impl(const char* body, const char* path) {
+int n = string_length(body);
+int plen = string_length(path);
+if (n == 0) {
+        {
+            return "";
+        }
+    }
+if (plen == 0) {
+        {
+int line_start = 0;
+int i = 0;
+            int at_end;
+            int c;
+            int is_eol;
+            int sp;
+while (i <= n) {
+                {
+at_end = 0;
+c = 0;
+if (i == n) {
+                        {
+at_end = 1;
+                        }
+                    } else {
+                        {
+c = string_char_at(body, i);
+                        }
+                    }
+is_eol = 0;
+if (at_end == 1) {
+                        {
+is_eol = 1;
+                        }
+                    }
+if (c == 10) {
+                        {
+is_eol = 1;
+                        }
+                    }
+if (is_eol == 1) {
+                        {
+if (i > line_start) {
+                                {
+sp = line_start;
+while (sp < i) {
+                                        {
+if (string_char_at(body, sp) == 32) {
+                                                {
+                                                    break;
+                                                }
+                                            }
+sp = (sp + 1);
+                                        }
+                                    }
+if ((sp > line_start) && (sp == (i - 1))) {
+                                        {
+                                            return string_substring(body, line_start, sp);
+                                        }
+                                    }
+                                }
+                            }
+line_start = (i + 1);
+                        }
+                    }
+i = (i + 1);
+                }
+            }
+            return "";
+        }
+    }
+int line_start = 0;
+int i = 0;
+    int at_end;
+    int c;
+    int is_eol;
+    int sp;
+    int sha_len;
+    int name_off;
+    int name_len;
+    int is_match;
+    int j;
+while (i <= n) {
+        {
+at_end = 0;
+c = 0;
+if (i == n) {
+                {
+at_end = 1;
+                }
+            } else {
+                {
+c = string_char_at(body, i);
+                }
+            }
+is_eol = 0;
+if (at_end == 1) {
+                {
+is_eol = 1;
+                }
+            }
+if (c == 10) {
+                {
+is_eol = 1;
+                }
+            }
+if (is_eol == 1) {
+                {
+sp = line_start;
+while (sp < i) {
+                        {
+if (string_char_at(body, sp) == 32) {
+                                {
+                                    break;
+                                }
+                            }
+sp = (sp + 1);
+                        }
+                    }
+if ((sp > line_start) && (sp < i)) {
+                        {
+sha_len = (sp - line_start);
+name_off = (sp + 1);
+name_len = (i - name_off);
+if (name_len == plen) {
+                                {
+is_match = 1;
+j = 0;
+while (j < plen) {
+                                        {
+if (string_char_at(body, (name_off + j)) != string_char_at(path, j)) {
+                                                {
+is_match = 0;
+                                                    break;
+                                                }
+                                            }
+j = (j + 1);
+                                        }
+                                    }
+if (is_match == 1) {
+                                        {
+                                            return string_substring(body, line_start, (line_start + sha_len));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+line_start = (i + 1);
+                }
+            }
+i = (i + 1);
+        }
+    }
+    return "";
+}
+
 static _tuple_int_string string_to_int(const char* s) {
 int ok = string_try_int(s);
 if (ok == 0) {
@@ -393,4 +603,10 @@ typedef struct AetherValue AetherValue;  /* opaque */
 
 const char* aether_paths_index_lookup(const char* body, const char* path) {
     return paths_index_lookup(body, path);
+}
+const char* aether_paths_index_ancestor_shas(const char* body, const char* target) {
+    return paths_index_ancestor_shas(body, target);
+}
+const char* aether_paths_index_lookup_impl(const char* body, const char* path) {
+    return paths_index_lookup_impl(body, path);
 }
