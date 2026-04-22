@@ -79,6 +79,22 @@ export io_is_directory(path: string) -> int {
     return 0
 }
 
+// 1 if `path` exists (any kind: file, dir, symlink, etc.), 0 otherwise.
+export io_exists(path: string) -> int {
+    _k, _s, _m, err = fs.file_stat(path)
+    if string.length(err) > 0 { return 0 }
+    return 1
+}
+
+// Raw kind byte: 1=file, 2=dir, 3=symlink, 4=other, 0=missing.
+// Use this when the caller cares which kind — otherwise the more
+// specific io_is_regular_file / io_is_directory / io_exists suffice.
+export io_stat_kind(path: string) -> int {
+    kind, _s, _m, err = fs.file_stat(path)
+    if string.length(err) > 0 { return 0 }
+    return kind
+}
+
 // Remove a file. Returns 0 on success, 1 on failure.
 export io_unlink(path: string) -> int {
     err = fs.delete(path)

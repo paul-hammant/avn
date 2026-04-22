@@ -114,12 +114,12 @@ svnae_wc_cp(const char *wc_root, const char *src, const char *dst)
     /* dst not already tracked AND not on disk. */
     if (svnae_wc_db_node_exists(db, dst)) { svnae_wc_db_close(db); return -2; }
 
+    extern int aether_io_exists(const char *path);
     char src_disk[PATH_MAX]; snprintf(src_disk, sizeof src_disk, "%s/%s", wc_root, src);
     char dst_disk[PATH_MAX]; snprintf(dst_disk, sizeof dst_disk, "%s/%s", wc_root, dst);
 
-    struct stat st;
-    if (stat(src_disk, &st) != 0) { svnae_wc_db_close(db); return -3; }
-    if (stat(dst_disk, &st) == 0) { svnae_wc_db_close(db); return -2; }
+    if (!aether_io_exists(src_disk)) { svnae_wc_db_close(db); return -3; }
+    if (aether_io_exists(dst_disk))  { svnae_wc_db_close(db); return -2; }
 
     if (copy_file(src_disk, dst_disk) != 0) {
         svnae_wc_db_close(db);

@@ -612,10 +612,10 @@ svnae_branch_create(const char *repo, const char *name, const char *base,
     if (!name || !*name || !base || !*base || n_globs <= 0) return -1;
 
     /* Reject if branch already exists. */
+    extern int aether_io_exists(const char *path);
     char br_dir[PATH_MAX];
     snprintf(br_dir, sizeof br_dir, "%s/branches/%s", repo, name);
-    struct stat st;
-    if (stat(br_dir, &st) == 0) return -1;
+    if (aether_io_exists(br_dir)) return -1;
 
     /* Find base branch's head rev. Prefer the new per-branch head
      * file; fall back to the legacy $repo/head when base == "main"

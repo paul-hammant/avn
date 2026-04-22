@@ -70,12 +70,13 @@ void        svnae_wc_node_free    (struct svnae_wc_node *n);
 int
 svnae_wc_add(const char *wc_root, const char *rel_path)
 {
+    extern int aether_io_stat_kind(const char *path);
     char disk[PATH_MAX];
     snprintf(disk, sizeof disk, "%s/%s", wc_root, rel_path);
-    struct stat st;
-    if (stat(disk, &st) != 0) return -2;
+    int skind = aether_io_stat_kind(disk);
+    if (skind == 0) return -2;
 
-    int kind = S_ISDIR(st.st_mode) ? 1 : 0;
+    int kind = (skind == 2) ? 1 : 0;
 
     sqlite3 *db = svnae_wc_db_open(wc_root);
     if (!db) return -3;

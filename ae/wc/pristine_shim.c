@@ -192,8 +192,8 @@ svnae_wc_pristine_put(const char *wc_root, const char *data, int len)
     build_path(wc_root, sha1, path, sizeof path);
 
     /* Dedup: if already present, skip the write. */
-    struct stat st;
-    if (stat(path, &st) == 0) return sha1;
+    extern int aether_io_exists(const char *p);
+    if (aether_io_exists(path)) return sha1;
 
     /* mkdir -p the two-level fanout. */
     if (mkdir_p(aether_pristine_dir(wc_root, sha1)) != 0) return NULL;
@@ -238,10 +238,10 @@ svnae_wc_pristine_put(const char *wc_root, const char *data, int len)
 int
 svnae_wc_pristine_has(const char *wc_root, const char *sha1)
 {
+    extern int aether_io_is_regular_file(const char *path);
     char path[PATH_MAX];
     build_path(wc_root, sha1, path, sizeof path);
-    struct stat st;
-    return stat(path, &st) == 0 ? 1 : 0;
+    return aether_io_is_regular_file(path);
 }
 
 /* Return the uncompressed size recorded in the header, or -1 on failure. */

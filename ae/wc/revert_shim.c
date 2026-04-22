@@ -205,10 +205,11 @@ svnae_wc_cleanup(const char *wc_root)
     if (!wc_root || !*wc_root) return -1;
 
     /* Verify this is a WC by checking for .svn/wc.db. */
+    extern int aether_io_exists(const char *p);
+    extern int aether_io_is_regular_file(const char *p);
     char wc_db[PATH_MAX];
     snprintf(wc_db, sizeof wc_db, "%s/.svn/wc.db", wc_root);
-    struct stat st;
-    if (stat(wc_db, &st) != 0) return -1;
+    if (!aether_io_exists(wc_db)) return -1;
 
     /* Walk the whole WC — includes .svn/pristine and user files.
      * is_stale_tmp gates what we actually delete, so we never touch
@@ -225,7 +226,7 @@ svnae_wc_cleanup(const char *wc_root)
      * absent under normal operation. */
     char journal[PATH_MAX];
     snprintf(journal, sizeof journal, "%s/.svn/wc.db-journal", wc_root);
-    if (stat(journal, &st) == 0 && S_ISREG(st.st_mode)) {
+    if (aether_io_is_regular_file(journal)) {
         if (unlink(journal) == 0) count++;
     }
 

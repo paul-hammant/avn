@@ -369,11 +369,8 @@ svnae_wc_merge(const char *wc_root, const char *source_path, int rev_a, int rev_
          * to B is safe to apply). If dirty locally, 3-way merge using
          * A as base and B as theirs. If not present locally, straight
          * add. */
-        int exists_on_disk = 0;
-        {
-            struct stat st;
-            exists_on_disk = (stat(disk, &st) == 0);
-        }
+        extern int aether_io_exists(const char *p);
+        int exists_on_disk = aether_io_exists(disk);
         if (!exists_on_disk || !svnae_wc_db_node_exists(db, wc_rel)) {
             /* Not tracked yet — new add-file. */
             if (write_file_atomic(disk, rb->data, rb->data_len) != 0) continue;

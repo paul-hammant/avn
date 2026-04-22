@@ -702,10 +702,10 @@ handle_repo_info(HttpRequest *req, HttpServerResponse *res, void *user_data)
             closedir(d);
         }
         /* If main wasn't already listed (no on-disk dir), emit [] for it. */
+        extern int aether_io_exists(const char *p);
         char main_spec[PATH_MAX];
         snprintf(main_spec, sizeof main_spec, "%s/main", branches_dir);
-        struct stat mst;
-        if (stat(main_spec, &mst) != 0) {
+        if (!aether_io_exists(main_spec)) {
             if (!first) sb_putc(&s, ',');
             sb_puts(&s, "\"main\":[]");
         }
