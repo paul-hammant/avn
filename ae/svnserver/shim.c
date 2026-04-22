@@ -787,19 +787,16 @@ handle_repo_rev(HttpRequest *req, HttpServerResponse *res, void *user_data)
     }
 
     /* /rev/N/paths → {"entries":[{"action":"A","path":"..."}, ...]}
-     * ACL-filtered; super sees all. Body built in Aether. */
+     * ACL-filtered; super sees all. Routing+response now done in
+     * ae/svnserver/handler_rev_paths.ae. */
     if (strcmp(after, "/paths") == 0) {
-        struct svnae_paths *P = svnae_repos_paths_changed(repo, rev);
-        if (!P) { respond_error(res, 404, "no such rev"); return; }
         const char *user = NULL;
         int is_super = auth_context(req, &user);
-        extern const char *aether_paths_changed_json(const char *repo, int rev,
-                                                     const void *paths,
-                                                     const char *user, int is_super);
-        const char *body = aether_paths_changed_json(repo, rev, P,
-                                                     user ? user : "", is_super);
-        svnae_repos_paths_free(P);
-        respond_json(res, 200, body ? body : "{\"entries\":[]}");
+        extern void aether_paths_handle(void *req, void *res,
+                                         const char *repo, int rev,
+                                         const char *user, int is_super);
+        aether_paths_handle(req, res, repo, rev,
+                            user ? user : "", is_super);
         return;
     }
 
