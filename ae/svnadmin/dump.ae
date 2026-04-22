@@ -25,11 +25,11 @@ import std.string
 // REP-COUNT <n>
 export dump_prelude(head: int, rev_count: int, rep_count: int) -> string {
     out = "SVNAE-DUMP 1\nFORMAT svnae-fsfs-1\nHEAD "
-    out = string.concat(out, int_to_dec(head))
+    out = string.concat(out, string.from_int(head))
     out = string.concat(out, "\nREV-COUNT ")
-    out = string.concat(out, int_to_dec(rev_count))
+    out = string.concat(out, string.from_int(rev_count))
     out = string.concat(out, "\nREP-COUNT ")
-    out = string.concat(out, int_to_dec(rep_count))
+    out = string.concat(out, string.from_int(rep_count))
     out = string.concat(out, "\n")
     return out
 }
@@ -40,7 +40,7 @@ export rep_header(sha: string, size: int) -> string {
     out = "REP "
     out = string.concat(out, sha)
     out = string.concat(out, "\nSIZE ")
-    out = string.concat(out, int_to_dec(size))
+    out = string.concat(out, string.from_int(size))
     out = string.concat(out, "\n")
     return out
 }
@@ -49,40 +49,11 @@ export rep_header(sha: string, size: int) -> string {
 // POINTER <sha>
 export rev_pointer_block(rev: int, pointer_sha: string) -> string {
     out = "REV "
-    out = string.concat(out, int_to_dec(rev))
+    out = string.concat(out, string.from_int(rev))
     out = string.concat(out, "\nPOINTER ")
     out = string.concat(out, pointer_sha)
     out = string.concat(out, "\n")
     return out
-}
-
-int_to_dec(v: int) -> string {
-    if v == 0 { return "0" }
-    neg = 0
-    n = v
-    if v < 0 { neg = 1; n = 0 - v }
-    out = ""
-    while n > 0 {
-        d = n - (n / 10) * 10
-        out = string.concat(digit_char(d), out)
-        n = n / 10
-    }
-    if neg == 1 { out = string.concat("-", out) }
-    return out
-}
-
-digit_char(d: int) -> string {
-    if d == 0 { return "0" }
-    if d == 1 { return "1" }
-    if d == 2 { return "2" }
-    if d == 3 { return "3" }
-    if d == 4 { return "4" }
-    if d == 5 { return "5" }
-    if d == 6 { return "6" }
-    if d == 7 { return "7" }
-    if d == 8 { return "8" }
-    if d == 9 { return "9" }
-    return "?"
 }
 
 // Count comma-separated tokens in `spec`. Ignores empty tokens.
