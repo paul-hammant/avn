@@ -37,12 +37,28 @@ extern aether_redacted_dir_sha(repo: string, rev: int, user: string,
 extern aether_rev_info_json(rev: int, author: string, date: string,
                             msg: string, root: string) -> string
 
+extern svnserver_respond_error(res: ptr, code: int, msg: string)
+extern svnserver_respond_json_ok(res: ptr, body: string)
+
 // Returns "{...json...}" on success, "" if the rev is missing.
 // Named `_full` to distinguish from the field-emit-only helper
 // aether_rev_info_json in ae/svnserver/json.ae (which just builds
 // the inner {rev, author, ...} object from already-known fields).
 export rev_info_json_full(repo: string, rev: int, user: string, is_super: int) -> string {
     return rev_info_json_full_impl(repo, rev, user, is_super)
+}
+
+// Full handler including transport: 404 on missing rev, JSON emit
+// otherwise. Keeps the 404-check on the Aether side so the C branch
+// is a single extern call.
+export rev_info_handle(req: ptr, res: ptr, repo: string, rev: int,
+                       user: string, is_super: int) {
+    body = rev_info_json_full_impl(repo, rev, user, is_super)
+    if string.length(body) == 0 {
+        svnserver_respond_error(res, 404, "no such rev")
+        return
+    }
+    svnserver_respond_json_ok(res, body)
 }
 
 rev_info_json_full_impl(repo: string, rev: int, user: string, is_super: int) -> string {

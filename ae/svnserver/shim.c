@@ -773,22 +773,15 @@ handle_repo_rev(HttpRequest *req, HttpServerResponse *res, void *user_data)
         return;
     }
 
-    /* /rev/N/info */
+    /* /rev/N/info — ported to ae/svnserver/handler_rev_info.ae. */
     if (strcmp(after, "/info") == 0) {
-        struct svnae_info *I = svnae_repos_info_rev(repo, rev);
-        /* Body + root-sha redaction ported to Aether (ae/svnserver/handler_rev_info.ae). */
-        svnae_repos_info_free(I);   /* rev_info_json will re-fetch */
         const char *user = NULL;
         int is_super = auth_context(req, &user);
-        extern const char *aether_rev_info_json_full(const char *repo, int rev,
-                                                     const char *user, int is_super);
-        const char *body = aether_rev_info_json_full(repo, rev,
-                                                     user ? user : "", is_super);
-        if (!body || !*body) {
-            respond_error(res, 404, "no such rev");
-            return;
-        }
-        respond_json(res, 200, body);
+        extern void aether_rev_info_handle(void *req, void *res,
+                                            const char *repo, int rev,
+                                            const char *user, int is_super);
+        aether_rev_info_handle(req, res, repo, rev,
+                               user ? user : "", is_super);
         return;
     }
 
