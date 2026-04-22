@@ -121,13 +121,8 @@ write_file_atomic(const char *path, const char *data, int len)
     return 0;
 }
 
-/* Build "prefix/name" into `out`, or just "name" if prefix is empty. */
-static void
-join_path(const char *prefix, const char *name, char *out, size_t out_sz)
-{
-    if (!prefix || !*prefix) snprintf(out, out_sz, "%s", name);
-    else                     snprintf(out, out_sz, "%s/%s", prefix, name);
-}
+/* Prefix/name join ported to Aether (ae/fs_fs/pathutil.ae). */
+extern const char *aether_path_join_rel(const char *prefix, const char *name);
 
 /* --- recursive walk --------------------------------------------------- */
 
@@ -147,12 +142,9 @@ walk(const char *base_url, const char *repo, int rev,
         const char *kind = svnae_ra_list_kind(L, i);
 
         /* repo-relative path (stored in wc.db). */
-        char rel[PATH_MAX];
-        join_path(prefix, name, rel, sizeof rel);
-
+        const char *rel = aether_path_join_rel(prefix, name);
         /* local filesystem path under $dest. */
-        char disk[PATH_MAX];
-        snprintf(disk, sizeof disk, "%s/%s", dest, rel);
+        const char *disk = aether_path_join_rel(dest, rel);
 
         if (strcmp(kind, "dir") == 0) {
             if (mkdir_p(disk) != 0) { svnae_ra_list_free(L); return -1; }
