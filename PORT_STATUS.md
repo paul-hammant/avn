@@ -11,7 +11,7 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
 
 ## Headline
 
-- **107 commits.** Each phase is its own commit, reviewable in isolation.
+- **111 commits.** Each phase is its own commit, reviewable in isolation.
 - **47 test suites**, ~507 assertions, all green.
 - **C→Aether port, rounds 2 + 3** (30 leaf ports, 1 per commit): branch
   spec matcher, mergeinfo arithmetic, svn:ignore matcher, JSON
@@ -37,7 +37,13 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
   JSON parsers in the verify path all ported. Issue #16's
   packed-int workaround unwound after discovering the real cause
   was `state` being a reserved keyword.  Hand-written C%: now
-  **68%**.
+  **58%** of tracked source (generated `_generated.c` files are
+  gitignored and not counted toward either side).
+- **Round 7** (current): ported the svnserver /rev/N URL-tail parser
+  (ae/svnserver/url_parse.ae), dropped four copies of hand-rolled
+  `int_to_dec` + `digit_char` in favour of `std.string.from_int` now
+  that it's available, and ported the WC pristine-store path builder
+  to ae/wc/pristine_path.ae (handles the two-level XX/YY/ fanout).
   Mix of in-language `.ae` tests and end-to-end shell harnesses that
   spin up a real HTTP server and drive it with curl and the built
   `svn` CLI.
