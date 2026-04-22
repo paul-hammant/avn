@@ -74,14 +74,15 @@
 sqlite3 *
 svnae_wc_db_open(const char *wc_root)
 {
-    /* mkdir $wc_root/.svn and $wc_root/.svn/pristine */
+    /* mkdir $wc_root/.svn/pristine (idempotent); path.ae's mkdir_p
+     * creates parents as needed, so wc_root itself gets materialized
+     * too if it's absent. */
+    extern int aether_io_mkdir_p(const char *path);
+    char pristine_dir[PATH_MAX];
+    snprintf(pristine_dir, sizeof pristine_dir, "%s/.svn/pristine", wc_root);
+    if (aether_io_mkdir_p(pristine_dir) != 0) return NULL;
     char svn_dir[PATH_MAX];
     snprintf(svn_dir, sizeof svn_dir, "%s/.svn", wc_root);
-    mkdir(wc_root, 0755);                 /* WC root must already exist; ignore EEXIST */
-    if (mkdir(svn_dir, 0755) != 0 && errno != EEXIST) return NULL;
-    char pristine_dir[PATH_MAX];
-    snprintf(pristine_dir, sizeof pristine_dir, "%s/pristine", svn_dir);
-    if (mkdir(pristine_dir, 0755) != 0 && errno != EEXIST) return NULL;
 
     char dbpath[PATH_MAX];
     snprintf(dbpath, sizeof dbpath, "%s/wc.db", svn_dir);

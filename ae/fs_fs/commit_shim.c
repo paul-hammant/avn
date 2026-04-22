@@ -54,8 +54,9 @@ void        svnae_rep_free(char *p);
 const char *svnae_fsfs_now_iso8601(void);
 int         svnae_repos_head_rev(const char *repo);
 
-/* Atomic write ported to Aether (ae/subr/io.ae, --emit=lib --with=fs). */
+/* Atomic write + mkdir-p ported to Aether (ae/subr/io.ae, --emit=lib --with=fs). */
 extern int aether_io_write_atomic(const char *path, const char *data, int length);
+extern int aether_io_mkdir_p(const char *path);
 
 static int write_atomic(const char *path, const char *data, int len)
 {
@@ -365,18 +366,7 @@ svnae_commit_finalise_on_branch(const char *repo, struct svnae_txn *txn,
              repo, branch, aa, bb);
     /* mkdir -p. write_atomic writes to a tempfile + rename, so the
      * parent dir must exist first. */
-    {
-        char tmp[PATH_MAX];
-        snprintf(tmp, sizeof tmp, "%s", branch_dir);
-        for (char *q = tmp + 1; *q; q++) {
-            if (*q == '/') {
-                *q = '\0';
-                if (mkdir(tmp, 0755) != 0 && errno != EEXIST) { free(new_root); return -1; }
-                *q = '/';
-            }
-        }
-        if (mkdir(tmp, 0755) != 0 && errno != EEXIST) { free(new_root); return -1; }
-    }
+    if (aether_io_mkdir_p(branch_dir) != 0) { free(new_root); return -1; }
     char branch_ptr[PATH_MAX];
     snprintf(branch_ptr, sizeof branch_ptr, "%s/%06d", branch_dir, next);
     if (write_atomic(branch_ptr, ptr_body, plen) != 0) { free(new_root); return -1; }
@@ -675,8 +665,7 @@ svnae_branch_create(const char *repo, const char *name, const char *base,
                  * legacy head. */
                 char main_dir[PATH_MAX];
                 snprintf(main_dir, sizeof main_dir, "%s/branches/main", repo);
-                (void)mkdir(branches_root, 0755);
-                (void)mkdir(main_dir, 0755);
+                (void)aether_io_mkdir_p(main_dir);
                 char main_head[PATH_MAX];
                 snprintf(main_head, sizeof main_head, "%s/head", main_dir);
                 char hb[32];
@@ -699,10 +688,7 @@ svnae_branch_create(const char *repo, const char *name, const char *base,
      * $repo/branches/<name>/spec. */
     /* Parent $repo/branches may not exist yet either (for repos seeded
      * before Phase 8.1 landed). */
-    char parent[PATH_MAX];
-    snprintf(parent, sizeof parent, "%s/branches", repo);
-    if (mkdir(parent, 0755) != 0 && errno != EEXIST) { free(new_root); return -1; }
-    if (mkdir(br_dir, 0755) != 0 && errno != EEXIST) { free(new_root); return -1; }
+    if (aether_io_mkdir_p(br_dir) != 0) { free(new_root); return -1; }
     char spec_path[PATH_MAX];
     snprintf(spec_path, sizeof spec_path, "%s/spec", br_dir);
     {
@@ -726,17 +712,7 @@ svnae_branch_create(const char *repo, const char *name, const char *base,
     /* Create the revs directory structure. */
     char revs_dir[PATH_MAX];
     snprintf(revs_dir, sizeof revs_dir, "%s/revs/00/00", br_dir);
-    /* mkdir -p. */
-    char tmp[PATH_MAX];
-    snprintf(tmp, sizeof tmp, "%s", revs_dir);
-    for (char *q = tmp + 1; *q; q++) {
-        if (*q == '/') {
-            *q = '\0';
-            if (mkdir(tmp, 0755) != 0 && errno != EEXIST) { free(new_root); return -1; }
-            *q = '/';
-        }
-    }
-    if (mkdir(tmp, 0755) != 0 && errno != EEXIST) { free(new_root); return -1; }
+    if (aether_io_mkdir_p(revs_dir) != 0) { free(new_root); return -1; }
 
     /* New rev number: one past the repo's current max.
      *
