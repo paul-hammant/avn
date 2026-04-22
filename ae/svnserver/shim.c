@@ -822,28 +822,17 @@ handle_repo_rev(HttpRequest *req, HttpServerResponse *res, void *user_data)
         return;
     }
 
-    /* /rev/N/blame/<path> → {"lines":[{"rev":..,"author":..,"text":..}]}
-     *
-     * Per-line attribution at `rev`. ACL applies: denied paths → 404.
-     * For very large files this is O(revs * lines^2) on the server;
-     * fine for typical source trees, revisit if that becomes a hot
-     * spot. */
+    /* /rev/N/blame/<path> — ported to ae/svnserver/handler_rev_blame.ae. */
     if (strncmp(after, "/blame/", 7) == 0) {
         const char *target = after + 7;
         const char *bl_user = NULL;
         int bl_is_super = auth_context(req, &bl_user);
-        if (!bl_is_super && !acl_allows(repo, rev, bl_user, target)) {
-            respond_error(res, 404, "not found");
-            return;
-        }
-
-        struct svnae_blame *B = svnae_repos_blame(repo, rev, target);
-        if (!B) { respond_error(res, 404, "not found"); return; }
-
-        extern const char *aether_blame_json(const void *blame);
-        const char *body = aether_blame_json(B);
-        svnae_blame_free(B);
-        respond_json(res, 200, body ? body : "{\"lines\":[]}");
+        extern void aether_blame_handle(void *req, void *res,
+                                         const char *repo, int rev,
+                                         const char *target,
+                                         const char *user, int is_super);
+        aether_blame_handle(req, res, repo, rev, target,
+                            bl_user ? bl_user : "", bl_is_super);
         return;
     }
 
