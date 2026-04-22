@@ -156,17 +156,11 @@ parse_int(const char *s, int *out)
 
 /* ---- create --------------------------------------------------------- */
 
-/* Golden list of hash algorithms. Match ae/subr/checksum/shim.c's
- * evp_by_name; kept local so svnadmin links standalone. */
-static int
-algo_supported(const char *algo)
-{
-    if (!algo) return 0;
-    if (strcmp(algo, "sha1")   == 0) return 1;
-    if (strcmp(algo, "sha256") == 0) return 1;
-    return 0;
-}
-#define svnae_hash_supported algo_supported
+/* Golden list lives in ae/ffi/openssl/shim.c now; every binary that
+ * links svnadmin also links the openssl wrapper, so we go through
+ * svnae_openssl_hash_supported rather than keeping a duplicate. */
+extern int svnae_openssl_hash_supported(const char *algo);
+#define svnae_hash_supported svnae_openssl_hash_supported
 
 /* Create the empty on-disk layout: dirs, format file, rep-cache schema.
  * No rev 0, no head. `algos_spec` is the comma-separated hash list

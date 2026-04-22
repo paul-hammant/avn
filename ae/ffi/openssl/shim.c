@@ -143,11 +143,17 @@ svnae_openssl_b64_decode(const char *src, int src_len,
     return 0;
 }
 
-/* Is `algo` in the golden list? 1 = yes, 0 = no. */
+/* Is `algo` allowed as a repo's *content-address* algorithm? 1 = yes,
+ * 0 = no. Intentionally narrower than evp_by_name: sha1 + sha256 only.
+ * md5 is supported by svnae_openssl_hash_hex for test-side use but
+ * must never be installed as a primary/secondary on a real repo. */
 int
 svnae_openssl_hash_supported(const char *algo)
 {
-    return evp_by_name(algo) ? 1 : 0;
+    if (!algo) return 0;
+    if (strcmp(algo, "sha1")   == 0) return 1;
+    if (strcmp(algo, "sha256") == 0) return 1;
+    return 0;
 }
 
 /* Hex width produced by `algo`. 32 (md5), 40 (sha1), 64 (sha256); 0 for
