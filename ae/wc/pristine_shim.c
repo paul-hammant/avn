@@ -77,6 +77,12 @@ extern void     svnae_wc_info_free(char *s);
 extern char *svnae_openssl_hash_hex(const char *algo, const char *data, int len);
 #define svnae_hash_hex svnae_openssl_hash_hex
 
+/* Binary-safe file read via std.fs TLS buffer. */
+extern int fs_try_read_binary(const char *path);
+extern const char *fs_get_read_binary(void);
+extern int fs_get_read_binary_length(void);
+extern void fs_release_read_binary(void);
+
 const char *
 svnae_wc_hash_algo(const char *wc_root)
 {
@@ -129,23 +135,11 @@ svnae_wc_hash_bytes(const char *wc_root, const char *data, int len, char *out)
 int
 svnae_wc_hash_file(const char *wc_root, const char *path, char *out)
 {
-    int fd = open(path, O_RDONLY);
-    if (fd < 0) return -1;
-    struct stat st;
-    if (fstat(fd, &st) != 0) { close(fd); return -1; }
-    size_t sz = (size_t)st.st_size;
-    char *buf = malloc(sz + 1);
-    if (!buf) { close(fd); return -1; }
-    size_t got = 0;
-    while (got < sz) {
-        ssize_t r = read(fd, buf + got, sz - got);
-        if (r < 0) { if (errno == EINTR) continue; free(buf); close(fd); return -1; }
-        if (r == 0) break;
-        got += (size_t)r;
-    }
-    close(fd);
-    int rc = wc_hash(wc_root, buf, (int)got, out) ? 0 : -1;
-    free(buf);
+    if (!fs_try_read_binary(path)) return -1;
+    int sz = fs_get_read_binary_length();
+    const char *data = fs_get_read_binary();
+    int rc = wc_hash(wc_root, data, sz, out) ? 0 : -1;
+    fs_release_read_binary();
     return rc;
 }
 
@@ -250,15 +244,15 @@ svnae_wc_pristine_size(const char *wc_root, const char *sha1)
 {
     char path[PATH_MAX];
     build_path(wc_root, sha1, path, sizeof path);
-    int fd = open(path, O_RDONLY);
-    if (fd < 0) return -1;
-    unsigned char hdr[5];
-    if (read(fd, hdr, sizeof hdr) != (ssize_t)sizeof hdr) { close(fd); return -1; }
-    close(fd);
+    if (!fs_try_read_binary(path)) return -1;
+    int fsize = fs_get_read_binary_length();
+    if (fsize < 5) { fs_release_read_binary(); return -1; }
+    const unsigned char *hdr = (const unsigned char *)fs_get_read_binary();
     int len = (int)hdr[1]
             | ((int)hdr[2] << 8)
             | ((int)hdr[3] << 16)
             | ((int)hdr[4] << 24);
+    fs_release_read_binary();
     return len;
 }
 
@@ -272,10 +266,6 @@ svnae_wc_pristine_get(const char *wc_root, const char *sha1)
     build_path(wc_root, sha1, path, sizeof path);
 
     /* Binary-safe read via std.fs's TLS-buffered read_binary. */
-    extern int fs_try_read_binary(const char *path);
-    extern const char *fs_get_read_binary(void);
-    extern int fs_get_read_binary_length(void);
-    extern void fs_release_read_binary(void);
     if (!fs_try_read_binary(path)) return NULL;
     int fsize = fs_get_read_binary_length();
     if (fsize < 5) { fs_release_read_binary(); return NULL; }

@@ -100,25 +100,22 @@ sha1_of_file(const char *path, char out[65])
     return svnae_wc_hash_file(g_wc_root, path, out);
 }
 
+extern int fs_try_read_binary(const char *path);
+extern const char *fs_get_read_binary(void);
+extern int fs_get_read_binary_length(void);
+extern void fs_release_read_binary(void);
+
 static char *
 read_file_to_malloc(const char *path, int *out_len)
 {
-    int fd = open(path, O_RDONLY);
-    if (fd < 0) return NULL;
-    struct stat st;
-    if (fstat(fd, &st) != 0) { close(fd); return NULL; }
-    char *buf = malloc((size_t)st.st_size + 1);
-    if (!buf) { close(fd); return NULL; }
-    ssize_t got = 0;
-    while (got < st.st_size) {
-        ssize_t n = read(fd, buf + got, (size_t)(st.st_size - got));
-        if (n < 0) { if (errno == EINTR) continue; free(buf); close(fd); return NULL; }
-        if (n == 0) break;
-        got += n;
-    }
-    close(fd);
-    buf[got] = '\0';
-    *out_len = (int)got;
+    if (!fs_try_read_binary(path)) return NULL;
+    int sz = fs_get_read_binary_length();
+    char *buf = malloc((size_t)sz + 1);
+    if (!buf) { fs_release_read_binary(); return NULL; }
+    if (sz > 0) memcpy(buf, fs_get_read_binary(), (size_t)sz);
+    buf[sz] = '\0';
+    fs_release_read_binary();
+    *out_len = sz;
     return buf;
 }
 
