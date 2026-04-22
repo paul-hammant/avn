@@ -1331,10 +1331,9 @@ verify_dir(const char *base_url, const char *repo, int rev,
     cJSON_Delete(root);
 
     /* Recurse into every child to compute its sha. */
+    extern const char *aether_path_join_rel(const char *prefix, const char *name);
     for (int i = 0; i < n; i++) {
-        char child_rel[PATH_MAX];
-        if (*rel) snprintf(child_rel, sizeof child_rel, "%s/%s", rel, entries[i].name);
-        else      snprintf(child_rel, sizeof child_rel, "%s", entries[i].name);
+        const char *child_rel = aether_path_join_rel(rel, entries[i].name);
 
         int rc;
         if (entries[i].kind_c == 'd') {
@@ -1426,10 +1425,9 @@ verify_secondaries_in_dir(const char *base_url, const char *repo, int rev,
     cJSON_Delete(root);
 
     int overall = 0;
+    extern const char *aether_path_join_rel(const char *prefix, const char *name);
     for (int i = 0; i < n; i++) {
-        char child_rel[PATH_MAX];
-        if (*rel) snprintf(child_rel, sizeof child_rel, "%s/%s", rel, ents[i].name);
-        else      snprintf(child_rel, sizeof child_rel, "%s", ents[i].name);
+        const char *child_rel = aether_path_join_rel(rel, ents[i].name);
 
         if (ents[i].kind_c == 'd') {
             int rc = verify_secondaries_in_dir(base_url, repo, rev, child_rel,
