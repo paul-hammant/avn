@@ -67,31 +67,24 @@ void        svnae_wc_node_free(struct svnae_wc_node *n);
 
 int svnae_wc_rm(const char *wc_root, const char *rel_path);
 
-/* Copy file src -> dst on disk. Returns 0 on success. */
+/* Binary-safe file copy via std.fs. The caller (svnae_wc_cp) already
+ * verified `dst` is absent, so the atomic-write-and-rename doesn't
+ * race with an existing file. */
+extern int fs_try_read_binary(const char *path);
+extern const char *fs_get_read_binary(void);
+extern int fs_get_read_binary_length(void);
+extern void fs_release_read_binary(void);
+extern int aether_io_write_atomic(const char *path, const char *data, int length);
+
 static int
 copy_file(const char *src, const char *dst)
 {
-    int sfd = open(src, O_RDONLY);
-    if (sfd < 0) return -errno;
-    int dfd = open(dst, O_WRONLY | O_CREAT | O_EXCL, 0644);
-    if (dfd < 0) { int rc = -errno; close(sfd); return rc; }
-    char buf[8192];
-    for (;;) {
-        ssize_t n = read(sfd, buf, sizeof buf);
-        if (n < 0) { if (errno == EINTR) continue; int rc = -errno; close(sfd); close(dfd); unlink(dst); return rc; }
-        if (n == 0) break;
-        const char *p = buf;
-        ssize_t rem = n;
-        while (rem > 0) {
-            ssize_t w = write(dfd, p, (size_t)rem);
-            if (w < 0) { if (errno == EINTR) continue; int rc = -errno; close(sfd); close(dfd); unlink(dst); return rc; }
-            p += w; rem -= w;
-        }
-    }
-    if (fsync(dfd) != 0) { int rc = -errno; close(sfd); close(dfd); unlink(dst); return rc; }
-    close(sfd);
-    close(dfd);
-    return 0;
+    if (!fs_try_read_binary(src)) return -1;
+    int sz = fs_get_read_binary_length();
+    const char *data = fs_get_read_binary();
+    int rc = aether_io_write_atomic(dst, data, sz);
+    fs_release_read_binary();
+    return rc == 0 ? 0 : -1;
 }
 
 int

@@ -60,28 +60,23 @@ struct svnae_wc_node *svnae_wc_db_get_node(sqlite3 *db, const char *path);
 int         svnae_wc_node_conflicted(const struct svnae_wc_node *n);
 void        svnae_wc_node_free(struct svnae_wc_node *n);
 
-/* Copy file src -> dst, overwriting if exists. */
+/* Copy file src -> dst via std.fs. The atomic-write already does
+ * overwrite-on-rename, so the "O_TRUNC" semantics are preserved. */
+extern int fs_try_read_binary(const char *path);
+extern const char *fs_get_read_binary(void);
+extern int fs_get_read_binary_length(void);
+extern void fs_release_read_binary(void);
+extern int aether_io_write_atomic(const char *path, const char *data, int length);
+
 static int
 copy_overwrite(const char *src, const char *dst)
 {
-    int sfd = open(src, O_RDONLY);
-    if (sfd < 0) return -1;
-    int dfd = open(dst, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    if (dfd < 0) { close(sfd); return -1; }
-    char buf[8192];
-    for (;;) {
-        ssize_t n = read(sfd, buf, sizeof buf);
-        if (n < 0) { if (errno == EINTR) continue; close(sfd); close(dfd); return -1; }
-        if (n == 0) break;
-        const char *p = buf; ssize_t rem = n;
-        while (rem > 0) {
-            ssize_t w = write(dfd, p, (size_t)rem);
-            if (w < 0) { if (errno == EINTR) continue; close(sfd); close(dfd); return -1; }
-            p += w; rem -= w;
-        }
-    }
-    close(sfd); close(dfd);
-    return 0;
+    if (!fs_try_read_binary(src)) return -1;
+    int sz = fs_get_read_binary_length();
+    const char *data = fs_get_read_binary();
+    int rc = aether_io_write_atomic(dst, data, sz);
+    fs_release_read_binary();
+    return rc == 0 ? 0 : -1;
 }
 
 /* Delete any `basename.mine` and `basename.r<digits>` sidecars in the
