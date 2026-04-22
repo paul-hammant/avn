@@ -1,0 +1,96 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// permissions and limitations under the License.
+
+// Recursive redacted dir-sha computation for the svnserver /info
+// Merkle proof. Ported from compute_redacted_dir_sha in
+// ae/svnserver/shim.c.
+//
+// The server advertises a per-rev root sha that a non-super-user
+// can independently verify. Paths the user can't read get replaced
+// with an "H <sha>\n" line (hidden placeholder) rather than the
+// normal entry — so the user's recomputed root hashes the same
+// thing the server did, proving the server didn't tamper with the
+// visible paths.
+//
+// The ACL check and hash primitive stay in C.
+
+import std.string
+
+extern svnae_rep_read_blob(repo: string, sha: string) -> string
+extern svnae_rep_free(body: string)
+
+extern aether_dir_count_entries(body: string) -> int
+extern aether_dir_entry_kind(body: string, i: int) -> int
+extern aether_dir_entry_sha(body: string, i: int) -> string
+extern aether_dir_entry_name(body: string, i: int) -> string
+extern aether_dir_entry_line(kind: int, sha: string, name: string) -> string
+extern aether_path_join_rel(prefix: string, name: string) -> string
+
+// C-side ACL decision + hash wrappers.
+extern svnserver_acl_allows(repo: string, rev: int, user: string, path: string) -> int
+extern svnserver_hash_hex(repo: string, data: string, length: int) -> string
+
+// Recursive entry. Returns the hex digest of the redacted dir body,
+// or "" on failure.
+export redacted_dir_sha(repo: string, rev: int, user: string,
+                        dir_sha: string, prefix: string) -> string {
+    return redacted_dir_sha_impl(repo, rev, user, dir_sha, prefix)
+}
+
+redacted_dir_sha_impl(repo: string, rev: int, user: string,
+                      dir_sha: string, prefix: string) -> string {
+    body = svnae_rep_read_blob(repo, dir_sha)
+    redact = ""
+    n = aether_dir_count_entries(body)
+    i = 0
+    while i < n {
+        kind = aether_dir_entry_kind(body, i)
+        sha = aether_dir_entry_sha(body, i)
+        name = aether_dir_entry_name(body, i)
+        // Snapshot — recursion calls svnae_rep_read_blob which may
+        // reuse shared buffers.
+        sha = string.concat(sha, "")
+        name = string.concat(name, "")
+        child_path = aether_path_join_rel(prefix, name)
+
+        allowed = svnserver_acl_allows(repo, rev, user, child_path)
+        if allowed == 1 {
+            if kind == 100 {          // 'd'
+                sub = redacted_dir_sha_impl(repo, rev, user, sha, child_path)
+                if string.length(sub) > 0 {
+                    redact = string.concat(redact,
+                        aether_dir_entry_line(kind, sub, name))
+                }
+            }
+            if kind != 100 {
+                redact = string.concat(redact,
+                    aether_dir_entry_line(kind, sha, name))
+            }
+        }
+        if allowed == 0 {
+            // Hidden — "H <sha>\n" instead of the entry's normal form.
+            redact = string.concat(redact, "H ")
+            redact = string.concat(redact, sha)
+            redact = string.concat(redact, "\n")
+        }
+        i = i + 1
+    }
+    svnae_rep_free(body)
+    return svnserver_hash_hex(repo, redact, string.length(redact))
+}
+
+main() {
+    println("ae/svnserver/redact.ae is a library; not meant to run standalone")
+}

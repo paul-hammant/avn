@@ -2,7 +2,7 @@
 
 AETHERC ?= $(HOME)/scm/aether/build/aetherc
 
-GENERATED := json_generated.c paths_index_generated.c acl_generated.c copy_acl_generated.c url_parse_generated.c
+GENERATED := json_generated.c paths_index_generated.c acl_generated.c copy_acl_generated.c url_parse_generated.c redact_generated.c
 
 all: $(GENERATED)
 
@@ -19,6 +19,9 @@ copy_acl_generated.c: copy_acl.ae
 	$(AETHERC) --emit=lib $< $@
 
 url_parse_generated.c: url_parse.ae
+	$(AETHERC) --emit=lib $< $@
+
+redact_generated.c: redact.ae
 	$(AETHERC) --emit=lib $< $@
 
 .PHONY: all

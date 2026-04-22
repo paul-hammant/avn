@@ -430,56 +430,40 @@ hex_digest(const char *algo, const char *data, int len, char *out)
     return svnae_openssl_hash_hex_into(algo, data, len, out);
 }
 
+/* Aether-callable ACL + hash wrappers. The redact walker is ported
+ * to ae/svnserver/redact.ae, which reaches through these. */
+int svnserver_acl_allows(const char *repo, int rev, const char *user,
+                         const char *path) {
+    return acl_allows(repo, rev, user, path);
+}
+
+const char *svnserver_hash_hex(const char *repo, const char *data, int length) {
+    static __thread char buf[65];
+    buf[0] = '\0';
+    const char *algo = svnae_repo_primary_hash(repo);
+    hex_digest(algo, data ? data : "", length, buf);
+    return buf;
+}
+
 /* Recursively compute the redacted-for-`user` sha of the dir at
  * `dir_sha`. Writes 65-byte hex into `out`. Returns 0 on success.
- * `prefix` is the repo-relative path of this dir. */
+ * Ported to Aether (ae/svnserver/redact.ae); the wrapper preserves
+ * the old out-param signature for the three call sites. */
+extern const char *aether_redacted_dir_sha(const char *repo, int rev,
+                                           const char *user,
+                                           const char *dir_sha,
+                                           const char *prefix);
+
 static int
 compute_redacted_dir_sha(const char *repo, int rev, const char *user,
                          const char *dir_sha, const char *prefix, char *out)
 {
-    char *body = svnae_rep_read_blob(repo, dir_sha);
-    if (!body) return -1;
-    const char *algo = svnae_repo_primary_hash(repo);
-    struct sb redact = {0};
-    int n_entries = aether_dir_count_entries(body);
-    for (int ei = 0; ei < n_entries; ei++) {
-        char kind_c = (char)aether_dir_entry_kind(body, ei);
-        /* Snapshot the child fields: recursive compute_redacted_dir_sha
-         * below will reuse the Aether thread-local return buffers. */
-        char child_sha[65], child_name[PATH_MAX];
-        const char *sha_ref = aether_dir_entry_sha(body, ei);
-        size_t sha_len = strlen(sha_ref);
-        if (sha_len >= sizeof child_sha) continue;
-        memcpy(child_sha, sha_ref, sha_len + 1);
-        const char *name_ref = aether_dir_entry_name(body, ei);
-        size_t name_len = strlen(name_ref);
-        if (name_len >= sizeof child_name) continue;
-        memcpy(child_name, name_ref, name_len + 1);
-
-        extern const char *aether_path_join_rel(const char *prefix, const char *name);
-        const char *child_path = aether_path_join_rel(prefix, child_name);
-        extern const char *aether_dir_entry_line(int kind, const char *sha, const char *name);
-        int allowed = acl_allows(repo, rev, user, child_path);
-        if (allowed) {
-            if (kind_c == 'd') {
-                char sub[65];
-                if (compute_redacted_dir_sha(repo, rev, user,
-                                             child_sha, child_path, sub) == 0) {
-                    sb_puts(&redact, aether_dir_entry_line((int)kind_c, sub, child_name));
-                }
-            } else {
-                sb_puts(&redact, aether_dir_entry_line((int)kind_c, child_sha, child_name));
-            }
-        } else {
-            char line[96];
-            snprintf(line, sizeof line, "H %s\n", child_sha);
-            sb_puts(&redact, line);
-        }
-    }
-    svnae_rep_free(body);
-    hex_digest(algo, redact.data ? redact.data : "",
-               redact.data ? (int)redact.len : 0, out);
-    free(redact.data);
+    const char *hex = aether_redacted_dir_sha(repo, rev, user, dir_sha, prefix);
+    if (!hex || !*hex) { out[0] = '\0'; return -1; }
+    size_t n = strlen(hex);
+    if (n >= 65) n = 64;
+    memcpy(out, hex, n);
+    out[n] = '\0';
     return 0;
 }
 
