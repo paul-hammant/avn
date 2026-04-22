@@ -704,32 +704,10 @@ load_rev_blob_field(const char *repo, int rev, const char *key)
     return out;
 }
 
-/* Back-compat: one call site still asks for "props:" specifically. */
-static char *
-load_rev_props_sha1(const char *repo, int rev)
-{
-    return load_rev_blob_field(repo, rev, "props");
-}
-
-/* Given a paths-props blob body and a target path, return the sha of
- * that path's per-path props blob (malloc'd), or NULL if missing.
- *
- * Shares the paths_acl_lookup Aether port — both blobs share the
- * "<sha> <path>\n" shape and the lookup handles any sha width. */
-static char *
-paths_props_lookup(const char *body, const char *path)
-{
-    if (!body) return NULL;
-    const char *v = aether_paths_index_lookup(body, path);
-    return (v && *v) ? strdup(v) : NULL;
-}
-
-/* props-blob → JSON transform ported to Aether (ae/svnserver/json.ae). */
-static void
-sb_put_props_as_json(struct sb *s, const char *body)
-{
-    sb_puts(s, aether_props_blob_to_json(body ? body : ""));
-}
+/* load_rev_props_sha1 / paths_props_lookup / sb_put_props_as_json
+ * were the building blocks of the /rev/N/props handler; all moved
+ * to Aether (ae/svnserver/acl_resolve.ae::props_resolve) and
+ * ae/svnserver/json.ae. */
 
 /* GET /repos/{r}/rev/:rev/info  → info_rev JSON
  * GET /repos/{r}/rev/:rev/cat/<path>   → raw bytes
