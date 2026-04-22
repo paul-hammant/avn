@@ -145,17 +145,7 @@ slurp_small(const char *path)
     return buf;
 }
 
-static int
-parse_int(const char *s, int *out)
-{
-    if (!s) return 0;
-    while (*s == ' ' || *s == '\t') s++;
-    char *e;
-    long v = strtol(s, &e, 10);
-    if (e == s) return 0;
-    *out = (int)v;
-    return 1;
-}
+/* parse_int moved to ae/svnadmin/dump.ae::parse_tagged_int. */
 
 /* ---- create --------------------------------------------------------- */
 
