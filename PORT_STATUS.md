@@ -11,7 +11,7 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
 
 ## Headline
 
-- **97 commits.** Each phase is its own commit, reviewable in isolation.
+- **107 commits.** Each phase is its own commit, reviewable in isolation.
 - **47 test suites**, ~507 assertions, all green.
 - **C→Aether port, rounds 2 + 3** (30 leaf ports, 1 per commit): branch
   spec matcher, mergeinfo arithmetic, svn:ignore matcher, JSON
@@ -26,15 +26,18 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
   URL builder family. Each lives in an Aether source under
   `ae/*/<name>.ae`, compiled with `aetherc --emit=lib` and linked into
   its consumers. Hand-written C%: **82% → 69%** by end of round 5.
-- **Rounds 4/5** (Aether 0.78.0/0.79.0): cjson was replaced with
+- **Rounds 4/5/6** (Aether 0.78.0/0.79.0): cjson was replaced with
   Aether's std.json in both `ra/shim.c` and `svnserver/shim.c` via a
   local compat layer; the `-lcjson` link-line dependency is gone
   entirely. FFI shims consolidated into `ae/ffi/{openssl,sqlite,
   zlib,utf8proc}/`. WC conflict-sidecar classifier, svn-status
-  decision table, dir-blob find-by-name, svnadmin dump-line
-  parsers, and several hand-written JSON parsers in the verify
-  path all ported. Issue #16's packed-int workaround unwound after
-  discovering the real cause was `state` being a reserved keyword.
+  decision table, dir-blob find-by-name, dir-blob parse helpers,
+  repo-path predicates (is_immediate_child / basename_after /
+  covers), svnadmin dump-line parsers, and several hand-written
+  JSON parsers in the verify path all ported. Issue #16's
+  packed-int workaround unwound after discovering the real cause
+  was `state` being a reserved keyword.  Hand-written C%: now
+  **68%**.
   Mix of in-language `.ae` tests and end-to-end shell harnesses that
   spin up a real HTTP server and drive it with curl and the built
   `svn` CLI.
