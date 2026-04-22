@@ -629,6 +629,28 @@ void svnserver_respond_json_ok(HttpServerResponse *res, const char *body) {
     respond_json(res, 200, body);
 }
 
+/* Aether-callable helper: newline-separated "algo hash\n" pairs for each
+ * configured secondary hash that the repo actually has for `node_sha`.
+ * Returned buffer is heap-allocated (free via svnae_rep_free). "" on none. */
+const char *svnserver_build_secondary_pairs(const char *repo, const char *node_sha) {
+    char sec[4][32];
+    int sec_n = svnae_repo_secondary_hashes(repo, sec);
+    size_t cap = 512, slen = 0;
+    char *pairs = malloc(cap);
+    if (!pairs) return "";
+    pairs[0] = '\0';
+    for (int i = 0; i < sec_n; i++) {
+        char *shex = svnae_rep_lookup_secondary(repo, node_sha, sec[i]);
+        if (shex && *shex) {
+            size_t need = strlen(sec[i]) + 1 + strlen(shex) + 2;
+            if (slen + need >= cap) { cap = (slen + need) * 2; pairs = realloc(pairs, cap); }
+            slen += (size_t)snprintf(pairs + slen, cap - slen, "%s %s\n", sec[i], shex);
+        }
+        free(shex);
+    }
+    return pairs;
+}
+
 /* --- path parsing helpers --------------------------------------------- *
  *
  * URL shape:  /repos/{R}/...
@@ -826,56 +848,19 @@ handle_repo_rev(HttpRequest *req, HttpServerResponse *res, void *user_data)
     }
 
     /* /rev/N/hashes/<path> → {"primary":{algo,hash}, "secondaries":[...]}
-     *
-     * Used by `svn verify --secondaries`. The client can fetch the
-     * content bytes separately (via /cat or /list's child shas), re-
-     * hash locally under each algo, and compare with the server's
-     * stored secondaries. ACL applies — denied paths return 404. */
+     * Ported to ae/svnserver/handler_rev_hashes.ae. */
     if (strncmp(after, "/hashes/", 8) == 0 || strcmp(after, "/hashes") == 0) {
         const char *target = strcmp(after, "/hashes") == 0 ? "" : after + 8;
-
         const char *hu_user = NULL;
         int hu_is_super = auth_context(req, &hu_user);
-        if (!hu_is_super && !acl_allows(repo, rev, hu_user, target)) {
-            respond_error(res, 404, "not found");
-            return;
-        }
-
-        char node_sha[65] = {0};
-        char node_kind = 0;
-        if (!svnae_repos_resolve(repo, rev, target, node_sha, &node_kind)) {
-            respond_error(res, 404, "not found");
-            return;
-        }
-
-        const char *algo = svnae_repo_primary_hash(repo);
-
-        /* Collect all non-empty (algo, hash) secondary pairs into a
-         * newline-separated string "algo1 hash1\nalgo2 hash2\n...";
-         * Aether assembles the final JSON. */
-        char sec[4][32];
-        int sec_n = svnae_repo_secondary_hashes(repo, sec);
-        size_t cap = 512, slen = 0;
-        char *pairs = malloc(cap);
-        pairs[0] = '\0';
-        for (int i = 0; i < sec_n; i++) {
-            char *shex = svnae_rep_lookup_secondary(repo, node_sha, sec[i]);
-            if (shex && *shex) {
-                size_t need = strlen(sec[i]) + 1 + strlen(shex) + 2;
-                if (slen + need >= cap) { cap = (slen + need) * 2; pairs = realloc(pairs, cap); }
-                slen += (size_t)snprintf(pairs + slen, cap - slen, "%s %s\n", sec[i], shex);
-            }
-            free(shex);
-        }
-        extern const char *aether_hashes_json(const char *algo,
-                                              const char *primary_sha,
-                                              const char *secondary_pairs);
-        const char *body = aether_hashes_json(algo, node_sha, pairs);
-        free(pairs);
-        respond_json(res, 200, body ? body : "{}");
+        extern void aether_hashes_handle(void *req, void *res,
+                                          const char *repo, int rev,
+                                          const char *target,
+                                          const char *user, int is_super);
+        aether_hashes_handle(req, res, repo, rev, target,
+                             hu_user ? hu_user : "", hu_is_super);
         return;
     }
-
     /* /rev/N/acl/<path> → ACL lookup + body in Aether. Super-user
      * only; normal users get 404 so they can't probe existence. */
     if (strncmp(after, "/acl/", 5) == 0 || strcmp(after, "/acl") == 0) {
