@@ -98,28 +98,18 @@ remove_sidecars(const char *wc_root, const char *rel_path)
     }
     size_t blen = strlen(base);
 
+    extern int aether_is_sidecar_suffix(const char *s);
+
     DIR *d = opendir(dirpath);
     if (!d) return;
     struct dirent *e;
     while ((e = readdir(d)) != NULL) {
         if (strncmp(e->d_name, base, blen) != 0) continue;
         if (e->d_name[blen] != '.') continue;
-        const char *suf = e->d_name + blen + 1;
-        int is_sidecar = 0;
-        if (strcmp(suf, "mine") == 0) {
-            is_sidecar = 1;
-        } else if (suf[0] == 'r' && suf[1]) {
-            int all_digits = 1;
-            for (const char *q = suf + 1; *q; q++) {
-                if (*q < '0' || *q > '9') { all_digits = 0; break; }
-            }
-            if (all_digits) is_sidecar = 1;
-        }
-        if (is_sidecar) {
-            char full[PATH_MAX];
-            snprintf(full, sizeof full, "%s/%s", dirpath, e->d_name);
-            unlink(full);
-        }
+        if (!aether_is_sidecar_suffix(e->d_name + blen + 1)) continue;
+        char full[PATH_MAX];
+        snprintf(full, sizeof full, "%s/%s", dirpath, e->d_name);
+        unlink(full);
     }
     closedir(d);
 }

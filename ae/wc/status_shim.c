@@ -196,20 +196,8 @@ walk_unversioned(const char *wc_root, const char *rel,
         /* Skip conflict sidecars — .mine and .r<N>. They'll be cleaned
          * up by `svn resolve`. */
         {
-            size_t nl = strlen(e->d_name);
-            if (nl > 5 && strcmp(e->d_name + nl - 5, ".mine") == 0) continue;
-            if (nl > 2 && e->d_name[nl - 2] == '.' && e->d_name[nl - 1] == 'r') {
-                /* just ".r" — probably not a sidecar; let through */
-            }
-            /* Pattern: name ends in ".rN" where N is all digits. */
-            const char *dot = strrchr(e->d_name, '.');
-            if (dot && dot[1] == 'r' && dot[2]) {
-                int all_digits = 1;
-                for (const char *q = dot + 2; *q; q++) {
-                    if (*q < '0' || *q > '9') { all_digits = 0; break; }
-                }
-                if (all_digits) continue;
-            }
+            extern int aether_is_sidecar_name(const char *name);
+            if (aether_is_sidecar_name(e->d_name)) continue;
         }
 
         char child_rel[PATH_MAX];
