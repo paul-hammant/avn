@@ -44,7 +44,18 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
   `int_to_dec` + `digit_char` in favour of `std.string.from_int` now
   that it's available, and ported the WC pristine-store path builder
   to ae/wc/pristine_path.ae (handles the two-level XX/YY/ fanout).
-- **Round 9** (current): the Gordian knots fall. Three structural
+- **Round 10** (current): svnserver JSON handlers move to Aether.
+  Each handler's body-building logic lives in a dedicated
+  `ae/svnserver/<route>_json.ae` module. The C side is now pure
+  routing + ACL-check + extern call + respond. Ported: /info
+  (info_json.ae), /log + /rev/N/paths + /rev/N/blame + /rev/N/hashes
+  (all in log_json.ae), /rev/N/list with the body+redact-blob pair
+  (list_json.ae), /rev/N/acl (acl_resolve.ae), /rev/N/props
+  (same file, props_resolve). The packed-return trick
+  ("<sha>\x01<json>") shuttles two values through one FFI call
+  when Merkle headers need the sha separately. C% from 52% → 50%.
+
+- **Round 9**: the Gordian knots fall. Three structural
   recursive walkers ported in a single session after `--emit=lib
   --with=fs` landed:
   - `filter_dir_recursive` (fs_fs, 89 lines of C → ae/fs_fs/filter.ae)
