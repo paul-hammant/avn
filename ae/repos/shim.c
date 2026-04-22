@@ -433,81 +433,24 @@ int svnae_repos_head_rev(const char *repo) { return head_rev(repo); }
  * same across revs hash identically and get skipped. That's a happy
  * rep-sharing side effect. */
 
-struct flat_entry { char *path; char kind; char sha1[65]; };
-struct flat_tree  { struct flat_entry *items; int n, cap; };
-
-static void
-flat_add(struct flat_tree *t, const char *path, char kind, const char *sha1)
-{
-    if (t->n == t->cap) {
-        int nc = t->cap ? t->cap * 2 : 64;
-        t->items = realloc(t->items, (size_t)nc * sizeof *t->items);
-        t->cap = nc;
-    }
-    t->items[t->n].path = strdup(path);
-    t->items[t->n].kind = kind;
-    size_t sl = strlen(sha1);
-    if (sl >= sizeof t->items[t->n].sha1) sl = sizeof t->items[t->n].sha1 - 1;
-    memcpy(t->items[t->n].sha1, sha1, sl);
-    t->items[t->n].sha1[sl] = '\0';
-    t->n++;
-}
-
-static void
-flat_free(struct flat_tree *t)
-{
-    for (int i = 0; i < t->n; i++) free(t->items[i].path);
-    free(t->items);
-}
-
-/* Depth-first walk of a dir-blob, emitting "<prefix>/<name>" entries
- * for every file and directory reachable from `dir_sha1`. */
-static void
-flatten_tree(const char *repo, const char *dir_sha1, const char *prefix,
-             struct flat_tree *out)
-{
-    char *body = svnae_rep_read_blob(repo, dir_sha1);
-    if (!body) return;
-    int n_entries = aether_dir_count_entries(body);
-    for (int ei = 0; ei < n_entries; ei++) {
-        char kind = (char)aether_dir_entry_kind(body, ei);
-        const char *child_sha_ref = aether_dir_entry_sha(body, ei);
-        const char *name = aether_dir_entry_name(body, ei);
-        /* Snapshot the Aether-owned strings before we recurse (which
-         * may reuse the thread-local buffers). */
-        char child_sha[65];
-        size_t sha_len = strlen(child_sha_ref);
-        if (sha_len >= sizeof child_sha) continue;
-        memcpy(child_sha, child_sha_ref, sha_len + 1);
-
-        extern const char *aether_path_join_rel(const char *prefix, const char *name);
-        const char *child_path = aether_path_join_rel(prefix, name);
-
-        flat_add(out, child_path, kind, child_sha);
-        if (kind == 'd') {
-            flatten_tree(repo, child_sha, child_path, out);
-        }
-    }
-    svnae_rep_free(body);
-}
-
-static int
-flat_cmp(const void *a, const void *b)
-{
-    const struct flat_entry *pa = a, *pb = b;
-    return strcmp(pa->path, pb->path);
-}
+/* flat_tree + flatten_tree + flat_add + flat_free + flat_cmp all
+ * ported to Aether (ae/repos/paths_changed.ae). */
 
 struct path_change { char action; char *path; };
 struct svnae_paths { struct path_change *items; int n; };
+
+/* Paths-changed diff ported to Aether (ae/repos/paths_changed.ae).
+ * Aether side flattens both trees, sorts, and merge-walks. Returns
+ * "ACTION\nPATH\n..." — we parse it into the C svnae_paths struct. */
+extern const char *aether_paths_changed_between(const char *repo,
+                                                const char *prev_root_sha,
+                                                const char *cur_root_sha);
 
 struct svnae_paths *
 svnae_repos_paths_changed(const char *repo, int rev)
 {
     if (rev < 0) return NULL;
 
-    /* Rev 0 is the initial empty-copy revision the seeder writes; its
-     * paths-changed list is empty. For rev > 0 we diff against rev-1. */
     char *cur_root = root_dir_sha1_for_rev(repo, rev);
     if (!cur_root) return NULL;
     char *prev_root = NULL;
@@ -516,48 +459,36 @@ svnae_repos_paths_changed(const char *repo, int rev)
         if (!prev_root) { free(cur_root); return NULL; }
     }
 
-    struct flat_tree cur = {0}, prev = {0};
-    flatten_tree(repo, cur_root, "", &cur);
-    if (prev_root) flatten_tree(repo, prev_root, "", &prev);
+    const char *diff = aether_paths_changed_between(repo,
+                                                    prev_root ? prev_root : "",
+                                                    cur_root);
     free(cur_root);
     free(prev_root);
 
-    qsort(cur.items,  (size_t)cur.n,  sizeof *cur.items,  flat_cmp);
-    qsort(prev.items, (size_t)prev.n, sizeof *prev.items, flat_cmp);
-
+    /* Parse "ACTION\nPATH\n" line pairs into the svnae_paths list. */
     struct svnae_paths *P = calloc(1, sizeof *P);
-    int cap = cur.n + prev.n + 1;
-    P->items = calloc((size_t)cap, sizeof *P->items);
+    if (!P) return NULL;
+    int cap = 0;
+    const char *p = diff ? diff : "";
+    while (*p) {
+        char action = *p;
+        if (*(p+1) != '\n') break;
+        p += 2;
+        const char *path_start = p;
+        while (*p && *p != '\n') p++;
+        int path_len = (int)(p - path_start);
+        if (*p == '\n') p++;
 
-    int i = 0, j = 0;
-    while (i < cur.n || j < prev.n) {
-        int cmp;
-        if      (i >= cur.n)  cmp = +1;
-        else if (j >= prev.n) cmp = -1;
-        else                  cmp = strcmp(cur.items[i].path, prev.items[j].path);
-
-        if (cmp == 0) {
-            if (strcmp(cur.items[i].sha1, prev.items[j].sha1) != 0) {
-                P->items[P->n].action = 'M';
-                P->items[P->n].path   = strdup(cur.items[i].path);
-                P->n++;
-            }
-            i++; j++;
-        } else if (cmp < 0) {
-            P->items[P->n].action = 'A';
-            P->items[P->n].path   = strdup(cur.items[i].path);
-            P->n++;
-            i++;
-        } else {
-            P->items[P->n].action = 'D';
-            P->items[P->n].path   = strdup(prev.items[j].path);
-            P->n++;
-            j++;
+        if (P->n == cap) {
+            cap = cap ? cap * 2 : 16;
+            P->items = realloc(P->items, (size_t)cap * sizeof *P->items);
         }
+        P->items[P->n].action = action;
+        P->items[P->n].path = malloc((size_t)path_len + 1);
+        memcpy(P->items[P->n].path, path_start, (size_t)path_len);
+        P->items[P->n].path[path_len] = '\0';
+        P->n++;
     }
-
-    flat_free(&cur);
-    flat_free(&prev);
     return P;
 }
 

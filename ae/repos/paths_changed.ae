@@ -1,0 +1,193 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// permissions and limitations under the License.
+
+// Ported from svnae_repos_paths_changed and its flatten_tree helper in
+// ae/repos/shim.c. Given (rev) → list of {action, path} where action is
+// 'A', 'M', or 'D'.
+//
+// Algorithm: flatten both the current rev's and previous rev's trees
+// depth-first into sorted-by-path lists, then merge-walk them to
+// produce the A/M/D diff. Dirs are entries too, so a newly-added
+// subdir appears as its own 'A' entry alongside its files.
+//
+// The flat list is encoded as a newline-separated string in the same
+// "K SHA NAME\n" shape the dir-blob reader already parses. The merge
+// emit format: "<action>\n<path>\n" per entry, joined into one string.
+// Two exports on top give callers index-based access.
+
+import std.string
+
+extern svnae_rep_read_blob(repo: string, sha: string) -> string
+extern svnae_rep_free(body: string)
+extern aether_dir_count_entries(body: string) -> int
+extern aether_dir_entry_kind(body: string, i: int) -> int
+extern aether_dir_entry_sha(body: string, i: int) -> string
+extern aether_dir_entry_name(body: string, i: int) -> string
+extern aether_dir_entry_line(kind: int, sha: string, name: string) -> string
+extern aether_path_join_rel(prefix: string, name: string) -> string
+
+// Depth-first flatten. Each entry is "K SHA PATH\n" with PATH being
+// the *full* path (prefix + name), not just the basename. Returns
+// an unsorted concatenation (callers sort separately).
+flatten_tree(repo: string, dir_sha: string, prefix: string) -> string {
+    return flatten_tree_impl(repo, dir_sha, prefix)
+}
+
+flatten_tree_impl(repo: string, dir_sha: string, prefix: string) -> string {
+    body = svnae_rep_read_blob(repo, dir_sha)
+    out = ""
+    n = aether_dir_count_entries(body)
+    i = 0
+    while i < n {
+        kind = aether_dir_entry_kind(body, i)
+        sha = aether_dir_entry_sha(body, i)
+        name = aether_dir_entry_name(body, i)
+        // Snapshot sha and name before recursing (thread-local bufs).
+        sha = string.concat(sha, "")
+        full_path = aether_path_join_rel(prefix, name)
+        out = string.concat(out, aether_dir_entry_line(kind, sha, full_path))
+        if kind == 100 {    // 'd'
+            out = string.concat(out, flatten_tree_impl(repo, sha, full_path))
+        }
+        i = i + 1
+    }
+    svnae_rep_free(body)
+    return out
+}
+
+// Insertion sort by path (the "name" field in the K SHA NAME\n
+// format, which here holds the full path). Same O(N^2) helper
+// shape as rebuild_dir's reclist_sort.
+sort_by_path(body: string) -> string {
+    n = aether_dir_count_entries(body)
+    if n <= 1 { return body }
+
+    sorted = ""
+    i = 0
+    while i < n {
+        this_name = aether_dir_entry_name(body, i)
+        this_kind = aether_dir_entry_kind(body, i)
+        this_sha = aether_dir_entry_sha(body, i)
+
+        sn = aether_dir_count_entries(sorted)
+        new_sorted = ""
+        placed = 0
+        j = 0
+        while j < sn {
+            jname = aether_dir_entry_name(sorted, j)
+            if placed == 0 {
+                if string.compare(this_name, jname) < 0 {
+                    new_sorted = string.concat(new_sorted,
+                        aether_dir_entry_line(this_kind, this_sha, this_name))
+                    placed = 1
+                }
+            }
+            new_sorted = string.concat(new_sorted,
+                aether_dir_entry_line(aether_dir_entry_kind(sorted, j),
+                                      aether_dir_entry_sha(sorted, j), jname))
+            j = j + 1
+        }
+        if placed == 0 {
+            new_sorted = string.concat(new_sorted,
+                aether_dir_entry_line(this_kind, this_sha, this_name))
+        }
+        sorted = new_sorted
+        i = i + 1
+    }
+    return sorted
+}
+
+// Compute the paths-changed diff between two rev roots. Returns a
+// string "ACTION\nPATH\nACTION\nPATH\n..." — two lines per entry.
+// Callers split on newlines to iterate.
+//
+// `prev_root_sha` may be "" — meaning "no previous rev", and every
+// path in cur_root becomes an add.
+export paths_changed_between(repo: string, prev_root_sha: string,
+                             cur_root_sha: string) -> string {
+    return paths_changed_between_impl(repo, prev_root_sha, cur_root_sha)
+}
+
+paths_changed_between_impl(repo: string, prev_root_sha: string,
+                           cur_root_sha: string) -> string {
+    cur_flat = sort_by_path(flatten_tree_impl(repo, cur_root_sha, ""))
+    prev_flat = ""
+    if string.length(prev_root_sha) > 0 {
+        prev_flat = sort_by_path(flatten_tree_impl(repo, prev_root_sha, ""))
+    }
+
+    cn = aether_dir_count_entries(cur_flat)
+    pn = aether_dir_count_entries(prev_flat)
+
+    out = ""
+    i = 0
+    j = 0
+    while i < cn {
+        if j >= pn {
+            // Everything remaining in cur is an add.
+            cur_path = aether_dir_entry_name(cur_flat, i)
+            out = string.concat(out, "A\n")
+            out = string.concat(out, cur_path)
+            out = string.concat(out, "\n")
+            i = i + 1
+        }
+        if j < pn {
+            if i < cn {
+                cur_path = aether_dir_entry_name(cur_flat, i)
+                prev_path = aether_dir_entry_name(prev_flat, j)
+                cmp_val = string.compare(cur_path, prev_path)
+                if cmp_val == 0 {
+                    // Same path on both sides — modified if sha differs.
+                    cur_sha = aether_dir_entry_sha(cur_flat, i)
+                    prev_sha = aether_dir_entry_sha(prev_flat, j)
+                    if string.equals(cur_sha, prev_sha) == 0 {
+                        out = string.concat(out, "M\n")
+                        out = string.concat(out, cur_path)
+                        out = string.concat(out, "\n")
+                    }
+                    i = i + 1
+                    j = j + 1
+                }
+                if cmp_val < 0 {
+                    // cur_path comes first — added.
+                    out = string.concat(out, "A\n")
+                    out = string.concat(out, cur_path)
+                    out = string.concat(out, "\n")
+                    i = i + 1
+                }
+                if cmp_val > 0 {
+                    // prev_path comes first — deleted.
+                    out = string.concat(out, "D\n")
+                    out = string.concat(out, prev_path)
+                    out = string.concat(out, "\n")
+                    j = j + 1
+                }
+            }
+        }
+    }
+    // Anything remaining in prev is a delete.
+    while j < pn {
+        prev_path = aether_dir_entry_name(prev_flat, j)
+        out = string.concat(out, "D\n")
+        out = string.concat(out, prev_path)
+        out = string.concat(out, "\n")
+        j = j + 1
+    }
+    return out
+}
+
+main() {
+    println("ae/repos/paths_changed.ae is a library; not meant to run standalone")
+}
