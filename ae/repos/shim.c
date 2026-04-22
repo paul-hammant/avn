@@ -544,9 +544,8 @@ flatten_tree(const char *repo, const char *dir_sha1, const char *prefix,
         if (sha_len >= sizeof child_sha) continue;
         memcpy(child_sha, child_sha_ref, sha_len + 1);
 
-        char child_path[PATH_MAX];
-        if (*prefix) snprintf(child_path, sizeof child_path, "%s/%s", prefix, name);
-        else         snprintf(child_path, sizeof child_path, "%s",    name);
+        extern const char *aether_path_join_rel(const char *prefix, const char *name);
+        const char *child_path = aether_path_join_rel(prefix, name);
 
         flat_add(out, child_path, kind, child_sha);
         if (kind == 'd') {

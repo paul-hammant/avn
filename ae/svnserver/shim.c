@@ -456,11 +456,8 @@ compute_redacted_dir_sha(const char *repo, int rev, const char *user,
         if (name_len >= sizeof child_name) continue;
         memcpy(child_name, name_ref, name_len + 1);
 
-        char child_path[PATH_MAX];
-        if (*prefix) snprintf(child_path, sizeof child_path, "%s/%s",
-                              prefix, child_name);
-        else         snprintf(child_path, sizeof child_path, "%s",
-                              child_name);
+        extern const char *aether_path_join_rel(const char *prefix, const char *name);
+        const char *child_path = aether_path_join_rel(prefix, child_name);
         extern const char *aether_dir_entry_line(int kind, const char *sha, const char *name);
         int allowed = acl_allows(repo, rev, user, child_path);
         if (allowed) {

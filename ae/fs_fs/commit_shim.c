@@ -547,11 +547,8 @@ filter_dir_recursive(const char *repo, const char *src_sha,
         if (name_len >= sizeof child_name) continue;
         memcpy(child_name, name_ref, name_len + 1);
 
-        char child_path[PATH_MAX];
-        if (*prefix)
-            snprintf(child_path, sizeof child_path, "%s/%s", prefix, child_name);
-        else
-            snprintf(child_path, sizeof child_path, "%s", child_name);
+        extern const char *aether_path_join_rel(const char *prefix, const char *name);
+        const char *child_path = aether_path_join_rel(prefix, child_name);
 
         int include = 0;
         char emit_sha[65];

@@ -71,6 +71,21 @@ export path_basename_after(path: string, dir_prefix: string) -> string {
     return string.substring(path, dlen + 1, plen)
 }
 
+// Join `prefix` and `name` with exactly one '/'. Either input may be
+// empty: path_join_rel("", "x") → "x"; path_join_rel("x", "") → "x".
+// prefix is assumed to have no trailing '/' (standard for repo-relative
+// paths in this codebase).
+//   path_join_rel("a/b", "c")   → "a/b/c"
+//   path_join_rel("", "c")      → "c"
+//   path_join_rel("a", "")      → "a"
+// Named *_rel to distinguish from the FS-path join in Aether's runtime.
+export path_join_rel(prefix: string, name: string) -> string {
+    if string.length(prefix) == 0 { return name }
+    if string.length(name) == 0 { return prefix }
+    out = string.concat(prefix, "/")
+    return string.concat(out, name)
+}
+
 // Is `path` equal to `prefix` or a descendant of it? I.e. `prefix`
 // covers `path` in the subtree sense.
 //   covers("a/b", "")       → 1  (everything is under root)
