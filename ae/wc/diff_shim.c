@@ -86,21 +86,14 @@ sha1_of_file(const char *path, char out[65])
 }
 
 /* Write `data[0..len]` to a fresh tempfile; return malloc'd path. */
+extern int aether_io_write_atomic(const char *path, const char *data, int length);
+
 static char *
 tmp_write(const char *data, int len)
 {
     char *path = malloc(PATH_MAX);
     snprintf(path, PATH_MAX, "/tmp/svnae_diff_%d_%p.tmp", (int)getpid(), (void *)data);
-    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
-    if (fd < 0) { free(path); return NULL; }
-    const char *p = data;
-    int rem = len;
-    while (rem > 0) {
-        ssize_t w = write(fd, p, (size_t)rem);
-        if (w < 0) { if (errno == EINTR) continue; close(fd); unlink(path); free(path); return NULL; }
-        p += w; rem -= (int)w;
-    }
-    close(fd);
+    if (aether_io_write_atomic(path, data, len) != 0) { free(path); return NULL; }
     return path;
 }
 
