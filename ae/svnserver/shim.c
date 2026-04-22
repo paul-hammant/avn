@@ -862,17 +862,17 @@ handle_repo_rev(HttpRequest *req, HttpServerResponse *res, void *user_data)
         return;
     }
     /* /rev/N/acl/<path> → ACL lookup + body in Aether. Super-user
-     * only; normal users get 404 so they can't probe existence. */
+     * only; normal users get 404. Ported to ae/svnserver/handler_rev_acl.ae. */
     if (strncmp(after, "/acl/", 5) == 0 || strcmp(after, "/acl") == 0) {
         const char *target = strcmp(after, "/acl") == 0 ? "" : after + 5;
         const char *a_user = NULL;
         int a_is_super = auth_context(req, &a_user);
-        if (!a_is_super) { respond_error(res, 404, "not found"); return; }
-
-        extern const char *aether_acl_resolve_json(const char *repo, int rev,
-                                                    const char *target);
-        const char *body = aether_acl_resolve_json(repo, rev, target);
-        respond_json(res, 200, body ? body : "{\"rules\":[],\"effective_from\":\"\"}");
+        extern void aether_acl_handle(void *req, void *res,
+                                       const char *repo, int rev,
+                                       const char *target,
+                                       const char *user, int is_super);
+        aether_acl_handle(req, res, repo, rev, target,
+                          a_user ? a_user : "", a_is_super);
         return;
     }
 
