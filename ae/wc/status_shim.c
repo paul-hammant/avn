@@ -252,11 +252,11 @@ svnae_wc_status(const char *wc_root)
 
         strset_add(&tracked, rel);
 
+        extern int aether_io_exists(const char *p);
         char disk[PATH_MAX];
         snprintf(disk, sizeof disk, "%s/%s", wc_root, rel);
 
-        struct stat st;
-        int on_disk = (lstat(disk, &st) == 0);
+        int on_disk = aether_io_exists(disk);
 
         /* Hash the file (if needed) so the classifier has all its inputs.
          * Avoid the I/O when we won't use the result — only normal-state

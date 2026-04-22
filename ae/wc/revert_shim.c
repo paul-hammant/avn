@@ -108,7 +108,8 @@ svnae_wc_revert(const char *wc_root, const char *rel_path)
          * pending-delete state. */
         if (state == 2) {
             /* Restore: recreate the dir. */
-            mkdir(disk, 0755);
+            extern int aether_io_mkdir_p(const char *p);
+            (void)aether_io_mkdir_p(disk);
         }
         svnae_wc_db_upsert_node(db, rel_path, 1, brev, "", 0);
         svnae_wc_db_close(db);
