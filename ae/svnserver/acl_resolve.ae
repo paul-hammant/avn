@@ -1,0 +1,76 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// permissions and limitations under the License.
+
+// /rev/N/acl/<path> response body builder. Ported from the "/acl"
+// branch of handle_repo_rev in ae/svnserver/shim.c.
+//
+// Walks the paths-acl blob from `target` upward (nearest ancestor
+// with a rule wins), reads that ancestor's per-path acl rules, and
+// emits the JSON response with both the rules and the
+// `effective_from` path.
+
+import std.string
+
+extern svnae_rep_read_blob(repo: string, sha: string) -> string
+extern svnae_rep_free(body: string)
+
+extern svnserver_load_rev_acl_root(repo: string, rev: int) -> string
+extern aether_paths_index_ancestor_nearest(body: string, target: string) -> string
+extern aether_acl_response_json(rules_body: string, effective_from: string) -> string
+
+export acl_resolve_json(repo: string, rev: int, target: string) -> string {
+    return acl_resolve_json_impl(repo, rev, target)
+}
+
+acl_resolve_json_impl(repo: string, rev: int, target: string) -> string {
+    acl_root = svnserver_load_rev_acl_root(repo, rev)
+    if string.length(acl_root) == 0 {
+        return "{\"rules\":[],\"effective_from\":\"\"}"
+    }
+    paths_body = svnae_rep_read_blob(repo, acl_root)
+    if string.length(paths_body) == 0 {
+        return "{\"rules\":[],\"effective_from\":\"\"}"
+    }
+
+    // Nearest ancestor is "sha\tpath". Empty means no match.
+    nearest = aether_paths_index_ancestor_nearest(paths_body, target)
+    svnae_rep_free(paths_body)
+    if string.length(nearest) == 0 {
+        return "{\"rules\":[],\"effective_from\":\"\"}"
+    }
+
+    // Split on tab.
+    tab_idx = 0 - 1
+    n = string.length(nearest)
+    i = 0
+    while i < n {
+        if string.char_at(nearest, i) == 9 { tab_idx = i; break }
+        i = i + 1
+    }
+    if tab_idx < 0 {
+        return "{\"rules\":[],\"effective_from\":\"\"}"
+    }
+    eff_sha = string.substring(nearest, 0, tab_idx)
+    eff_path = string.substring(nearest, tab_idx + 1, n)
+
+    rules_body = svnae_rep_read_blob(repo, eff_sha)
+    body = aether_acl_response_json(rules_body, eff_path)
+    svnae_rep_free(rules_body)
+    return body
+}
+
+main() {
+    println("ae/svnserver/acl_resolve.ae is a library; not meant to run standalone")
+}

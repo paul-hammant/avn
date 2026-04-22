@@ -445,6 +445,23 @@ const char *svnserver_hash_hex(const char *repo, const char *data, int length) {
     return buf;
 }
 
+/* load_rev_blob_field is a file-scope static defined further down.
+ * Forward-declare + re-export via a stable wrapper for the Aether
+ * acl_resolve port. */
+static char *load_rev_blob_field(const char *repo, int rev, const char *key);
+
+const char *svnserver_load_rev_acl_root(const char *repo, int rev) {
+    static __thread char buf[65];
+    buf[0] = '\0';
+    char *sha = load_rev_blob_field(repo, rev, "acl");
+    if (sha) {
+        size_t n = strlen(sha);
+        if (n < sizeof buf) { memcpy(buf, sha, n + 1); }
+        free(sha);
+    }
+    return buf;
+}
+
 /* Recursively compute the redacted-for-`user` sha of the dir at
  * `dir_sha`. Writes 65-byte hex into `out`. Returns 0 on success.
  * Ported to Aether (ae/svnserver/redact.ae); the wrapper preserves
@@ -882,55 +899,18 @@ handle_repo_rev(HttpRequest *req, HttpServerResponse *res, void *user_data)
         return;
     }
 
-    /* /rev/N/acl/<path> → {"rules":["+alice","-eve"], "effective_from":"path"}
-     *
-     * Returns the *effective* ACL at `path` — nearest ancestor wins.
-     * Super-user only; normal users that hit this get 404 so they
-     * can't probe existence. */
+    /* /rev/N/acl/<path> → ACL lookup + body in Aether. Super-user
+     * only; normal users get 404 so they can't probe existence. */
     if (strncmp(after, "/acl/", 5) == 0 || strcmp(after, "/acl") == 0) {
         const char *target = strcmp(after, "/acl") == 0 ? "" : after + 5;
         const char *a_user = NULL;
         int a_is_super = auth_context(req, &a_user);
         if (!a_is_super) { respond_error(res, 404, "not found"); return; }
 
-        /* Walk the paths-acl blob from target upward. */
-        char *acl_root = load_rev_blob_field(repo, rev, "acl");
-        if (!acl_root || !*acl_root) {
-            free(acl_root);
-            respond_json(res, 200, "{\"rules\":[],\"effective_from\":\"\"}");
-            return;
-        }
-        char *paths_body = svnae_rep_read_blob(repo, acl_root);
-        free(acl_root);
-        if (!paths_body) {
-            respond_json(res, 200, "{\"rules\":[],\"effective_from\":\"\"}");
-            return;
-        }
-        /* "sha\tprefix" of the nearest ancestor match; empty → no match. */
-        const char *nearest = aether_paths_index_ancestor_nearest(paths_body, target);
-        char *eff_path = NULL;
-        char *eff_sha = NULL;
-        if (nearest && *nearest) {
-            const char *tab = strchr(nearest, '\t');
-            if (tab) {
-                size_t sl = (size_t)(tab - nearest);
-                eff_sha = malloc(sl + 1);
-                memcpy(eff_sha, nearest, sl); eff_sha[sl] = '\0';
-                eff_path = strdup(tab + 1);
-            }
-        }
-        svnae_rep_free(paths_body);
-
-        char *rules = NULL;
-        if (eff_sha) {
-            rules = svnae_rep_read_blob(repo, eff_sha);
-            free(eff_sha);
-        }
-        const char *body = aether_acl_response_json(rules ? rules : "",
-                                                     eff_path ? eff_path : "");
-        if (rules) svnae_rep_free(rules);
-        free(eff_path);
-        respond_json(res, 200, body ? body : "{}");
+        extern const char *aether_acl_resolve_json(const char *repo, int rev,
+                                                    const char *target);
+        const char *body = aether_acl_resolve_json(repo, rev, target);
+        respond_json(res, 200, body ? body : "{\"rules\":[],\"effective_from\":\"\"}");
         return;
     }
 
