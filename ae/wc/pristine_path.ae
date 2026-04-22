@@ -1,0 +1,53 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// permissions and limitations under the License.
+
+// Pristine-store path builder for ae/wc/pristine_shim.c.
+//
+// Layout is a two-level fanout over the first four hex nibbles of the
+// content sha:
+//
+//   <wc_root>/.svn/pristine/<s0s1>/<s2s3>/<sha>.rep
+//   <wc_root>/.svn/pristine/<s0s1>/<s2s3>              (dir-only)
+//
+// Callers that need the dir (for mkdir -p) use pristine_dir; callers
+// that need the full file path use pristine_path. The sha is assumed
+// to be at least 4 chars long (sha1 = 40, sha256 = 64); shorter inputs
+// return "".
+
+import std.string
+
+export pristine_path(wc_root: string, sha: string) -> string {
+    if string.length(sha) < 4 { return "" }
+    out = string.concat(wc_root, "/.svn/pristine/")
+    out = string.concat(out, string.substring(sha, 0, 2))
+    out = string.concat(out, "/")
+    out = string.concat(out, string.substring(sha, 2, 4))
+    out = string.concat(out, "/")
+    out = string.concat(out, sha)
+    return string.concat(out, ".rep")
+}
+
+export pristine_dir(wc_root: string, sha: string) -> string {
+    if string.length(sha) < 4 { return "" }
+    out = string.concat(wc_root, "/.svn/pristine/")
+    out = string.concat(out, string.substring(sha, 0, 2))
+    out = string.concat(out, "/")
+    out = string.concat(out, string.substring(sha, 2, 4))
+    return out
+}
+
+main() {
+    println("ae/wc/pristine_path.ae is a library; not meant to run standalone")
+}

@@ -152,11 +152,20 @@ svnae_wc_hash_file(const char *wc_root, const char *path, char *out)
 /* Build $wc_root/.svn/pristine/aa/bb/<sha1>.rep into `out`.
  * Returns the parent directory (through a static buffer, one call at a
  * time). */
+/* Path builder ported to Aether (ae/wc/pristine_path.ae, --emit=lib).
+ * The C wrapper keeps the caller-supplied-buffer shape so the four
+ * call sites don't have to change. */
+extern const char *aether_pristine_path(const char *wc_root, const char *sha);
+extern const char *aether_pristine_dir(const char *wc_root, const char *sha);
+
 static void
 build_path(const char *wc_root, const char *sha1, char *out, size_t out_sz)
 {
-    snprintf(out, out_sz, "%s/.svn/pristine/%c%c/%c%c/%s.rep",
-             wc_root, sha1[0], sha1[1], sha1[2], sha1[3], sha1);
+    const char *p = aether_pristine_path(wc_root, sha1);
+    size_t n = strlen(p);
+    if (n >= out_sz) n = out_sz - 1;
+    memcpy(out, p, n);
+    out[n] = '\0';
 }
 
 static int
@@ -214,10 +223,7 @@ svnae_wc_pristine_put(const char *wc_root, const char *data, int len)
     if (stat(path, &st) == 0) return sha1;
 
     /* mkdir -p the two-level fanout. */
-    char dir[PATH_MAX];
-    snprintf(dir, sizeof dir, "%s/.svn/pristine/%c%c/%c%c",
-             wc_root, sha1[0], sha1[1], sha1[2], sha1[3]);
-    if (mkdir_p(dir) != 0) return NULL;
+    if (mkdir_p(aether_pristine_dir(wc_root, sha1)) != 0) return NULL;
 
     /* Decide RAW vs ZLIB. Same threshold as fs_fs: zlib only if it
      * saves at least 16 bytes. */

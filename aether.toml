@@ -7,7 +7,7 @@ link_flags = "-lsqlite3 -lz -lutf8proc -lssl -lcrypto -lcurl"
 [[bin]]
 name = "svn"
 path = "ae/svn/main.ae"
-extra_sources = ["ae/ra/shim.c", "ae/ra/urls_generated.c", "ae/subr/io/shim.c", "ae/wc/db_shim.c", "ae/wc/pristine_shim.c", "ae/wc/checkout_shim.c", "ae/wc/status_shim.c", "ae/wc/ignore_generated.c", "ae/wc/mutate_shim.c", "ae/wc/commit_shim.c", "ae/wc/update_shim.c", "ae/wc/revert_shim.c", "ae/wc/diff_shim.c", "ae/wc/cp_shim.c", "ae/wc/props_shim.c", "ae/wc/merge_shim.c", "ae/wc/mergeinfo_generated.c", "ae/wc/merge3_shim.c", "ae/wc/resolve_shim.c", "ae/wc/sidecar_generated.c", "ae/wc/status_code_generated.c", "ae/ffi/openssl/shim.c"]
+extra_sources = ["ae/ra/shim.c", "ae/ra/urls_generated.c", "ae/subr/io/shim.c", "ae/wc/db_shim.c", "ae/wc/pristine_shim.c", "ae/wc/pristine_path_generated.c", "ae/wc/checkout_shim.c", "ae/wc/status_shim.c", "ae/wc/ignore_generated.c", "ae/wc/mutate_shim.c", "ae/wc/commit_shim.c", "ae/wc/update_shim.c", "ae/wc/revert_shim.c", "ae/wc/diff_shim.c", "ae/wc/cp_shim.c", "ae/wc/props_shim.c", "ae/wc/merge_shim.c", "ae/wc/mergeinfo_generated.c", "ae/wc/merge3_shim.c", "ae/wc/resolve_shim.c", "ae/wc/sidecar_generated.c", "ae/wc/status_code_generated.c", "ae/ffi/openssl/shim.c"]
 
 [[bin]]
 name = "svnadmin"
@@ -37,7 +37,7 @@ extra_sources = ["ae/wc/db_shim.c", "ae/subr/io/shim.c"]
 [[bin]]
 name = "test_wc_pristine"
 path = "ae/wc/test_pristine.ae"
-extra_sources = ["ae/wc/db_shim.c", "ae/wc/pristine_shim.c", "ae/subr/io/shim.c", "ae/ffi/openssl/shim.c"]
+extra_sources = ["ae/wc/db_shim.c", "ae/wc/pristine_shim.c", "ae/wc/pristine_path_generated.c", "ae/subr/io/shim.c", "ae/ffi/openssl/shim.c"]
 
 # --- test binaries -----------------------------------------------------------
 
