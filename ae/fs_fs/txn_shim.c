@@ -307,46 +307,31 @@ txn_find_edit(const struct svnae_txn *t, const char *path, int *out_kind)
     return -1;
 }
 
+/* Path predicates now live in ae/fs_fs/pathutil.ae. */
+extern int         aether_path_is_immediate_child(const char *path, const char *pfx);
+extern const char *aether_path_basename_after    (const char *path, const char *pfx);
+extern int         aether_path_covers            (const char *path, const char *pfx);
+
 /* Does any edit path match `prefix` or start with `prefix + "/"`? */
 static int
 edits_touch_subtree_c(const struct svnae_txn *t, const char *prefix)
 {
-    size_t plen = strlen(prefix);
     for (int i = 0; i < t->n; i++) {
-        const char *p = t->edits[i].path;
-        if (plen == 0) return 1;
-        if (strncmp(p, prefix, plen) == 0) {
-            if (p[plen] == '\0' || p[plen] == '/') return 1;
-        }
+        if (aether_path_covers(t->edits[i].path, prefix)) return 1;
     }
     return 0;
 }
 
-/* Is `path` an immediate child of `dir_prefix`?
- * Immediate child of "" = path has no '/'.
- * Immediate child of "a/b" = path == "a/b/X" with X containing no '/'. */
 static int
 is_immediate_child_c(const char *path, const char *dir_prefix)
 {
-    size_t plen = strlen(path);
-    size_t dlen = strlen(dir_prefix);
-    if (dlen == 0) {
-        return strchr(path, '/') == NULL ? 1 : 0;
-    }
-    if (plen <= dlen + 1) return 0;
-    if (strncmp(path, dir_prefix, dlen) != 0) return 0;
-    if (path[dlen] != '/') return 0;
-    if (strchr(path + dlen + 1, '/') != NULL) return 0;
-    return 1;
+    return aether_path_is_immediate_child(path, dir_prefix);
 }
 
-/* Extract the basename of `path` assuming `dir_prefix` is its parent. */
 static const char *
 basename_after_c(const char *path, const char *dir_prefix)
 {
-    size_t dlen = strlen(dir_prefix);
-    if (dlen == 0) return path;
-    return path + dlen + 1;
+    return aether_path_basename_after(path, dir_prefix);
 }
 
 /* A growable char buffer. */
