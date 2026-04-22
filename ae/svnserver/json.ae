@@ -60,23 +60,7 @@ export json_escape_string(v: string) -> string {
 }
 
 export json_int_to_dec(v: int) -> string {
-    return json_int_to_dec_impl(v)
-}
-
-// Local: write `v` as decimal (no surrounding quotes).
-json_int_to_dec_impl(v: int) -> string {
-    if v == 0 { return "0" }
-    neg = 0
-    n = v
-    if v < 0 { neg = 1; n = 0 - v }
-    out = ""
-    while n > 0 {
-        d = n - (n / 10) * 10
-        out = string.concat(digit_char(d), out)
-        n = n / 10
-    }
-    if neg == 1 { out = string.concat("-", out) }
-    return out
+    return string.from_int(v)
 }
 
 // --- internal helpers -----------------------------------------------------
@@ -225,7 +209,7 @@ export specs_to_json_array(body: string) -> string {
 // Used by /rev/N/info (emits as-is including the trailing }).
 export rev_info_json(rev: int, author: string, date: string, msg: string, root: string) -> string {
     out = "{\"rev\":"
-    out = string.concat(out, json_int_to_dec_impl(rev))
+    out = string.concat(out, string.from_int(rev))
     out = string.concat(out, ",\"author\":")
     out = string.concat(out, json_escape_string_impl(author))
     out = string.concat(out, ",\"date\":")
@@ -241,7 +225,7 @@ export rev_info_json(rev: int, author: string, date: string, msg: string, root: 
 // {"rev":N,"author":"...","date":"...","msg":"..."}
 export log_entry_json(rev: int, author: string, date: string, msg: string) -> string {
     out = "{\"rev\":"
-    out = string.concat(out, json_int_to_dec_impl(rev))
+    out = string.concat(out, string.from_int(rev))
     out = string.concat(out, ",\"author\":")
     out = string.concat(out, json_escape_string_impl(author))
     out = string.concat(out, ",\"date\":")
@@ -324,13 +308,13 @@ export error_response_json(msg: string) -> string {
 
 export rev_response_json(rev: int) -> string {
     out = "{\"rev\":"
-    out = string.concat(out, json_int_to_dec_impl(rev))
+    out = string.concat(out, string.from_int(rev))
     return string.concat(out, "}")
 }
 
 export rev_sha_response_json(rev: int, sha: string) -> string {
     out = "{\"rev\":"
-    out = string.concat(out, json_int_to_dec_impl(rev))
+    out = string.concat(out, string.from_int(rev))
     out = string.concat(out, ",\"sha\":")
     out = string.concat(out, json_escape_string_impl(sha))
     return string.concat(out, "}")
@@ -338,7 +322,7 @@ export rev_sha_response_json(rev: int, sha: string) -> string {
 
 export rev_branch_response_json(rev: int, branch: string) -> string {
     out = "{\"rev\":"
-    out = string.concat(out, json_int_to_dec_impl(rev))
+    out = string.concat(out, string.from_int(rev))
     out = string.concat(out, ",\"branch\":")
     out = string.concat(out, json_escape_string_impl(branch))
     return string.concat(out, "}")
@@ -348,7 +332,7 @@ export rev_branch_response_json(rev: int, branch: string) -> string {
 // Stops before ,"branches":[...] so the C side can still stream the branch list.
 export info_prelude_json(head: int, name: string, hash_algo: string) -> string {
     out = "{\"head\":"
-    out = string.concat(out, json_int_to_dec_impl(head))
+    out = string.concat(out, string.from_int(head))
     out = string.concat(out, ",\"name\":")
     out = string.concat(out, json_escape_string_impl(name))
     out = string.concat(out, ",\"hash_algo\":")
@@ -400,7 +384,7 @@ export redact_line_hidden(sha: string) -> string {
 // {"rev":N,"author":"...","text":"..."}
 export blame_entry_json(rev: int, author: string, text: string) -> string {
     out = "{\"rev\":"
-    out = string.concat(out, json_int_to_dec_impl(rev))
+    out = string.concat(out, string.from_int(rev))
     out = string.concat(out, ",\"author\":")
     out = string.concat(out, json_escape_string_impl(author))
     out = string.concat(out, ",\"text\":")

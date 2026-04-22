@@ -139,7 +139,7 @@ export rev_blob_body(root: string, branch: string, props: string, acl: string,
     out = string.concat(out, "\nacl: ")
     out = string.concat(out, acl)
     out = string.concat(out, "\nprev: ")
-    out = string.concat(out, rb_int_to_dec(prev))
+    out = string.concat(out, string.from_int(prev))
     out = string.concat(out, "\nauthor: ")
     out = string.concat(out, author)
     out = string.concat(out, "\ndate: ")
@@ -150,34 +150,6 @@ export rev_blob_body(root: string, branch: string, props: string, acl: string,
     return out
 }
 
-rb_int_to_dec(v: int) -> string {
-    if v == 0 { return "0" }
-    neg = 0
-    n = v
-    if v < 0 { neg = 1; n = 0 - v }
-    out = ""
-    while n > 0 {
-        d = n - (n / 10) * 10
-        out = string.concat(rb_digit_char(d), out)
-        n = n / 10
-    }
-    if neg == 1 { out = string.concat("-", out) }
-    return out
-}
-
-rb_digit_char(d: int) -> string {
-    if d == 0 { return "0" }
-    if d == 1 { return "1" }
-    if d == 2 { return "2" }
-    if d == 3 { return "3" }
-    if d == 4 { return "4" }
-    if d == 5 { return "5" }
-    if d == 6 { return "6" }
-    if d == 7 { return "7" }
-    if d == 8 { return "8" }
-    if d == 9 { return "9" }
-    return "?"
-}
 
 // Sort the "<sha> <path>" lines in `body` by path ascending, preserving
 // exact line contents. Used by paths-acl / paths-props blob builders in

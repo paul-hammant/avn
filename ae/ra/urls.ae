@@ -110,36 +110,7 @@ rev_prefix(base: string, repo: string, rev: int) -> string {
     out = string.concat(base, "/repos/")
     out = string.concat(out, repo)
     out = string.concat(out, "/rev/")
-    return string.concat(out, u_int_to_dec(rev))
-}
-
-u_int_to_dec(v: int) -> string {
-    if v == 0 { return "0" }
-    neg = 0
-    n = v
-    if v < 0 { neg = 1; n = 0 - v }
-    out = ""
-    while n > 0 {
-        d = n - (n / 10) * 10
-        out = string.concat(u_digit_char(d), out)
-        n = n / 10
-    }
-    if neg == 1 { out = string.concat("-", out) }
-    return out
-}
-
-u_digit_char(d: int) -> string {
-    if d == 0 { return "0" }
-    if d == 1 { return "1" }
-    if d == 2 { return "2" }
-    if d == 3 { return "3" }
-    if d == 4 { return "4" }
-    if d == 5 { return "5" }
-    if d == 6 { return "6" }
-    if d == 7 { return "7" }
-    if d == 8 { return "8" }
-    if d == 9 { return "9" }
-    return "?"
+    return string.concat(out, string.from_int(rev))
 }
 
 main() {
