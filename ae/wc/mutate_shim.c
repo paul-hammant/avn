@@ -131,10 +131,12 @@ svnae_wc_rm(const char *wc_root, const char *rel_path)
     /* Remove the file/dir from disk best-effort. Reference svn keeps
      * deleted files around until commit in some cases; we remove now
      * because this CLI is scoped for "commit soon". */
+    extern int aether_io_unlink(const char *p);
+    extern int aether_io_rmdir(const char *p);
     char disk[PATH_MAX];
     snprintf(disk, sizeof disk, "%s/%s", wc_root, rel_path);
-    if (kind == 0) unlink(disk);
-    else           rmdir(disk);
+    if (kind == 0) (void)aether_io_unlink(disk);
+    else           (void)aether_io_rmdir(disk);
 
     return 0;
 }

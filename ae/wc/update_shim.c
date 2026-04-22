@@ -348,9 +348,12 @@ svnae_wc_update(const char *wc_root, int target_rev)
         if (!r) {
             /* Remote removed it. Delete locally (only safe if clean,
              * which we verified above). */
+            extern int aether_io_unlink(const char *p);
+            extern int aether_io_rmdir(const char *p);
             char disk[PATH_MAX];
             snprintf(disk, sizeof disk, "%s/%s", wc_root, rel);
-            if (kind == 0) unlink(disk); else rmdir(disk);
+            if (kind == 0) (void)aether_io_unlink(disk);
+            else           (void)aether_io_rmdir(disk);
             svnae_wc_db_delete_node(db, rel);
             continue;
         }

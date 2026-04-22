@@ -342,7 +342,12 @@ svnae_wc_merge(const char *wc_root, const char *source_path, int rev_a, int rev_
                 svnae_wc_node_free(n);
                 svnae_wc_db_upsert_node(db, wc_rel, kind, brev, bsha_copy, 2);
             }
-            if (ra->kind == 0) unlink(disk); else rmdir(disk);
+            {
+                extern int aether_io_unlink(const char *p);
+                extern int aether_io_rmdir(const char *p);
+                if (ra->kind == 0) (void)aether_io_unlink(disk);
+                else               (void)aether_io_rmdir(disk);
+            }
         }
     }
 
