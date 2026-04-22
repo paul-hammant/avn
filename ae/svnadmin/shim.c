@@ -76,6 +76,13 @@ const char *svnae_rep_write_blob(const char *repo, const char *data, int len);
 char       *svnae_rep_read_blob(const char *repo, const char *sha1_hex);
 void        svnae_rep_free(char *p);
 int         svnae_repos_head_rev(const char *repo);
+
+/* Aether-as-library entry points (ae/svnadmin/dump.ae). */
+extern const char *aether_dump_prelude(int head, int rev_count, int rep_count);
+extern const char *aether_rep_header(const char *sha, int size);
+extern const char *aether_rev_pointer_block(int rev, const char *pointer_sha);
+extern int         aether_algos_count(const char *spec);
+extern const char *aether_algos_token(const char *spec, int i);
 const char *svnae_fsfs_now_iso8601(void);
 
 /* ---- tiny helpers --------------------------------------------------- */
@@ -181,16 +188,9 @@ create_bare(const char *repo, const char *algos_spec)
     /* Validate each algorithm against the golden list before writing. */
     const char *spec = (algos_spec && *algos_spec) ? algos_spec : "sha1";
     {
-        const char *p = spec;
-        while (*p) {
-            const char *comma = strchr(p, ',');
-            size_t alen = comma ? (size_t)(comma - p) : strlen(p);
-            char a[32];
-            if (alen >= sizeof a) return -1;
-            memcpy(a, p, alen); a[alen] = '\0';
-            if (!svnae_hash_supported(a)) return -1;
-            if (!comma) break;
-            p = comma + 1;
+        int n = aether_algos_count(spec);
+        for (int i = 0; i < n; i++) {
+            if (!svnae_hash_supported(aether_algos_token(spec, i))) return -1;
         }
     }
 
@@ -388,10 +388,7 @@ write_all(int fd, const char *data, int len)
     return 0;
 }
 
-/* Dump header builders ported to Aether (ae/svnadmin/dump.ae). */
-extern const char *aether_dump_prelude(int head, int rev_count, int rep_count);
-extern const char *aether_rep_header(const char *sha, int size);
-extern const char *aether_rev_pointer_block(int rev, const char *pointer_sha);
+/* Dump header builders ported to Aether — externs declared at top. */
 
 int
 svnae_svnadmin_dump(const char *repo, int out_fd)

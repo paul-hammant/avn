@@ -85,6 +85,55 @@ digit_char(d: int) -> string {
     return "?"
 }
 
+// Count comma-separated tokens in `spec`. Ignores empty tokens.
+export algos_count(spec: string) -> int {
+    n = string.length(spec)
+    if n == 0 { return 0 }
+    count = 0
+    start = 0
+    i = 0
+    while i <= n {
+        at_end = 0
+        c = 0
+        if i == n { at_end = 1 } else { c = string.char_at(spec, i) }
+        is_sep = 0
+        if at_end == 1 { is_sep = 1 }
+        if c == 44 { is_sep = 1 }
+        if is_sep == 1 {
+            if i > start { count = count + 1 }
+            start = i + 1
+        }
+        i = i + 1
+    }
+    return count
+}
+
+// Return the i-th comma-separated token, "" if out of range.
+export algos_token(spec: string, target: int) -> string {
+    n = string.length(spec)
+    if n == 0 { return "" }
+    count = 0
+    start = 0
+    i = 0
+    while i <= n {
+        at_end = 0
+        c = 0
+        if i == n { at_end = 1 } else { c = string.char_at(spec, i) }
+        is_sep = 0
+        if at_end == 1 { is_sep = 1 }
+        if c == 44 { is_sep = 1 }
+        if is_sep == 1 {
+            if i > start {
+                if count == target { return string.substring(spec, start, i) }
+                count = count + 1
+            }
+            start = i + 1
+        }
+        i = i + 1
+    }
+    return ""
+}
+
 main() {
     println("ae/svnadmin/dump.ae is a library; not meant to run standalone")
 }

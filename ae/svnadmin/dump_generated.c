@@ -369,6 +369,119 @@ if (d == 9) {
     return "?";
 }
 
+// Exported:
+int algos_count(const char* spec) {
+int n = string_length(spec);
+if (n == 0) {
+        {
+            return 0;
+        }
+    }
+int count = 0;
+int start = 0;
+int i = 0;
+    int at_end;
+    int c;
+    int is_sep;
+while (i <= n) {
+        {
+at_end = 0;
+c = 0;
+if (i == n) {
+                {
+at_end = 1;
+                }
+            } else {
+                {
+c = string_char_at(spec, i);
+                }
+            }
+is_sep = 0;
+if (at_end == 1) {
+                {
+is_sep = 1;
+                }
+            }
+if (c == 44) {
+                {
+is_sep = 1;
+                }
+            }
+if (is_sep == 1) {
+                {
+if (i > start) {
+                        {
+count = (count + 1);
+                        }
+                    }
+start = (i + 1);
+                }
+            }
+i = (i + 1);
+        }
+    }
+    return count;
+}
+
+// Exported:
+const char* algos_token(const char* spec, int target) {
+int n = string_length(spec);
+if (n == 0) {
+        {
+            return "";
+        }
+    }
+int count = 0;
+int start = 0;
+int i = 0;
+    int at_end;
+    int c;
+    int is_sep;
+while (i <= n) {
+        {
+at_end = 0;
+c = 0;
+if (i == n) {
+                {
+at_end = 1;
+                }
+            } else {
+                {
+c = string_char_at(spec, i);
+                }
+            }
+is_sep = 0;
+if (at_end == 1) {
+                {
+is_sep = 1;
+                }
+            }
+if (c == 44) {
+                {
+is_sep = 1;
+                }
+            }
+if (is_sep == 1) {
+                {
+if (i > start) {
+                        {
+if (count == target) {
+                                {
+                                    return string_substring(spec, start, i);
+                                }
+                            }
+count = (count + 1);
+                        }
+                    }
+start = (i + 1);
+                }
+            }
+i = (i + 1);
+        }
+    }
+    return "";
+}
+
 static _tuple_int_string string_to_int(const char* s) {
 int ok = string_try_int(s);
 if (ok == 0) {
@@ -428,4 +541,10 @@ const char* aether_int_to_dec(int32_t v) {
 }
 const char* aether_digit_char(int32_t d) {
     return digit_char(d);
+}
+int32_t aether_algos_count(const char* spec) {
+    return algos_count(spec);
+}
+const char* aether_algos_token(const char* spec, int32_t target) {
+    return algos_token(spec, target);
 }
