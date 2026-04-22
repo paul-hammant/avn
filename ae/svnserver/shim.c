@@ -35,7 +35,28 @@
  * as \uXXXX).
  */
 
-#include <cjson/cJSON.h>
+#include "aether_json.h"
+
+/* cJSON → std.json compatibility layer (see ae/ra/shim.c for the full
+ * design note). Only the parse/read side is needed here. */
+typedef JsonValue cJSON;
+#define cJSON_ParseWithLength(b, n)            json_parse_raw_n((b), (n))
+#define cJSON_Delete(v)                        json_free(v)
+#define cJSON_GetObjectItemCaseSensitive(o, k) json_object_get_raw((o), (k))
+#define cJSON_IsNumber(v)                      ((v) && json_type(v) == JSON_NUMBER)
+#define cJSON_IsString(v)                      ((v) && json_type(v) == JSON_STRING)
+#define cJSON_IsArray(v)                       ((v) && json_type(v) == JSON_ARRAY)
+#define cJSON_IsObject(v)                      ((v) && json_type(v) == JSON_OBJECT)
+#define cJSON_GetArraySize(a)                  json_array_size(a)
+#define cJSON_GetArrayItem(a, i)               json_array_get_raw((a), (i))
+static inline int         json_valueint(JsonValue *v)    { return json_get_int(v); }
+static inline const char *json_valuestring(JsonValue *v) { return json_get_string_raw(v); }
+#define cJSON_ArrayForEach(entry, arr)                                 \
+    for (int _sa_idx = 0,                                              \
+             _sa_len = json_array_size(arr);                           \
+         _sa_idx < _sa_len &&                                          \
+         ((entry) = json_array_get_raw((arr), _sa_idx), 1);            \
+         _sa_idx++)
 #include <dirent.h>
 #include <sys/stat.h>
 #include <errno.h>
@@ -1530,7 +1551,7 @@ handle_repo_commit(HttpRequest *req, HttpServerResponse *res, void *user_data)
         return;
     }
 
-    int base_rev = jbase->valueint;
+    int base_rev = json_valueint(jbase);
 
     /* Write-ACL pre-scan (Phase 7.2): before building the txn, walk
      * every edit path (and every ACL-touched path, below) and confirm
@@ -1543,8 +1564,8 @@ handle_repo_commit(HttpRequest *req, HttpServerResponse *res, void *user_data)
     const char *commit_branch;
     {
         cJSON *jbranch = cJSON_GetObjectItemCaseSensitive(root, "branch");
-        commit_branch = (jbranch && cJSON_IsString(jbranch) && *jbranch->valuestring)
-                        ? jbranch->valuestring
+        commit_branch = (jbranch && cJSON_IsString(jbranch) && *json_valuestring(jbranch))
+                        ? json_valuestring(jbranch)
                         : request_branch(req);
     }
     {
@@ -1554,7 +1575,7 @@ handle_repo_commit(HttpRequest *req, HttpServerResponse *res, void *user_data)
         cJSON_ArrayForEach(ck, jedits) {
             cJSON *jp = cJSON_GetObjectItemCaseSensitive(ck, "path");
             if (!cJSON_IsString(jp)) continue;
-            const char *epath = jp->valuestring;
+            const char *epath = json_valuestring(jp);
             if (!is_super &&
                 !acl_allows_mode(repo, base_rev, user, epath, 1)) {
                 cJSON_Delete(root);
@@ -1573,8 +1594,10 @@ handle_repo_commit(HttpRequest *req, HttpServerResponse *res, void *user_data)
              * +alice on /secret. */
             cJSON *jacl_pre = cJSON_GetObjectItemCaseSensitive(root, "acl");
             if (jacl_pre && cJSON_IsObject(jacl_pre)) {
-                for (cJSON *p = jacl_pre->child; p; p = p->next) {
-                    const char *apath = p->string ? p->string : "";
+                int pre_n = json_object_size_raw(jacl_pre);
+                for (int pi = 0; pi < pre_n; pi++) {
+                    const char *apath = json_object_key_at(jacl_pre, pi);
+                    if (!apath) apath = "";
                     if (!acl_allows_mode(repo, base_rev, user, apath, 1)) {
                         cJSON_Delete(root);
                         respond_error(res, 403, "forbidden");
@@ -1586,8 +1609,8 @@ handle_repo_commit(HttpRequest *req, HttpServerResponse *res, void *user_data)
     }
 
     /* Copy out — we cJSON_Delete before calling finalise. */
-    char *author = strdup(jauthor->valuestring);
-    char *logmsg = strdup(jlog->valuestring);
+    char *author = strdup(json_valuestring(jauthor));
+    char *logmsg = strdup(json_valuestring(jlog));
 
     struct svnae_txn *txn = svnae_txn_new(base_rev);
     if (!txn) { cJSON_Delete(root); respond_error(res, 500, "oom"); return; }
@@ -1601,8 +1624,8 @@ handle_repo_commit(HttpRequest *req, HttpServerResponse *res, void *user_data)
             respond_error(res, 400, "edit missing op/path");
             return;
         }
-        const char *op   = jop->valuestring;
-        const char *path = jpath->valuestring;
+        const char *op   = json_valuestring(jop);
+        const char *path = json_valuestring(jpath);
 
         if (strcmp(op, "add-file") == 0) {
             cJSON *jcontent = cJSON_GetObjectItemCaseSensitive(e, "content");
@@ -1611,7 +1634,7 @@ handle_repo_commit(HttpRequest *req, HttpServerResponse *res, void *user_data)
                 respond_error(res, 400, "add-file missing content");
                 return;
             }
-            const char *b64 = jcontent->valuestring;
+            const char *b64 = json_valuestring(jcontent);
             unsigned char *raw = NULL;
             int raw_len = 0;
             if (b64_decode(b64, (int)strlen(b64), &raw, &raw_len) != 0) {
@@ -1641,25 +1664,27 @@ handle_repo_commit(HttpRequest *req, HttpServerResponse *res, void *user_data)
     char *built_props_sha1 = NULL;
     if (jprops && cJSON_IsObject(jprops)) {
         /* Build paths-props blob. */
-        int np = 0;
-        for (cJSON *it = jprops->child; it; it = it->next) np++;
+        int np = json_object_size_raw(jprops);
         if (np > 0) {
             const char **paths      = calloc((size_t)np, sizeof *paths);
             const char **props_shas = calloc((size_t)np, sizeof *props_shas);
             char       **props_sha_copies = calloc((size_t)np, sizeof *props_sha_copies);
             int i = 0;
-            for (cJSON *p = jprops->child; p; p = p->next) {
-                paths[i] = p->string ? p->string : "";
+            for (int pi = 0; pi < np; pi++) {
+                const char *this_path = json_object_key_at(jprops, pi);
+                cJSON *p = json_object_value_at(jprops, pi);
+                paths[i] = this_path ? this_path : "";
                 /* p is an object; its children are key:value string pairs. */
-                int nk = 0;
-                for (cJSON *kv = p->child; kv; kv = kv->next) nk++;
+                int nk = cJSON_IsObject(p) ? json_object_size_raw(p) : 0;
                 const char **keys   = calloc((size_t)(nk > 0 ? nk : 1), sizeof *keys);
                 const char **values = calloc((size_t)(nk > 0 ? nk : 1), sizeof *values);
                 int k = 0;
-                for (cJSON *kv = p->child; kv; kv = kv->next) {
+                for (int ki = 0; ki < nk; ki++) {
+                    cJSON *kv = json_object_value_at(p, ki);
                     if (cJSON_IsString(kv)) {
-                        keys[k]   = kv->string ? kv->string : "";
-                        values[k] = kv->valuestring ? kv->valuestring : "";
+                        const char *kname = json_object_key_at(p, ki);
+                        keys[k]   = kname ? kname : "";
+                        values[k] = json_valuestring(kv) ? json_valuestring(kv) : "";
                         k++;
                     }
                 }
@@ -1685,14 +1710,15 @@ handle_repo_commit(HttpRequest *req, HttpServerResponse *res, void *user_data)
     const char *use_acl_sha1 = "";
     char *built_acl_sha1 = NULL;
     if (jacl && cJSON_IsObject(jacl)) {
-        int np = 0;
-        for (cJSON *it = jacl->child; it; it = it->next) np++;
+        int np = json_object_size_raw(jacl);
         if (np > 0) {
             const char **paths     = calloc((size_t)np, sizeof *paths);
             const char **acl_shas  = calloc((size_t)np, sizeof *acl_shas);
             char       **sha_copies = calloc((size_t)np, sizeof *sha_copies);
             int i = 0;
-            for (cJSON *p = jacl->child; p; p = p->next) {
+            for (int pi = 0; pi < np; pi++) {
+                const char *this_path = json_object_key_at(jacl, pi);
+                cJSON *p = json_object_value_at(jacl, pi);
                 if (!cJSON_IsArray(p)) continue;
                 int nr = cJSON_GetArraySize(p);
                 if (nr == 0) continue;   /* empty = remove */
@@ -1700,12 +1726,12 @@ handle_repo_commit(HttpRequest *req, HttpServerResponse *res, void *user_data)
                 int rcount = 0;
                 for (int k = 0; k < nr; k++) {
                     cJSON *r = cJSON_GetArrayItem(p, k);
-                    if (cJSON_IsString(r)) rules[rcount++] = r->valuestring;
+                    if (cJSON_IsString(r)) rules[rcount++] = json_valuestring(r);
                 }
                 const char *asha = svnae_build_acl_blob(repo, rules, rcount);
                 free(rules);
                 if (!asha) asha = "";
-                paths[i] = p->string ? p->string : "";
+                paths[i] = this_path ? this_path : "";
                 sha_copies[i] = strdup(asha);
                 acl_shas[i] = sha_copies[i];
                 i++;
@@ -1849,11 +1875,11 @@ handle_repo_copy(HttpRequest *req, HttpServerResponse *res, void *user_data)
         return;
     }
 
-    int base_rev = jbase->valueint;
-    char *from_path = strdup(jfrom->valuestring);
-    char *to_path   = strdup(jto->valuestring);
-    char *author    = strdup(jaut->valuestring);
-    char *logmsg    = strdup(jlog->valuestring);
+    int base_rev = json_valueint(jbase);
+    char *from_path = strdup(json_valuestring(jfrom));
+    char *to_path   = strdup(json_valuestring(jto));
+    char *author    = strdup(json_valuestring(jaut));
+    char *logmsg    = strdup(json_valuestring(jlog));
     cJSON_Delete(root);
 
     /* ACL check (Phase 7.7):
@@ -1976,13 +2002,13 @@ handle_repo_branch_create(HttpRequest *req, HttpServerResponse *res,
     int gi = 0;
     for (int i = 0; i < n_inc; i++) {
         cJSON *e = cJSON_GetArrayItem(jinc, i);
-        if (cJSON_IsString(e) && e->valuestring && *e->valuestring) {
-            glob_copies[gi] = strdup(e->valuestring);
+        if (cJSON_IsString(e) && json_valuestring(e) && *json_valuestring(e)) {
+            glob_copies[gi] = strdup(json_valuestring(e));
             globs[gi] = glob_copies[gi];
             gi++;
         }
     }
-    char *base_copy = strdup(jbase->valuestring);
+    char *base_copy = strdup(json_valuestring(jbase));
     cJSON_Delete(root);
 
     int new_rev = svnae_branch_create(repo, branch_name, base_copy,

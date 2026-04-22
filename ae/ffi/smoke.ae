@@ -13,14 +13,19 @@
 // implied. See the License for the specific language governing
 // permissions and limitations under the License.
 
-// Phase 0.1 smoke test — verify all four FFI libraries link and can be called.
+// Phase 0.1 smoke test — verify the system FFI libraries link and can be called.
 //   libsqlite3  — working-copy DB, FSFS rep-cache
 //   libz        — svndiff compression
 //   libutf8proc — Unicode normalization for paths
-//   libssl + libcrypto — TLS transport (via digest, which exercises libcrypto)
+//   libssl + libcrypto — digests + base64 (via ae/ffi/openssl/shim.c)
 //
-// This is deliberately minimal: one call per library, enough to prove the link
-// line in aether.toml is correct and the system headers agree with our signatures.
+// JSON used to be provided by libcjson; we moved to Aether's std.json
+// (parser + builder) which ships with libaether, so cjson is no longer
+// a system dependency and there's nothing to probe for it here.
+//
+// This is deliberately minimal: one call per library, enough to prove the
+// link line in aether.toml is correct and the system headers agree with
+// our signatures.
 //
 // Run from repo root:  ae run ae/ffi/smoke.ae
 
@@ -28,7 +33,6 @@ extern sqlite3_libversion() -> string
 extern zlibVersion() -> string
 extern utf8proc_version() -> string
 extern OpenSSL_version(t: int) -> string
-extern cJSON_Version() -> string
 
 main() {
     print("sqlite3  ")
@@ -43,7 +47,4 @@ main() {
     // OpenSSL_version(0) == OPENSSL_VERSION — the full version string.
     print("openssl  ")
     println(OpenSSL_version(0))
-
-    print("cjson    ")
-    println(cJSON_Version())
 }

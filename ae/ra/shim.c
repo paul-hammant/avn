@@ -23,11 +23,11 @@
  * that already know the repos query API can switch repository sources
  * without reshape.
  *
- * We do the HTTP and JSON work ourselves rather than going through
- * std.http and cjson via Aether FFI, because Aether can't model the
- * function-pointer and opaque-ptr chains cleanly. std.http's `get`
- * wrapper is Aether-only; we drop to libcurl for the underlying
- * request/response.
+ * We do the HTTP work ourselves via libcurl rather than going through
+ * std.http, because Aether can't model the function-pointer chains
+ * cleanly and std.http's `get` wrapper is Aether-only. JSON is handled
+ * by Aether's std.json — the cJSON_* spellings below are a thin compat
+ * layer (see the macros that immediately follow the #include).
  *
  * Dependency: libcurl. Installed via `apt install libcurl4-openssl-dev`.
  */

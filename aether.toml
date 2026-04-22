@@ -2,7 +2,7 @@
 name = "svn-aether"
 
 [build]
-link_flags = "-lsqlite3 -lz -lutf8proc -lssl -lcrypto -lcjson -lcurl"
+link_flags = "-lsqlite3 -lz -lutf8proc -lssl -lcrypto -lcurl"
 
 [[bin]]
 name = "svn"
