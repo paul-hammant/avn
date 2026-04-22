@@ -54,42 +54,32 @@
 #define PATH_MAX 4096
 #endif
 
+/* Atomic write + slurp ported to Aether (ae/subr/io.ae). */
+extern int aether_io_write_atomic(const char *path, const char *data, int length);
+extern const char *aether_io_read_file(const char *path);
+extern int aether_io_file_size(const char *path);
+
 static int
 write_tmp(const char *data, int len, char *out_path, size_t out_sz)
 {
     static int seq = 0;
     snprintf(out_path, out_sz, "/tmp/svnae_m3_%d_%d.tmp", (int)getpid(), seq++);
-    int fd = open(out_path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
-    if (fd < 0) return -1;
-    const char *p = data; int rem = len;
-    while (rem > 0) {
-        ssize_t w = write(fd, p, (size_t)rem);
-        if (w < 0) { if (errno == EINTR) continue; close(fd); unlink(out_path); return -1; }
-        p += w; rem -= (int)w;
-    }
-    close(fd);
-    return 0;
+    return aether_io_write_atomic(out_path, data, len) == 0 ? 0 : -1;
 }
 
 /* Slurp a file into malloc'd memory. Returns buf, sets *out_len. */
 static char *
 slurp(const char *path, int *out_len)
 {
-    int fd = open(path, O_RDONLY);
-    if (fd < 0) return NULL;
-    struct stat st;
-    if (fstat(fd, &st) != 0) { close(fd); return NULL; }
-    char *buf = malloc((size_t)st.st_size + 1);
-    int got = 0;
-    while (got < st.st_size) {
-        ssize_t n = read(fd, buf + got, (size_t)(st.st_size - got));
-        if (n < 0) { if (errno == EINTR) continue; free(buf); close(fd); return NULL; }
-        if (n == 0) break;
-        got += (int)n;
-    }
-    close(fd);
-    buf[got] = '\0';
-    *out_len = got;
+    int sz = aether_io_file_size(path);
+    if (sz < 0) return NULL;
+    const char *src = aether_io_read_file(path);
+    if (!src) return NULL;
+    char *buf = malloc((size_t)sz + 1);
+    if (!buf) return NULL;
+    if (sz > 0) memcpy(buf, src, (size_t)sz);
+    buf[sz] = '\0';
+    *out_len = sz;
     return buf;
 }
 
