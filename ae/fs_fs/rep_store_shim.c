@@ -50,64 +50,32 @@
 
 /* --- utility -------------------------------------------------------- */
 
-static int
-write_file_atomic(const char *path, const char *data, int len)
+/* Atomic write + mkdir-p ported to Aether (ae/subr/io.ae). */
+extern int aether_io_write_atomic(const char *path, const char *data, int length);
+extern int aether_io_mkdir_p(const char *path);
+
+static int write_file_atomic(const char *path, const char *data, int len)
 {
-    char tmp[PATH_MAX];
-    snprintf(tmp, sizeof tmp, "%s.tmp.%d", path, (int)getpid());
-    int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    if (fd < 0) return -errno;
-    const char *p = data;
-    int rem = len;
-    while (rem > 0) {
-        ssize_t w = write(fd, p, (size_t)rem);
-        if (w < 0) { if (errno == EINTR) continue; close(fd); unlink(tmp); return -errno; }
-        p += w; rem -= (int)w;
-    }
-    if (fsync(fd) != 0) { int rc = -errno; close(fd); unlink(tmp); return rc; }
-    if (close(fd) != 0) return -errno;
-    if (rename(tmp, path) != 0) { unlink(tmp); return -errno; }
-    return 0;
+    return aether_io_write_atomic(path, data, len) == 0 ? 0 : -1;
 }
 
+/* rep blob layout: 1 header byte + payload. The Aether atomic-write
+ * is binary-safe, so we just prepend the header to a single buffer
+ * and write it in one go. Cleaner than the original two-syscall
+ * version (header write then payload loop). */
 static int
 write_file_with_header_atomic(const char *path, char header, const char *data, int len)
 {
-    char tmp[PATH_MAX];
-    snprintf(tmp, sizeof tmp, "%s.tmp.%d", path, (int)getpid());
-    int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    if (fd < 0) return -errno;
-    (void)write(fd, &header, 1);
-    const char *p = data;
-    int rem = len;
-    while (rem > 0) {
-        ssize_t w = write(fd, p, (size_t)rem);
-        if (w < 0) { if (errno == EINTR) continue; close(fd); unlink(tmp); return -errno; }
-        p += w; rem -= (int)w;
-    }
-    if (fsync(fd) != 0) { int rc = -errno; close(fd); unlink(tmp); return rc; }
-    if (close(fd) != 0) return -errno;
-    if (rename(tmp, path) != 0) { unlink(tmp); return -errno; }
-    return 0;
+    char *buf = malloc((size_t)len + 1);
+    if (!buf) return -1;
+    buf[0] = header;
+    if (len > 0) memcpy(buf + 1, data, (size_t)len);
+    int rc = aether_io_write_atomic(path, buf, len + 1);
+    free(buf);
+    return rc == 0 ? 0 : -1;
 }
 
-/* Build $repo/reps/aa/bb/... and mkdir -p those directories. */
-static int
-mkdir_p(const char *path)
-{
-    /* Quick: assume parents mostly exist; try each segment. */
-    char tmp[PATH_MAX];
-    snprintf(tmp, sizeof tmp, "%s", path);
-    for (char *p = tmp + 1; *p; p++) {
-        if (*p == '/') {
-            *p = '\0';
-            if (mkdir(tmp, 0755) != 0 && errno != EEXIST) return -errno;
-            *p = '/';
-        }
-    }
-    if (mkdir(tmp, 0755) != 0 && errno != EEXIST) return -errno;
-    return 0;
-}
+static int mkdir_p(const char *path) { return aether_io_mkdir_p(path) == 0 ? 0 : -1; }
 
 /* Format-line parsing ported to Aether (ae/fs_fs/format_line.ae). */
 extern const char *aether_format_primary_hash(const char *line);

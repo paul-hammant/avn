@@ -69,24 +69,11 @@ char *svnae_wc_pristine_get(const char *wc_root, const char *sha1);
 int   svnae_wc_pristine_size(const char *wc_root, const char *sha1);
 void  svnae_wc_pristine_free(char *p);
 
-static int
-write_file_atomic(const char *path, const char *data, int len)
-{
-    char tmp[PATH_MAX];
-    snprintf(tmp, sizeof tmp, "%s.tmp.%d", path, (int)getpid());
-    int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    if (fd < 0) return -errno;
-    const char *p = data;
-    int rem = len;
-    while (rem > 0) {
-        ssize_t w = write(fd, p, (size_t)rem);
-        if (w < 0) { if (errno == EINTR) continue; close(fd); unlink(tmp); return -errno; }
-        p += w; rem -= (int)w;
-    }
-    if (fsync(fd) != 0) { int rc = -errno; close(fd); unlink(tmp); return rc; }
-    close(fd);
-    if (rename(tmp, path) != 0) { unlink(tmp); return -errno; }
-    return 0;
+/* Atomic write ported to Aether (ae/subr/io.ae). */
+extern int aether_io_write_atomic(const char *path, const char *data, int length);
+
+static int write_file_atomic(const char *path, const char *data, int len) {
+    return aether_io_write_atomic(path, data, len) == 0 ? 0 : -1;
 }
 
 int

@@ -142,39 +142,13 @@ sha1_of_bytes(const char *data, int len, char out[65])
     if (g_wc_root) svnae_wc_hash_bytes(g_wc_root, data, len, out);
 }
 
-static int
-mkdir_p(const char *path)
-{
-    char tmp[PATH_MAX]; snprintf(tmp, sizeof tmp, "%s", path);
-    for (char *p = tmp + 1; *p; p++) {
-        if (*p == '/') {
-            *p = '\0';
-            if (mkdir(tmp, 0755) != 0 && errno != EEXIST) return -1;
-            *p = '/';
-        }
-    }
-    if (mkdir(tmp, 0755) != 0 && errno != EEXIST) return -1;
-    return 0;
-}
+/* mkdir_p + atomic write ported to Aether (ae/subr/io.ae). */
+extern int aether_io_mkdir_p(const char *path);
+extern int aether_io_write_atomic(const char *path, const char *data, int length);
 
-static int
-write_file_atomic(const char *path, const char *data, int len)
-{
-    char tmp[PATH_MAX];
-    snprintf(tmp, sizeof tmp, "%s.tmp.%d", path, (int)getpid());
-    int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    if (fd < 0) return -errno;
-    const char *p = data;
-    int rem = len;
-    while (rem > 0) {
-        ssize_t w = write(fd, p, (size_t)rem);
-        if (w < 0) { if (errno == EINTR) continue; close(fd); unlink(tmp); return -errno; }
-        p += w; rem -= (int)w;
-    }
-    if (fsync(fd) != 0) { int rc = -errno; close(fd); unlink(tmp); return rc; }
-    close(fd);
-    if (rename(tmp, path) != 0) { unlink(tmp); return -errno; }
-    return 0;
+static int mkdir_p(const char *path) { return aether_io_mkdir_p(path) == 0 ? 0 : -1; }
+static int write_file_atomic(const char *path, const char *data, int len) {
+    return aether_io_write_atomic(path, data, len) == 0 ? 0 : -1;
 }
 
 /* --- remote tree map --------------------------------------------------- *

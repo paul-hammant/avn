@@ -7,7 +7,7 @@ link_flags = "-lsqlite3 -lz -lutf8proc -lssl -lcrypto -lcurl"
 [[bin]]
 name = "svn"
 path = "ae/svn/main.ae"
-extra_sources = ["ae/ra/shim.c", "ae/ra/urls_generated.c", "ae/subr/io/shim.c", "ae/wc/db_shim.c", "ae/wc/pristine_shim.c", "ae/wc/pristine_path_generated.c", "ae/wc/checkout_shim.c", "ae/wc/status_shim.c", "ae/wc/ignore_generated.c", "ae/wc/mutate_shim.c", "ae/wc/commit_shim.c", "ae/wc/update_shim.c", "ae/wc/revert_shim.c", "ae/wc/diff_shim.c", "ae/wc/cp_shim.c", "ae/wc/props_shim.c", "ae/wc/merge_shim.c", "ae/wc/mergeinfo_generated.c", "ae/wc/merge3_shim.c", "ae/wc/resolve_shim.c", "ae/wc/sidecar_generated.c", "ae/wc/status_code_generated.c", "ae/fs_fs/pathutil_generated.c", "ae/ffi/openssl/shim.c"]
+extra_sources = ["ae/ra/shim.c", "ae/ra/urls_generated.c", "ae/subr/io/shim.c", "ae/subr/io_generated.c", "ae/wc/db_shim.c", "ae/wc/pristine_shim.c", "ae/wc/pristine_path_generated.c", "ae/wc/checkout_shim.c", "ae/wc/status_shim.c", "ae/wc/ignore_generated.c", "ae/wc/mutate_shim.c", "ae/wc/commit_shim.c", "ae/wc/update_shim.c", "ae/wc/revert_shim.c", "ae/wc/diff_shim.c", "ae/wc/cp_shim.c", "ae/wc/props_shim.c", "ae/wc/merge_shim.c", "ae/wc/mergeinfo_generated.c", "ae/wc/merge3_shim.c", "ae/wc/resolve_shim.c", "ae/wc/sidecar_generated.c", "ae/wc/status_code_generated.c", "ae/fs_fs/pathutil_generated.c", "ae/ffi/openssl/shim.c"]
 
 [[bin]]
 name = "svnadmin"
@@ -22,7 +22,7 @@ extra_sources = ["ae/ffi/sqlite/shim.c", "ae/subr/io/shim.c", "ae/subr/io_genera
 [[bin]]
 name = "svnae-seed"
 path = "ae/svnserver/seed.ae"
-extra_sources = ["ae/ffi/sqlite/shim.c", "ae/subr/io/shim.c", "ae/subr/checksum/shim.c", "ae/ffi/zlib/shim.c", "ae/fs_fs/shim.c", "ae/fs_fs/txn_shim.c", "ae/fs_fs/pathutil_generated.c", "ae/fs_fs/rep_store_shim.c", "ae/fs_fs/reppath_generated.c", "ae/fs_fs/dirblob_generated.c", "ae/fs_fs/format_line_generated.c", "ae/ffi/openssl/shim.c"]
+extra_sources = ["ae/ffi/sqlite/shim.c", "ae/subr/io/shim.c", "ae/subr/io_generated.c", "ae/subr/checksum/shim.c", "ae/ffi/zlib/shim.c", "ae/fs_fs/shim.c", "ae/fs_fs/txn_shim.c", "ae/fs_fs/pathutil_generated.c", "ae/fs_fs/rep_store_shim.c", "ae/fs_fs/reppath_generated.c", "ae/fs_fs/dirblob_generated.c", "ae/fs_fs/format_line_generated.c", "ae/ffi/openssl/shim.c"]
 
 [[bin]]
 name = "test_ra"
@@ -32,12 +32,12 @@ extra_sources = ["ae/ra/shim.c", "ae/ra/urls_generated.c", "ae/fs_fs/pathutil_ge
 [[bin]]
 name = "test_wc_db"
 path = "ae/wc/test_db.ae"
-extra_sources = ["ae/wc/db_shim.c", "ae/subr/io/shim.c"]
+extra_sources = ["ae/wc/db_shim.c", "ae/subr/io/shim.c", "ae/subr/io_generated.c"]
 
 [[bin]]
 name = "test_wc_pristine"
 path = "ae/wc/test_pristine.ae"
-extra_sources = ["ae/wc/db_shim.c", "ae/wc/pristine_shim.c", "ae/wc/pristine_path_generated.c", "ae/subr/io/shim.c", "ae/ffi/openssl/shim.c"]
+extra_sources = ["ae/wc/db_shim.c", "ae/wc/pristine_shim.c", "ae/wc/pristine_path_generated.c", "ae/subr/io/shim.c", "ae/subr/io_generated.c", "ae/ffi/openssl/shim.c"]
 
 # --- test binaries -----------------------------------------------------------
 
@@ -59,7 +59,7 @@ extra_sources = ["ae/ffi/zlib/shim.c"]
 [[bin]]
 name = "test_io"
 path = "ae/subr/test_io.ae"
-extra_sources = ["ae/subr/io/shim.c"]
+extra_sources = ["ae/subr/io/shim.c", "ae/subr/io_generated.c"]
 
 [[bin]]
 name = "test_utf8"
@@ -74,27 +74,27 @@ extra_sources = ["ae/delta/svndiff/shim.c"]
 [[bin]]
 name = "test_sqlite"
 path = "ae/subr/test_sqlite.ae"
-extra_sources = ["ae/ffi/sqlite/shim.c", "ae/subr/io/shim.c"]
+extra_sources = ["ae/ffi/sqlite/shim.c", "ae/subr/io/shim.c", "ae/subr/io_generated.c"]
 
 [[bin]]
 name = "test_repo"
 path = "ae/fs_fs/test_repo.ae"
-extra_sources = ["ae/ffi/sqlite/shim.c", "ae/subr/io/shim.c", "ae/subr/checksum/shim.c", "ae/ffi/zlib/shim.c", "ae/ffi/openssl/shim.c"]
+extra_sources = ["ae/ffi/sqlite/shim.c", "ae/subr/io/shim.c", "ae/subr/io_generated.c", "ae/subr/checksum/shim.c", "ae/ffi/zlib/shim.c", "ae/ffi/openssl/shim.c"]
 
 [[bin]]
 name = "test_revisions"
 path = "ae/fs_fs/test_revisions.ae"
-extra_sources = ["ae/ffi/sqlite/shim.c", "ae/subr/io/shim.c", "ae/subr/checksum/shim.c", "ae/ffi/zlib/shim.c", "ae/fs_fs/shim.c", "ae/ffi/openssl/shim.c"]
+extra_sources = ["ae/ffi/sqlite/shim.c", "ae/subr/io/shim.c", "ae/subr/io_generated.c", "ae/subr/checksum/shim.c", "ae/ffi/zlib/shim.c", "ae/fs_fs/shim.c", "ae/ffi/openssl/shim.c"]
 
 [[bin]]
 name = "test_txn"
 path = "ae/fs_fs/test_txn.ae"
-extra_sources = ["ae/ffi/sqlite/shim.c", "ae/subr/io/shim.c", "ae/subr/checksum/shim.c", "ae/ffi/zlib/shim.c", "ae/fs_fs/shim.c", "ae/fs_fs/txn_shim.c", "ae/fs_fs/pathutil_generated.c", "ae/fs_fs/rep_store_shim.c", "ae/fs_fs/reppath_generated.c", "ae/fs_fs/dirblob_generated.c", "ae/fs_fs/format_line_generated.c", "ae/ffi/openssl/shim.c"]
+extra_sources = ["ae/ffi/sqlite/shim.c", "ae/subr/io/shim.c", "ae/subr/io_generated.c", "ae/subr/checksum/shim.c", "ae/ffi/zlib/shim.c", "ae/fs_fs/shim.c", "ae/fs_fs/txn_shim.c", "ae/fs_fs/pathutil_generated.c", "ae/fs_fs/rep_store_shim.c", "ae/fs_fs/reppath_generated.c", "ae/fs_fs/dirblob_generated.c", "ae/fs_fs/format_line_generated.c", "ae/ffi/openssl/shim.c"]
 
 [[bin]]
 name = "test_repos"
 path = "ae/repos/test_repos.ae"
-extra_sources = ["ae/ffi/sqlite/shim.c", "ae/subr/io/shim.c", "ae/subr/checksum/shim.c", "ae/ffi/zlib/shim.c", "ae/fs_fs/shim.c", "ae/fs_fs/txn_shim.c", "ae/fs_fs/pathutil_generated.c", "ae/fs_fs/rep_store_shim.c", "ae/fs_fs/reppath_generated.c", "ae/fs_fs/dirblob_generated.c", "ae/fs_fs/format_line_generated.c", "ae/repos/shim.c", "ae/repos/blobfield_generated.c", "ae/ffi/openssl/shim.c"]
+extra_sources = ["ae/ffi/sqlite/shim.c", "ae/subr/io/shim.c", "ae/subr/io_generated.c", "ae/subr/checksum/shim.c", "ae/ffi/zlib/shim.c", "ae/fs_fs/shim.c", "ae/fs_fs/txn_shim.c", "ae/fs_fs/pathutil_generated.c", "ae/fs_fs/rep_store_shim.c", "ae/fs_fs/reppath_generated.c", "ae/fs_fs/dirblob_generated.c", "ae/fs_fs/format_line_generated.c", "ae/repos/shim.c", "ae/repos/blobfield_generated.c", "ae/ffi/openssl/shim.c"]
 
 [[bin]]
 name = "test_xdelta"
