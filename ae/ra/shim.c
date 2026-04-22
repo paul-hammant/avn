@@ -32,12 +32,110 @@
  * Dependency: libcurl. Installed via `apt install libcurl4-openssl-dev`.
  */
 
-#include <cjson/cJSON.h>
+#include "aether_json.h"
 #include <curl/curl.h>
-#include <openssl/evp.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+/* ---- cJSON → std.json compatibility layer -----------------------------
+ *
+ * This file started on cJSON (via -lcjson). Aether 0.79.0 ships
+ * std.json with object-key iteration in addition to the previous
+ * parser/builder surface, so every cJSON call-site maps to a std.json
+ * equivalent. The macros + inlines below let the existing code read
+ * naturally while running on the std.json backend.
+ *
+ * Differences worth calling out:
+ *   - cJSON exposes struct fields (valueint, valuestring). std.json
+ *     uses accessor functions. We introduce local inline helpers to
+ *     keep the old expressions readable.
+ *   - cJSON_ArrayForEach iterates via ->next. std.json is index-based.
+ *     Our macro expands to a for-loop over json_array_size.
+ *   - Object iteration (cJSON's p->child / p->next) maps to a macro
+ *     that calls json_object_size_raw + json_object_{key,value}_at.
+ *   - Builders: cJSON_Create* / cJSON_Add*ToObject map to json_create_*
+ *     + json_object_set_raw.
+ */
+typedef JsonValue cJSON;
+#define cJSON_ParseWithLength(b, n)            json_parse_raw_n((b), (n))
+#define cJSON_Delete(v)                        json_free(v)
+#define cJSON_GetObjectItemCaseSensitive(o, k) json_object_get_raw((o), (k))
+#define cJSON_IsNumber(v)                      ((v) && json_type(v) == JSON_NUMBER)
+#define cJSON_IsString(v)                      ((v) && json_type(v) == JSON_STRING)
+#define cJSON_IsArray(v)                       ((v) && json_type(v) == JSON_ARRAY)
+#define cJSON_IsObject(v)                      ((v) && json_type(v) == JSON_OBJECT)
+#define cJSON_GetArraySize(a)                  json_array_size(a)
+#define cJSON_GetArrayItem(a, i)               json_array_get_raw((a), (i))
+
+static inline int         json_valueint(JsonValue *v)    { return json_get_int(v); }
+static inline const char *json_valuestring(JsonValue *v) { return json_get_string_raw(v); }
+
+/* Index-based stand-in for cJSON_ArrayForEach(entry, arr). */
+#define cJSON_ArrayForEach(entry, arr)                                 \
+    for (int _ra_idx = 0,                                              \
+             _ra_len = json_array_size(arr);                           \
+         _ra_idx < _ra_len &&                                          \
+         ((entry) = json_array_get_raw((arr), _ra_idx), 1);            \
+         _ra_idx++)
+
+/* Object-key iteration (new in Aether 0.79.0). `key_var` is const char*,
+ * `val_var` is JsonValue*. */
+#define cJSON_ObjectForEach(key_var, val_var, obj)                     \
+    for (int _ro_idx = 0,                                              \
+             _ro_len = json_object_size_raw(obj);                      \
+         _ro_idx < _ro_len &&                                          \
+         ((key_var) = json_object_key_at((obj), _ro_idx),              \
+          (val_var) = json_object_value_at((obj), _ro_idx), 1);        \
+         _ro_idx++)
+
+/* --- builders used by the commit-body writer ----------------------
+ *
+ * IMPORTANT ownership note: std.json's json_object_set_raw /
+ * json_array_add_raw deep-copy the passed value into the container's
+ * arena and free the original. The old cJSON_Add*ToObject variants
+ * below therefore can NOT return the passed-in pointer — they have to
+ * re-fetch the copied value out of the container so the caller gets
+ * a pointer they can keep using. */
+
+static inline JsonValue *cJSON_CreateObject(void) { return json_create_object(); }
+static inline JsonValue *cJSON_CreateString(const char *s) { return json_create_string(s); }
+
+static inline int cJSON_AddItemToArray(JsonValue *arr, JsonValue *v) {
+    return json_array_add_raw(arr, v);
+}
+
+static inline JsonValue *cJSON_AddNumberToObject(JsonValue *obj, const char *key, double n) {
+    JsonValue *v = json_create_number(n);
+    if (!v) return NULL;
+    if (!json_object_set_raw(obj, key, v)) return NULL;
+    return json_object_get_raw(obj, key);
+}
+
+static inline JsonValue *cJSON_AddStringToObject(JsonValue *obj, const char *key, const char *s) {
+    JsonValue *v = json_create_string(s);
+    if (!v) return NULL;
+    if (!json_object_set_raw(obj, key, v)) return NULL;
+    return json_object_get_raw(obj, key);
+}
+
+static inline JsonValue *cJSON_AddObjectToObject(JsonValue *obj, const char *key) {
+    JsonValue *v = json_create_object();
+    if (!v) return NULL;
+    if (!json_object_set_raw(obj, key, v)) return NULL;
+    return json_object_get_raw(obj, key);
+}
+
+static inline JsonValue *cJSON_AddArrayToObject(JsonValue *obj, const char *key) {
+    JsonValue *v = json_create_array();
+    if (!v) return NULL;
+    if (!json_object_set_raw(obj, key, v)) return NULL;
+    return json_object_get_raw(obj, key);
+}
+
+static inline char *cJSON_PrintUnformatted(JsonValue *v) {
+    return json_stringify_raw(v);
+}
 
 /* ---- HTTP plumbing ---------------------------------------------------- */
 
@@ -263,7 +361,7 @@ svnae_ra_head_rev(const char *base_url, const char *repo_name)
     free(body);
     if (!root) return -1;
     cJSON *h = cJSON_GetObjectItemCaseSensitive(root, "head");
-    int rev = cJSON_IsNumber(h) ? h->valueint : -1;
+    int rev = cJSON_IsNumber(h) ? json_valueint(h) : -1;
     cJSON_Delete(root);
     return rev;
 }
@@ -284,8 +382,8 @@ svnae_ra_hash_algo(const char *base_url, const char *repo_name)
     free(body);
     if (!root) return NULL;
     cJSON *h = cJSON_GetObjectItemCaseSensitive(root, "hash_algo");
-    char *algo = (cJSON_IsString(h) && h->valuestring[0])
-                     ? strdup(h->valuestring)
+    char *algo = (cJSON_IsString(h) && json_valuestring(h)[0])
+                     ? strdup(json_valuestring(h))
                      : strdup("sha1");
     cJSON_Delete(root);
     return algo;
@@ -322,10 +420,10 @@ svnae_ra_log(const char *base_url, const char *repo_name)
         cJSON *ja = cJSON_GetObjectItemCaseSensitive(e, "author");
         cJSON *jd = cJSON_GetObjectItemCaseSensitive(e, "date");
         cJSON *jm = cJSON_GetObjectItemCaseSensitive(e, "msg");
-        lg->entries[i].rev    = cJSON_IsNumber(jr) ? jr->valueint : -1;
-        lg->entries[i].author = cJSON_IsString(ja) ? strdup(ja->valuestring) : strdup("");
-        lg->entries[i].date   = cJSON_IsString(jd) ? strdup(jd->valuestring) : strdup("");
-        lg->entries[i].msg    = cJSON_IsString(jm) ? strdup(jm->valuestring) : strdup("");
+        lg->entries[i].rev    = cJSON_IsNumber(jr) ? json_valueint(jr) : -1;
+        lg->entries[i].author = cJSON_IsString(ja) ? strdup(json_valuestring(ja)) : strdup("");
+        lg->entries[i].date   = cJSON_IsString(jd) ? strdup(json_valuestring(jd)) : strdup("");
+        lg->entries[i].msg    = cJSON_IsString(jm) ? strdup(json_valuestring(jm)) : strdup("");
         i++;
     }
     cJSON_Delete(root);
@@ -403,9 +501,9 @@ svnae_ra_paths_changed(const char *base_url, const char *repo_name, int rev)
     cJSON_ArrayForEach(e, jentries) {
         cJSON *ja = cJSON_GetObjectItemCaseSensitive(e, "action");
         cJSON *jp = cJSON_GetObjectItemCaseSensitive(e, "path");
-        P->items[i].action = (cJSON_IsString(ja) && ja->valuestring[0])
-                                 ? ja->valuestring[0] : '?';
-        P->items[i].path   = cJSON_IsString(jp) ? strdup(jp->valuestring) : strdup("");
+        P->items[i].action = (cJSON_IsString(ja) && json_valuestring(ja)[0])
+                                 ? json_valuestring(ja)[0] : '?';
+        P->items[i].path   = cJSON_IsString(jp) ? strdup(json_valuestring(jp)) : strdup("");
         i++;
     }
     cJSON_Delete(root);
@@ -473,9 +571,9 @@ svnae_ra_blame(const char *base_url, const char *repo_name,
         cJSON *jr = cJSON_GetObjectItemCaseSensitive(e, "rev");
         cJSON *ja = cJSON_GetObjectItemCaseSensitive(e, "author");
         cJSON *jt = cJSON_GetObjectItemCaseSensitive(e, "text");
-        B->items[i].rev    = cJSON_IsNumber(jr) ? jr->valueint : -1;
-        B->items[i].author = cJSON_IsString(ja) ? strdup(ja->valuestring) : strdup("");
-        B->items[i].text   = cJSON_IsString(jt) ? strdup(jt->valuestring) : strdup("");
+        B->items[i].rev    = cJSON_IsNumber(jr) ? json_valueint(jr) : -1;
+        B->items[i].author = cJSON_IsString(ja) ? strdup(json_valuestring(ja)) : strdup("");
+        B->items[i].text   = cJSON_IsString(jt) ? strdup(json_valuestring(jt)) : strdup("");
         i++;
     }
     cJSON_Delete(root);
@@ -520,11 +618,11 @@ svnae_ra_info_rev(const char *base_url, const char *repo_name, int rev)
     cJSON *jd = cJSON_GetObjectItemCaseSensitive(root, "date");
     cJSON *jm = cJSON_GetObjectItemCaseSensitive(root, "msg");
     cJSON *jroot = cJSON_GetObjectItemCaseSensitive(root, "root");
-    I->rev    = cJSON_IsNumber(jr) ? jr->valueint : -1;
-    I->author = cJSON_IsString(ja) ? strdup(ja->valuestring) : strdup("");
-    I->date   = cJSON_IsString(jd) ? strdup(jd->valuestring) : strdup("");
-    I->msg    = cJSON_IsString(jm) ? strdup(jm->valuestring) : strdup("");
-    I->root   = cJSON_IsString(jroot) ? strdup(jroot->valuestring) : strdup("");
+    I->rev    = cJSON_IsNumber(jr) ? json_valueint(jr) : -1;
+    I->author = cJSON_IsString(ja) ? strdup(json_valuestring(ja)) : strdup("");
+    I->date   = cJSON_IsString(jd) ? strdup(json_valuestring(jd)) : strdup("");
+    I->msg    = cJSON_IsString(jm) ? strdup(json_valuestring(jm)) : strdup("");
+    I->root   = cJSON_IsString(jroot) ? strdup(json_valuestring(jroot)) : strdup("");
     cJSON_Delete(root);
     return I;
 }
@@ -589,16 +687,16 @@ svnae_ra_get_props(const char *base_url, const char *repo_name,
     if (!root) return NULL;
     if (!cJSON_IsObject(root)) { cJSON_Delete(root); return NULL; }
 
-    int n = 0;
-    for (cJSON *it = root->child; it; it = it->next) n++;
+    int n = json_object_size_raw(root);
+    if (n < 0) n = 0;
     struct svnae_ra_props *P = calloc(1, sizeof *P);
     P->n = n;
     P->items = calloc((size_t)(n > 0 ? n : 1), sizeof *P->items);
-    int i = 0;
-    for (cJSON *it = root->child; it; it = it->next) {
-        P->items[i].name  = strdup(it->string ? it->string : "");
-        P->items[i].value = cJSON_IsString(it) ? strdup(it->valuestring) : strdup("");
-        i++;
+    for (int i = 0; i < n; i++) {
+        const char *k = json_object_key_at(root, i);
+        JsonValue  *v = json_object_value_at(root, i);
+        P->items[i].name  = strdup(k ? k : "");
+        P->items[i].value = cJSON_IsString(v) ? strdup(json_valuestring(v)) : strdup("");
     }
     cJSON_Delete(root);
     return P;
@@ -647,7 +745,7 @@ svnae_ra_server_copy(const char *base_url, const char *repo_name,
         cJSON *root = cJSON_ParseWithLength(resp, len);
         if (root) {
             cJSON *jr = cJSON_GetObjectItemCaseSensitive(root, "rev");
-            if (cJSON_IsNumber(jr)) new_rev = jr->valueint;
+            if (cJSON_IsNumber(jr)) new_rev = json_valueint(jr);
             cJSON_Delete(root);
         }
     }
@@ -698,7 +796,7 @@ svnae_ra_branch_create(const char *base_url, const char *repo_name,
         cJSON *root = cJSON_ParseWithLength(resp, len);
         if (root) {
             cJSON *jr = cJSON_GetObjectItemCaseSensitive(root, "rev");
-            if (cJSON_IsNumber(jr)) new_rev = jr->valueint;
+            if (cJSON_IsNumber(jr)) new_rev = json_valueint(jr);
             cJSON_Delete(root);
         }
     }
@@ -735,8 +833,8 @@ svnae_ra_list(const char *base_url, const char *repo_name, int rev, const char *
     cJSON_ArrayForEach(e, jentries) {
         cJSON *jn = cJSON_GetObjectItemCaseSensitive(e, "name");
         cJSON *jk = cJSON_GetObjectItemCaseSensitive(e, "kind");
-        L->items[i].name = cJSON_IsString(jn) ? strdup(jn->valuestring) : strdup("");
-        L->items[i].kind = (cJSON_IsString(jk) && strcmp(jk->valuestring, "dir") == 0) ? 'd' : 'f';
+        L->items[i].name = cJSON_IsString(jn) ? strdup(json_valuestring(jn)) : strdup("");
+        L->items[i].kind = (cJSON_IsString(jk) && strcmp(json_valuestring(jk), "dir") == 0) ? 'd' : 'f';
         i++;
     }
     cJSON_Delete(root);
@@ -939,12 +1037,15 @@ svnae_ra_commit_finish(struct svnae_ra_commit *cb,
 {
     if (!cb) return -1;
 
-    cJSON *body = cJSON_CreateObject();
-    cJSON_AddNumberToObject(body, "base_rev", cb->base_rev);
-    cJSON_AddStringToObject(body, "author",   cb->author);
-    cJSON_AddStringToObject(body, "log",      cb->logmsg);
+    /* Build bottom-up: std.json's set/add deep-copy the value into the
+     * container's arena and free the original. Composition therefore
+     * has to finish every child before it's attached to a parent —
+     * otherwise later modifications land on the freed original, not
+     * on the (fresh) copy inside the parent. We compose each container
+     * standalone and only attach to `body` at the very end. */
 
-    cJSON *jedits = cJSON_AddArrayToObject(body, "edits");
+    /* edits array — populated before attaching to body. */
+    cJSON *jedits = json_create_array();
     for (int i = 0; i < cb->n; i++) {
         cJSON *e = cJSON_CreateObject();
         if (cb->edits[i].op == 1) {
@@ -960,30 +1061,81 @@ svnae_ra_commit_finish(struct svnae_ra_commit *cb,
             cJSON_AddStringToObject(e, "op", "delete");
             cJSON_AddStringToObject(e, "path", cb->edits[i].path);
         }
-        cJSON_AddItemToArray(jedits, e);
+        json_array_add_raw(jedits, e);
     }
 
-    /* Add props object: { path: {key: value, ...}, ... }. */
+    /* props object: { path: {key: value, ...}, ... } — group by path
+     * into standalone per-path objects, then assemble the outer object. */
+    cJSON *jp = NULL;
     if (cb->n_props > 0) {
-        cJSON *jp = cJSON_AddObjectToObject(body, "props");
+        jp = json_create_object();
         for (int i = 0; i < cb->n_props; i++) {
             const char *p = cb->props[i].path;
-            cJSON *per = cJSON_GetObjectItemCaseSensitive(jp, p);
-            if (!per) per = cJSON_AddObjectToObject(jp, p);
-            cJSON_AddStringToObject(per, cb->props[i].key, cb->props[i].value);
+            /* Accumulate per-path entries into a map-like structure.
+             * Since we can't mutate children already attached to jp
+             * (set_raw deep-copies), we build per-path dicts up front. */
+            cJSON *per = json_object_get_raw(jp, p);
+            if (!per) {
+                /* Create a new per-path object, fill it with just
+                 * this one key, then attach — subsequent props on the
+                 * same path hit the slow path below. */
+                per = json_create_object();
+                cJSON_AddStringToObject(per, cb->props[i].key, cb->props[i].value);
+                json_object_set_raw(jp, p, per);
+            } else {
+                /* Path already exists in jp. We need to add another
+                 * key to it, but `per` points at the attached copy
+                 * and set_raw on its grandparent doesn't persist
+                 * grandchild modifications. Workaround: rebuild the
+                 * whole per-path object with the old keys + new key
+                 * and re-attach under the same path. This is O(K²) on
+                 * props-per-path but K is tiny in practice. */
+                cJSON *replacement = json_create_object();
+                int keys_n = json_object_size_raw(per);
+                for (int k = 0; k < keys_n; k++) {
+                    const char *kk = json_object_key_at(per, k);
+                    JsonValue  *vv = json_object_value_at(per, k);
+                    cJSON_AddStringToObject(replacement, kk, json_valuestring(vv));
+                }
+                cJSON_AddStringToObject(replacement, cb->props[i].key, cb->props[i].value);
+                json_object_set_raw(jp, p, replacement);
+            }
         }
     }
 
-    /* Add acl object: { path: ["+rule1", "-rule2", ...], ... }. */
+    /* acl object: { path: ["+rule1", "-rule2", ...], ... } — same pattern. */
+    cJSON *ja = NULL;
     if (cb->n_acls > 0) {
-        cJSON *ja = cJSON_AddObjectToObject(body, "acl");
+        ja = json_create_object();
         for (int i = 0; i < cb->n_acls; i++) {
             const char *p = cb->acls[i].path;
-            cJSON *arr = cJSON_GetObjectItemCaseSensitive(ja, p);
-            if (!arr) arr = cJSON_AddArrayToObject(ja, p);
-            cJSON_AddItemToArray(arr, cJSON_CreateString(cb->acls[i].rule));
+            cJSON *arr = json_object_get_raw(ja, p);
+            if (!arr) {
+                arr = json_create_array();
+                json_array_add_raw(arr, json_create_string(cb->acls[i].rule));
+                json_object_set_raw(ja, p, arr);
+            } else {
+                /* Rebuild the array with existing entries + new one. */
+                cJSON *replacement = json_create_array();
+                int arr_n = json_array_size(arr);
+                for (int j = 0; j < arr_n; j++) {
+                    JsonValue *rv = json_array_get_raw(arr, j);
+                    json_array_add_raw(replacement, json_create_string(json_valuestring(rv)));
+                }
+                json_array_add_raw(replacement, json_create_string(cb->acls[i].rule));
+                json_object_set_raw(ja, p, replacement);
+            }
         }
     }
+
+    /* Now assemble the outer body with everything pre-populated. */
+    cJSON *body = cJSON_CreateObject();
+    cJSON_AddNumberToObject(body, "base_rev", cb->base_rev);
+    cJSON_AddStringToObject(body, "author",   cb->author);
+    cJSON_AddStringToObject(body, "log",      cb->logmsg);
+    json_object_set_raw(body, "edits", jedits);
+    if (jp) json_object_set_raw(body, "props", jp);
+    if (ja) json_object_set_raw(body, "acl",   ja);
 
     char *json = cJSON_PrintUnformatted(body);
     cJSON_Delete(body);
@@ -999,7 +1151,7 @@ svnae_ra_commit_finish(struct svnae_ra_commit *cb,
         cJSON *root = cJSON_ParseWithLength(resp, len);
         if (root) {
             cJSON *jr = cJSON_GetObjectItemCaseSensitive(root, "rev");
-            if (cJSON_IsNumber(jr)) new_rev = jr->valueint;
+            if (cJSON_IsNumber(jr)) new_rev = json_valueint(jr);
             cJSON_Delete(root);
         }
     }

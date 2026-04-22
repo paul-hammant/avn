@@ -76,6 +76,7 @@ struct svnae_wc_nodelist *svnae_wc_db_list_nodes(sqlite3 *db);
 int         svnae_wc_nodelist_count(const struct svnae_wc_nodelist *L);
 const char *svnae_wc_nodelist_path(const struct svnae_wc_nodelist *L, int i);
 int         svnae_wc_nodelist_kind(const struct svnae_wc_nodelist *L, int i);
+int         svnae_wc_nodelist_base_rev(const struct svnae_wc_nodelist *L, int i);
 const char *svnae_wc_nodelist_base_sha1(const struct svnae_wc_nodelist *L, int i);
 int         svnae_wc_nodelist_state(const struct svnae_wc_nodelist *L, int i);
 void        svnae_wc_nodelist_free(struct svnae_wc_nodelist *L);

@@ -169,8 +169,9 @@ svnae_wc_commit(const char *wc_root, const char *author, const char *logmsg)
      *   2 = mkdir
      *   3 = delete
      */
-    int *roles = calloc((size_t)n, sizeof *roles);
-    char **new_sha1s = calloc((size_t)n, sizeof *new_sha1s);   /* for role=1 files */
+    size_t n_alloc = n > 0 ? (size_t)n : 1;
+    int *roles = calloc(n_alloc, sizeof *roles);
+    char **new_sha1s = calloc(n_alloc, sizeof *new_sha1s);   /* for role=1 files */
 
     struct svnae_ra_commit *cb = svnae_ra_commit_begin(base_rev, author, logmsg);
     int any_edits = 0;
