@@ -37,31 +37,31 @@ handler_log_impl(req: ptr, res: ptr) {
     path = http.request_path(req)
     name = aether_parse_repo_name_in(path)
     if string.length(name) == 0 {
-        respond_error(res, 404, "not found")
+        handler_log_respond_error(res, 404, "not found")
         return
     }
     // Tail must be exactly "/log".
     n = string.length(path)
     expected_tail_start = 7 + string.length(name)
     if n != expected_tail_start + 4 {
-        respond_error(res, 404, "not found")
+        handler_log_respond_error(res, 404, "not found")
         return
     }
     tail = string.substring(path, expected_tail_start, n)
     if string.equals(tail, "/log") == 0 {
-        respond_error(res, 404, "not found")
+        handler_log_respond_error(res, 404, "not found")
         return
     }
 
     repo = svnserver_find_repo_path(name)
     if string.length(repo) == 0 {
-        respond_error(res, 404, "no such repo")
+        handler_log_respond_error(res, 404, "no such repo")
         return
     }
 
     lg = svnae_repos_log(repo)
     if lg == null {
-        respond_error(res, 500, "cannot read log")
+        handler_log_respond_error(res, 500, "cannot read log")
         return
     }
 
@@ -74,9 +74,14 @@ handler_log_impl(req: ptr, res: ptr) {
     http.response_json(res, body)
 }
 
-respond_error(res: ptr, code: int, msg: string) {
-    http.response_set_status(res, code)
-    http.response_json(res, aether_error_response_json(msg))
+// Delegate error-response emission to the C shim wrapper
+// (svnserver_respond_error in shim.c). Unique-named local wrapper
+// so the Aether-side symbol doesn't collide with neighbouring
+// handler modules when linked into the same binary.
+extern svnserver_respond_error(res: ptr, code: int, msg: string)
+
+handler_log_respond_error(res: ptr, code: int, msg: string) {
+    svnserver_respond_error(res, code, msg)
 }
 
 main() {

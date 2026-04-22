@@ -80,15 +80,9 @@ handler_info_impl(req: ptr, res: ptr) {
     http.response_json(res, body)
 }
 
-// Error response helper — the C side formats the {"error": "..."}
-// shape via aether_error_response_json. Wrap it here so callers
-// don't repeat the ceremony.
-extern aether_error_response_json(msg: string) -> string
-
-svnserver_respond_error(res: ptr, code: int, msg: string) {
-    http.response_set_status(res, code)
-    http.response_json(res, aether_error_response_json(msg))
-}
+// Error emitter is a C shim (svnserver_respond_error in shim.c);
+// Aether just calls through.
+extern svnserver_respond_error(res: ptr, code: int, msg: string)
 
 main() {
     println("ae/svnserver/handler_info.ae is a library; not meant to run standalone")

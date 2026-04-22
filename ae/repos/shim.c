@@ -545,6 +545,26 @@ svnae_repos_resolve(const char *repo, int rev, const char *path,
     return 1;
 }
 
+/* Aether-callable split-accessor form. Returns 0 on miss instead of
+ * an out-param pair. kind is 'f'(102), 'd'(100), or 0. */
+int
+svnae_repos_resolve_kind(const char *repo, int rev, const char *path)
+{
+    char sha[65]; char kind = 0;
+    if (!svnae_repos_resolve(repo, rev, path, sha, &kind)) return 0;
+    return (int)(unsigned char)kind;
+}
+
+const char *
+svnae_repos_resolve_sha(const char *repo, int rev, const char *path)
+{
+    static __thread char buf[65];
+    buf[0] = '\0';
+    char kind = 0;
+    svnae_repos_resolve(repo, rev, path, buf, &kind);
+    return buf;
+}
+
 /* --- blame -----------------------------------------------------------
  *
  * Per-line attribution: for every line of `path` at `rev`, determine

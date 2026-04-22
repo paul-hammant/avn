@@ -609,6 +609,22 @@ const char *svnserver_find_repo_path(const char *name) {
     return p ? p : "";
 }
 
+/* Aether-callable passthroughs to the static helpers defined earlier
+ * in the file (respond_error / respond_binary / set_merkle_headers). */
+void svnserver_respond_error(HttpServerResponse *res, int code, const char *msg) {
+    respond_error(res, code, msg);
+}
+
+void svnserver_respond_binary_ok(HttpServerResponse *res, const char *data,
+                                 int length, const char *content_type) {
+    respond_binary(res, data, (size_t)length, content_type);
+}
+
+void svnserver_set_merkle_headers(HttpServerResponse *res, const char *algo,
+                                  const char *kind, const char *sha) {
+    set_merkle_headers(res, algo, kind, sha);
+}
+
 /* --- path parsing helpers --------------------------------------------- *
  *
  * URL shape:  /repos/{R}/...
@@ -750,35 +766,19 @@ handle_repo_rev(HttpRequest *req, HttpServerResponse *res, void *user_data)
         return;
     }
 
-    /* /rev/N/cat/<path>   (path may be empty → root, which is an error for cat) */
+    /* /rev/N/cat/<path> — logic in Aether (handler_rev_cat.ae); the
+     * final respond_binary stays in C because std.http lacks a
+     * length-aware body setter. */
     if (strncmp(after, "/cat/", 5) == 0 || strcmp(after, "/cat") == 0) {
         const char *file_path = strcmp(after, "/cat") == 0 ? "" : after + 5;
-        if (!*file_path) { respond_error(res, 400, "cat requires a path"); return; }
-        /* ACL check before reading: denied = 404 (indistinguishable
-         * from "doesn't exist", per Phase 7.1 design). Super-user
-         * bypasses. */
         const char *user = NULL;
         int is_super = auth_context(req, &user);
-        if (!is_super && !acl_allows(repo, rev, user, file_path)) {
-            respond_error(res, 404, "not found");
-            return;
-        }
-        char *data = svnae_repos_cat(repo, rev, file_path);
-        if (!data) { respond_error(res, 404, "not found"); return; }
-        /* We don't know the length without a separate API call. Our cat
-         * returns NUL-terminated text for the test cases; for this Phase 6
-         * we use strlen. When binary blobs become common we'll add a
-         * length-aware cat variant. */
-        size_t len = strlen(data);
-        /* Merkle headers: resolve (rev, path) to its content sha. */
-        char node_sha[65] = {0};
-        char node_kind = 0;
-        if (svnae_repos_resolve(repo, rev, file_path, node_sha, &node_kind)) {
-            set_merkle_headers(res, svnae_repo_primary_hash(repo),
-                               node_kind == 'd' ? "dir" : "file", node_sha);
-        }
-        respond_binary(res, data, len, "application/octet-stream");
-        svnae_rep_free(data);
+        extern int aether_cat_handle(HttpRequest *req, HttpServerResponse *res,
+                                     const char *repo, int rev,
+                                     const char *file_path,
+                                     const char *user, int is_super);
+        (void)aether_cat_handle(req, res, repo, rev, file_path,
+                                user ? user : "", is_super);
         return;
     }
 
