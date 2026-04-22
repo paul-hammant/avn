@@ -44,7 +44,27 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
   `int_to_dec` + `digit_char` in favour of `std.string.from_int` now
   that it's available, and ported the WC pristine-store path builder
   to ae/wc/pristine_path.ae (handles the two-level XX/YY/ fanout).
-- **Round 8** (current): Aether shipped `--emit=lib --with=fs` after
+- **Round 9** (current): the Gordian knots fall. Three structural
+  recursive walkers ported in a single session after `--emit=lib
+  --with=fs` landed:
+  - `filter_dir_recursive` (fs_fs, 89 lines of C → ae/fs_fs/filter.ae)
+  - `rebuild_dir_c` (fs_fs, 292 lines of C → ae/fs_fs/rebuild.ae)
+    — the core commit tree rebuilder that had been flagged as
+    "weeks of work" earlier in the session
+  - `compute_redacted_dir_sha` (svnserver, 50 lines → ae/svnserver/redact.ae)
+  Plus two more algorithmic ports:
+  - `svnae_wc_update` apply pipeline (wc, 135 lines → ae/wc/update_apply.ae)
+  - `svnae_wc_merge` apply pipeline (wc, 135 lines → ae/wc/merge_apply.ae)
+  - `svnae_repos_paths_changed` flatten+diff (repos, 65 lines →
+    ae/repos/paths_changed.ae)
+  - `resolve_path` (repos, 70 lines → ae/repos/resolve.ae)
+  Pattern: every recursive walker reads/writes blobs through C
+  externs, represents its in-memory accumulator as a newline-
+  separated string in the same `K SHA NAME\n` format the dir-blob
+  parsers already understand. Hand-written C% now at **52%**, from
+  57% at round-8 close.
+
+- **Round 8**: Aether shipped `--emit=lib --with=fs` after
   a feedback pass from this port (`~/scm/aether/stdlib_wish.md`), so
   std.fs is now reachable from our `.ae` files. `ae/subr/io.ae`
   exports atomic-write / mkdir-p / slurp / file_size / is_regular
