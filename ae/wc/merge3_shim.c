@@ -198,30 +198,22 @@ svnae_merge3_apply(const char *wc_path,
     if (rc < 0) { free(mine); return -1; }
 
     /* Write merged back to wc_path, atomically. */
-    char tmp[PATH_MAX];
-    snprintf(tmp, sizeof tmp, "%s.svnmerge.%d", wc_path, (int)getpid());
-    int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    if (fd < 0) { free(mine); free(merged); return -1; }
-    ssize_t w = write(fd, merged, (size_t)merged_len);
-    close(fd);
-    if (w != merged_len || rename(tmp, wc_path) != 0) {
-        unlink(tmp);
-        free(mine); free(merged);
-        return -1;
+    if (aether_io_write_atomic(wc_path, merged, merged_len) != 0) {
+        free(mine); free(merged); return -1;
     }
 
     if (rc == 1) {
-        /* Conflicts — drop sidecars for svn resolve to use. */
+        /* Conflicts — drop sidecars for svn resolve to use. The
+         * sidecars don't need the atomic-rename dance, but going
+         * through aether_io_write_atomic costs only an extra rename
+         * and keeps one primitive in use. */
         char side[PATH_MAX];
         snprintf(side, sizeof side, "%s.mine", wc_path);
-        int sfd = open(side, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-        if (sfd >= 0) { (void)write(sfd, mine, (size_t)mine_len); close(sfd); }
+        (void)aether_io_write_atomic(side, mine, mine_len);
         snprintf(side, sizeof side, "%s.r%d", wc_path, base_rev);
-        sfd = open(side, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-        if (sfd >= 0) { (void)write(sfd, base, (size_t)base_len); close(sfd); }
+        (void)aether_io_write_atomic(side, base, base_len);
         snprintf(side, sizeof side, "%s.r%d", wc_path, theirs_rev);
-        sfd = open(side, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-        if (sfd >= 0) { (void)write(sfd, theirs, (size_t)theirs_len); close(sfd); }
+        (void)aether_io_write_atomic(side, theirs, theirs_len);
     }
 
     free(mine); free(merged);
