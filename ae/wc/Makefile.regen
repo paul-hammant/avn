@@ -7,7 +7,7 @@
 
 AETHERC ?= $(HOME)/scm/aether/build/aetherc
 
-GENERATED := mergeinfo_generated.c ignore_generated.c sidecar_generated.c status_code_generated.c pristine_path_generated.c update_apply_generated.c
+GENERATED := mergeinfo_generated.c ignore_generated.c sidecar_generated.c status_code_generated.c pristine_path_generated.c update_apply_generated.c merge_apply_generated.c
 
 all: $(GENERATED)
 
@@ -27,6 +27,9 @@ pristine_path_generated.c: pristine_path.ae
 	$(AETHERC) --emit=lib $< $@
 
 update_apply_generated.c: update_apply.ae
+	$(AETHERC) --emit=lib $< $@
+
+merge_apply_generated.c: merge_apply.ae
 	$(AETHERC) --emit=lib $< $@
 
 .PHONY: all

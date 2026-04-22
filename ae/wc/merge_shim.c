@@ -99,27 +99,15 @@ extern int svnae_wc_hash_file (const char *wc_root, const char *path, char *out)
 
 static __thread const char *g_wc_root = NULL;
 
-static int
-sha1_of_file(const char *path, char out[65])
-{
-    if (!g_wc_root) return -1;
-    return svnae_wc_hash_file(g_wc_root, path, out);
-}
-
+/* sha1_of_bytes is still used by rt_add to populate each remote file
+ * entry's sha1 during walk_remote. The file-hashing, mkdir-p, and
+ * atomic-write helpers moved into the Aether apply pass
+ * (ae/wc/merge_apply.ae). */
 static void
 sha1_of_bytes(const char *data, int len, char out[65])
 {
     out[0] = '\0';
     if (g_wc_root) svnae_wc_hash_bytes(g_wc_root, data, len, out);
-}
-
-/* mkdir_p + atomic write ported to Aether (ae/subr/io.ae). */
-extern int aether_io_mkdir_p(const char *path);
-extern int aether_io_write_atomic(const char *path, const char *data, int length);
-
-static int mkdir_p(const char *path) { return aether_io_mkdir_p(path) == 0 ? 0 : -1; }
-static int write_file_atomic(const char *path, const char *data, int len) {
-    return aether_io_write_atomic(path, data, len) == 0 ? 0 : -1;
 }
 
 /* --- remote-tree snapshot (same as update_shim) ---------------------- */
@@ -163,6 +151,38 @@ rt_find(const struct rtree *rt, const char *path)
 {
     for (int i = 0; i < rt->n; i++) if (strcmp(rt->items[i].path, path) == 0) return &rt->items[i];
     return NULL;
+}
+
+/* Accessors for the Aether apply-pass port. Mirror the ones in
+ * update_shim.c (different struct name — `rtree` here vs
+ * `remote_tree` there — but same fields). */
+int mergert_count(const struct rtree *rt) { return rt ? rt->n : 0; }
+const char *mergert_path_at(const struct rtree *rt, int i) {
+    if (!rt || i < 0 || i >= rt->n) return "";
+    return rt->items[i].path;
+}
+int mergert_kind_at(const struct rtree *rt, int i) {
+    if (!rt || i < 0 || i >= rt->n) return -1;
+    return rt->items[i].kind;
+}
+const char *mergert_sha_at(const struct rtree *rt, int i) {
+    if (!rt || i < 0 || i >= rt->n) return "";
+    return rt->items[i].sha1;
+}
+const char *mergert_data_at(const struct rtree *rt, int i) {
+    if (!rt || i < 0 || i >= rt->n) return "";
+    return rt->items[i].data ? rt->items[i].data : "";
+}
+int mergert_data_len_at(const struct rtree *rt, int i) {
+    if (!rt || i < 0 || i >= rt->n) return 0;
+    return rt->items[i].data_len;
+}
+int mergert_find_by_path(const struct rtree *rt, const char *path) {
+    if (!rt || !path) return -1;
+    for (int i = 0; i < rt->n; i++) {
+        if (strcmp(rt->items[i].path, path) == 0) return i;
+    }
+    return -1;
 }
 
 /* Walk a subtree under `source_path` at `rev` on the remote. The stored
@@ -306,124 +326,24 @@ svnae_wc_merge(const char *wc_root, const char *source_path, int rev_a, int rev_
         struct rtree tmp = A; A = B; B = tmp;
     }
 
-    /* Compute the diff: for each path in A ∪ B, decide add/mod/del. */
+    /* Compute the diff and apply: pass 1 deletions, pass 2 adds+mods.
+     * Ported to ae/wc/merge_apply.ae. The C side keeps walk_remote
+     * + rtree + sqlite handles. */
     db = svnae_wc_db_open(wc_root);
 
-    /* Helper: map a source-relative path `p` into the target subdir in
-     * the WC, writing into `out` (caller sized PATH_MAX). */
-    #define MAP_WC_REL(p, out) do { \
-        if (*target_path) snprintf(out, PATH_MAX, "%s/%s", target_path, p); \
-        else              snprintf(out, PATH_MAX, "%s", p); \
-    } while (0)
-
-    /* Phase 5.13: no pre-scan abort. Per-file, the apply pass decides
-     * clean overwrite vs 3-way merge. */
-
-    /* Apply deletions (A has it, B doesn't). */
-    for (int i = 0; i < A.n; i++) {
-        const struct rnode *ra = &A.items[i];
-        if (rt_find(&B, ra->path)) continue;
-        char wc_rel[PATH_MAX]; MAP_WC_REL(ra->path, wc_rel);
-        char disk[PATH_MAX]; snprintf(disk, sizeof disk, "%s/%s", wc_root, wc_rel);
-
-        if (svnae_wc_db_node_exists(db, wc_rel)) {
-            struct svnae_wc_node *n = svnae_wc_db_get_node(db, wc_rel);
-            if (n) {
-                int brev = svnae_wc_node_base_rev(n);
-                const char *bsha = svnae_wc_node_base_sha1(n);
-                int kind = svnae_wc_node_kind(n);
-                char bsha_copy[65] = {0};
-                if (bsha) {
-                    size_t l = strlen(bsha);
-                    if (l >= sizeof bsha_copy) l = sizeof bsha_copy - 1;
-                    memcpy(bsha_copy, bsha, l);
-                    bsha_copy[l] = '\0';
-                }
-                svnae_wc_node_free(n);
-                svnae_wc_db_upsert_node(db, wc_rel, kind, brev, bsha_copy, 2);
-            }
-            {
-                extern int aether_io_unlink(const char *p);
-                extern int aether_io_rmdir(const char *p);
-                if (ra->kind == 0) (void)aether_io_unlink(disk);
-                else               (void)aether_io_rmdir(disk);
-            }
-        }
-    }
-
-    /* Apply adds and mods from B. */
-    for (int i = 0; i < B.n; i++) {
-        const struct rnode *rb = &B.items[i];
-        const struct rnode *ra = rt_find(&A, rb->path);
-
-        char wc_rel[PATH_MAX]; MAP_WC_REL(rb->path, wc_rel);
-        char disk[PATH_MAX]; snprintf(disk, sizeof disk, "%s/%s", wc_root, wc_rel);
-
-        if (rb->kind == 1) {
-            if (mkdir_p(disk) != 0) continue;
-            if (!svnae_wc_db_node_exists(db, wc_rel)) {
-                svnae_wc_db_upsert_node(db, wc_rel, 1, 0, "", 1);
-            }
-            continue;
-        }
-
-        if (ra && ra->kind == 0 && strcmp(ra->sha1, rb->sha1) == 0) continue;
-
-        /* Does the local file already exist? If yes and it's clean
-         * against its pristine, straight overwrite (the change from A
-         * to B is safe to apply). If dirty locally, 3-way merge using
-         * A as base and B as theirs. If not present locally, straight
-         * add. */
-        extern int aether_io_exists(const char *p);
-        int exists_on_disk = aether_io_exists(disk);
-        if (!exists_on_disk || !svnae_wc_db_node_exists(db, wc_rel)) {
-            /* Not tracked yet — new add-file. */
-            if (write_file_atomic(disk, rb->data, rb->data_len) != 0) continue;
-            svnae_wc_pristine_put(wc_root, rb->data, rb->data_len);
-            if (!svnae_wc_db_node_exists(db, wc_rel))
-                svnae_wc_db_upsert_node(db, wc_rel, 0, 0, "", 1);
-            continue;
-        }
-
-        /* Tracked. Check for local modification. */
-        char disk_sha[65];
-        int has_disk_sha = (sha1_of_file(disk, disk_sha) == 0);
-        struct svnae_wc_node *n = svnae_wc_db_get_node(db, wc_rel);
-        char local_base_sha[41] = {0};
-        int  local_base_rev = 0;
-        if (n) {
-            const char *bs = svnae_wc_node_base_sha1(n);
-            if (bs) strncpy(local_base_sha, bs, 40);
-            local_base_rev = svnae_wc_node_base_rev(n);
-            svnae_wc_node_free(n);
-        }
-        (void)has_disk_sha;
-        (void)local_base_rev;
-        /* Always use 3-way merge: mine=disk, base=source@A,
-         * theirs=source@B. For forward merges where the WC is clean
-         * this collapses to a straight overwrite anyway (no
-         * conflicting region). For reverse merges and cherry-picks
-         * the WC is NOT synced to A or B, so we must let merge3
-         * splice the base→theirs diff into mine rather than
-         * blindly overwriting. */
-        int m3rc = svnae_merge3_apply(disk,
-                                      ra ? ra->data : "", ra ? ra->data_len : 0, rev_a,
-                                      rb->data, rb->data_len, rev_b);
-        if (m3rc == 0) {
-            /* Clean merge. We do NOT update the pristine here because
-             * the WC's base is still the WC's original head — we only
-             * spliced an external rev-range diff into `mine`. Commit
-             * will pick up the change via disk-vs-pristine status. */
-        } else if (m3rc == 1) {
-            svnae_wc_db_set_conflicted(db, wc_rel, 1);
-            fprintf(stderr, "C    %s\n", wc_rel);
-        } else {
-            fprintf(stderr, "error merging %s; left alone\n", wc_rel);
-        }
-        (void)local_base_sha;
-    }
-
-    #undef MAP_WC_REL
+    extern void aether_merge_apply_deletions(const char *wc_root,
+                                             const char *target_path,
+                                             const struct rtree *a_rt,
+                                             const struct rtree *b_rt,
+                                             sqlite3 *db);
+    extern void aether_merge_apply_adds_mods(const char *wc_root,
+                                             const char *target_path,
+                                             int rev_a, int rev_b,
+                                             const struct rtree *a_rt,
+                                             const struct rtree *b_rt,
+                                             sqlite3 *db);
+    aether_merge_apply_deletions(wc_root, target_path, &A, &B, db);
+    aether_merge_apply_adds_mods(wc_root, target_path, rev_a, rev_b, &A, &B, db);
 
     svnae_wc_db_close(db);
     rt_free(&A); rt_free(&B);
