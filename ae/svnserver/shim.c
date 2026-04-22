@@ -625,6 +625,10 @@ void svnserver_set_merkle_headers(HttpServerResponse *res, const char *algo,
     set_merkle_headers(res, algo, kind, sha);
 }
 
+void svnserver_respond_json_ok(HttpServerResponse *res, const char *body) {
+    respond_json(res, 200, body);
+}
+
 /* --- path parsing helpers --------------------------------------------- *
  *
  * URL shape:  /repos/{R}/...
@@ -930,62 +934,14 @@ handle_repo_rev(HttpRequest *req, HttpServerResponse *res, void *user_data)
      * rehash — same as Phase 6.2 behaviour). */
     if (strncmp(after, "/list/", 6) == 0 || strcmp(after, "/list") == 0) {
         const char *dir_path = strcmp(after, "/list") == 0 ? "" : after + 6;
-
         const char *user = NULL;
         int is_super = auth_context(req, &user);
-
-        /* ACL check on the dir itself. If the dir is denied, pretend
-         * it doesn't exist. */
-        if (!is_super && !acl_allows(repo, rev, user, dir_path)) {
-            respond_error(res, 404, "not a directory");
-            return;
-        }
-
-        /* Resolve the dir's sha + read its raw blob so we can parse
-         * children with their content-shas intact. */
-        char dir_sha[65] = {0};
-        char dir_kind = 0;
-        if (!svnae_repos_resolve(repo, rev, dir_path, dir_sha, &dir_kind)
-            || dir_kind != 'd') {
-            respond_error(res, 404, "not a directory");
-            return;
-        }
-        char *dir_body = svnae_rep_read_blob(repo, dir_sha);
-        if (!dir_body) { respond_error(res, 500, "cannot read dir blob"); return; }
-
-        /* Body + redacted-blob built in Aether (ae/svnserver/list_json.ae).
-         * Returns "<json-body>\x01<redacted-blob>". We split on \x01,
-         * hash the redact half for the Merkle header, and emit the
-         * body half. */
-        extern const char *aether_list_build(const char *repo, int rev,
-                                             const char *user, int is_super,
-                                             const char *dir_body,
-                                             const char *dir_path);
-        const char *packed = aether_list_build(repo, rev,
-                                               user ? user : "", is_super,
-                                               dir_body, dir_path);
-        svnae_rep_free(dir_body);
-        const char *algo = svnae_repo_primary_hash(repo);
-        const char *sep = packed ? strchr(packed, '\x01') : NULL;
-        if (is_super) {
-            set_merkle_headers(res, algo, "dir", dir_sha);
-        } else if (sep) {
-            const char *redact = sep + 1;
-            int redact_len = (int)strlen(redact);
-            char rehash[65] = {0};
-            svnae_openssl_hash_hex_into(algo, redact, redact_len, rehash);
-            set_merkle_headers(res, algo, "dir", rehash);
-        }
-        if (sep) {
-            size_t body_len = (size_t)(sep - packed);
-            char *body_copy = malloc(body_len + 1);
-            memcpy(body_copy, packed, body_len);
-            body_copy[body_len] = '\0';
-            respond_json(res, 200, body_copy);
-            free(body_copy);
-        } else {
-            respond_json(res, 200, packed ? packed : "{\"entries\":[]}");
-        }
+        extern void aether_list_handle(HttpRequest *req, HttpServerResponse *res,
+                                       const char *repo, int rev,
+                                       const char *dir_path,
+                                       const char *user, int is_super);
+        aether_list_handle(req, res, repo, rev, dir_path,
+                           user ? user : "", is_super);
         return;
     }
 

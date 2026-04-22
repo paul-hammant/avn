@@ -2,7 +2,7 @@
 
 AETHERC ?= $(HOME)/scm/aether/build/aetherc
 
-GENERATED := json_generated.c paths_index_generated.c acl_generated.c copy_acl_generated.c url_parse_generated.c redact_generated.c info_json_generated.c log_json_generated.c list_json_generated.c acl_resolve_generated.c handler_info_generated.c handler_log_generated.c handler_rev_info_generated.c handler_rev_cat_generated.c
+GENERATED := json_generated.c paths_index_generated.c acl_generated.c copy_acl_generated.c url_parse_generated.c redact_generated.c info_json_generated.c log_json_generated.c list_json_generated.c acl_resolve_generated.c handler_info_generated.c handler_log_generated.c handler_rev_info_generated.c handler_rev_cat_generated.c handler_rev_list_generated.c
 
 all: $(GENERATED)
 
@@ -46,6 +46,9 @@ handler_rev_info_generated.c: handler_rev_info.ae
 	$(AETHERC) --emit=lib $< $@
 
 handler_rev_cat_generated.c: handler_rev_cat.ae
+	$(AETHERC) --emit=lib $< $@
+
+handler_rev_list_generated.c: handler_rev_list.ae
 	$(AETHERC) --emit=lib $< $@
 
 .PHONY: all
