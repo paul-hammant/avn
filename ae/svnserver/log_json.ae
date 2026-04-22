@@ -95,6 +95,41 @@ log_json_impl(repo: string, lg: ptr, user: string, is_super: int) -> string {
     return string.concat(out, "]}")
 }
 
+// /rev/N/paths response body. ACL-filter the list of (action, path)
+// entries; super-user sees everything.
+extern svnae_repos_paths_action(p: ptr, i: int) -> string
+extern aether_path_change_entry_json(action: string, path: string) -> string
+
+export paths_changed_json(repo: string, rev: int, paths: ptr,
+                          user: string, is_super: int) -> string {
+    return paths_changed_json_impl(repo, rev, paths, user, is_super)
+}
+
+paths_changed_json_impl(repo: string, rev: int, paths: ptr,
+                        user: string, is_super: int) -> string {
+    out = "{\"entries\":["
+    n = svnae_repos_paths_count(paths)
+    any = 0
+    i = 0
+    while i < n {
+        path = svnae_repos_paths_path(paths, i)
+        visible = 1
+        if is_super == 0 {
+            if svnserver_acl_allows(repo, rev, user, path) == 0 {
+                visible = 0
+            }
+        }
+        if visible == 1 {
+            if any == 1 { out = string.concat(out, ",") }
+            any = 1
+            action = svnae_repos_paths_action(paths, i)
+            out = string.concat(out, aether_path_change_entry_json(action, path))
+        }
+        i = i + 1
+    }
+    return string.concat(out, "]}")
+}
+
 main() {
     println("ae/svnserver/log_json.ae is a library; not meant to run standalone")
 }

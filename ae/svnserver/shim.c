@@ -790,29 +790,19 @@ handle_repo_rev(HttpRequest *req, HttpServerResponse *res, void *user_data)
     }
 
     /* /rev/N/paths → {"entries":[{"action":"A","path":"..."}, ...]}
-     * Used by `svn log --verbose`. Denied paths are filtered out of
-     * the result (indistinguishable from "path didn't change in this
-     * rev"). Super-users get the full set. */
+     * ACL-filtered; super sees all. Body built in Aether. */
     if (strcmp(after, "/paths") == 0) {
         struct svnae_paths *P = svnae_repos_paths_changed(repo, rev);
         if (!P) { respond_error(res, 404, "no such rev"); return; }
         const char *user = NULL;
         int is_super = auth_context(req, &user);
-        struct sb s = {0};
-        sb_puts(&s, "{\"entries\":[");
-        int n = svnae_repos_paths_count(P);
-        int any = 0;
-        for (int i = 0; i < n; i++) {
-            const char *path = svnae_repos_paths_path(P, i);
-            if (!is_super && !acl_allows(repo, rev, user, path)) continue;
-            if (any) sb_putc(&s, ',');
-            any = 1;
-            sb_puts(&s, aether_path_change_entry_json(svnae_repos_paths_action(P, i), path));
-        }
-        sb_puts(&s, "]}");
+        extern const char *aether_paths_changed_json(const char *repo, int rev,
+                                                     const void *paths,
+                                                     const char *user, int is_super);
+        const char *body = aether_paths_changed_json(repo, rev, P,
+                                                     user ? user : "", is_super);
         svnae_repos_paths_free(P);
-        respond_json(res, 200, s.data ? s.data : "{\"entries\":[]}");
-        free(s.data);
+        respond_json(res, 200, body ? body : "{\"entries\":[]}");
         return;
     }
 
