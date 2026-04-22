@@ -462,6 +462,18 @@ const char *svnserver_load_rev_acl_root(const char *repo, int rev) {
     return buf;
 }
 
+const char *svnserver_load_rev_props_sha(const char *repo, int rev) {
+    static __thread char buf[65];
+    buf[0] = '\0';
+    char *sha = load_rev_blob_field(repo, rev, "props");
+    if (sha) {
+        size_t n = strlen(sha);
+        if (n < sizeof buf) { memcpy(buf, sha, n + 1); }
+        free(sha);
+    }
+    return buf;
+}
+
 /* Recursively compute the redacted-for-`user` sha of the dir at
  * `dir_sha`. Writes 65-byte hex into `out`. Returns 0 on success.
  * Ported to Aether (ae/svnserver/redact.ae); the wrapper preserves
@@ -914,41 +926,31 @@ handle_repo_rev(HttpRequest *req, HttpServerResponse *res, void *user_data)
         return;
     }
 
-    /* /rev/N/props/<path>  */
+    /* /rev/N/props/<path> — lookup + body in Aether. Returns
+     * "<per-path-sha>\x01<json>"; we split to set the Merkle header
+     * and emit the body. */
     if (strncmp(after, "/props/", 7) == 0 || strcmp(after, "/props") == 0) {
         const char *target = strcmp(after, "/props") == 0 ? "" : after + 7;
-        /* ACL check: denied paths have empty props from caller's view. */
         const char *p_user = NULL;
         int p_is_super = auth_context(req, &p_user);
         if (!p_is_super && !acl_allows(repo, rev, p_user, target)) {
             respond_json(res, 200, "{}");
             return;
         }
-        /* The path "" means the WC root. */
-        char *props_sha = load_rev_props_sha1(repo, rev);
-        if (!props_sha || !*props_sha) {
-            free(props_sha);
-            respond_json(res, 200, "{}");
-            return;
+        extern const char *aether_props_resolve(const char *repo, int rev,
+                                                 const char *target);
+        const char *packed = aether_props_resolve(repo, rev, target);
+        const char *sep = packed ? strchr(packed, '\x01') : NULL;
+        if (sep && sep > packed) {
+            char sha[65];
+            size_t sl = (size_t)(sep - packed);
+            if (sl < sizeof sha) {
+                memcpy(sha, packed, sl); sha[sl] = '\0';
+                set_merkle_headers(res, svnae_repo_primary_hash(repo),
+                                   "props", sha);
+            }
         }
-        char *paths_body = svnae_rep_read_blob(repo, props_sha);
-        free(props_sha);
-        if (!paths_body) { respond_json(res, 200, "{}"); return; }
-        char *per_path_sha = paths_props_lookup(paths_body, target);
-        svnae_rep_free(paths_body);
-        if (!per_path_sha) { respond_json(res, 200, "{}"); return; }
-        char *props_body = svnae_rep_read_blob(repo, per_path_sha);
-        if (!props_body) { free(per_path_sha); respond_json(res, 200, "{}"); return; }
-        /* Merkle headers: the per-path props blob's sha *is* this
-         * node's content hash for verification purposes. */
-        set_merkle_headers(res, svnae_repo_primary_hash(repo),
-                           "props", per_path_sha);
-        free(per_path_sha);
-        struct sb s = {0};
-        sb_put_props_as_json(&s, props_body);
-        svnae_rep_free(props_body);
-        respond_json(res, 200, s.data ? s.data : "{}");
-        free(s.data);
+        respond_json(res, 200, sep ? sep + 1 : "{}");
         return;
     }
 

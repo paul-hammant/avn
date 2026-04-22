@@ -71,6 +71,43 @@ acl_resolve_json_impl(repo: string, rev: int, target: string) -> string {
     return body
 }
 
+// /rev/N/props/<path> lookup. Returns "<per-path-sha>\x01<json body>"
+// on success, "\x01{}" when no props for target. The C caller splits
+// on \x01, sets the Merkle header from the sha half, and emits the
+// body half.
+
+extern svnserver_load_rev_props_sha(repo: string, rev: int) -> string
+extern aether_paths_index_lookup(body: string, path: string) -> string
+extern aether_props_blob_to_json(body: string) -> string
+
+export props_resolve(repo: string, rev: int, target: string) -> string {
+    return props_resolve_impl(repo, rev, target)
+}
+
+props_resolve_impl(repo: string, rev: int, target: string) -> string {
+    props_sha = svnserver_load_rev_props_sha(repo, rev)
+    if string.length(props_sha) == 0 { return "\x01{}" }
+
+    paths_body = svnae_rep_read_blob(repo, props_sha)
+    if string.length(paths_body) == 0 { return "\x01{}" }
+
+    per_path_sha = aether_paths_index_lookup(paths_body, target)
+    per_path_sha = string.concat(per_path_sha, "")
+    svnae_rep_free(paths_body)
+    if string.length(per_path_sha) == 0 { return "\x01{}" }
+
+    props_body = svnae_rep_read_blob(repo, per_path_sha)
+    if string.length(props_body) == 0 {
+        out = string.concat(per_path_sha, "\x01")
+        return string.concat(out, "{}")
+    }
+
+    json = aether_props_blob_to_json(props_body)
+    svnae_rep_free(props_body)
+    out = string.concat(per_path_sha, "\x01")
+    return string.concat(out, json)
+}
+
 main() {
     println("ae/svnserver/acl_resolve.ae is a library; not meant to run standalone")
 }
