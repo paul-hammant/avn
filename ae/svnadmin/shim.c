@@ -83,6 +83,9 @@ extern const char *aether_rep_header(const char *sha, int size);
 extern const char *aether_rev_pointer_block(int rev, const char *pointer_sha);
 extern int         aether_algos_count(const char *spec);
 extern const char *aether_algos_token(const char *spec, int i);
+extern int         aether_line_starts_with_tag(const char *line, const char *prefix);
+extern int         aether_parse_tagged_int(const char *line, const char *prefix, int fallback);
+extern const char *aether_tagged_rest(const char *line, const char *prefix);
 const char *svnae_fsfs_now_iso8601(void);
 
 /* ---- tiny helpers --------------------------------------------------- */
@@ -468,19 +471,21 @@ svnae_svnadmin_load(const char *repo, int in_fd)
     int len;
 
     /* Header. */
+    /* Line-tag checks via ae/svnadmin/dump.ae helpers. */
+    #define TAG_SENTINEL (-2147483647)
     len = read_line(in_fd, line, sizeof line);
     if (len < 0 || strcmp(line, "SVNAE-DUMP 1") != 0) return -1;
     len = read_line(in_fd, line, sizeof line);   /* FORMAT ... */
-    if (len < 0 || strncmp(line, "FORMAT ", 7) != 0) return -1;
+    if (len < 0 || !aether_line_starts_with_tag(line, "FORMAT")) return -1;
     len = read_line(in_fd, line, sizeof line);   /* HEAD ... */
-    int head;
-    if (len < 0 || strncmp(line, "HEAD ", 5) != 0 || !parse_int(line + 5, &head)) return -1;
+    int head = aether_parse_tagged_int(line, "HEAD", TAG_SENTINEL);
+    if (len < 0 || head == TAG_SENTINEL) return -1;
     len = read_line(in_fd, line, sizeof line);   /* REV-COUNT ... */
-    int rev_count;
-    if (len < 0 || strncmp(line, "REV-COUNT ", 10) != 0 || !parse_int(line + 10, &rev_count)) return -1;
+    int rev_count = aether_parse_tagged_int(line, "REV-COUNT", TAG_SENTINEL);
+    if (len < 0 || rev_count == TAG_SENTINEL) return -1;
     len = read_line(in_fd, line, sizeof line);   /* REP-COUNT ... */
-    int rep_count;
-    if (len < 0 || strncmp(line, "REP-COUNT ", 10) != 0 || !parse_int(line + 10, &rep_count)) return -1;
+    int rep_count = aether_parse_tagged_int(line, "REP-COUNT", TAG_SENTINEL);
+    if (len < 0 || rep_count == TAG_SENTINEL) return -1;
 
     /* Initialise target repo's bare layout (no seed rev 0 — the dump
      * will replay its own rev 0 below). Dumps currently always carry
@@ -488,21 +493,23 @@ svnae_svnadmin_load(const char *repo, int in_fd)
      * an ALGOS header to the dump format, pass it through here. */
     if (create_bare(repo, "sha1") != 0) return -1;
 
-    /* REP-COUNT blocks. Hash may be sha1 (40 hex) or sha256 (64 hex).
-     * The REP line gives us the full hex; we read up to the next
-     * newline to cover either. */
+    /* REP-COUNT blocks. Hash may be sha1 (40 hex) or sha256 (64 hex);
+     * the REP line gives us the full hex and the Aether helper returns
+     * a pointer into the read buffer that we immediately strdup below. */
     for (int i = 0; i < rep_count; i++) {
         len = read_line(in_fd, line, sizeof line);
-        if (len < 0 || strncmp(line, "REP ", 4) != 0) return -1;
+        if (len < 0) return -1;
+        const char *sha_ref = aether_tagged_rest(line, "REP");
+        if (!sha_ref || !*sha_ref) return -1;
         char sha[65];
-        size_t slen = (size_t)(len - 4);
+        size_t slen = strlen(sha_ref);
         if (slen >= sizeof sha) return -1;
-        memcpy(sha, line + 4, slen); sha[slen] = '\0';
+        memcpy(sha, sha_ref, slen + 1);
 
         len = read_line(in_fd, line, sizeof line);
-        if (len < 0 || strncmp(line, "SIZE ", 5) != 0) return -1;
-        int size;
-        if (!parse_int(line + 5, &size)) return -1;
+        if (len < 0) return -1;
+        int size = aether_parse_tagged_int(line, "SIZE", TAG_SENTINEL);
+        if (size == TAG_SENTINEL) return -1;
 
         char *data = malloc((size_t)size + 1);
         if (!data) return -1;
@@ -524,13 +531,14 @@ svnae_svnadmin_load(const char *repo, int in_fd)
     /* REV-COUNT blocks. */
     for (int i = 0; i < rev_count; i++) {
         len = read_line(in_fd, line, sizeof line);
-        if (len < 0 || strncmp(line, "REV ", 4) != 0) return -1;
-        int rev;
-        if (!parse_int(line + 4, &rev)) return -1;
+        if (len < 0) return -1;
+        int rev = aether_parse_tagged_int(line, "REV", TAG_SENTINEL);
+        if (rev == TAG_SENTINEL) return -1;
 
         len = read_line(in_fd, line, sizeof line);
-        if (len < 0 || strncmp(line, "POINTER ", 8) != 0) return -1;
-        const char *sha = line + 8;
+        if (len < 0) return -1;
+        const char *sha = aether_tagged_rest(line, "POINTER");
+        if (!sha || !*sha) return -1;
 
         char ptr_body[128];
         int plen = snprintf(ptr_body, sizeof ptr_body, "%s\n", sha);
