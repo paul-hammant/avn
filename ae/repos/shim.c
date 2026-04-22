@@ -267,80 +267,25 @@ root_dir_sha1_for_rev(const char *repo, int rev)
     return root;
 }
 
-/* Resolve a path against a dir-body chain. Returns {kind_char, sha1} on
- * success. `out_sha1` is a malloc'd 40-char hex string the caller frees.
- * `out_kind` is 'f', 'd', or 0 on miss. */
+/* resolve_path ported to Aether (ae/repos/resolve.ae). The split-
+ * accessor shape (resolve_kind first, resolve_sha second) replaces
+ * the pair of out-params. Both calls walk the path again, but at
+ * these path lengths (typically 2-4 segments) that's negligible. */
+extern int         aether_resolve_kind(const char *repo, const char *root_sha, const char *path);
+extern const char *aether_resolve_sha (const char *repo, const char *root_sha, const char *path);
+
 static int
 resolve_path(const char *repo, const char *root_sha1, const char *path,
              char *out_kind, char **out_sha1)
 {
     *out_kind = 0;
     *out_sha1 = NULL;
-
-    /* Skip leading '/' and any trailing. */
-    const char *p = path;
-    while (*p == '/') p++;
-
-    if (!*p) {
-        /* Path is the root itself. */
-        *out_kind = 'd';
-        *out_sha1 = strdup(root_sha1);
-        return 1;
-    }
-
-    /* Dynamic-length to cover sha1 (40) and sha256 (64). */
-    char cur_sha1[65];
-    size_t rs_len = strlen(root_sha1);
-    if (rs_len >= sizeof cur_sha1) return 0;
-    memcpy(cur_sha1, root_sha1, rs_len + 1);
-    char *cur_body = svnae_rep_read_blob(repo, cur_sha1);
-    if (!cur_body) return 0;
-
-    while (*p) {
-        /* Extract the next segment. */
-        const char *seg_start = p;
-        while (*p && *p != '/') p++;
-        size_t seg_len = (size_t)(p - seg_start);
-        char seg[256];
-        if (seg_len >= sizeof seg) { svnae_rep_free(cur_body); return 0; }
-        memcpy(seg, seg_start, seg_len);
-        seg[seg_len] = '\0';
-
-        int at_end = (*p == '\0');
-        if (*p == '/') p++;
-
-        /* Walk cur_body entries looking for `seg`. */
-        extern int         aether_dir_find_kind(const char *body, const char *name);
-        extern const char *aether_dir_find_sha (const char *body, const char *name);
-        char found_kind = (char)aether_dir_find_kind(cur_body, seg);
-        char found_sha1[65] = {0};
-        if (found_kind) {
-            const char *sha = aether_dir_find_sha(cur_body, seg);
-            size_t sha_len = strlen(sha);
-            if (sha_len >= sizeof found_sha1) { svnae_rep_free(cur_body); return 0; }
-            memcpy(found_sha1, sha, sha_len + 1);
-        }
-        svnae_rep_free(cur_body);
-        cur_body = NULL;
-        if (!found_kind) return 0;
-
-        if (at_end) {
-            *out_kind = found_kind;
-            *out_sha1 = strdup(found_sha1);
-            return 1;
-        }
-        /* Must be a directory to keep walking. */
-        if (found_kind != 'd') return 0;
-        size_t fs_len = strlen(found_sha1);
-        if (fs_len >= sizeof cur_sha1) return 0;
-        memcpy(cur_sha1, found_sha1, fs_len + 1);
-        cur_body = svnae_rep_read_blob(repo, cur_sha1);
-        if (!cur_body) return 0;
-    }
-
-    /* Shouldn't reach here. */
-    if (cur_body) svnae_rep_free(cur_body);
-    return 0;
+    int k = aether_resolve_kind(repo, root_sha1, path);
+    if (k == 0) return 0;
+    *out_kind = (char)k;
+    const char *sha = aether_resolve_sha(repo, root_sha1, path);
+    *out_sha1 = strdup(sha ? sha : "");
+    return 1;
 }
 
 /* Read file content at (rev, path). Returns malloc'd bytes or NULL.
