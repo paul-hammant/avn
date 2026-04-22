@@ -225,6 +225,23 @@ export dir_find_sha(body: string, name: string) -> string {
     return ""
 }
 
+// Emit a single dir-blob line: "<kind> <sha> <name>\n". `kind` is the
+// ASCII byte value (102='f', 100='d', 72='H' for redacted). Used by
+// the rebuild, filter, and redact passes that assemble dir blobs.
+export dir_entry_line(kind: int, sha: string, name: string) -> string {
+    out = ""
+    // One-byte string from int — build by concat to a 1-byte lookup.
+    // We only need 'f', 'd', 'H' here.
+    if kind == 102 { out = "f " }
+    if kind == 100 { out = "d " }
+    if kind == 72  { out = "H " }
+    if string.length(out) == 0 { return "" }
+    out = string.concat(out, sha)
+    out = string.concat(out, " ")
+    out = string.concat(out, name)
+    return string.concat(out, "\n")
+}
+
 main() {
     println("ae/fs_fs/dirblob.ae is a library; not meant to run standalone")
 }

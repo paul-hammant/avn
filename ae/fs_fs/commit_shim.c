@@ -587,10 +587,10 @@ filter_dir_recursive(const char *repo, const char *src_sha,
         }
 
         if (include) {
-            char line[PATH_MAX + 96];
-            int ln = snprintf(line, sizeof line, "%c %s %s\n",
-                              kind_c, emit_sha, child_name);
-            if (blen + (size_t)ln + 1 >= cap) {
+            extern const char *aether_dir_entry_line(int kind, const char *sha, const char *name);
+            const char *line = aether_dir_entry_line((int)kind_c, emit_sha, child_name);
+            size_t ln = strlen(line);
+            if (blen + ln + 1 >= cap) {
                 cap = (blen + ln + 1) * 2;
                 body = realloc(body, cap);
             }

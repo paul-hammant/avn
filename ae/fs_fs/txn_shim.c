@@ -537,12 +537,12 @@ rebuild_dir_c(const char *repo, const char *base_dir_sha1,
      * hex, sha256 is 64 — so don't clamp the sha with "%.40s". */
     qsort(rl.items, (size_t)rl.n, sizeof *rl.items, rec_cmp);
 
+    extern const char *aether_dir_entry_line(int kind, const char *sha, const char *name);
     struct sbuf body = {0};
     for (int i = 0; i < rl.n; i++) {
-        char line[4096 + 96];
-        snprintf(line, sizeof line, "%c %s %s\n",
-                 rl.items[i].kind, rl.items[i].sha1, rl.items[i].name);
-        sbuf_push_cstr(&body, line);
+        sbuf_push_cstr(&body, aether_dir_entry_line((int)rl.items[i].kind,
+                                                    rl.items[i].sha1,
+                                                    rl.items[i].name));
     }
 
     const char *dir_sha = svnae_rep_write_blob(repo, body.data ? body.data : "", body.len);

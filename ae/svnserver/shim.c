@@ -461,22 +461,17 @@ compute_redacted_dir_sha(const char *repo, int rev, const char *user,
                               prefix, child_name);
         else         snprintf(child_path, sizeof child_path, "%s",
                               child_name);
+        extern const char *aether_dir_entry_line(int kind, const char *sha, const char *name);
         int allowed = acl_allows(repo, rev, user, child_path);
         if (allowed) {
             if (kind_c == 'd') {
                 char sub[65];
                 if (compute_redacted_dir_sha(repo, rev, user,
                                              child_sha, child_path, sub) == 0) {
-                    char line[PATH_MAX + 96];
-                    snprintf(line, sizeof line, "%c %s %s\n",
-                             kind_c, sub, child_name);
-                    sb_puts(&redact, line);
+                    sb_puts(&redact, aether_dir_entry_line((int)kind_c, sub, child_name));
                 }
             } else {
-                char line[PATH_MAX + 96];
-                snprintf(line, sizeof line, "%c %s %s\n",
-                         kind_c, child_sha, child_name);
-                sb_puts(&redact, line);
+                sb_puts(&redact, aether_dir_entry_line((int)kind_c, child_sha, child_name));
             }
         } else {
             char line[96];
