@@ -1014,73 +1014,39 @@ handle_repo_rev(HttpRequest *req, HttpServerResponse *res, void *user_data)
         char *dir_body = svnae_rep_read_blob(repo, dir_sha);
         if (!dir_body) { respond_error(res, 500, "cannot read dir blob"); return; }
 
-        /* Parse each line "<kind> <sha> <name>\n" and decide per-child:
-         *   allowed      → emit {name, kind}
-         *   denied       → emit {kind:"hidden", sha}, no name
-         * Also build the redacted dir blob so we can rehash for the
-         * response header. For allowed children the blob line is
-         * identical to the original; for denied children it becomes
-         * "H <sha>\n" (no trailing space-name, no name).
-         *
-         * The blob wire format the client needs to recompute this
-         * redacted-dir hash is *that* redacted form — so verify knows
-         * to rebuild "H <sha>\n" lines for children returned with
-         * kind=hidden. */
-        struct sb body = {0};     /* JSON output */
-        struct sb redact = {0};   /* redacted raw dir blob */
-        sb_puts(&body, "{\"entries\":[");
-        int any = 0;
-        const char *algo = svnae_repo_primary_hash(repo);
-        int n_entries = aether_dir_count_entries(dir_body);
-        for (int ei = 0; ei < n_entries; ei++) {
-            char kind_c = (char)aether_dir_entry_kind(dir_body, ei);
-            char child_sha[65], child_name[PATH_MAX];
-            const char *sha_ref = aether_dir_entry_sha(dir_body, ei);
-            size_t sha_len = strlen(sha_ref);
-            if (sha_len >= sizeof child_sha) continue;
-            memcpy(child_sha, sha_ref, sha_len + 1);
-            const char *name_ref = aether_dir_entry_name(dir_body, ei);
-            size_t name_len = strlen(name_ref);
-            if (name_len >= sizeof child_name) continue;
-            memcpy(child_name, name_ref, name_len + 1);
-
-            char child_path[PATH_MAX];
-            if (*dir_path) snprintf(child_path, sizeof child_path, "%s/%s",
-                                    dir_path, child_name);
-            else           snprintf(child_path, sizeof child_path, "%s",
-                                    child_name);
-
-            int allowed = is_super || acl_allows(repo, rev, user, child_path);
-            if (any) sb_putc(&body, ',');
-            any = 1;
-            if (allowed) {
-                sb_puts(&body, aether_list_entry_visible_json(child_name, (int)(unsigned char)kind_c));
-                sb_puts(&redact, aether_redact_line_visible((int)(unsigned char)kind_c, child_sha, child_name));
-            } else {
-                sb_puts(&body, aether_list_entry_hidden_json(child_sha));
-                sb_puts(&redact, aether_redact_line_hidden(child_sha));
-            }
-        }
-        sb_puts(&body, "]}");
+        /* Body + redacted-blob built in Aether (ae/svnserver/list_json.ae).
+         * Returns "<json-body>\x01<redacted-blob>". We split on \x01,
+         * hash the redact half for the Merkle header, and emit the
+         * body half. */
+        extern const char *aether_list_build(const char *repo, int rev,
+                                             const char *user, int is_super,
+                                             const char *dir_body,
+                                             const char *dir_path);
+        const char *packed = aether_list_build(repo, rev,
+                                               user ? user : "", is_super,
+                                               dir_body, dir_path);
         svnae_rep_free(dir_body);
-
-        /* Compute the redacted dir's hash (for super-users this
-         * collapses to the unmodified dir_sha since nothing was
-         * rewritten). */
+        const char *algo = svnae_repo_primary_hash(repo);
+        const char *sep = packed ? strchr(packed, '\x01') : NULL;
         if (is_super) {
             set_merkle_headers(res, algo, "dir", dir_sha);
-        } else {
+        } else if (sep) {
+            const char *redact = sep + 1;
+            int redact_len = (int)strlen(redact);
             char rehash[65] = {0};
-            svnae_openssl_hash_hex_into(algo,
-                                        redact.data ? redact.data : "",
-                                        redact.data ? (int)redact.len : 0,
-                                        rehash);
+            svnae_openssl_hash_hex_into(algo, redact, redact_len, rehash);
             set_merkle_headers(res, algo, "dir", rehash);
         }
-
-        free(redact.data);
-        respond_json(res, 200, body.data ? body.data : "{\"entries\":[]}");
-        free(body.data);
+        if (sep) {
+            size_t body_len = (size_t)(sep - packed);
+            char *body_copy = malloc(body_len + 1);
+            memcpy(body_copy, packed, body_len);
+            body_copy[body_len] = '\0';
+            respond_json(res, 200, body_copy);
+            free(body_copy);
+        } else {
+            respond_json(res, 200, packed ? packed : "{\"entries\":[]}");
+        }
         return;
     }
 
