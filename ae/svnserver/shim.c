@@ -612,81 +612,11 @@ handle_repo_info(HttpRequest *req, HttpServerResponse *res, void *user_data)
         respond_error(res, 500, "cannot read head");
         return;
     }
-    /* Enumerate branches by listing $repo/branches/. Phase 8.1 has
-     * only `main`, but the enumeration is future-proof. */
-    char branches_dir[PATH_MAX];
-    snprintf(branches_dir, sizeof branches_dir, "%s/branches", repo);
-    struct sb s = {0};
-    sb_puts(&s, aether_info_prelude_json(head, name, svnae_repo_primary_hash(repo)));
-    sb_puts(&s, ",\"branches\":[");
-    extern void *aether_io_listdir(const char *p);
-    extern int aether_io_listdir_count(void *h);
-    extern const char *aether_io_listdir_name(void *h, int i);
-    extern void aether_io_listdir_free(void *h);
-    extern const char *aether_io_read_file(const char *p);
-    extern int aether_io_file_size(const char *p);
-
-    {
-        /* `main` is always implicit in every repo, even ones seeded
-         * before the per-branch layout existed. We emit it first and
-         * suppress a duplicate if the on-disk dir also has a
-         * branches/main entry. */
-        sb_putjson_string(&s, "main");
-        void *d = aether_io_listdir(branches_dir);
-        if (d) {
-            int n_br = aether_io_listdir_count(d);
-            for (int i = 0; i < n_br; i++) {
-                const char *nm = aether_io_listdir_name(d, i);
-                if (strcmp(nm, "main") == 0) continue;
-                sb_putc(&s, ',');
-                sb_putjson_string(&s, nm);
-            }
-            aether_io_listdir_free(d);
-        }
-    }
-    sb_puts(&s, "],\"specs\":{");
-    {
-        /* Per-branch include globs. main has no spec (full tree)
-         * unless explicitly set — we emit [] for it in that case. */
-        int first = 1;
-        void *d = aether_io_listdir(branches_dir);
-        if (d) {
-            int n_br = aether_io_listdir_count(d);
-            for (int i = 0; i < n_br; i++) {
-                const char *nm = aether_io_listdir_name(d, i);
-                char spec_path[PATH_MAX];
-                snprintf(spec_path, sizeof spec_path, "%s/%s/spec",
-                         branches_dir, nm);
-                if (!first) sb_putc(&s, ',');
-                first = 0;
-                sb_putjson_string(&s, nm);
-                sb_puts(&s, ":[");
-                int spec_sz = aether_io_file_size(spec_path);
-                if (spec_sz > 0 && spec_sz < 65536) {
-                    const char *spec_buf = aether_io_read_file(spec_path);
-                    if (spec_buf && *spec_buf) {
-                        /* Strip the leading '[' we already emitted. */
-                        sb_puts(&s, aether_specs_to_json_array(spec_buf) + 1);
-                        continue;
-                    }
-                }
-                sb_puts(&s, "]");
-            }
-            aether_io_listdir_free(d);
-        }
-        /* If main wasn't already listed (no on-disk dir), emit [] for it. */
-        extern int aether_io_exists(const char *p);
-        char main_spec[PATH_MAX];
-        snprintf(main_spec, sizeof main_spec, "%s/main", branches_dir);
-        if (!aether_io_exists(main_spec)) {
-            if (!first) sb_putc(&s, ',');
-            sb_puts(&s, "\"main\":[]");
-        }
-    }
-    sb_puts(&s, "}");
-    sb_puts(&s, "}");
-    respond_json(res, 200, s.data ? s.data : "{}");
-    free(s.data);
+    /* Whole /info body assembled in Aether (ae/svnserver/info_json.ae). */
+    extern const char *aether_info_json(const char *repo, const char *name,
+                                        int head, const char *hash_algo);
+    const char *body = aether_info_json(repo, name, head, svnae_repo_primary_hash(repo));
+    respond_json(res, 200, body ? body : "{}");
 }
 
 /* GET /repos/{r}/log */
