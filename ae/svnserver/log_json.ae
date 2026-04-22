@@ -157,6 +157,50 @@ blame_json_impl(blame: ptr) -> string {
     return string.concat(out, "]}")
 }
 
+// /rev/N/hashes response body. Assembles the prelude from
+// (primary algo, primary sha) plus the secondary entries by walking
+// a newline-separated "algo1 sha1\nalgo2 sha2\n..." string the C
+// side collected.
+extern aether_hashes_prelude_json(algo: string, primary_hash: string) -> string
+extern aether_secondary_entry_json(algo: string, hash: string) -> string
+
+export hashes_json(algo: string, primary_sha: string, secondary_pairs: string) -> string {
+    return hashes_json_impl(algo, primary_sha, secondary_pairs)
+}
+
+hashes_json_impl(algo: string, primary_sha: string, secondary_pairs: string) -> string {
+    out = aether_hashes_prelude_json(algo, primary_sha)
+    n = string.length(secondary_pairs)
+    any = 0
+    line_start = 0
+    i = 0
+    while i <= n {
+        at_end = 0
+        c = 0
+        if i == n { at_end = 1 } else { c = string.char_at(secondary_pairs, i) }
+        if at_end == 1 || c == 10 {
+            // Parse "algo sha" from [line_start..i).
+            sp = line_start
+            while sp < i {
+                if string.char_at(secondary_pairs, sp) == 32 { break }
+                sp = sp + 1
+            }
+            if sp > line_start {
+                if sp < i {
+                    sec_algo = string.substring(secondary_pairs, line_start, sp)
+                    sec_sha = string.substring(secondary_pairs, sp + 1, i)
+                    if any == 1 { out = string.concat(out, ",") }
+                    any = 1
+                    out = string.concat(out, aether_secondary_entry_json(sec_algo, sec_sha))
+                }
+            }
+            line_start = i + 1
+        }
+        i = i + 1
+    }
+    return string.concat(out, "]}")
+}
+
 main() {
     println("ae/svnserver/log_json.ae is a library; not meant to run standalone")
 }

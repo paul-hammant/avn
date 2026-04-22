@@ -855,28 +855,30 @@ handle_repo_rev(HttpRequest *req, HttpServerResponse *res, void *user_data)
         }
 
         const char *algo = svnae_repo_primary_hash(repo);
-        struct sb s = {0};
-        sb_puts(&s, aether_hashes_prelude_json(algo, node_sha));
 
-        /* Iterate declared secondaries in the format file, looking up
-         * each one's stored hash for this blob. Missing entries
-         * (e.g. the blob was written before a secondary was added)
-         * are silently skipped. */
+        /* Collect all non-empty (algo, hash) secondary pairs into a
+         * newline-separated string "algo1 hash1\nalgo2 hash2\n...";
+         * Aether assembles the final JSON. */
         char sec[4][32];
         int sec_n = svnae_repo_secondary_hashes(repo, sec);
-        int any = 0;
+        size_t cap = 512, slen = 0;
+        char *pairs = malloc(cap);
+        pairs[0] = '\0';
         for (int i = 0; i < sec_n; i++) {
             char *shex = svnae_rep_lookup_secondary(repo, node_sha, sec[i]);
             if (shex && *shex) {
-                if (any) sb_putc(&s, ',');
-                any = 1;
-                sb_puts(&s, aether_secondary_entry_json(sec[i], shex));
+                size_t need = strlen(sec[i]) + 1 + strlen(shex) + 2;
+                if (slen + need >= cap) { cap = (slen + need) * 2; pairs = realloc(pairs, cap); }
+                slen += (size_t)snprintf(pairs + slen, cap - slen, "%s %s\n", sec[i], shex);
             }
             free(shex);
         }
-        sb_puts(&s, "]}");
-        respond_json(res, 200, s.data ? s.data : "{}");
-        free(s.data);
+        extern const char *aether_hashes_json(const char *algo,
+                                              const char *primary_sha,
+                                              const char *secondary_pairs);
+        const char *body = aether_hashes_json(algo, node_sha, pairs);
+        free(pairs);
+        respond_json(res, 200, body ? body : "{}");
         return;
     }
 
