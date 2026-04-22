@@ -520,6 +520,19 @@ auth_context(HttpRequest *req, const char **out_user)
     return 0;
 }
 
+/* Aether-callable split of auth_context. The Aether port can't
+ * handle out-params across FFI gracefully, so we expose two probes. */
+const char *svnserver_request_user(HttpRequest *req) {
+    const char *user = NULL;
+    (void)auth_context(req, &user);
+    return user ? user : "";
+}
+
+int svnserver_request_is_super(HttpRequest *req) {
+    const char *user = NULL;
+    return auth_context(req, &user);
+}
+
 /* --- JSON string builder ---------------------------------------------- */
 
 static void sb_push(struct sb *s, const char *p, size_t n)
@@ -639,32 +652,14 @@ handle_repo_info(HttpRequest *req, HttpServerResponse *res, void *user_data)
     aether_handler_info(req, res);
 }
 
-/* GET /repos/{r}/log */
+/* GET /repos/{r}/log — fully in Aether (ae/svnserver/handler_log.ae). */
+extern void aether_handler_log(HttpRequest *req, HttpServerResponse *res);
+
 static void
 handle_repo_log(HttpRequest *req, HttpServerResponse *res, void *user_data)
 {
     (void)user_data;
-    char name[128];
-    const char *tail = parse_repo_and_tail(req->path, name, sizeof name);
-    if (!tail || strcmp(tail, "/log") != 0) {
-        respond_error(res, 404, "not found");
-        return;
-    }
-    const char *repo = find_repo_path(name);
-    if (!repo) { respond_error(res, 404, "no such repo"); return; }
-
-    struct svnae_log *lg = svnae_repos_log(repo);
-    if (!lg) { respond_error(res, 500, "cannot read log"); return; }
-
-    const char *user = NULL;
-    int is_super = auth_context(req, &user);
-
-    /* Body + visibility filter ported to Aether (ae/svnserver/log_json.ae). */
-    extern const char *aether_log_json(const char *repo, const void *lg,
-                                       const char *user, int is_super);
-    const char *body = aether_log_json(repo, lg, user ? user : "", is_super);
-    svnae_repos_log_free(lg);
-    respond_json(res, 200, body ? body : "{\"entries\":[]}");
+    aether_handler_log(req, res);
 }
 
 /* Field extraction ported to Aether (ae/repos/blobfield.ae). The C side

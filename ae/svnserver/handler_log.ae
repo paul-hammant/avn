@@ -1,0 +1,84 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// permissions and limitations under the License.
+
+// Full handler for GET /repos/{r}/log.
+// Parses /repos/{r}/log, looks up repo, reads log list, filters by
+// ACL (via log_json_impl in ae/svnserver/log_json.ae), responds.
+
+import std.http
+import std.string
+
+extern aether_parse_repo_name_in(path: string) -> string
+extern svnserver_find_repo_path(name: string) -> string
+extern svnserver_request_user(req: ptr) -> string
+extern svnserver_request_is_super(req: ptr) -> int
+extern svnae_repos_log(repo: string) -> ptr
+extern svnae_repos_log_free(lg: ptr)
+extern aether_log_json(repo: string, lg: ptr, user: string, is_super: int) -> string
+extern aether_error_response_json(msg: string) -> string
+
+export handler_log(req: ptr, res: ptr) {
+    handler_log_impl(req, res)
+}
+
+handler_log_impl(req: ptr, res: ptr) {
+    path = http.request_path(req)
+    name = aether_parse_repo_name_in(path)
+    if string.length(name) == 0 {
+        respond_error(res, 404, "not found")
+        return
+    }
+    // Tail must be exactly "/log".
+    n = string.length(path)
+    expected_tail_start = 7 + string.length(name)
+    if n != expected_tail_start + 4 {
+        respond_error(res, 404, "not found")
+        return
+    }
+    tail = string.substring(path, expected_tail_start, n)
+    if string.equals(tail, "/log") == 0 {
+        respond_error(res, 404, "not found")
+        return
+    }
+
+    repo = svnserver_find_repo_path(name)
+    if string.length(repo) == 0 {
+        respond_error(res, 404, "no such repo")
+        return
+    }
+
+    lg = svnae_repos_log(repo)
+    if lg == null {
+        respond_error(res, 500, "cannot read log")
+        return
+    }
+
+    user = svnserver_request_user(req)
+    is_super = svnserver_request_is_super(req)
+    body = aether_log_json(repo, lg, user, is_super)
+    svnae_repos_log_free(lg)
+
+    http.response_set_status(res, 200)
+    http.response_json(res, body)
+}
+
+respond_error(res: ptr, code: int, msg: string) {
+    http.response_set_status(res, code)
+    http.response_json(res, aether_error_response_json(msg))
+}
+
+main() {
+    println("ae/svnserver/handler_log.ae is a library; not meant to run standalone")
+}
