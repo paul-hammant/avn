@@ -1310,36 +1310,25 @@ verify_dir(const char *base_url, const char *repo, int rev,
         return -1;
     }
 
-    /* Parse the JSON entries array by hand (no cJSON linkage here).
-     * Very simple format:
-     *   {"entries":[{"name":"...","kind":"file|dir"}, ...]}
-     */
-    struct entry *entries = NULL;
-    int n = 0, cap = 0;
-    const char *p = strstr(body, "\"entries\":[");
-    if (p) p += strlen("\"entries\":[");
-    while (p && *p && *p != ']') {
-        const char *name_k = strstr(p, "\"name\":\"");
-        if (!name_k || name_k > body + len) break;
-        name_k += 8;
-        const char *name_end = strchr(name_k, '"');
-        if (!name_end) break;
-        const char *kind_k = strstr(name_end, "\"kind\":\"");
-        if (!kind_k) break;
-        kind_k += 8;
-        const char *kind_end = strchr(kind_k, '"');
-        if (!kind_end) break;
-        if (n == cap) {
-            cap = cap ? cap * 2 : 8;
-            entries = realloc(entries, (size_t)cap * sizeof *entries);
-        }
-        entries[n].name = strndup(name_k, (size_t)(name_end - name_k));
-        entries[n].kind_c = (kind_k[0] == 'd') ? 'd' : 'f';
-        entries[n].sha = NULL;
-        n++;
-        p = kind_end + 1;
-    }
+    /* Parse via std.json (the compat layer at the top of this file
+     * maps cJSON_* names to json_*). */
+    cJSON *root = cJSON_ParseWithLength(body, len);
     free(body);
+    if (!root) { free(dir_hdr); return -1; }
+    cJSON *jents = cJSON_GetObjectItemCaseSensitive(root, "entries");
+    if (!cJSON_IsArray(jents)) { cJSON_Delete(root); free(dir_hdr); return -1; }
+    int n = cJSON_GetArraySize(jents);
+    struct entry *entries = calloc((size_t)(n > 0 ? n : 1), sizeof *entries);
+    for (int i = 0; i < n; i++) {
+        cJSON *e = cJSON_GetArrayItem(jents, i);
+        cJSON *jname = cJSON_GetObjectItemCaseSensitive(e, "name");
+        cJSON *jkind = cJSON_GetObjectItemCaseSensitive(e, "kind");
+        entries[i].name = strdup(cJSON_IsString(jname) ? json_valuestring(jname) : "");
+        const char *kind = cJSON_IsString(jkind) ? json_valuestring(jkind) : "file";
+        entries[i].kind_c = (kind[0] == 'd') ? 'd' : 'f';
+        entries[i].sha = NULL;
+    }
+    cJSON_Delete(root);
 
     /* Recurse into every child to compute its sha. */
     for (int i = 0; i < n; i++) {
@@ -1417,33 +1406,24 @@ verify_secondaries_in_dir(const char *base_url, const char *repo, int rev,
         free(body);
         return -1;
     }
-    /* Parse entries (same shape as verify_dir). */
+    /* Parse entries via std.json (same shape as verify_dir). */
     struct entry { char kind_c; char *name; };
-    struct entry *ents = NULL;
-    int n = 0, cap = 0;
-    const char *p = strstr(body, "\"entries\":[");
-    if (p) p += strlen("\"entries\":[");
-    while (p && *p && *p != ']') {
-        const char *name_k = strstr(p, "\"name\":\"");
-        if (!name_k || name_k > body + len) break;
-        name_k += 8;
-        const char *name_end = strchr(name_k, '"');
-        if (!name_end) break;
-        const char *kind_k = strstr(name_end, "\"kind\":\"");
-        if (!kind_k) break;
-        kind_k += 8;
-        const char *kind_end = strchr(kind_k, '"');
-        if (!kind_end) break;
-        if (n == cap) {
-            cap = cap ? cap * 2 : 8;
-            ents = realloc(ents, (size_t)cap * sizeof *ents);
-        }
-        ents[n].name = strndup(name_k, (size_t)(name_end - name_k));
-        ents[n].kind_c = (kind_k[0] == 'd') ? 'd' : 'f';
-        n++;
-        p = kind_end + 1;
-    }
+    cJSON *root = cJSON_ParseWithLength(body, len);
     free(body);
+    if (!root) return -1;
+    cJSON *jents = cJSON_GetObjectItemCaseSensitive(root, "entries");
+    if (!cJSON_IsArray(jents)) { cJSON_Delete(root); return -1; }
+    int n = cJSON_GetArraySize(jents);
+    struct entry *ents = calloc((size_t)(n > 0 ? n : 1), sizeof *ents);
+    for (int i = 0; i < n; i++) {
+        cJSON *e = cJSON_GetArrayItem(jents, i);
+        cJSON *jname = cJSON_GetObjectItemCaseSensitive(e, "name");
+        cJSON *jkind = cJSON_GetObjectItemCaseSensitive(e, "kind");
+        ents[i].name = strdup(cJSON_IsString(jname) ? json_valuestring(jname) : "");
+        const char *kind = cJSON_IsString(jkind) ? json_valuestring(jkind) : "file";
+        ents[i].kind_c = (kind[0] == 'd') ? 'd' : 'f';
+    }
+    cJSON_Delete(root);
 
     int overall = 0;
     for (int i = 0; i < n; i++) {
@@ -1475,40 +1455,34 @@ verify_secondaries_in_dir(const char *base_url, const char *repo, int rev,
                 continue;
             }
 
-            /* Parse the secondaries array by hand. */
-            const char *sp = strstr(hbody, "\"secondaries\":[");
-            if (sp) sp += strlen("\"secondaries\":[");
-            while (sp && *sp && *sp != ']') {
-                const char *algo_k = strstr(sp, "\"algo\":\"");
-                if (!algo_k) break;
-                algo_k += 8;
-                const char *algo_end = strchr(algo_k, '"');
-                if (!algo_end) break;
-                const char *hash_k = strstr(algo_end, "\"hash\":\"");
-                if (!hash_k) break;
-                hash_k += 8;
-                const char *hash_end = strchr(hash_k, '"');
-                if (!hash_end) break;
-                char algo[32], server_hex[65];
-                size_t al = (size_t)(algo_end - algo_k);
-                size_t hl = (size_t)(hash_end - hash_k);
-                if (al < sizeof algo && hl < sizeof server_hex) {
-                    memcpy(algo, algo_k, al); algo[al] = '\0';
-                    memcpy(server_hex, hash_k, hl); server_hex[hl] = '\0';
-                    char *local = hash_hex(algo, cbody, body_len);
-                    if (local && strcmp(local, server_hex) == 0) {
-                        (*out_secondary_count)++;
-                    } else {
-                        fprintf(stderr,
-                                "verify: secondary %s mismatch at /%s\n"
-                                "  server: %s\n  local:  %s\n",
-                                algo, child_rel,
-                                server_hex, local ? local : "(null)");
-                        if (overall == 0) overall = -2;
+            /* Parse the secondaries array via std.json. */
+            cJSON *hroot = cJSON_ParseWithLength(hbody, hlen);
+            if (hroot) {
+                cJSON *jsecs = cJSON_GetObjectItemCaseSensitive(hroot, "secondaries");
+                if (cJSON_IsArray(jsecs)) {
+                    int sec_n = cJSON_GetArraySize(jsecs);
+                    for (int si = 0; si < sec_n; si++) {
+                        cJSON *sec = cJSON_GetArrayItem(jsecs, si);
+                        cJSON *jalgo = cJSON_GetObjectItemCaseSensitive(sec, "algo");
+                        cJSON *jhash = cJSON_GetObjectItemCaseSensitive(sec, "hash");
+                        if (!cJSON_IsString(jalgo) || !cJSON_IsString(jhash)) continue;
+                        const char *algo = json_valuestring(jalgo);
+                        const char *server_hex = json_valuestring(jhash);
+                        char *local = hash_hex(algo, cbody, body_len);
+                        if (local && strcmp(local, server_hex) == 0) {
+                            (*out_secondary_count)++;
+                        } else {
+                            fprintf(stderr,
+                                    "verify: secondary %s mismatch at /%s\n"
+                                    "  server: %s\n  local:  %s\n",
+                                    algo, child_rel,
+                                    server_hex, local ? local : "(null)");
+                            if (overall == 0) overall = -2;
+                        }
+                        free(local);
                     }
-                    free(local);
                 }
-                sp = hash_end + 1;
+                cJSON_Delete(hroot);
             }
             free(cbody); free(hbody);
             (*out_files_checked)++;
