@@ -77,6 +77,31 @@ export parse_rev_prefix_end(tail: string) -> int {
     return rev_prefix_len(tail)
 }
 
+// Parse the {name} from a "/repos/{name}/..." path. Returns the name
+// substring, or "" if the path doesn't have the expected prefix or
+// the name slot is empty. The caller typically checks the remainder
+// by length or exact substring compare.
+export parse_repo_name_in(path: string) -> string {
+    n = string.length(path)
+    // "/repos/" is 7 bytes.
+    if n < 8 { return "" }
+    if string.char_at(path, 0) != 47 { return "" }   // '/'
+    if string.char_at(path, 1) != 114 { return "" }  // 'r'
+    if string.char_at(path, 2) != 101 { return "" }  // 'e'
+    if string.char_at(path, 3) != 112 { return "" }  // 'p'
+    if string.char_at(path, 4) != 111 { return "" }  // 'o'
+    if string.char_at(path, 5) != 115 { return "" }  // 's'
+    if string.char_at(path, 6) != 47 { return "" }   // '/'
+    // Scan for the next '/' or end-of-string.
+    i = 7
+    while i < n {
+        if string.char_at(path, i) == 47 { break }
+        i = i + 1
+    }
+    if i == 7 { return "" }   // empty name
+    return string.substring(path, 7, i)
+}
+
 main() {
     println("ae/svnserver/url_parse.ae is a library; not meant to run standalone")
 }

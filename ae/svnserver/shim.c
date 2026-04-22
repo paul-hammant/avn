@@ -577,6 +577,13 @@ find_repo_path(const char *name)
     return strcmp(name, g_repo_name) == 0 ? g_repo_path : NULL;
 }
 
+/* Aether-callable wrapper. Returns "" for missing (Aether can't
+ * return NULL from a string extern). */
+const char *svnserver_find_repo_path(const char *name) {
+    const char *p = find_repo_path(name);
+    return p ? p : "";
+}
+
 /* --- path parsing helpers --------------------------------------------- *
  *
  * URL shape:  /repos/{R}/...
@@ -620,32 +627,16 @@ parse_rev_from_tail(const char *tail, int *out_rev, const char **after)
     return 1;
 }
 
-/* GET /repos/{r}/info */
+/* GET /repos/{r}/info — fully in Aether (ae/svnserver/handler_info.ae).
+ * The C wrapper only exists so the dispatch table keeps pointing at a
+ * stable C function. */
+extern void aether_handler_info(HttpRequest *req, HttpServerResponse *res);
+
 static void
 handle_repo_info(HttpRequest *req, HttpServerResponse *res, void *user_data)
 {
     (void)user_data;
-    char name[128];
-    const char *tail = parse_repo_and_tail(req->path, name, sizeof name);
-    if (!tail || strcmp(tail, "/info") != 0) {
-        respond_error(res, 404, "not found");
-        return;
-    }
-    const char *repo = find_repo_path(name);
-    if (!repo) {
-        respond_error(res, 404, "no such repo");
-        return;
-    }
-    int head = svnae_repos_head_rev(repo);
-    if (head < 0) {
-        respond_error(res, 500, "cannot read head");
-        return;
-    }
-    /* Whole /info body assembled in Aether (ae/svnserver/info_json.ae). */
-    extern const char *aether_info_json(const char *repo, const char *name,
-                                        int head, const char *hash_algo);
-    const char *body = aether_info_json(repo, name, head, svnae_repo_primary_hash(repo));
-    respond_json(res, 200, body ? body : "{}");
+    aether_handler_info(req, res);
 }
 
 /* GET /repos/{r}/log */
