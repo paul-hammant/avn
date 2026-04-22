@@ -124,21 +124,50 @@ Not a code bug; re-run is safe.
 ## Current state (keep updated)
 
 Check `PORT_STATUS.md` for the authoritative narrative. One-line
-summary per commit in `git log --oneline`. What's left after leaf
-sweep is a small set of Gordian knots:
+summary per commit in `git log --oneline`.
 
-1. `rebuild_dir_c` in `ae/fs_fs/txn_shim.c` (~330 lines) — recursive
-   tree walk; portable in principle, interleaves heavily with
-   rep-store I/O.
-2. `svnae_wc_update` in `ae/wc/update_shim.c` (~200 lines) — diff +
-   apply + merge3 + conflict pipeline.
-3. `svnae_wc_merge` in `ae/wc/merge_shim.c` (~200 lines).
-4. `ae/svnserver/shim.c` HTTP handlers (~1400 lines) — each one is
+As of round 9, the recursive-walker knots (rebuild_dir, filter_dir,
+redact_dir, paths_changed, resolve_path, update/merge apply) are
+all ported via the same pattern — see below. What's left:
+
+1. `ae/svnserver/shim.c` HTTP handlers (~1400 lines) — each one is
    pure but depends on std.http's server shape which we haven't
    wired through yet.
-5. `ae/ra/shim.c` curl client (~1000 lines) — std.http has a client
+2. `ae/ra/shim.c` curl client (~1000 lines) — std.http has a client
    but switching is last-resort.
-6. `ae/wc/db_shim.c` (~350 lines) — pure sqlite3.
+3. `ae/wc/db_shim.c` (~350 lines) — pure sqlite3.
+4. `ae/wc/checkout_shim.c` walk (~70 lines) — curl + opaque RA
+   props; would need ra-props accessors in Aether.
+5. blame LCS in `ae/repos/shim.c` (~70 lines) — int DP table.
+   Portable but needs a decision on how to represent int arrays
+   in Aether.
+
+## The recursive-walker port pattern
+
+For anyone porting another structural walker, the recipe that
+worked for rebuild_dir / filter_dir / redact_dir / paths_changed /
+update-apply / merge-apply / resolve_path:
+
+1. Keep rep-store I/O + opaque handles in C. `svnae_rep_read_blob`,
+   `svnae_rep_write_blob`, sqlite3 handles all stay C externs.
+2. Represent any in-memory accumulator (reclist, flat_tree) as a
+   newline-separated string in the `K SHA NAME\n` dir-blob format.
+   Aether already has parsers for that format (`aether_dir_*`).
+3. Add C-side `*_count / *_path_at / *_kind_at / *_sha_at / *_data_at /
+   *_data_len_at / *_find_by_path` accessors to any list struct the
+   Aether side needs to iterate. Mirror update_shim's `rtree_*` for
+   the shape.
+4. Two out-params → two exports (e.g. `resolve_kind` + `resolve_sha`).
+   Walk the path twice; it's cheap.
+5. Recursive functions use the `foo_impl()` + `export foo() { return
+   foo_impl() }` split. Aether's export-can't-call-export rule is
+   still there.
+6. Reserved keywords: `state`, `match`, `message`, `ptr`, `else` as
+   an identifier, `address`. `else` as part of `if/else` works
+   (don't shadow `else`). When in doubt, use separate `if` checks.
+7. After porting, add the `*_generated.c` to every `[[bin]]` in
+   `aether.toml` that links the shim — typically at least two or
+   three bins.
 
 ## When stuck
 
