@@ -117,6 +117,8 @@ remove_sidecars(const char *wc_root, const char *rel_path)
 /* Find the `<base>.r<N>` sidecar that isn't the base rev. There are
  * typically two: one for the common ancestor and one for theirs. We
  * take the larger N (which by construction is theirs). */
+extern int aether_sidecar_rev(const char *suffix);
+
 static int
 find_theirs_sidecar(const char *wc_root, const char *rel_path, char *out, size_t out_sz)
 {
@@ -139,14 +141,8 @@ find_theirs_sidecar(const char *wc_root, const char *rel_path, char *out, size_t
     while ((e = readdir(d)) != NULL) {
         if (strncmp(e->d_name, base, blen) != 0) continue;
         if (e->d_name[blen] != '.') continue;
-        const char *suf = e->d_name + blen + 1;
-        if (suf[0] != 'r' || !suf[1]) continue;
-        int n = 0; int ok = 1;
-        for (const char *q = suf + 1; *q; q++) {
-            if (*q < '0' || *q > '9') { ok = 0; break; }
-            n = n * 10 + (*q - '0');
-        }
-        if (ok && n > best_rev) best_rev = n;
+        int n = aether_sidecar_rev(e->d_name + blen + 1);
+        if (n > best_rev) best_rev = n;
     }
     closedir(d);
     if (best_rev < 0) return -1;

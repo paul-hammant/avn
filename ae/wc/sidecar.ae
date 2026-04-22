@@ -83,6 +83,24 @@ export is_sidecar_name(name: string) -> int {
     return is_sidecar_suffix_impl(string.substring(name, dot + 1, n))
 }
 
+// If `suffix` is "r<digits>" return the integer rev; else -1.
+// "mine" returns -1 too (it's a sidecar but not a rev-tagged one).
+export sidecar_rev(suffix: string) -> int {
+    n = string.length(suffix)
+    if n < 2 { return 0 - 1 }
+    if string.char_at(suffix, 0) != 114 { return 0 - 1 }   // 'r'
+    v = 0
+    i = 1
+    while i < n {
+        c = string.char_at(suffix, i)
+        if c < 48 { return 0 - 1 }
+        if c > 57 { return 0 - 1 }
+        v = v * 10 + (c - 48)
+        i = i + 1
+    }
+    return v
+}
+
 main() {
     println("ae/wc/sidecar.ae is a library; not meant to run standalone")
 }
