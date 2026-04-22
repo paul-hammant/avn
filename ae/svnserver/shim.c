@@ -600,20 +600,18 @@ parse_repo_and_tail(const char *path, char *name_buf, size_t name_sz)
 
 /* --- handlers --------------------------------------------------------- */
 
+/* Ported to Aether (ae/svnserver/url_parse.ae). The thin wrapper keeps
+ * the original out-param shape the two call sites use. */
+extern int aether_parse_rev_prefix(const char *tail);
+extern int aether_parse_rev_prefix_end(const char *tail);
+
 static int
 parse_rev_from_tail(const char *tail, int *out_rev, const char **after)
 {
-    /* tail starts with "/rev/" + digits */
-    if (strncmp(tail, "/rev/", 5) != 0) return 0;
-    const char *p = tail + 5;
-    if (!*p || (*p < '0' || *p > '9')) return 0;
-    int v = 0;
-    while (*p >= '0' && *p <= '9') {
-        v = v * 10 + (*p - '0');
-        p++;
-    }
-    *out_rev = v;
-    *after = p;   /* points at '/', or '\0' */
+    int end = aether_parse_rev_prefix_end(tail);
+    if (end < 0) return 0;
+    *out_rev = aether_parse_rev_prefix(tail);
+    *after = tail + end;   /* points at '/', or '\0' */
     return 1;
 }
 
