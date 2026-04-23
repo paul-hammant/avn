@@ -156,6 +156,20 @@ repos_format_line_impl(repo: string) -> string {
     return string.substring(line, 0, l)
 }
 
+// Primary hash name for this repo, as declared by
+// $repo/format's first line ("svnae-fsfs-1 sha1" / "... sha256" /
+// "... sha1,sha256" etc.). Returns "sha1" as a safe default for
+// missing file, empty line, or any parse trouble.
+extern aether_format_primary_hash(format_line: string) -> string
+
+export repo_primary_hash(repo: string) -> string {
+    line = repos_format_line_impl(repo)
+    if string.length(line) == 0 { return "sha1" }
+    primary = aether_format_primary_hash(line)
+    if string.length(primary) == 0 { return "sha1" }
+    return string.copy(primary)
+}
+
 main() {
     println("ae/repos/rev_io.ae is a library; not meant to run standalone")
 }

@@ -98,19 +98,21 @@ read_format_line(const char *repo, char *out, size_t out_sz)
     return 0;
 }
 
+/* Ported to ae/repos/rev_io.ae::repo_primary_hash. Still returns a
+ * TLS-cached string so call sites that hold the pointer across a
+ * subsequent call don't trample it. */
+extern const char *aether_repo_primary_hash(const char *repo);
+
 const char *
 svnae_repo_primary_hash(const char *repo)
 {
     static __thread char cache[32];
-    char line[128];
-    if (read_format_line(repo, line, sizeof line) != 0) {
-        strcpy(cache, "sha1"); return cache;
-    }
-    const char *primary = aether_format_primary_hash(line);
-    if (!primary || !*primary) { strcpy(cache, "sha1"); return cache; }
-    size_t plen = strlen(primary);
-    if (plen >= sizeof cache) { strcpy(cache, "sha1"); return cache; }
-    memcpy(cache, primary, plen + 1);
+    const char *v = aether_repo_primary_hash(repo);
+    const char *src = (v && *v) ? v : "sha1";
+    size_t n = strlen(src);
+    if (n >= sizeof cache) n = sizeof cache - 1;
+    memcpy(cache, src, n);
+    cache[n] = '\0';
     return cache;
 }
 
