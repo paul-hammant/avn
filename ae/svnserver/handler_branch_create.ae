@@ -105,19 +105,19 @@ handler_branch_create_impl(req: ptr, res: ptr) {
     }
 
     rv = svnserver_branch_create_from_body(repo, branch_name, body, body_len, user)
-    if rv == 0 - 1 {
+    if rv == -1 {
         svnserver_respond_error(res, 400, "malformed JSON")
         return
     }
-    if rv == 0 - 2 {
+    if rv == -2 {
         svnserver_respond_error(res, 400, "need base:string and include:array")
         return
     }
-    if rv == 0 - 3 {
+    if rv == -3 {
         svnserver_respond_error(res, 400, "include must be non-empty")
         return
     }
-    if rv == 0 - 4 {
+    if rv == -4 {
         svnserver_respond_error(res, 400, "branch create failed (exists, bad base, or no globs?)")
         return
     }

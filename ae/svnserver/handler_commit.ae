@@ -72,47 +72,47 @@ handler_commit_impl(req: ptr, res: ptr) {
     }
 
     rv = svnserver_commit_from_body(req, res, repo)
-    if rv == 0 - 1 {
+    if rv == -1 {
         svnserver_respond_error(res, 400, "empty body")
         return
     }
-    if rv == 0 - 2 {
+    if rv == -2 {
         svnserver_respond_error(res, 400, "malformed JSON")
         return
     }
-    if rv == 0 - 3 {
+    if rv == -3 {
         svnserver_respond_error(res, 400, "missing or wrong-typed field")
         return
     }
-    if rv == 0 - 4 {
+    if rv == -4 {
         svnserver_respond_error(res, 403, "forbidden")
         return
     }
-    if rv == 0 - 5 {
+    if rv == -5 {
         svnserver_respond_error(res, 403, "path outside branch spec")
         return
     }
-    if rv == 0 - 6 {
+    if rv == -6 {
         svnserver_respond_error(res, 500, "oom")
         return
     }
-    if rv == 0 - 7 {
+    if rv == -7 {
         svnserver_respond_error(res, 400, "edit missing op/path")
         return
     }
-    if rv == 0 - 8 {
+    if rv == -8 {
         svnserver_respond_error(res, 400, "add-file missing content")
         return
     }
-    if rv == 0 - 9 {
+    if rv == -9 {
         svnserver_respond_error(res, 400, "base64 decode failed")
         return
     }
-    if rv == 0 - 10 {
+    if rv == -10 {
         svnserver_respond_error(res, 400, "unknown op")
         return
     }
-    if rv == 0 - 11 {
+    if rv == -11 {
         svnserver_respond_error(res, 500, "commit failed")
         return
     }
