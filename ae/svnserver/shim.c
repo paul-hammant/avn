@@ -1027,6 +1027,14 @@ int svnserver_acl_allows_write(const char *repo, int rev,
                                 const char *user, const char *path) {
     return acl_allows_mode(repo, rev, user, path, 1);
 }
+/* Both-mode wrapper. Aether's acl_subtree walker needs to check
+ * RO and RW separately on the same path, so it's cleaner to take
+ * `want_write` as an argument than to expose two wrappers. */
+int svnserver_acl_allows_mode(const char *repo, int rev,
+                               const char *user, const char *path,
+                               int want_write) {
+    return acl_allows_mode(repo, rev, user, path, want_write);
+}
 int svnserver_spec_allows(const char *repo, const char *branch,
                            const char *path, int is_super) {
     return spec_allows(repo, branch, path, is_super);
@@ -1387,36 +1395,14 @@ int svnserver_commit_from_body(HttpRequest *req, HttpServerResponse *res,
 /* POST /commit — ported to ae/svnserver/handler_commit.ae. */
 extern void aether_handler_commit(void *req, void *res);
 
-/* Recursively walk `path` at `rev` and confirm that `user` has RW on
- * every descendant (including `path` itself). Returns 1 if fully RW,
- * 0 if any descendant denies RW to the caller. Used by the /copy
- * handler to enforce "you can only copy what you fully own". */
+/* Subtree RW check ported to ae/svnserver/acl_subtree.ae. */
+extern int aether_acl_user_has_rw_subtree(const char *repo, int rev,
+                                          const char *user, const char *path);
 static int
 acl_user_has_rw_subtree(const char *repo, int rev, const char *user,
                         const char *path)
 {
-    if (!acl_allows_mode(repo, rev, user, path, 0)) return 0;
-    if (!acl_allows_mode(repo, rev, user, path, 1)) return 0;
-
-    /* If it's a dir, descend. Files have no descendants. */
-    char sha[65] = {0};
-    char kind = 0;
-    if (!svnae_repos_resolve(repo, rev, path, sha, &kind)) return 1;
-    if (kind != 'd') return 1;
-
-    struct svnae_list *L = svnae_repos_list(repo, rev, *path ? path : "/");
-    if (!L) return 1;
-    int n = svnae_repos_list_count(L);
-    int ok = 1;
-    for (int i = 0; i < n; i++) {
-        const char *name = svnae_repos_list_name(L, i);
-        char child[PATH_MAX];
-        if (*path) snprintf(child, sizeof child, "%s/%s", path, name);
-        else       snprintf(child, sizeof child, "%s", name);
-        if (!acl_user_has_rw_subtree(repo, rev, user, child)) { ok = 0; break; }
-    }
-    svnae_repos_list_free(L);
-    return ok;
+    return aether_acl_user_has_rw_subtree(repo, rev, user, path);
 }
 
 /* Collect (path, acl-sha) pairs from the base rev's paths-acl blob

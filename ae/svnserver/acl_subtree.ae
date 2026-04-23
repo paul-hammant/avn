@@ -1,0 +1,84 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// permissions and limitations under the License.
+
+// Recursively walk `path` at `rev` and confirm that `user` has RW
+// on every descendant (including `path` itself). Returns 1 if the
+// subtree is fully RW, 0 if any descendant denies RW.
+//
+// Used by the /copy handler to enforce "you can only server-copy
+// what you fully own" — copying partially-restricted subtrees
+// would exfiltrate hidden children to the caller's branch.
+
+import std.string
+
+extern svnserver_acl_allows_mode(repo: string, rev: int, user: string,
+                                  path: string, want_write: int) -> int
+extern svnae_repos_resolve_kind(repo: string, rev: int, path: string) -> int
+
+extern svnae_repos_list(repo: string, rev: int, path: string) -> ptr
+extern svnae_repos_list_count(L: ptr) -> int
+extern svnae_repos_list_name(L: ptr, i: int) -> string
+extern svnae_repos_list_free(L: ptr)
+
+export acl_user_has_rw_subtree(repo: string, rev: int, user: string,
+                                path: string) -> int {
+    return acl_user_has_rw_subtree_impl(repo, rev, user, path)
+}
+
+acl_user_has_rw_subtree_impl(repo: string, rev: int, user: string,
+                              path: string) -> int {
+    if svnserver_acl_allows_mode(repo, rev, user, path, 0) == 0 { return 0 }
+    if svnserver_acl_allows_mode(repo, rev, user, path, 1) == 0 { return 0 }
+
+    // Only dirs have descendants.
+    kind = svnae_repos_resolve_kind(repo, rev, path)
+    if kind != 100 { return 1 }   // 'd' = 100
+
+    // svnae_repos_list wants "/" for the root; the C-side convention
+    // is an empty path means root in most places, but list() is the
+    // exception.
+    list_path = path
+    if string.length(path) == 0 { list_path = "/" }
+
+    L = svnae_repos_list(repo, rev, list_path)
+    if L == null { return 1 }
+
+    n = svnae_repos_list_count(L)
+    ok = 1
+    i = 0
+    while i < n {
+        if ok == 1 {
+            name = svnae_repos_list_name(L, i)
+            name = string.copy(name)   // list's buffer reused on free
+            child = ""
+            if string.length(path) > 0 {
+                child = string.concat(string.concat(path, "/"), name)
+            }
+            if string.length(path) == 0 {
+                child = name
+            }
+            if acl_user_has_rw_subtree_impl(repo, rev, user, child) == 0 {
+                ok = 0
+            }
+        }
+        i = i + 1
+    }
+    svnae_repos_list_free(L)
+    return ok
+}
+
+main() {
+    println("ae/svnserver/acl_subtree.ae is a library; not meant to run standalone")
+}
