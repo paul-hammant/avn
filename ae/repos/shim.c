@@ -290,50 +290,52 @@ svnae_repos_list_free(struct svnae_list *L)
 
 /* --- info (single-revision metadata) --------------------------------- *
  *
- * A convenience for when you know a specific rev# and don't want to
- * walk the whole log. Returns a tiny struct accessed with the same
- * accessor shape as log entries. */
+ * One-shot lookup for a specific rev#. Aether's repos_info_packed does
+ * the rev-blob read + field extraction in a single call; the C handle
+ * just owns the packed "<rev>\x01<author>\x01<date>\x01<msg>" string.
+ * Accessor shape matches the ra_info_* family, and we reuse those
+ * accessors (ae/ra/packed.ae) verbatim. */
 
-struct svnae_info {
-    int   rev;
-    char *author;
-    char *date;
-    char *msg;
-};
+struct svnae_info { char *packed; struct pin_list pins; };
+
+extern const char *aether_repos_info_packed(const char *repo, int rev);
+extern int         aether_ra_info_rev(const char *packed);
+extern const char *aether_ra_info_author(const char *packed);
+extern const char *aether_ra_info_date(const char *packed);
+extern const char *aether_ra_info_msg(const char *packed);
 
 struct svnae_info *
 svnae_repos_info_rev(const char *repo, int rev)
 {
-    /* If the rev pointer doesn't exist at all, bail. load_rev_blob_field
-     * returns "" for "rev exists but field absent" and also "" for
-     * "rev doesn't exist" — distinguish the two by probing for the
-     * "root" field, which every valid rev blob carries. */
-    const char *root = aether_repos_load_rev_blob_field(repo, rev, "root");
-    if (!root || !*root) return NULL;
-
+    const char *packed = aether_repos_info_packed(repo, rev);
+    if (!packed || !*packed) return NULL;
     struct svnae_info *I = calloc(1, sizeof *I);
-    I->rev = rev;
-
-    const char *v;
-    v = aether_repos_load_rev_blob_field(repo, rev, "author");
-    I->author = (v && *v) ? strdup(v) : NULL;
-    v = aether_repos_load_rev_blob_field(repo, rev, "date");
-    I->date = (v && *v) ? strdup(v) : NULL;
-    v = aether_repos_load_rev_blob_field(repo, rev, "log");
-    I->msg = (v && *v) ? strdup(v) : NULL;
+    I->packed = strdup(packed);
     return I;
 }
 
-int         svnae_repos_info_rev_num(const struct svnae_info *I) { return I ? I->rev : -1; }
-const char *svnae_repos_info_author (const struct svnae_info *I) { return I && I->author ? I->author : ""; }
-const char *svnae_repos_info_date   (const struct svnae_info *I) { return I && I->date   ? I->date   : ""; }
-const char *svnae_repos_info_msg    (const struct svnae_info *I) { return I && I->msg    ? I->msg    : ""; }
+int         svnae_repos_info_rev_num(const struct svnae_info *I) {
+    return I ? aether_ra_info_rev(I->packed) : -1;
+}
+const char *svnae_repos_info_author (struct svnae_info *I) {
+    if (!I) return "";
+    return pin_str(&I->pins, aether_ra_info_author(I->packed));
+}
+const char *svnae_repos_info_date   (struct svnae_info *I) {
+    if (!I) return "";
+    return pin_str(&I->pins, aether_ra_info_date(I->packed));
+}
+const char *svnae_repos_info_msg    (struct svnae_info *I) {
+    if (!I) return "";
+    return pin_str(&I->pins, aether_ra_info_msg(I->packed));
+}
 
 void
 svnae_repos_info_free(struct svnae_info *I)
 {
     if (!I) return;
-    free(I->author); free(I->date); free(I->msg);
+    free(I->packed);
+    pin_list_free(&I->pins);
     free(I);
 }
 
