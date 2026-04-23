@@ -1039,73 +1039,23 @@ int svnserver_based_on_check(HttpRequest *req, HttpServerResponse *res,
                           allow_missing_as_create);
 }
 
-/* PUT /repos/{r}/path/<path>: replace or create a file with the body
- * bytes. Single-edit atomic commit. */
+/* Aether can't safely carry an arbitrary binary body (its `string` is
+ * NUL-terminated), so the txn-add-file call that consumes req->body
+ * stays on the C side. Aether calls this with a built txn; C pulls
+ * body + length off the request directly. */
+int svnserver_txn_add_file_from_req(void *txn, const char *path,
+                                     HttpRequest *req) {
+    const char *body = req->body ? req->body : "";
+    int blen = req->body ? (int)req->body_length : 0;
+    return svnae_txn_add_file((struct svnae_txn *)txn, path, body, blen);
+}
+
+/* PUT /repos/{r}/path/<path> — ported to ae/svnserver/handler_path_put.ae. */
+extern void aether_handler_path_put(void *req, void *res);
 static void
 handle_repo_path_put(HttpRequest *req, HttpServerResponse *res)
 {
-    char name[128];
-    const char *tail = parse_repo_and_tail(req->path, name, sizeof name);
-    if (!tail || strncmp(tail, "/path/", 6) != 0) {
-        respond_error(res, 404, "not found"); return;
-    }
-    const char *repo = find_repo_path(name);
-    if (!repo) { respond_error(res, 404, "no such repo"); return; }
-    const char *file_path = tail + 6;
-    if (!*file_path) { respond_error(res, 400, "empty path"); return; }
-
-    int base_rev = svnae_repos_head_rev(repo);
-    if (base_rev < 0) { respond_error(res, 500, "cannot read head"); return; }
-
-    /* Auth + write-ACL. Super-user bypasses. */
-    const char *user = NULL;
-    int is_super = auth_context(req, &user);
-    if (!is_super && !acl_allows_mode(repo, base_rev, user, file_path, 1)) {
-        respond_error(res, 403, "forbidden");
-        return;
-    }
-
-    /* Phase 8.2b: path must fall inside the branch's include spec. */
-    if (!spec_allows(repo, request_branch(req), file_path, is_super)) {
-        respond_error(res, 403, "path outside branch spec");
-        return;
-    }
-
-    /* Concurrency check. Super-user also respects based-on — it's
-     * lighter than ACL, and skipping it would make scripting unsafe
-     * in ways super-users might not expect. */
-    if (!based_on_check(req, res, repo, base_rev, file_path, 1)) return;
-
-    /* Build a one-edit txn: add-file with request body as content. */
-    struct svnae_txn *txn = svnae_txn_new(base_rev);
-    if (!txn) { respond_error(res, 500, "oom"); return; }
-    const char *body = req->body ? req->body : "";
-    int blen = req->body ? (int)req->body_length : 0;
-    svnae_txn_add_file(txn, file_path, body, blen);
-
-    const char *hdr_author = header_or_null(req, "Svn-Author");
-    if (!hdr_author) hdr_author = (user && *user) ? user : "anonymous";
-    const char *hdr_log = header_or_null(req, "Svn-Log");
-    char synth_log[PATH_MAX + 64];
-    if (!hdr_log) {
-        snprintf(synth_log, sizeof synth_log, "PUT /%s", file_path);
-        hdr_log = synth_log;
-    }
-
-    int new_rev = svnae_commit_finalise(repo, txn, hdr_author, hdr_log);
-    svnae_txn_free(txn);
-    if (new_rev < 0) {
-        respond_error(res, 500, "commit failed");
-        return;
-    }
-
-    /* Resolve the new path's sha for the response body. */
-    char new_sha[65] = {0};
-    char new_kind = 0;
-    svnae_repos_resolve(repo, new_rev, file_path, new_sha, &new_kind);
-
-    http_response_set_status(res, 201);
-    http_response_json(res, aether_rev_sha_response_json(new_rev, new_sha));
+    aether_handler_path_put(req, res);
 }
 
 /* DELETE /repos/{r}/path/<path> — ported to ae/svnserver/handler_path_delete.ae. */
