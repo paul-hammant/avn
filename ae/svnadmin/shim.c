@@ -97,13 +97,6 @@ const char *svnae_fsfs_now_iso8601(void);
 extern int aether_io_mkdir_p(const char *path);
 extern int aether_io_write_atomic(const char *path, const char *data, int length);
 
-static int mkdir_p(const char *path) { return aether_io_mkdir_p(path) == 0 ? 0 : -1; }
-
-static int write_file_atomic(const char *path, const char *data, int len)
-{
-    return aether_io_write_atomic(path, data, len) == 0 ? 0 : -1;
-}
-
 /* slurp_small / parse_int previously lived here; both unused after
  * the dump-body read moved to aether_repos_rev_blob_sha and the load
  * parser moved to ae/svnadmin/dump.ae::parse_tagged_int. */
@@ -125,13 +118,13 @@ extern int svnae_openssl_hash_supported(const char *algo);
 static int
 create_bare(const char *repo, const char *algos_spec)
 {
-    if (mkdir_p(repo) != 0) return -1;
+    if (aether_io_mkdir_p(repo) != 0) return -1;
 
     char path[PATH_MAX];
     snprintf(path, sizeof path, "%s/reps", repo);
-    if (mkdir_p(path) != 0) return -1;
+    if (aether_io_mkdir_p(path) != 0) return -1;
     snprintf(path, sizeof path, "%s/revs", repo);
-    if (mkdir_p(path) != 0) return -1;
+    if (aether_io_mkdir_p(path) != 0) return -1;
 
     /* Validate each algorithm against the golden list before writing. */
     const char *spec = (algos_spec && *algos_spec) ? algos_spec : "sha1";
@@ -145,7 +138,7 @@ create_bare(const char *repo, const char *algos_spec)
     snprintf(path, sizeof path, "%s/format", repo);
     char fmt_line[128];
     int flen = snprintf(fmt_line, sizeof fmt_line, "svnae-fsfs-1 %s\n", spec);
-    if (write_file_atomic(path, fmt_line, flen) != 0) return -1;
+    if (aether_io_write_atomic(path, fmt_line, flen) != 0) return -1;
 
     snprintf(path, sizeof path, "%s/rep-cache.db", repo);
     sqlite3 *db;
@@ -193,17 +186,17 @@ svnae_svnadmin_create_with_algos(const char *repo, const char *algos_spec)
      * concerns. */
     char p[PATH_MAX];
     snprintf(p, sizeof p, "%s/branches", repo);
-    if (mkdir_p(p) != 0) return -1;
+    if (aether_io_mkdir_p(p) != 0) return -1;
     snprintf(p, sizeof p, "%s/branches/main", repo);
-    if (mkdir_p(p) != 0) return -1;
+    if (aether_io_mkdir_p(p) != 0) return -1;
     snprintf(p, sizeof p, "%s/branches/main/revs", repo);
-    if (mkdir_p(p) != 0) return -1;
+    if (aether_io_mkdir_p(p) != 0) return -1;
     snprintf(p, sizeof p, "%s/branches/main/revs/00/00", repo);
-    if (mkdir_p(p) != 0) return -1;
+    if (aether_io_mkdir_p(p) != 0) return -1;
     /* Empty spec file — means "include everything from parent," but
      * for main (which has no parent) it means "full tree." */
     snprintf(p, sizeof p, "%s/branches/main/spec", repo);
-    if (write_file_atomic(p, "", 0) != 0) return -1;
+    if (aether_io_write_atomic(p, "", 0) != 0) return -1;
 
     /* Path-rev secondary index for O(touched-revs) blame/log-of-path.
      * Populated on every commit (see fs_fs/commit_shim.c Phase 8.1). */
@@ -251,23 +244,23 @@ svnae_svnadmin_create_with_algos(const char *repo, const char *algos_spec)
      * continue to work. Phase 8.2+ will drop this once every reader
      * has moved to the per-branch layout. */
     snprintf(path, sizeof path, "%s/revs/000000", repo);
-    if (write_file_atomic(path, ptr_body, plen) != 0) return -1;
+    if (aether_io_write_atomic(path, ptr_body, plen) != 0) return -1;
 
     /* New per-branch rev pointer. Two-level fanout: aa/bb/NNNNNN
      * where aa = rev/65536, bb = (rev/256)%256. At rev 0 that's
      * 00/00/000000. */
     snprintf(path, sizeof path, "%s/branches/main/revs/00/00/000000", repo);
-    if (write_file_atomic(path, ptr_body, plen) != 0) return -1;
+    if (aether_io_write_atomic(path, ptr_body, plen) != 0) return -1;
 
     /* Legacy head file. */
     snprintf(path, sizeof path, "%s/head", repo);
-    if (write_file_atomic(path, "0\n", 2) != 0) return -1;
+    if (aether_io_write_atomic(path, "0\n", 2) != 0) return -1;
 
     /* New per-branch head file. Format: "rev=N\n". Richer than the
      * legacy one-int form — leaves room for tree-sha / spec-sha
      * caching in 8.2 without another format change. */
     snprintf(path, sizeof path, "%s/branches/main/head", repo);
-    if (write_file_atomic(path, "rev=0\n", 6) != 0) return -1;
+    if (aether_io_write_atomic(path, "rev=0\n", 6) != 0) return -1;
     return 0;
 }
 
@@ -494,7 +487,7 @@ svnae_svnadmin_load(const char *repo, int in_fd)
         int plen = snprintf(ptr_body, sizeof ptr_body, "%s\n", sha);
         char ptr_path[PATH_MAX];
         snprintf(ptr_path, sizeof ptr_path, "%s/revs/%06d", repo, rev);
-        if (write_file_atomic(ptr_path, ptr_body, plen) != 0) return -1;
+        if (aether_io_write_atomic(ptr_path, ptr_body, plen) != 0) return -1;
     }
 
     /* END + head. */
@@ -505,7 +498,7 @@ svnae_svnadmin_load(const char *repo, int in_fd)
     int hlen = snprintf(head_body, sizeof head_body, "%d\n", head);
     char head_path[PATH_MAX];
     snprintf(head_path, sizeof head_path, "%s/head", repo);
-    if (write_file_atomic(head_path, head_body, hlen) != 0) return -1;
+    if (aether_io_write_atomic(head_path, head_body, hlen) != 0) return -1;
 
     return 0;
 }
