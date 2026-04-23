@@ -1011,6 +1011,34 @@ based_on_check(HttpRequest *req, HttpServerResponse *res,
     return 1;
 }
 
+/* Aether-callable wrappers around the static request-inspection and
+ * mutation-policy helpers above. Each returns "" for a NULL string so
+ * Aether's string externs can distinguish "header absent" from
+ * "header present + empty" by string.length == 0. based_on_check
+ * emits its own 4xx response on failure; we just propagate the int. */
+const char *svnserver_request_header(HttpRequest *req, const char *name) {
+    const char *v = req_header(req, name);
+    return (v && *v) ? v : "";
+}
+const char *svnserver_request_branch(HttpRequest *req) {
+    return request_branch(req);
+}
+int svnserver_acl_allows_write(const char *repo, int rev,
+                                const char *user, const char *path) {
+    return acl_allows_mode(repo, rev, user, path, 1);
+}
+int svnserver_spec_allows(const char *repo, const char *branch,
+                           const char *path, int is_super) {
+    return spec_allows(repo, branch, path, is_super);
+}
+int svnserver_based_on_check(HttpRequest *req, HttpServerResponse *res,
+                              const char *repo, int head_rev,
+                              const char *path,
+                              int allow_missing_as_create) {
+    return based_on_check(req, res, repo, head_rev, path,
+                          allow_missing_as_create);
+}
+
 /* PUT /repos/{r}/path/<path>: replace or create a file with the body
  * bytes. Single-edit atomic commit. */
 static void
@@ -1080,63 +1108,12 @@ handle_repo_path_put(HttpRequest *req, HttpServerResponse *res)
     http_response_json(res, aether_rev_sha_response_json(new_rev, new_sha));
 }
 
-/* DELETE /repos/{r}/path/<path>: remove file or subtree from HEAD.
- * Atomic single-edit commit. */
+/* DELETE /repos/{r}/path/<path> — ported to ae/svnserver/handler_path_delete.ae. */
+extern void aether_handler_path_delete(void *req, void *res);
 static void
 handle_repo_path_delete(HttpRequest *req, HttpServerResponse *res)
 {
-    char name[128];
-    const char *tail = parse_repo_and_tail(req->path, name, sizeof name);
-    if (!tail || strncmp(tail, "/path/", 6) != 0) {
-        respond_error(res, 404, "not found"); return;
-    }
-    const char *repo = find_repo_path(name);
-    if (!repo) { respond_error(res, 404, "no such repo"); return; }
-    const char *file_path = tail + 6;
-    if (!*file_path) { respond_error(res, 400, "empty path"); return; }
-
-    int base_rev = svnae_repos_head_rev(repo);
-    if (base_rev < 0) { respond_error(res, 500, "cannot read head"); return; }
-
-    const char *user = NULL;
-    int is_super = auth_context(req, &user);
-    if (!is_super && !acl_allows_mode(repo, base_rev, user, file_path, 1)) {
-        respond_error(res, 403, "forbidden");
-        return;
-    }
-
-    /* Phase 8.2b spec check. */
-    if (!spec_allows(repo, request_branch(req), file_path, is_super)) {
-        respond_error(res, 403, "path outside branch spec");
-        return;
-    }
-
-    /* DELETE requires the path to exist — "create-if-absent" semantics
-     * don't apply. The 4th arg 0 forces the based_on_check to 404 on
-     * missing path. */
-    if (!based_on_check(req, res, repo, base_rev, file_path, 0)) return;
-
-    struct svnae_txn *txn = svnae_txn_new(base_rev);
-    if (!txn) { respond_error(res, 500, "oom"); return; }
-    svnae_txn_delete(txn, file_path);
-
-    const char *hdr_author = header_or_null(req, "Svn-Author");
-    if (!hdr_author) hdr_author = (user && *user) ? user : "anonymous";
-    const char *hdr_log = header_or_null(req, "Svn-Log");
-    char synth_log[PATH_MAX + 64];
-    if (!hdr_log) {
-        snprintf(synth_log, sizeof synth_log, "DELETE /%s", file_path);
-        hdr_log = synth_log;
-    }
-
-    int new_rev = svnae_commit_finalise(repo, txn, hdr_author, hdr_log);
-    svnae_txn_free(txn);
-    if (new_rev < 0) {
-        respond_error(res, 500, "commit failed");
-        return;
-    }
-
-    respond_json(res, 200, aether_rev_response_json(new_rev));
+    aether_handler_path_delete(req, res);
 }
 
 /* --- commit handler --------------------------------------------------- *
