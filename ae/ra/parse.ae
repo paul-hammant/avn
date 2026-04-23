@@ -1,0 +1,63 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// permissions and limitations under the License.
+
+// JSON-body parsers for RA client GETs. The C side still owns the
+// HTTP + auth-header + curl lifecycle (std.http lacks custom-
+// header support), so each C accessor does:
+//
+//   1. curl GET URL with X-Svnae-User/Superuser headers
+//   2. feed response body to an Aether parser here
+//   3. return the scalar / string the parser extracted
+//
+// Each parser returns a sentinel on failure that the C caller
+// translates to its conventional "NULL / -1 / ..." shape.
+
+import std.string
+import std.json
+
+// Parse {"head": N} → N. Returns -1 on malformed JSON or missing
+// field; the C caller maps that to "HTTP failure or absent head".
+export ra_parse_head_rev(body: string) -> int {
+    if string.length(body) == 0 { return -1 }
+    root, err = json.parse(body)
+    if string.length(err) > 0 { return -1 }
+    h, gerr = json.object_get(root, "head")
+    if string.length(gerr) > 0 { json.free(root); return -1 }
+    rv = json.get_int(h)
+    json.free(root)
+    return rv
+}
+
+// Parse {"hash_algo": "sha1" | "sha256"} → algo name. Older
+// servers (pre Phase 6.1) omit the field; in that case we default
+// to "sha1" so callers can forge ahead.
+// Returns "" only on malformed JSON / empty body.
+export ra_parse_hash_algo(body: string) -> string {
+    if string.length(body) == 0 { return "" }
+    root, err = json.parse(body)
+    if string.length(err) > 0 { return "" }
+    result = "sha1"
+    h, gerr = json.object_get(root, "hash_algo")
+    if string.length(gerr) == 0 {
+        s, _ = json.get_string(h)
+        if string.length(s) > 0 { result = string.copy(s) }
+    }
+    json.free(root)
+    return result
+}
+
+main() {
+    println("ae/ra/parse.ae is a library; not meant to run standalone")
+}

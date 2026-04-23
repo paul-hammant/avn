@@ -349,6 +349,7 @@ http_post_json(const char *url, const char *body, char **out_resp, size_t *out_l
 /* ---- public API ------------------------------------------------------ */
 
 /* head_rev: returns the current revision number, or -1 on any failure. */
+extern int aether_ra_parse_head_rev(const char *body);
 int
 svnae_ra_head_rev(const char *base_url, const char *repo_name)
 {
@@ -356,13 +357,10 @@ svnae_ra_head_rev(const char *base_url, const char *repo_name)
     char *body = NULL; size_t len = 0; int status = 0;
     if (http_get(url, &body, &len, &status) != 0) return -1;
     if (status != 200) { free(body); return -1; }
-
-    cJSON *root = cJSON_ParseWithLength(body, len);
+    /* JSON parse + head-field extraction ported to
+     * ae/ra/parse.ae::ra_parse_head_rev. */
+    int rev = aether_ra_parse_head_rev(body);
     free(body);
-    if (!root) return -1;
-    cJSON *h = cJSON_GetObjectItemCaseSensitive(root, "head");
-    int rev = cJSON_IsNumber(h) ? json_valueint(h) : -1;
-    cJSON_Delete(root);
     return rev;
 }
 
@@ -370,6 +368,7 @@ svnae_ra_head_rev(const char *base_url, const char *repo_name)
  * malloc'd string (caller frees via free()) or NULL on failure. If
  * the server predates Phase 6.1 and omits the field, returns "sha1"
  * so callers can safely default. */
+extern const char *aether_ra_parse_hash_algo(const char *body);
 char *
 svnae_ra_hash_algo(const char *base_url, const char *repo_name)
 {
@@ -377,16 +376,13 @@ svnae_ra_hash_algo(const char *base_url, const char *repo_name)
     char *body = NULL; size_t len = 0; int status = 0;
     if (http_get(url, &body, &len, &status) != 0) return NULL;
     if (status != 200) { free(body); return NULL; }
-
-    cJSON *root = cJSON_ParseWithLength(body, len);
+    /* JSON parse ported to ae/ra/parse.ae::ra_parse_hash_algo.
+     * Parser returns "" only on parse failure; defaults to "sha1"
+     * when the field is absent (pre-Phase-6.1 servers). */
+    const char *algo = aether_ra_parse_hash_algo(body);
     free(body);
-    if (!root) return NULL;
-    cJSON *h = cJSON_GetObjectItemCaseSensitive(root, "hash_algo");
-    char *algo = (cJSON_IsString(h) && json_valuestring(h)[0])
-                     ? strdup(json_valuestring(h))
-                     : strdup("sha1");
-    cJSON_Delete(root);
-    return algo;
+    if (!algo || !*algo) return NULL;
+    return strdup(algo);
 }
 
 /* ---- log handle (matches repos/shim.c accessor shape) ---------------- */
