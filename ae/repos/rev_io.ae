@@ -91,10 +91,33 @@ export repos_head_rev(repo: string) -> int {
 
 // $repo/revs/NNNNNN → rev blob sha (hex string), or "" on miss.
 export repos_rev_blob_sha(repo: string, rev: int) -> string {
+    return repos_rev_blob_sha_impl(repo, rev)
+}
+repos_rev_blob_sha_impl(repo: string, rev: int) -> string {
     path = string.concat(string.concat(repo, "/revs/"), repos_pad6(rev))
     if aether_io_file_size(path) < 0 { return "" }
     src = aether_io_read_file(path)
     return string.copy(repos_rtrim_ws(src))
+}
+
+// Two-hop loader: read the rev's pointer file, load the referenced
+// rep blob, extract the named field. Returns "" on any miss. This
+// is the "repos" version of svnserver/rev_load.ae's identical
+// function; both binaries link; shim.c callers bind to whichever
+// one is in scope via the aether_repos_load_rev_blob_field name.
+extern svnae_rep_read_blob(repo: string, sha: string) -> string
+extern svnae_rep_free(body: string)
+extern aether_blobfield_get(body: string, key: string) -> string
+
+export repos_load_rev_blob_field(repo: string, rev: int, key: string) -> string {
+    sha = repos_rev_blob_sha_impl(repo, rev)
+    if string.length(sha) == 0 { return "" }
+    body = svnae_rep_read_blob(repo, sha)
+    if string.length(body) == 0 { return "" }
+    v = aether_blobfield_get(body, key)
+    v = string.copy(v)
+    svnae_rep_free(body)
+    return v
 }
 
 main() {
