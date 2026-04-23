@@ -35,28 +35,10 @@
  * as \uXXXX).
  */
 
-#include "aether_json.h"
+/* JSON parse + build live entirely in Aether now
+ * (ae/svnserver/branch_create_parse.ae, copy_parse.ae,
+ * commit_parse.ae). No std.json is consumed by this file directly. */
 
-/* cJSON → std.json compatibility layer (see ae/ra/shim.c for the full
- * design note). Only the parse/read side is needed here. */
-typedef JsonValue cJSON;
-#define cJSON_ParseWithLength(b, n)            json_parse_raw_n((b), (n))
-#define cJSON_Delete(v)                        json_free(v)
-#define cJSON_GetObjectItemCaseSensitive(o, k) json_object_get_raw((o), (k))
-#define cJSON_IsNumber(v)                      ((v) && json_type(v) == JSON_NUMBER)
-#define cJSON_IsString(v)                      ((v) && json_type(v) == JSON_STRING)
-#define cJSON_IsArray(v)                       ((v) && json_type(v) == JSON_ARRAY)
-#define cJSON_IsObject(v)                      ((v) && json_type(v) == JSON_OBJECT)
-#define cJSON_GetArraySize(a)                  json_array_size(a)
-#define cJSON_GetArrayItem(a, i)               json_array_get_raw((a), (i))
-static inline int         json_valueint(JsonValue *v)    { return json_get_int(v); }
-static inline const char *json_valuestring(JsonValue *v) { return json_get_string_raw(v); }
-#define cJSON_ArrayForEach(entry, arr)                                 \
-    for (int _sa_idx = 0,                                              \
-             _sa_len = json_array_size(arr);                           \
-         _sa_idx < _sa_len &&                                          \
-         ((entry) = json_array_get_raw((arr), _sa_idx), 1);            \
-         _sa_idx++)
 #include <dirent.h>
 #include <sys/stat.h>
 #include <errno.h>
