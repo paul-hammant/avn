@@ -22,6 +22,7 @@
 // duplicate the walkers here).
 
 import std.string
+import std.intarr
 
 extern aether_repos_head_rev(repo: string) -> int
 extern aether_repos_rev_blob_sha(repo: string, rev: int) -> string
@@ -30,6 +31,19 @@ extern aether_blobfield_get(body: string, key: string) -> string
 // Borrowed from fs_fs/rep_store_shim.c.
 extern svnae_rep_read_blob(repo: string, sha1_hex: string) -> string
 extern svnae_rep_free(p: string)
+
+// For the blame walker: paths_changed at each rev (to skip untouched
+// revs and detect deletes), resolve_path + rep_read_blob for content,
+// and repos_info_packed for the author attribution. All already
+// ported in sibling modules.
+extern aether_paths_changed_packed(repo: string, rev: int) -> string
+extern aether_ra_paths_count(packed: string) -> int
+extern aether_ra_paths_action(packed: string, i: int) -> string
+extern aether_ra_paths_path(packed: string, i: int) -> string
+
+extern aether_repos_load_rev_blob_field(repo: string, rev: int, key: string) -> string
+extern aether_resolve_kind(repo: string, root_sha: string, path: string) -> int
+extern aether_resolve_sha(repo: string, root_sha: string, path: string) -> string
 
 export repos_log_packed(repo: string) -> string {
     return repos_log_packed_impl(repo)
@@ -115,6 +129,400 @@ repos_info_packed_impl(repo: string, rev: int) -> string {
     out = string.concat(out, "\x01")
     out = string.concat(out, msg)
     return out
+}
+
+// ===========================================================================
+// blame — per-line attribution for (rev, path)
+// ===========================================================================
+//
+// Walks revs 1..target_rev, maintaining a "current" annotation state
+// (as a packed "<rev>\x01<author>\x01<text>\x02..." string — same
+// shape as the final return). For each rev that touched `path`:
+//
+//   - action D (deleted): clear state; if re-added later we start
+//     fresh, matching the C version.
+//   - otherwise: fetch content, split into lines, run line-level
+//     LCS against the prev version, and for each current line:
+//       * if matched to a prev line: carry that prev line's
+//         annotation (rev + author) forward.
+//       * otherwise: attribute to the current rev + author.
+//
+// Returns a packed "N\x02<rev>\x01<author>\x01<text>\x02..." string
+// matching ra_parse_blame's output, so the C side reuses the
+// ra_blame_* accessors from ae/ra/packed.ae.
+
+// ----------------------------------------------------------------------------
+// Content fetch: resolve (rev, path) to a file sha, then read its blob.
+// Returns the body (caller *must* svnae_rep_free it), or "" on miss /
+// non-file.
+
+cat_rev_path(repo: string, rev: int, path: string) -> string {
+    root = aether_repos_load_rev_blob_field(repo, rev, "root")
+    if string.length(root) == 0 { return "" }
+    // Snapshot — aether_repos_load_rev_blob_field returns into TLS.
+    root_copy = string.copy(root)
+    k = aether_resolve_kind(repo, root_copy, path)
+    if k != 102 { return "" }   // 102 = 'f'
+    sha = aether_resolve_sha(repo, root_copy, path)
+    if string.length(sha) == 0 { return "" }
+    sha_copy = string.copy(sha)
+    return svnae_rep_read_blob(repo, sha_copy)
+}
+
+// ----------------------------------------------------------------------------
+// Line split: return an intarr where each line occupies two slots
+// [2i] = offset, [2i+1] = length. Trailing '\n' is not part of the
+// line. Out-param count via returning two values in a tuple-like
+// packed string "<n_lines>\x01<ptr-as-int>"... actually tuples work
+// in Aether but cross-function. Simplest: return the intarr; the
+// caller reads size via intarr_size and divides by 2. (Drops an
+// int pair for empty input since intarr can't be zero-length
+// meaningfully — we handle n=0 by returning a 0-slot array.)
+
+split_lines_packed(body: string) -> ptr {
+    n = string.length(body)
+    // Pre-scan to count lines.
+    count = 0
+    i = 0
+    while i < n {
+        count = count + 1
+        while i < n {
+            if string.char_at(body, i) == 10 { break }
+            i = i + 1
+        }
+        if i < n { i = i + 1 }   // skip '\n'
+    }
+    arr, _ = intarr.new(count * 2)
+    if arr == null { return null }
+    pos = 0
+    li = 0
+    while pos < n {
+        start = pos
+        while pos < n {
+            if string.char_at(body, pos) == 10 { break }
+            pos = pos + 1
+        }
+        intarr_set_unchecked(arr, li * 2,     start)
+        intarr_set_unchecked(arr, li * 2 + 1, pos - start)
+        li = li + 1
+        if pos < n { pos = pos + 1 }
+    }
+    return arr
+}
+
+// Byte-by-byte equality of body_a[off_a..off_a+len] vs body_b[...].
+lines_equal(body_a: string, off_a: int, len_a: int,
+            body_b: string, off_b: int, len_b: int) -> int {
+    if len_a != len_b { return 0 }
+    k = 0
+    while k < len_a {
+        if string.char_at(body_a, off_a + k) != string.char_at(body_b, off_b + k) {
+            return 0
+        }
+        k = k + 1
+    }
+    return 1
+}
+
+// Line-level LCS. Returns an intarr of size `na` where entry `i`
+// is the index in B of A[i]'s match_arr, or -1 if unique to A. Standard
+// DP, O(na * nb) time and space.
+//
+// a_lines / b_lines are the split_lines_packed outputs: size == 2*n,
+// slot [2i] = offset, [2i+1] = length.
+lcs_match(a_body: string, a_lines: ptr, na: int,
+          b_body: string, b_lines: ptr, nb: int) -> ptr {
+    // dp[(na+1) * (nb+1)], zero-initialised.
+    dp_cols = nb + 1
+    dp, _ = intarr.new((na + 1) * dp_cols)
+    if dp == null { return null }
+
+    i = 1
+    while i <= na {
+        a_off = intarr_get_unchecked(a_lines, (i - 1) * 2)
+        a_len = intarr_get_unchecked(a_lines, (i - 1) * 2 + 1)
+        j = 1
+        while j <= nb {
+            b_off = intarr_get_unchecked(b_lines, (j - 1) * 2)
+            b_len = intarr_get_unchecked(b_lines, (j - 1) * 2 + 1)
+            if lines_equal(a_body, a_off, a_len, b_body, b_off, b_len) == 1 {
+                up_left = intarr_get_unchecked(dp, (i - 1) * dp_cols + (j - 1))
+                intarr_set_unchecked(dp, i * dp_cols + j, up_left + 1)
+            }
+            if lines_equal(a_body, a_off, a_len, b_body, b_off, b_len) == 0 {
+                up   = intarr_get_unchecked(dp, (i - 1) * dp_cols + j)
+                left = intarr_get_unchecked(dp, i * dp_cols + (j - 1))
+                best = up
+                if left > best { best = left }
+                intarr_set_unchecked(dp, i * dp_cols + j, best)
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+
+    match_arr, _ = intarr.new_filled(na, -1)
+    if match_arr == null { intarr_free(dp); return null }
+
+    i = na
+    j = nb
+    while i > 0 {
+        if j <= 0 { break }
+        a_off = intarr_get_unchecked(a_lines, (i - 1) * 2)
+        a_len = intarr_get_unchecked(a_lines, (i - 1) * 2 + 1)
+        b_off = intarr_get_unchecked(b_lines, (j - 1) * 2)
+        b_len = intarr_get_unchecked(b_lines, (j - 1) * 2 + 1)
+        if lines_equal(a_body, a_off, a_len, b_body, b_off, b_len) == 1 {
+            intarr_set_unchecked(match_arr, i - 1, j - 1)
+            i = i - 1
+            j = j - 1
+        }
+        if lines_equal(a_body, a_off, a_len, b_body, b_off, b_len) == 0 {
+            up   = intarr_get_unchecked(dp, (i - 1) * dp_cols + j)
+            left = intarr_get_unchecked(dp, i * dp_cols + (j - 1))
+            if up >= left { i = i - 1 } else { j = j - 1 }
+        }
+    }
+    intarr_free(dp)
+    return match_arr
+}
+
+// ----------------------------------------------------------------------------
+// Accumulator: the "current state" is a packed
+// "<rev>\x01<author>\x01<text>\x02..." string (no count header — we
+// know line count from context). Helpers walk it record-by-record.
+// Same shape the C side used to carry in struct line_ann[].
+
+// Return the i-th record in a packed (no-count) stream. "" if OOB.
+acc_record_at(packed: string, i: int) -> string {
+    n = string.length(packed)
+    pos = 0
+    k = 0
+    while k < i {
+        if pos >= n { return "" }
+        sep = -1
+        j = pos
+        while j < n {
+            if string.char_at(packed, j) == 2 { sep = j; break }
+            j = j + 1
+        }
+        if sep < 0 { return "" }
+        pos = sep + 1
+        k = k + 1
+    }
+    if pos >= n { return "" }
+    end = n
+    j = pos
+    while j < n {
+        if string.char_at(packed, j) == 2 { end = j; break }
+        j = j + 1
+    }
+    return string.substring(packed, pos, end)
+}
+
+// Field access within one "<rev>\x01<author>\x01<text>" record.
+rec_field(rec: string, field_idx: int) -> string {
+    n = string.length(rec)
+    pos = 0
+    k = 0
+    while k < field_idx {
+        sep = -1
+        j = pos
+        while j < n {
+            if string.char_at(rec, j) == 1 { sep = j; break }
+            j = j + 1
+        }
+        if sep < 0 { return "" }
+        pos = sep + 1
+        k = k + 1
+    }
+    end = n
+    j = pos
+    while j < n {
+        if string.char_at(rec, j) == 1 { end = j; break }
+        j = j + 1
+    }
+    return string.substring(rec, pos, end)
+}
+
+rec_rev(rec: string) -> int {
+    s = rec_field(rec, 0)
+    if string.length(s) == 0 { return 0 }
+    return string.get_int(s)
+}
+rec_author(rec: string) -> string { return rec_field(rec, 1) }
+
+// Build one "<rev>\x01<author>\x01<text>" record.
+make_record(rev: int, author: string, text: string) -> string {
+    out = string.concat(string.from_int(rev), "\x01")
+    out = string.concat(out, author)
+    out = string.concat(out, "\x01")
+    out = string.concat(out, text)
+    return out
+}
+
+// ----------------------------------------------------------------------------
+// Walk one rev: given the prior accumulator (packed records, or "" if
+// we have no prior state), produce the new accumulator for the file
+// content at `body`. `lines` is split_lines_packed(body).
+//
+// If prev_acc is empty ("no prior state"), every line is attributed
+// to `rev` + `author`. Otherwise we LCS-match_arr body against prev_body
+// and carry forward matched-line annotations.
+
+step_rev(rev: int, author: string,
+         body: string, lines: ptr, n_lines: int,
+         prev_body: string, prev_lines: ptr, prev_n: int,
+         prev_acc: string) -> string {
+    out = ""
+    if prev_n == 0 {
+        // First version — every line is this rev's.
+        i = 0
+        while i < n_lines {
+            off = intarr_get_unchecked(lines, i * 2)
+            len = intarr_get_unchecked(lines, i * 2 + 1)
+            text = string.substring(body, off, off + len)
+            rec = make_record(rev, author, text)
+            if i == 0 { out = rec }
+            if i > 0 {
+                out = string.concat(out, "\x02")
+                out = string.concat(out, rec)
+            }
+            i = i + 1
+        }
+        return out
+    }
+
+    // LCS — cur (=A) against prev (=B).
+    match_arr = lcs_match(body, lines, n_lines, prev_body, prev_lines, prev_n)
+
+    i = 0
+    while i < n_lines {
+        off = intarr_get_unchecked(lines, i * 2)
+        len = intarr_get_unchecked(lines, i * 2 + 1)
+        text = string.substring(body, off, off + len)
+        m = -1
+        if match_arr != null { m = intarr_get_unchecked(match_arr, i) }
+        if m >= 0 {
+            if m < prev_n {
+                prev_rec = acc_record_at(prev_acc, m)
+                rec = make_record(rec_rev(prev_rec), rec_author(prev_rec), text)
+                if i == 0 { out = rec }
+                if i > 0 {
+                    out = string.concat(out, "\x02")
+                    out = string.concat(out, rec)
+                }
+                i = i + 1
+                continue
+            }
+        }
+        rec = make_record(rev, author, text)
+        if i == 0 { out = rec }
+        if i > 0 {
+            out = string.concat(out, "\x02")
+            out = string.concat(out, rec)
+        }
+        i = i + 1
+    }
+    if match_arr != null { intarr_free(match_arr) }
+    return out
+}
+
+// ----------------------------------------------------------------------------
+// Public entry point. Returns packed "N\x02<rev>\x01<author>\x01
+// <text>\x02..." matching ra_parse_blame. "" on failure / path
+// doesn't resolve at target_rev.
+
+export repos_blame_packed(repo: string, target_rev: int, path: string) -> string {
+    return repos_blame_packed_impl(repo, target_rev, path)
+}
+
+repos_blame_packed_impl(repo: string, target_rev: int, path: string) -> string {
+    if target_rev < 0 {
+        target_rev = aether_repos_head_rev(repo)
+    }
+    if target_rev < 1 { return "" }
+
+    acc = ""           // accumulator: packed records, no count header
+    acc_n = 0          // record count in acc == line count of prev_body
+    prev_body = ""
+    prev_lines = null
+
+    r = 1
+    while r <= target_rev {
+        // Did this rev touch `path`?
+        touches = 0
+        action = ""
+        paths = aether_paths_changed_packed(repo, r)
+        if string.length(paths) > 0 {
+            pn = aether_ra_paths_count(paths)
+            pi = 0
+            while pi < pn {
+                p = aether_ra_paths_path(paths, pi)
+                if string.equals(p, path) == 1 {
+                    touches = 1
+                    a = aether_ra_paths_action(paths, pi)
+                    action = string.copy(a)
+                    break
+                }
+                pi = pi + 1
+            }
+        }
+
+        if touches == 0 {
+            r = r + 1
+            continue
+        }
+
+        if string.equals(action, "D") == 1 {
+            // Deleted at this rev. Drop state; re-add starts fresh.
+            acc = ""
+            acc_n = 0
+            prev_body = ""
+            if prev_lines != null { intarr_free(prev_lines); prev_lines = null }
+            r = r + 1
+            continue
+        }
+
+        // Fetch content.
+        body_raw = cat_rev_path(repo, r, path)
+        if string.length(body_raw) == 0 {
+            r = r + 1
+            continue
+        }
+        body = string.copy(body_raw)    // detach from rep-blob TLS buf
+        svnae_rep_free(body_raw)
+
+        // Author for attribution.
+        info = repos_info_packed_impl(repo, r)
+        author = ""
+        if string.length(info) > 0 {
+            author = rec_author(info)
+        }
+
+        lines = split_lines_packed(body)
+        n_lines = 0
+        if lines != null { n_lines = intarr_size(lines) / 2 }
+
+        new_acc = step_rev(r, author, body, lines, n_lines,
+                            prev_body, prev_lines, acc_n, acc)
+
+        // Swap state.
+        if prev_lines != null { intarr_free(prev_lines) }
+        prev_lines = lines
+        prev_body = body
+        acc = new_acc
+        acc_n = n_lines
+
+        r = r + 1
+    }
+
+    if prev_lines != null { intarr_free(prev_lines) }
+
+    // Wrap with "<N>\x02" header.
+    header = string.concat(string.from_int(acc_n), "\x02")
+    if acc_n == 0 { return header }
+    return string.concat(header, acc)
 }
 
 main() {

@@ -44,7 +44,26 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
   `int_to_dec` + `digit_char` in favour of `std.string.from_int` now
   that it's available, and ported the WC pristine-store path builder
   to ae/wc/pristine_path.ae (handles the two-level XX/YY/ fanout).
-- **Rounds 26-27** (current): **37.85% C, 62.15% Aether.** Leaf
+- **Round 28** (current): **36.81% C, 63.19% Aether.** Ported
+  svnae_repos_blame — the last big knot in repos/shim.c, ~245
+  LOC of C doing line-level LCS, paths-changed walk, and
+  per-line annotation carry-forward.
+  - Aether side lives in ae/repos/log.ae::repos_blame_packed.
+    Uses std.intarr for the O(na*nb) LCS dp table (2D flat
+    indexing) and the per-line (offset, length) pairs (one
+    packed intarr of size 2*n).
+  - The annotation accumulator is itself the packed blame
+    output shape — "<rev>\x01<author>\x01<text>\x02..." —
+    same as ra_parse_blame emits on the client side. Each
+    rev-step consumes the prev accumulator and produces a
+    new one; no intermediate struct.
+  - C collapses to the {packed, n, pin_list} handle pattern;
+    accessors reuse aether_ra_blame_* from packed.ae.
+  - repos/shim.c: 703 → 510 LOC (-193 LOC). split_lines,
+    lcs_match, ann_push, struct line_ann, struct svnae_blame's
+    old items array, and the 90-LOC walk loop all gone from C.
+
+- **Rounds 26-27**: **37.85% C, 62.15% Aether.** Leaf
   sweep after the structural passes:
   - svnae_repos_info_rev: ported to ae/repos/log.ae's
     repos_info_packed. One rev-blob read in Aether → packed
