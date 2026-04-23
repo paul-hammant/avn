@@ -800,25 +800,23 @@ svnae_ra_props_free(struct svnae_ra_props *P)
  * POST /repos/{r}/copy with { base_rev, from_path, to_path, author, log }.
  * Returns the new revision number, or -1.
  */
+extern const char *aether_ra_copy_build_body(int base_rev,
+                                              const char *from_path,
+                                              const char *to_path,
+                                              const char *author,
+                                              const char *logmsg);
 int
 svnae_ra_server_copy(const char *base_url, const char *repo_name,
                      int base_rev,
                      const char *from_path, const char *to_path,
                      const char *author, const char *logmsg)
 {
-    cJSON *body = cJSON_CreateObject();
-    cJSON_AddNumberToObject(body, "base_rev",  base_rev);
-    cJSON_AddStringToObject(body, "from_path", from_path);
-    cJSON_AddStringToObject(body, "to_path",   to_path);
-    cJSON_AddStringToObject(body, "author",    author);
-    cJSON_AddStringToObject(body, "log",       logmsg);
-    char *json = cJSON_PrintUnformatted(body);
-    cJSON_Delete(body);
-
+    /* Body serialisation ported to ae/ra/commit_build.ae::ra_copy_build_body. */
+    const char *json = aether_ra_copy_build_body(base_rev, from_path, to_path,
+                                                 author, logmsg);
     const char *url = aether_url_copy(base_url, repo_name);
     char *resp = NULL; size_t len = 0; int status = 0;
     int rc = http_post_json(url, json, &resp, &len, &status);
-    free(json);
 
     int new_rev = -1;
     if (rc == 0 && status == 200 && resp) {
@@ -842,34 +840,19 @@ svnae_ra_server_copy(const char *base_url, const char *repo_name,
  * `includes_joined` is a single newline-separated string for ergonomic
  * passage from Aether (Aether ptr-array types are awkward). We split
  * here and pass as a JSON array. */
+extern const char *aether_ra_branch_create_build_body(const char *base,
+                                                       const char *includes_joined);
 int
 svnae_ra_branch_create(const char *base_url, const char *repo_name,
                       const char *name, const char *base,
                       const char *includes_joined)
 {
-    cJSON *body = cJSON_CreateObject();
-    cJSON_AddStringToObject(body, "base", base);
-    cJSON *arr = cJSON_AddArrayToObject(body, "include");
-    const char *p = includes_joined ? includes_joined : "";
-    while (*p) {
-        const char *eol = strchr(p, '\n');
-        size_t n = eol ? (size_t)(eol - p) : strlen(p);
-        if (n > 0) {
-            char *s = malloc(n + 1);
-            memcpy(s, p, n); s[n] = '\0';
-            cJSON_AddItemToArray(arr, cJSON_CreateString(s));
-            free(s);
-        }
-        if (!eol) break;
-        p = eol + 1;
-    }
-    char *json = cJSON_PrintUnformatted(body);
-    cJSON_Delete(body);
-
+    /* Body serialisation ported to
+     * ae/ra/commit_build.ae::ra_branch_create_build_body. */
+    const char *json = aether_ra_branch_create_build_body(base, includes_joined ? includes_joined : "");
     const char *url = aether_url_branches_create(base_url, repo_name, name);
     char *resp = NULL; size_t len = 0; int status = 0;
     int rc = http_post_json(url, json, &resp, &len, &status);
-    free(json);
 
     int new_rev = -1;
     if (rc == 0 && status == 201 && resp) {

@@ -155,6 +155,58 @@ ra_commit_build_body_impl(cb: ptr) -> string {
     return out
 }
 
+// Build the /copy POST body:
+//   { "base_rev": N, "from_path": "...", "to_path": "...",
+//     "author": "...", "log": "..." }
+export ra_copy_build_body(base_rev: int, from_path: string, to_path: string,
+                           author: string, logmsg: string) -> string {
+    body = json_create_object()
+    json.object_set(body, "base_rev", svnae_ra_json_int(base_rev))
+    json.object_set(body, "from_path", json_create_string(from_path))
+    json.object_set(body, "to_path", json_create_string(to_path))
+    json.object_set(body, "author", json_create_string(author))
+    json.object_set(body, "log", json_create_string(logmsg))
+    out, _ = json.stringify(body)
+    json.free(body)
+    return out
+}
+
+// Build the /branches/<NAME>/create POST body:
+//   { "base": "<sha-or-branch>", "include": ["glob", ...] }
+// `includes_joined` is a \n-separated list (empty lines skipped).
+export ra_branch_create_build_body(base: string, includes_joined: string) -> string {
+    body = json_create_object()
+    json.object_set(body, "base", json_create_string(base))
+
+    arr = json_create_array()
+    n = string.length(includes_joined)
+    line_start = 0
+    i = 0
+    while i <= n {
+        at_end = 0
+        c = 0
+        if i == n { at_end = 1 } else { c = string.char_at(includes_joined, i) }
+        is_eol = 0
+        if at_end == 1 { is_eol = 1 }
+        if c == 10 { is_eol = 1 }
+        if is_eol == 1 {
+            if i > line_start {
+                seg = string.substring(includes_joined, line_start, i)
+                if string.length(seg) > 0 {
+                    json.array_add(arr, json_create_string(seg))
+                }
+            }
+            line_start = i + 1
+        }
+        i = i + 1
+    }
+    json.object_set(body, "include", arr)
+
+    out, _ = json.stringify(body)
+    json.free(body)
+    return out
+}
+
 main() {
     println("ae/ra/commit_build.ae is a library; not meant to run standalone")
 }
