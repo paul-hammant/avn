@@ -44,18 +44,28 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
   `int_to_dec` + `digit_char` in favour of `std.string.from_int` now
   that it's available, and ported the WC pristine-store path builder
   to ae/wc/pristine_path.ae (handles the two-level XX/YY/ fanout).
-- **Round 11** (current): **Aether crosses parity and widens the
-  lead — 48.85% C, 51.14% Aether.** Started the session at 68% C.
-  Aether 0.81.0 made std.http request/response accessors tolerate
+- **Round 11** (current): **Aether widens the parity lead —
+  46.82% C, 53.17% Aether.** Started the session at 68% C. Aether
+  0.81.0 made std.http request/response accessors tolerate
   externally-constructed `HttpRequest*`/`HttpServerResponse*`
   pointers, so C-dispatched handlers can flow all the way through
-  Aether. Nine svnserver handlers now fully ported — URL parse,
-  auth check, data fetch, body build, response emit all in `.ae`:
-  `handler_info`, `handler_log`, `handler_rev_info`,
-  `handler_rev_cat`, `handler_rev_list`, `handler_rev_paths`,
-  `handler_rev_hashes`, `handler_rev_acl`, `handler_rev_props`.
-  Each C branch is now a 3–10-line `aether_*_handle(req, res,
-  repo, rev, ...)` wrapper. Aether 0.82.0's `fs.read_binary`
+  Aether. All svnserver read+mutate handlers are now Aether-owned:
+
+  - Read: `handler_info`, `handler_log`, `handler_rev_info`,
+    `handler_rev_cat`, `handler_rev_list`, `handler_rev_paths`,
+    `handler_rev_hashes`, `handler_rev_acl`, `handler_rev_props`,
+    `handler_rev_blame`, `handler_path_get`
+  - Mutate: `handler_path_put`, `handler_path_delete`,
+    `handler_branch_create`, `handler_copy`, `handler_commit`
+
+  Each C branch is now a 3-line `aether_*_handle(req, res)`
+  extern call. For mutating handlers where cJSON + dynamic-sized
+  string arrays are central (branch_create, copy, commit), the
+  JSON parse + mutation stays in C behind a typed wrapper that
+  returns -1..-N for distinct failure kinds; the Aether handler
+  maps each to the right HTTP response. Only the dispatcher
+  itself, auth_context, and a few static helpers remain on the
+  C side of the handler layer. Aether 0.82.0's `fs.read_binary`
   NUL-preservation fix retired the TLS-buffer escape hatch carried
   in three places. `std.intarr` landed but we haven't used it yet
   (blame LCS would).
