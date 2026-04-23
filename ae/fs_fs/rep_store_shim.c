@@ -82,22 +82,6 @@ extern const char *aether_format_primary_hash(const char *line);
 extern int         aether_format_secondary_count(const char *line);
 extern const char *aether_format_secondary_hash(const char *line, int i);
 
-/* $repo/format reader ported to ae/repos/rev_io.ae. Thin wrapper
- * keeps the existing 0/-1 + char[out_sz] signature. */
-extern const char *aether_repos_format_line(const char *repo);
-
-static int
-read_format_line(const char *repo, char *out, size_t out_sz)
-{
-    const char *src = aether_repos_format_line(repo);
-    if (!src || !*src) return -1;
-    size_t n = strlen(src);
-    if (n >= out_sz) n = out_sz - 1;
-    memcpy(out, src, n);
-    out[n] = '\0';
-    return 0;
-}
-
 /* Ported to ae/repos/rev_io.ae::repo_primary_hash. Still returns a
  * TLS-cached string so call sites that hold the pointer across a
  * subsequent call don't trample it. */
