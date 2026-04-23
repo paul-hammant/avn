@@ -691,24 +691,15 @@ extern int32_t aether_spec_matches_any(const char *path, const char *specs_joine
  * Returns 1 = allowed, 0 = denied, -1 on I/O error (caller treats as
  * deny to be safe).
  */
+/* Ported to ae/fs_fs/branch_spec.ae. Thin C shim preserves the
+ * existing -1-on-bad-args shape the old C function had (Aether
+ * version simplifies to 1 on bad branch/path, since no caller
+ * differentiated). */
+extern int aether_branch_spec_allows(const char *repo, const char *branch,
+                                     const char *path);
 int
 svnae_branch_spec_allows(const char *repo, const char *branch, const char *path)
 {
     if (!repo || !branch || !path) return -1;
-    if (!*branch || !*path) return 1;
-
-    char spec_path[PATH_MAX];
-    snprintf(spec_path, sizeof spec_path, "%s/branches/%s/spec", repo, branch);
-    int sz = aether_io_file_size(spec_path);
-    if (sz < 0) {
-        /* No spec file → behave like main: include-all. Applies to
-         * legacy seeded repos where $repo/branches/main/spec doesn't
-         * exist at all. */
-        return 1;
-    }
-    if (sz == 0) return 1;   /* empty spec → include-all */
-
-    const char *buf = aether_io_read_file(spec_path);
-    int ok = aether_spec_matches_any(path, buf);
-    return ok ? 1 : 0;
+    return aether_branch_spec_allows(repo, branch, path);
 }

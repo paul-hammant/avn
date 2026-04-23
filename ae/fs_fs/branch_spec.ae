@@ -1,0 +1,47 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// permissions and limitations under the License.
+
+// Check whether `path` falls within branch `branch`'s include spec.
+//
+// The spec file at $repo/branches/<branch>/spec is a newline-
+// separated glob list. Empty file or missing file both mean "allow
+// everything" (compatible with legacy main-only seeded repos).
+//
+// Returns 1 = allowed, 0 = denied, -1 on bad args. (The old C
+// wrapper also distinguished I/O error but in practice every caller
+// treats -1 as deny; we simplify.)
+
+import std.string
+
+extern aether_io_read_file(path: string) -> string
+extern aether_io_file_size(path: string) -> int
+extern aether_spec_matches_any(path: string, globs_joined: string) -> int
+
+export branch_spec_allows(repo: string, branch: string, path: string) -> int {
+    if string.length(branch) == 0 { return 1 }
+    if string.length(path) == 0 { return 1 }
+
+    spec_path = string.concat(string.concat(string.concat(repo, "/branches/"), branch), "/spec")
+    sz = aether_io_file_size(spec_path)
+    if sz < 0 { return 1 }      // no spec → main-like allow-all
+    if sz == 0 { return 1 }      // empty spec → allow-all
+
+    buf = aether_io_read_file(spec_path)
+    return aether_spec_matches_any(path, buf)
+}
+
+main() {
+    println("ae/fs_fs/branch_spec.ae is a library; not meant to run standalone")
+}
