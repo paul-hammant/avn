@@ -63,41 +63,21 @@ static int write_atomic(const char *path, const char *data, int len)
     return aether_io_write_atomic(path, data, len) == 0 ? 0 : -1;
 }
 
-/* Read the root-dir sha1 for a given revision. Returns malloc'd string
- * or NULL. */
+/* Read the root-dir sha1 for a given revision. Returns malloc'd
+ * string or NULL. rev_blob_field below already goes through
+ * ae/repos/rev_io.ae for the two-hop read; define its extern
+ * first so we can point at it. */
 extern const char *aether_io_read_file(const char *path);
 extern int aether_io_file_size(const char *path);
+extern const char *aether_repos_load_rev_blob_field(const char *repo, int rev,
+                                                    const char *key);
 
 static char *
 load_rev_root_sha1(const char *repo, int rev)
 {
-    char path[PATH_MAX];
-    snprintf(path, sizeof path, "%s/revs/%06d", repo, rev);
-    if (aether_io_file_size(path) < 0) return NULL;
-    const char *src = aether_io_read_file(path);
-    char buf[128];
-    size_t slen = strlen(src);
-    if (slen >= sizeof buf) slen = sizeof buf - 1;
-    memcpy(buf, src, slen);
-    buf[slen] = '\0';
-    /* trim trailing whitespace */
-    size_t n = slen;
-    while (n > 0 && (buf[n-1] == '\n' || buf[n-1] == '\r' || buf[n-1] == ' ')) buf[--n] = '\0';
-
-    char *rev_body = svnae_rep_read_blob(repo, buf);
-    if (!rev_body) return NULL;
-    /* Parse "root: <sha1>" line. */
-    const char *key = "root: ";
-    char *p = strstr(rev_body, key);
-    if (!p) { svnae_rep_free(rev_body); return NULL; }
-    p += strlen(key);
-    const char *eol = strchr(p, '\n');
-    size_t len = eol ? (size_t)(eol - p) : strlen(p);
-    char *out = malloc(len + 1);
-    memcpy(out, p, len);
-    out[len] = '\0';
-    svnae_rep_free(rev_body);
-    return out;
+    const char *v = aether_repos_load_rev_blob_field(repo, rev, "root");
+    if (!v || !*v) return NULL;
+    return strdup(v);
 }
 
 /* Finalise: take the txn's base rev, rebuild the tree, write a new
@@ -118,13 +98,9 @@ extern const char *aether_rev_blob_body(const char *root, const char *branch,
                                         const char *date, const char *log);
 extern const char *aether_paths_index_sort_by_path(const char *body);
 
-/* Thin wrapper preserving the existing "NULL on miss, malloc'd on
- * hit" contract the two callers below rely on. The actual two-hop
- * read (rev-pointer → rep blob → named field) lives in
- * ae/repos/rev_io.ae::repos_load_rev_blob_field. */
-extern const char *aether_repos_load_rev_blob_field(const char *repo, int rev,
-                                                    const char *key);
-
+/* rev_blob_field: thin wrapper around the same Aether helper
+ * load_rev_root_sha1 uses. "NULL on miss, malloc'd on hit"
+ * matches the in-file callers. */
 static char *
 rev_blob_field(const char *repo, int rev, const char *key)
 {
