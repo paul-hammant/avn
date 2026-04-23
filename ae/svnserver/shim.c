@@ -1050,6 +1050,72 @@ int svnserver_txn_add_file_from_req(void *txn, const char *path,
     return svnae_txn_add_file((struct svnae_txn *)txn, path, body, blen);
 }
 
+/* Pull body bytes from req into an Aether-safe view. Returns "" if
+ * the body is absent. For branch-create, the body is JSON (no embedded
+ * NULs) so a NUL-terminated string round-trip is fine. */
+const char *svnserver_request_body(HttpRequest *req) {
+    return req->body ? req->body : "";
+}
+int svnserver_request_body_length(HttpRequest *req) {
+    return req->body ? (int)req->body_length : 0;
+}
+
+/* Parse {base:"...", include:[...]} JSON body and perform the branch
+ * create. Return value encodes the outcome for the Aether caller:
+ *    >= 0 : new_rev on success
+ *    -1   : malformed JSON
+ *    -2   : missing/bad base/include fields
+ *    -3   : include array empty
+ *    -4   : svnae_branch_create rejected (exists, bad base, no globs)
+ * The Aether handler maps each negative value to the appropriate HTTP
+ * error response. Keeps the cJSON + glob-array bits on the C side
+ * since Aether doesn't have array-of-string FFI. */
+int svnserver_branch_create_from_body(const char *repo,
+                                       const char *branch_name,
+                                       const char *body, int body_len,
+                                       const char *user_for_author) {
+    if (!body || body_len <= 0) return -1;
+    cJSON *root = cJSON_ParseWithLength(body, (size_t)body_len);
+    if (!root) return -1;
+
+    cJSON *jbase = cJSON_GetObjectItemCaseSensitive(root, "base");
+    cJSON *jinc  = cJSON_GetObjectItemCaseSensitive(root, "include");
+    if (!cJSON_IsString(jbase) || !cJSON_IsArray(jinc)) {
+        cJSON_Delete(root);
+        return -2;
+    }
+    int n_inc = cJSON_GetArraySize(jinc);
+    if (n_inc <= 0) {
+        cJSON_Delete(root);
+        return -3;
+    }
+
+    const char **globs = calloc((size_t)n_inc, sizeof *globs);
+    char **glob_copies = calloc((size_t)n_inc, sizeof *glob_copies);
+    int gi = 0;
+    for (int i = 0; i < n_inc; i++) {
+        cJSON *e = cJSON_GetArrayItem(jinc, i);
+        if (cJSON_IsString(e) && json_valuestring(e) && *json_valuestring(e)) {
+            glob_copies[gi] = strdup(json_valuestring(e));
+            globs[gi] = glob_copies[gi];
+            gi++;
+        }
+    }
+    char *base_copy = strdup(json_valuestring(jbase));
+    cJSON_Delete(root);
+
+    int new_rev = svnae_branch_create(repo, branch_name, base_copy,
+                                      globs, gi,
+                                      (user_for_author && *user_for_author)
+                                        ? user_for_author : "super");
+
+    for (int i = 0; i < gi; i++) free(glob_copies[i]);
+    free(glob_copies); free(globs); free(base_copy);
+
+    if (new_rev < 0) return -4;
+    return new_rev;
+}
+
 /* PUT /repos/{r}/path/<path> — ported to ae/svnserver/handler_path_put.ae. */
 extern void aether_handler_path_put(void *req, void *res);
 static void
@@ -1523,73 +1589,10 @@ extern int svnae_branch_create(const char *repo, const char *name,
                                const char *const *globs, int n_globs,
                                const char *author);
 
-static void
-handle_repo_branch_create(HttpRequest *req, HttpServerResponse *res,
-                          const char *branch_name)
-{
-    char name[128];
-    const char *tail = parse_repo_and_tail(req->path, name, sizeof name);
-    if (!tail) { respond_error(res, 404, "not found"); return; }
-    const char *repo = find_repo_path(name);
-    if (!repo) { respond_error(res, 404, "no such repo"); return; }
-    if (!branch_name || !*branch_name) {
-        respond_error(res, 400, "missing branch name"); return;
-    }
-
-    /* Super-user check. Branch creation is privileged. */
-    const char *user = NULL;
-    int is_super = auth_context(req, &user);
-    if (!is_super) { respond_error(res, 403, "forbidden"); return; }
-
-    if (!req->body || req->body_length == 0) {
-        respond_error(res, 400, "empty body"); return;
-    }
-    cJSON *root = cJSON_ParseWithLength(req->body, req->body_length);
-    if (!root) { respond_error(res, 400, "malformed JSON"); return; }
-
-    cJSON *jbase = cJSON_GetObjectItemCaseSensitive(root, "base");
-    cJSON *jinc  = cJSON_GetObjectItemCaseSensitive(root, "include");
-    if (!cJSON_IsString(jbase) || !cJSON_IsArray(jinc)) {
-        cJSON_Delete(root);
-        respond_error(res, 400, "need base:string and include:array");
-        return;
-    }
-    int n_inc = cJSON_GetArraySize(jinc);
-    if (n_inc <= 0) {
-        cJSON_Delete(root);
-        respond_error(res, 400, "include must be non-empty");
-        return;
-    }
-
-    /* Collect include globs as a flat C array. */
-    const char **globs = calloc((size_t)n_inc, sizeof *globs);
-    char **glob_copies = calloc((size_t)n_inc, sizeof *glob_copies);
-    int gi = 0;
-    for (int i = 0; i < n_inc; i++) {
-        cJSON *e = cJSON_GetArrayItem(jinc, i);
-        if (cJSON_IsString(e) && json_valuestring(e) && *json_valuestring(e)) {
-            glob_copies[gi] = strdup(json_valuestring(e));
-            globs[gi] = glob_copies[gi];
-            gi++;
-        }
-    }
-    char *base_copy = strdup(json_valuestring(jbase));
-    cJSON_Delete(root);
-
-    int new_rev = svnae_branch_create(repo, branch_name, base_copy,
-                                      globs, gi,
-                                      (user && *user) ? user : "super");
-
-    for (int i = 0; i < gi; i++) free(glob_copies[i]);
-    free(glob_copies); free(globs); free(base_copy);
-
-    if (new_rev < 0) {
-        respond_error(res, 400, "branch create failed (exists, bad base, or no globs?)");
-        return;
-    }
-    http_response_set_status(res, 201);
-    http_response_json(res, aether_rev_branch_response_json(new_rev, branch_name));
-}
+/* POST /branches/<NAME>/create — ported to ae/svnserver/handler_branch_create.ae.
+ * Aether parses the branch name from the URL itself, so the dispatcher
+ * no longer needs to split it out. */
+extern void aether_handler_branch_create(void *req, void *res);
 
 void *svnae_svnserver_handler_info(void) { return (void *)handle_repo_info; }
 void *svnae_svnserver_handler_log (void) { return (void *)handle_repo_log;  }
@@ -1616,20 +1619,13 @@ dispatch(HttpRequest *req, HttpServerResponse *res, void *user_data)
         if (strcmp(tail, "/commit") == 0) { handle_repo_commit(req, res, user_data); return; }
         if (strcmp(tail, "/copy")   == 0) { handle_repo_copy  (req, res, user_data); return; }
 
-        /* /branches/<NAME>/create — Phase 8.2a */
+        /* /branches/<NAME>/create — Phase 8.2a. Parse+auth+commit all
+         * in ae/svnserver/handler_branch_create.ae. Delegate for any
+         * tail starting with "/branches/" and let Aether 404 on
+         * malformed shapes. */
         if (strncmp(tail, "/branches/", 10) == 0) {
-            const char *after = tail + 10;
-            const char *slash = strchr(after, '/');
-            if (slash && strcmp(slash, "/create") == 0) {
-                char br_name[128];
-                size_t nlen = (size_t)(slash - after);
-                if (nlen > 0 && nlen < sizeof br_name) {
-                    memcpy(br_name, after, nlen);
-                    br_name[nlen] = '\0';
-                    handle_repo_branch_create(req, res, br_name);
-                    return;
-                }
-            }
+            aether_handler_branch_create(req, res);
+            return;
         }
 
         respond_error(res, 404, "unknown POST route");
