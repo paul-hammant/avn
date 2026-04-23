@@ -403,33 +403,6 @@ extern int svnae_openssl_b64_decode(const char *src, int src_len,
  *   X-Svnae-Superuser: <token> — bypass ACL + optimistic-concurrency.
  */
 
-static const char *
-header_or_null(HttpRequest *req, const char *name)
-{
-    const char *v = req_header(req, name);
-    return (v && *v) ? v : NULL;
-}
-
-/* Phase 8.2b: pick the caller's branch for a mutation. Clients pass
- * Svn-Branch: <name> when they're working against a non-main branch;
- * absent header defaults to "main" (which on seeded repos with no
- * spec means "allow everything", preserving legacy behaviour). */
-static const char *
-request_branch(HttpRequest *req)
-{
-    const char *b = header_or_null(req, "Svn-Branch");
-    return (b && *b) ? b : "main";
-}
-
-/* Wrapper that respects super-user bypass: super always allowed, non-super
- * is checked against the branch's include spec. Returns 1 = allow. */
-static int
-spec_allows(const char *repo, const char *branch, const char *path, int is_super)
-{
-    if (is_super) return 1;
-    return svnae_branch_spec_allows(repo, branch, path) == 1;
-}
-
 /* Optimistic-concurrency check ported to
  * ae/svnserver/based_on_check.ae. */
 extern int aether_based_on_check(void *req, void *res,
@@ -446,8 +419,13 @@ const char *svnserver_request_header(HttpRequest *req, const char *name) {
     const char *v = req_header(req, name);
     return (v && *v) ? v : "";
 }
+/* Phase 8.2b: pick the caller's branch for a mutation. Clients pass
+ * Svn-Branch: <name> when they're working against a non-main branch;
+ * absent header defaults to "main" (which on seeded repos with no
+ * spec means "allow everything", preserving legacy behaviour). */
 const char *svnserver_request_branch(HttpRequest *req) {
-    return request_branch(req);
+    const char *b = req_header(req, "Svn-Branch");
+    return (b && *b) ? b : "main";
 }
 int svnserver_acl_allows_write(const char *repo, int rev,
                                 const char *user, const char *path) {
@@ -463,7 +441,8 @@ int svnserver_acl_allows_mode(const char *repo, int rev,
 }
 int svnserver_spec_allows(const char *repo, const char *branch,
                            const char *path, int is_super) {
-    return spec_allows(repo, branch, path, is_super);
+    if (is_super) return 1;
+    return svnae_branch_spec_allows(repo, branch, path) == 1;
 }
 int svnserver_based_on_check(HttpRequest *req, HttpServerResponse *res,
                               const char *repo, int head_rev,
