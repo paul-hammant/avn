@@ -264,26 +264,8 @@ walk_remote(const char *base_url, const char *repo, int rev,
  * The WC proplist query is per-path; empty remote set means "server
  * has no props for this path", in which case every local prop on
  * this path gets deleted. */
-/* Ported to ae/wc/update_props.ae. */
-extern void aether_ingest_props(const char *base_url, const char *repo,
-                                int rev, const char *wc_root, const char *rel);
-static void
-ingest_props(const char *base_url, const char *repo, int rev,
-             const char *wc_root, const char *rel)
-{
-    aether_ingest_props(base_url, repo, rev, wc_root, rel);
-}
-
-/* Aether-callable wrapper around ingest_props. The RA-props /
- * WC-proplist handles are opaque C structs that don't round-trip
- * cleanly through Aether FFI, so the apply-pass port calls this
- * wrapper once per path-that-changed. */
-void
-update_ingest_props(const char *base_url, const char *repo, int rev,
-                    const char *wc_root, const char *rel)
-{
-    ingest_props(base_url, repo, rev, wc_root, rel);
-}
+/* update_ingest_props trampoline removed — the Aether apply-pass
+ * (ae/wc/update_apply.ae) binds to aether_ingest_props directly. */
 
 /* Aether-callable disk-file hash. Returns a TLS scratch string with
  * the 65-byte hex (empty on failure). Mirrors the `sha1_of_file`
