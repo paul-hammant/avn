@@ -64,35 +64,12 @@ void svnae_txn_free(struct svnae_txn *t);
 /* Phase 8.2b enforcement. */
 int  svnae_branch_spec_allows(const char *repo, const char *branch, const char *path);
 
-/* Dir-blob line parser ported to Aether (ae/fs_fs/dirblob.ae). */
-extern int         aether_dir_count_entries(const char *body);
-extern int         aether_dir_entry_kind(const char *body, int i);
-extern const char *aether_dir_entry_sha(const char *body, int i);
-extern const char *aether_dir_entry_name(const char *body, int i);
-
-/* All other aether_* externs used throughout. Consolidated here so
- * every call site (including respond_error which lives very early) has
- * the declarations in scope. */
-extern const char *aether_props_blob_to_json(const char *body);
-extern const char *aether_specs_to_json_array(const char *body);
-extern const char *aether_log_entry_json(int rev, const char *author, const char *date, const char *msg);
-extern const char *aether_path_change_entry_json(const char *action, const char *path);
-extern const char *aether_blame_entry_json(int rev, const char *author, const char *text);
-extern const char *aether_list_entry_visible_json(const char *name, int kind_c);
-extern const char *aether_list_entry_hidden_json(const char *sha);
-extern const char *aether_redact_line_visible(int kind_c, const char *sha, const char *name);
-extern const char *aether_redact_line_hidden(const char *sha);
-extern const char *aether_info_prelude_json(int head, const char *name, const char *hash_algo);
-extern const char *aether_rev_info_json(int rev, const char *author, const char *date, const char *msg, const char *root);
+/* aether_* JSON builder + dir-blob + ACL externs previously
+ * declared here for the C-side route handlers. All handlers moved
+ * to Aether modules which declare what they need locally; the only
+ * surviving user here is aether_error_response_json via
+ * svnserver_respond_error below. */
 extern const char *aether_error_response_json(const char *msg);
-extern const char *aether_rev_response_json(int rev);
-extern const char *aether_rev_sha_response_json(int rev, const char *sha);
-extern const char *aether_rev_branch_response_json(int rev, const char *branch);
-extern const char *aether_hashes_prelude_json(const char *algo, const char *primary_hash);
-extern const char *aether_secondary_entry_json(const char *algo, const char *hash);
-extern const char *aether_acl_response_json(const char *rules_body, const char *effective_from);
-extern const char *aether_copy_acl_follow(const char *body, const char *from_path, const char *to_path);
-extern const char *aether_paths_index_sort_by_path(const char *body);
 
 int  svnae_commit_finalise(const char *repo, struct svnae_txn *txn,
                            const char *author, const char *logmsg);
@@ -820,15 +797,9 @@ int svnserver_branch_create_globs(const char *repo, const char *branch_name,
 /* POST /commit — ported to ae/svnserver/handler_commit.ae. */
 extern void aether_handler_commit(void *req, void *res);
 
-/* Subtree RW check ported to ae/svnserver/acl_subtree.ae. */
-extern int aether_acl_user_has_rw_subtree(const char *repo, int rev,
-                                          const char *user, const char *path);
-static int
-acl_user_has_rw_subtree(const char *repo, int rev, const char *user,
-                        const char *path)
-{
-    return aether_acl_user_has_rw_subtree(repo, rev, user, path);
-}
+/* Subtree RW check ported to ae/svnserver/acl_subtree.ae; called
+ * directly from ae/svnserver/copy_parse.ae as
+ * aether_acl_user_has_rw_subtree. */
 
 /* Collect (path, acl-sha) pairs from the base rev's paths-acl blob
  * where the path starts with `from_path` (or equals it). For each
