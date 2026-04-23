@@ -427,42 +427,13 @@ void svnae_rep_free(char *p) { free(p); }
 /* Count .rep files under $repo/reps. Used by the test to prove
  * rep-sharing: the delta between two counts is the number of new
  * unique blobs written by a commit. */
-#include <dirent.h>
-
-static int
-count_reps_recurse(const char *dir)
-{
-    extern void *aether_io_listdir(const char *p);
-    extern int aether_io_listdir_count(void *h);
-    extern const char *aether_io_listdir_name(void *h, int i);
-    extern void aether_io_listdir_free(void *h);
-    extern int aether_io_stat_kind(const char *p);
-
-    void *d = aether_io_listdir(dir);
-    if (!d) return 0;
-    int c = 0;
-    int n_entries = aether_io_listdir_count(d);
-    for (int i = 0; i < n_entries; i++) {
-        const char *name = aether_io_listdir_name(d, i);
-        if (name[0] == '.') continue;
-        char p[PATH_MAX];
-        snprintf(p, sizeof p, "%s/%s", dir, name);
-        int kind = aether_io_stat_kind(p);
-        if (kind == 2) {
-            c += count_reps_recurse(p);
-        } else if (kind == 1) {
-            size_t nl = strlen(name);
-            if (nl > 4 && strcmp(name + nl - 4, ".rep") == 0) c++;
-        }
-    }
-    aether_io_listdir_free(d);
-    return c;
-}
+/* Ported to ae/fs_fs/count_reps.ae. (Export symbol is
+ * fs_count_rep_files to avoid collision with the test_txn.ae
+ * helper of the same name in svnae_count-aware test binaries.) */
+extern int aether_fs_count_rep_files(const char *repo);
 
 int
 svnae_count_rep_files(const char *repo)
 {
-    char reps[PATH_MAX];
-    snprintf(reps, sizeof reps, "%s/reps", repo);
-    return count_reps_recurse(reps);
+    return aether_fs_count_rep_files(repo);
 }
