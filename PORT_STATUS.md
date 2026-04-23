@@ -44,7 +44,27 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
   `int_to_dec` + `digit_char` in favour of `std.string.from_int` now
   that it's available, and ported the WC pristine-store path builder
   to ae/wc/pristine_path.ae (handles the two-level XX/YY/ fanout).
-- **Round 18** (current): **40.33% C, 59.66% Aether.** Cleanup
+- **Round 19** (current): **40.23% C, 59.77% Aether.** Another
+  dead-decl sweep across the remaining shims after the svnserver
+  cleanup in round 18:
+  - svnserver/shim.c: dropped aether_blobfield_get (unused),
+    aether_handler_{branch_create,commit,copy} extern decls —
+    the std.http dispatcher binds those Aether handlers directly
+    now, so the C-side forward decls were leftover scaffolding.
+  - fs_fs/commit_shim.c: dropped aether_blobfield_get and
+    aether_spec_matches_any (both had no remaining C callers; the
+    in-C rev-blob field probe moved to aether_repos_load_rev_blob_field
+    last round, and branch-spec matching goes through
+    aether_branch_spec_allows).
+  - fs_fs/rep_store_shim.c: dropped aether_format_{primary_hash,
+    secondary_count,secondary_hash} — superseded by rev_io.ae's
+    repo_primary_hash / repo_secondary_hashes_joined which do
+    the file-read + parse together.
+  - repos/shim.c: dropped aether_dir_entry_sha (only kind + name
+    are pulled per dir entry; the sha accessor was an unused
+    leftover from the dir-blob parser port).
+
+- **Round 18**: **40.33% C, 59.66% Aether.** Cleanup
   round focused on pulling one more layer of C-side trampolines
   up and pruning stale forward decls:
   - svnae_repo_secondary_hashes parse → ae/repos/rev_io.ae

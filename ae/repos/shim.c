@@ -50,7 +50,6 @@ char *svnae_rep_read_blob(const char *repo, const char *sha1_hex);
 /* Dir-blob line parser ported to Aether (ae/fs_fs/dirblob.ae). */
 extern int         aether_dir_count_entries(const char *body);
 extern int         aether_dir_entry_kind(const char *body, int i);
-extern const char *aether_dir_entry_sha(const char *body, int i);
 extern const char *aether_dir_entry_name(const char *body, int i);
 void  svnae_rep_free(char *p);
 

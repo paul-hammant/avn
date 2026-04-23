@@ -385,8 +385,6 @@ const char *svnserver_build_secondary_pairs(const char *repo, const char *node_s
  * three cJSON-heavy body-action wrappers for branch_create / copy /
  * commit. Everything else in svnserver/ is Aether-side. */
 
-extern const char *aether_blobfield_get(const char *body, const char *key);
-
 /* Ported to ae/svnserver/rev_load.ae. The Aether version returns
  * "" on miss instead of NULL; adapt at the boundary so existing
  * C callers keep their `if (!acl_root) ...` idiom. */
@@ -733,8 +731,8 @@ int svnserver_branch_create_globs(const char *repo, const char *branch_name,
 /* svnserver_commit_from_body C trampoline removed — the Aether
  * handler calls aether_commit_from_body directly. */
 
-/* POST /commit — ported to ae/svnserver/handler_commit.ae. */
-extern void aether_handler_commit(void *req, void *res);
+/* POST /commit — ported to ae/svnserver/handler_commit.ae; dispatcher
+ * binds the Aether handler directly. */
 
 /* Subtree RW check ported to ae/svnserver/acl_subtree.ae; called
  * directly from ae/svnserver/copy_parse.ae as
@@ -796,8 +794,8 @@ auto_follow_copy_acl(const char *repo, int base_rev,
 /* svnserver_copy_from_body C trampoline removed — the Aether
  * handler calls aether_copy_from_body directly. */
 
-/* POST /copy — ported to ae/svnserver/handler_copy.ae. */
-extern void aether_handler_copy(void *req, void *res);
+/* POST /copy — ported to ae/svnserver/handler_copy.ae; dispatcher
+ * binds the Aether handler directly. */
 
 /* Phase 8.2a: POST /repos/{r}/branches/<NAME>/create
  *
@@ -814,8 +812,8 @@ extern int svnae_branch_create(const char *repo, const char *name,
 
 /* POST /branches/<NAME>/create — ported to ae/svnserver/handler_branch_create.ae.
  * Aether parses the branch name from the URL itself, so the dispatcher
- * no longer needs to split it out. */
-extern void aether_handler_branch_create(void *req, void *res);
+ * no longer needs to split it out. The dispatcher binds the Aether
+ * handler directly. */
 
 /* svnae_svnserver_handler_{info,log,rev} used to expose C-side
  * function pointers to an earlier Aether orchestration pass. Both

@@ -90,8 +90,6 @@ load_rev_root_sha1(const char *repo, int rev)
  * that pass "" always get the previous rev's props-sha1 carried
  * forward. */
 
-/* Field extraction ported to Aether (ae/repos/blobfield.ae). */
-extern const char *aether_blobfield_get(const char *body, const char *key);
 extern const char *aether_rev_blob_body(const char *root, const char *branch,
                                         const char *props, const char *acl,
                                         int prev, const char *author,
@@ -644,9 +642,9 @@ svnae_branch_create(const char *repo, const char *name, const char *base,
 }
 
 /* The glob-parsing + matching is ported to Aether in ae/fs_fs/spec.ae.
- * The C side keeps only the file I/O (std.fs is unavailable under
- * --emit=lib) and hands the spec-file body to the Aether entry point. */
-extern int32_t aether_spec_matches_any(const char *path, const char *specs_joined);
+ * The branch-spec logic (including empty-spec = allow) is ported to
+ * ae/fs_fs/branch_spec.ae; aether_branch_spec_allows is called
+ * directly where needed. */
 
 /* Phase 8.2b: is `path` allowed by `branch`'s include spec?
  *   - Empty or missing spec ⇒ allow (main's "full tree" case).

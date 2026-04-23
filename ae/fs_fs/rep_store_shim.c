@@ -77,12 +77,12 @@ write_file_with_header_atomic(const char *path, char header, const char *data, i
 
 static int mkdir_p(const char *path) { return aether_io_mkdir_p(path) == 0 ? 0 : -1; }
 
-/* Format-line parsing ported to Aether (ae/fs_fs/format_line.ae). */
-extern const char *aether_format_primary_hash(const char *line);
-extern int         aether_format_secondary_count(const char *line);
-extern const char *aether_format_secondary_hash(const char *line, int i);
-
-/* Ported to ae/repos/rev_io.ae::repo_primary_hash. Still returns a
+/* Format-line parsing initially ported to ae/fs_fs/format_line.ae,
+ * then superseded by ae/repos/rev_io.ae's repo_primary_hash /
+ * repo_secondary_hashes_joined which do the full file read + parse
+ * in one call. No C caller of the line-level parsers remains.
+ *
+ * Ported to ae/repos/rev_io.ae::repo_primary_hash. Still returns a
  * TLS-cached string so call sites that hold the pointer across a
  * subsequent call don't trample it. */
 extern const char *aether_repo_primary_hash(const char *repo);
