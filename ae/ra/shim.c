@@ -73,20 +73,8 @@ void svnae_ra_set_superuser_token(const char *token) {
     g_client_super_token = token && *token ? strdup(token) : NULL;
 }
 
-/* Environment-variable accessor for the Aether CLI. Returns a static
- * thread-local NUL-terminated string, or "" on miss. */
-const char *svnae_env_get(const char *name) {
-    static __thread char buf[512];
-    const char *v = getenv(name);
-    if (!v) { buf[0] = '\0'; return buf; }
-    size_t n = strlen(v);
-    if (n >= sizeof buf) n = sizeof buf - 1;
-    memcpy(buf, v, n);
-    buf[n] = '\0';
-    return buf;
-}
-
-/* svnae_http_get_body lives below, after http_get is defined. */
+/* Environment-variable accessor moved to std.os::getenv;
+ * svnae_http_get_body lives below, after http_get is defined. */
 
 /* Build a curl header list containing whatever auth we have. Caller
  * frees with curl_slist_free_all. Always returns non-NULL (at least
