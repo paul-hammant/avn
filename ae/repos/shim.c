@@ -97,31 +97,20 @@ rev_pointer_path(const char *repo, int rev, char *out, size_t out_sz)
     return snprintf(out, out_sz, "%s/revs/%06d", repo, rev);
 }
 
-static int
-head_rev(const char *repo)
-{
-    char path[PATH_MAX];
-    snprintf(path, sizeof path, "%s/head", repo);
-    char *body = read_small(path);
-    if (!body) return -1;
-    trim_trailing_newline(body);
-    int v = -1;
-    parse_int(body, &v);
-    free(body);
-    return v;
-}
+/* head_rev + rev_blob_sha1 ported to ae/repos/rev_io.ae
+ * (repos_head_rev / repos_rev_blob_sha). Wrappers preserve the
+ * existing int / char* conventions. */
+extern int         aether_repos_head_rev(const char *repo);
+extern const char *aether_repos_rev_blob_sha(const char *repo, int rev);
 
-/* Return the revision blob's SHA-1 for rev `n`, as a malloc'd string.
- * NULL on failure. */
+static int
+head_rev(const char *repo) { return aether_repos_head_rev(repo); }
+
 static char *
-rev_blob_sha1(const char *repo, int rev)
-{
-    char path[PATH_MAX];
-    rev_pointer_path(repo, rev, path, sizeof path);
-    char *body = read_small(path);
-    if (!body) return NULL;
-    trim_trailing_newline(body);
-    return body;
+rev_blob_sha1(const char *repo, int rev) {
+    const char *sha = aether_repos_rev_blob_sha(repo, rev);
+    if (!sha || !*sha) return NULL;
+    return strdup(sha);
 }
 
 /* "key: value" extractor — ported to Aether (ae/repos/blobfield.ae).

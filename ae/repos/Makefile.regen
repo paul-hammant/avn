@@ -2,7 +2,7 @@
 
 AETHERC ?= $(HOME)/scm/aether/build/aetherc
 
-GENERATED := blobfield_generated.c resolve_generated.c paths_changed_generated.c
+GENERATED := blobfield_generated.c resolve_generated.c paths_changed_generated.c rev_io_generated.c
 
 all: $(GENERATED)
 
@@ -13,6 +13,9 @@ resolve_generated.c: resolve.ae
 	$(AETHERC) --emit=lib $< $@
 
 paths_changed_generated.c: paths_changed.ae
+	$(AETHERC) --emit=lib $< $@
+
+rev_io_generated.c: rev_io.ae
 	$(AETHERC) --emit=lib $< $@
 
 .PHONY: all

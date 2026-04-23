@@ -1,0 +1,102 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// permissions and limitations under the License.
+
+// Small rev-pointer utilities used by both the repos shim and the
+// svnserver shim. Consolidates:
+//   - $repo/head  → head revision number
+//   - $repo/revs/NNNNNN  → rev blob sha (with trailing ws trimmed)
+//
+// Mirrors the already-existing ae/svnserver/rev_load.ae; a follow-up
+// commit may collapse the two.
+
+import std.string
+
+extern aether_io_read_file(path: string) -> string
+extern aether_io_file_size(path: string) -> int
+
+repos_pad6(n: int) -> string {
+    s = string.from_int(n)
+    slen = string.length(s)
+    if slen >= 6 { return s }
+    return string.concat(string.substring("000000", 0, 6 - slen), s)
+}
+
+// Local name avoids colliding with svnserver/rev_load.ae's rtrim_ws
+// (both get emitted as `aether_rtrim_ws` with no module prefix).
+repos_rtrim_ws(s: string) -> string {
+    n = string.length(s)
+    keep_going = 1
+    while keep_going == 1 {
+        if n == 0 { keep_going = 0 }
+        if keep_going == 1 {
+            c = string.char_at(s, n - 1)
+            if c == 10 { n = n - 1 }
+            if c != 10 {
+                if c == 13 { n = n - 1 }
+                if c != 13 { keep_going = 0 }
+            }
+        }
+    }
+    return string.substring(s, 0, n)
+}
+
+// $repo/head → N, or -1 on missing / unparsable.
+// Parse is inlined: the tuple-returning helper form tripped a
+// codegen issue in Aether 0.84 when called from an exported
+// function.
+export repos_head_rev(repo: string) -> int {
+    path = string.concat(repo, "/head")
+    if aether_io_file_size(path) < 0 { return -1 }
+    src = aether_io_read_file(path)
+    s = repos_rtrim_ws(src)
+    n = string.length(s)
+    i = 0
+    // Skip leading whitespace.
+    while i < n {
+        c = string.char_at(s, i)
+        if c == 32 { i = i + 1 }
+        if c != 32 {
+            if c == 9 { i = i + 1 }
+            if c != 9 { break }
+        }
+    }
+    start = i
+    while i < n {
+        c = string.char_at(s, i)
+        if c < 48 { break }
+        if c > 57 { break }
+        i = i + 1
+    }
+    if i == start { return -1 }
+    v = 0
+    k = start
+    while k < i {
+        v = v * 10 + (string.char_at(s, k) - 48)
+        k = k + 1
+    }
+    return v
+}
+
+// $repo/revs/NNNNNN → rev blob sha (hex string), or "" on miss.
+export repos_rev_blob_sha(repo: string, rev: int) -> string {
+    path = string.concat(string.concat(repo, "/revs/"), repos_pad6(rev))
+    if aether_io_file_size(path) < 0 { return "" }
+    src = aether_io_read_file(path)
+    return string.copy(repos_rtrim_ws(src))
+}
+
+main() {
+    println("ae/repos/rev_io.ae is a library; not meant to run standalone")
+}
