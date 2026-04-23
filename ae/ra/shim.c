@@ -25,75 +25,21 @@
  *
  * We do the HTTP work ourselves via libcurl rather than going through
  * std.http, because Aether can't model the function-pointer chains
- * cleanly and std.http's `get` wrapper is Aether-only. JSON is handled
- * by Aether's std.json — the cJSON_* spellings below are a thin compat
- * layer (see the macros that immediately follow the #include).
+ * cleanly and std.http's `get` wrapper is Aether-only. JSON parse+build
+ * now lives entirely on the Aether side (ae/ra/parse.ae,
+ * ae/ra/commit_build.ae); nothing in this file touches std.json
+ * directly.
  *
  * Dependency: libcurl. Installed via `apt install libcurl4-openssl-dev`.
  */
 
-#include "aether_json.h"
+#include "aether_json.h"    /* JsonValue / json_create_number used by the
+                               svnae_ra_json_int helper the commit-build
+                               Aether module calls back into. */
 #include <curl/curl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-/* ---- cJSON → std.json compatibility layer -----------------------------
- *
- * This file started on cJSON (via -lcjson). Aether 0.79.0 ships
- * std.json with object-key iteration in addition to the previous
- * parser/builder surface, so every cJSON call-site maps to a std.json
- * equivalent. The macros + inlines below let the existing code read
- * naturally while running on the std.json backend.
- *
- * Differences worth calling out:
- *   - cJSON exposes struct fields (valueint, valuestring). std.json
- *     uses accessor functions. We introduce local inline helpers to
- *     keep the old expressions readable.
- *   - cJSON_ArrayForEach iterates via ->next. std.json is index-based.
- *     Our macro expands to a for-loop over json_array_size.
- *   - Object iteration (cJSON's p->child / p->next) maps to a macro
- *     that calls json_object_size_raw + json_object_{key,value}_at.
- *   - Builders: cJSON_Create* / cJSON_Add*ToObject map to json_create_*
- *     + json_object_set_raw.
- */
-typedef JsonValue cJSON;
-#define cJSON_ParseWithLength(b, n)            json_parse_raw_n((b), (n))
-#define cJSON_Delete(v)                        json_free(v)
-#define cJSON_GetObjectItemCaseSensitive(o, k) json_object_get_raw((o), (k))
-#define cJSON_IsNumber(v)                      ((v) && json_type(v) == JSON_NUMBER)
-#define cJSON_IsString(v)                      ((v) && json_type(v) == JSON_STRING)
-#define cJSON_IsArray(v)                       ((v) && json_type(v) == JSON_ARRAY)
-#define cJSON_IsObject(v)                      ((v) && json_type(v) == JSON_OBJECT)
-#define cJSON_GetArraySize(a)                  json_array_size(a)
-#define cJSON_GetArrayItem(a, i)               json_array_get_raw((a), (i))
-
-static inline int         json_valueint(JsonValue *v)    { return json_get_int(v); }
-static inline const char *json_valuestring(JsonValue *v) { return json_get_string_raw(v); }
-
-/* Index-based stand-in for cJSON_ArrayForEach(entry, arr). */
-#define cJSON_ArrayForEach(entry, arr)                                 \
-    for (int _ra_idx = 0,                                              \
-             _ra_len = json_array_size(arr);                           \
-         _ra_idx < _ra_len &&                                          \
-         ((entry) = json_array_get_raw((arr), _ra_idx), 1);            \
-         _ra_idx++)
-
-/* Object-key iteration (new in Aether 0.79.0). `key_var` is const char*,
- * `val_var` is JsonValue*. */
-#define cJSON_ObjectForEach(key_var, val_var, obj)                     \
-    for (int _ro_idx = 0,                                              \
-             _ro_len = json_object_size_raw(obj);                      \
-         _ro_idx < _ro_len &&                                          \
-         ((key_var) = json_object_key_at((obj), _ro_idx),              \
-          (val_var) = json_object_value_at((obj), _ro_idx), 1);        \
-         _ro_idx++)
-
-/* --- builders used by the commit-body writer ----------------------
- * The cJSON_Create* / cJSON_Add* builder inlines previously lived
- * here for svnae_ra_commit_finish and friends. All builder sites
- * ported to Aether (ae/ra/commit_build.ae via std.json); the C-side
- * inlines are unused and removed. */
 
 /* ---- HTTP plumbing ---------------------------------------------------- */
 
