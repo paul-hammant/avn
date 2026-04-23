@@ -1,0 +1,87 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// permissions and limitations under the License.
+
+// Recursive remote-tree walker for `svn update` / `svn switch`.
+// Calls the RA list/cat accessors and populates a C-side
+// remote_tree via the svnae_rtree_add_{dir,file} wrappers.
+//
+// Previously a 28-line recursive C function in ae/wc/update_shim.c
+// — lifts cleanly once the RA accessors + path-join helper are
+// callable from Aether (all already are).
+
+import std.string
+
+extern svnae_ra_list(base_url: string, repo_name: string, rev: int, path: string) -> ptr
+extern svnae_ra_list_count(L: ptr) -> int
+extern svnae_ra_list_name(L: ptr, i: int) -> string
+extern svnae_ra_list_kind(L: ptr, i: int) -> string
+extern svnae_ra_list_free(L: ptr)
+extern svnae_ra_cat(base_url: string, repo_name: string, rev: int, path: string) -> string
+extern svnae_ra_free(p: string)
+
+extern aether_path_join_rel(prefix: string, name: string) -> string
+
+extern svnae_rtree_add_dir(rt: ptr, path: string)
+extern svnae_rtree_add_file(rt: ptr, path: string, data: string, data_len: int)
+
+// Returns 0 on success, -1 on any list/cat failure.
+export update_walk_remote(base_url: string, repo: string, rev: int,
+                           prefix: string, rt: ptr) -> int {
+    return update_walk_remote_impl(base_url, repo, rev, prefix, rt)
+}
+
+update_walk_remote_impl(base_url: string, repo: string, rev: int,
+                         prefix: string, rt: ptr) -> int {
+    L = svnae_ra_list(base_url, repo, rev, prefix)
+    if L == null { return -1 }
+
+    n = svnae_ra_list_count(L)
+    result = 0
+    i = 0
+    while i < n {
+        if result == 0 {
+            name = svnae_ra_list_name(L, i)
+            name = string.copy(name)
+            kind = svnae_ra_list_kind(L, i)
+            kind = string.copy(kind)
+            rel = aether_path_join_rel(prefix, name)
+            rel = string.copy(rel)
+
+            if string.equals(kind, "dir") == 1 {
+                svnae_rtree_add_dir(rt, rel)
+                if update_walk_remote_impl(base_url, repo, rev, rel, rt) != 0 {
+                    result = -1
+                }
+            }
+            if string.equals(kind, "dir") == 0 {
+                data = svnae_ra_cat(base_url, repo, rev, rel)
+                if string.length(data) == 0 {
+                    result = -1
+                }
+                if result == 0 {
+                    svnae_rtree_add_file(rt, rel, data, string.length(data))
+                    svnae_ra_free(data)
+                }
+            }
+        }
+        i = i + 1
+    }
+    svnae_ra_list_free(L)
+    return result
+}
+
+main() {
+    println("ae/wc/update_walk.ae is a library; not meant to run standalone")
+}

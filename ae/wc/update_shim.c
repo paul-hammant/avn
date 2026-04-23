@@ -187,6 +187,16 @@ rtree_add(struct remote_tree *rt,
     }
 }
 
+/* Aether-callable wrappers used by the ported walk_remote in
+ * ae/wc/update_walk.ae. rtree is an opaque ptr on the Aether side. */
+void svnae_rtree_add_dir(void *rt, const char *path) {
+    rtree_add((struct remote_tree *)rt, path, 1, NULL, 0);
+}
+void svnae_rtree_add_file(void *rt, const char *path,
+                           const char *data, int data_len) {
+    rtree_add((struct remote_tree *)rt, path, 0, data, data_len);
+}
+
 static void
 rtree_free(struct remote_tree *rt)
 {
@@ -241,36 +251,17 @@ int rtree_find_by_path(const struct remote_tree *rt, const char *path) {
     return -1;
 }
 
-/* Recursive walk of the remote tree. Prefix is relative to repo root;
- * "" for root. */
+/* Recursive remote-tree walk ported to ae/wc/update_walk.ae. The
+ * Aether side calls RA accessors + svnae_rtree_add_{dir,file}
+ * wrappers on this C side. */
+extern int aether_update_walk_remote(const char *base_url, const char *repo,
+                                     int rev, const char *prefix, void *rt);
+
 static int
 walk_remote(const char *base_url, const char *repo, int rev,
             const char *prefix, struct remote_tree *rt)
 {
-    struct svnae_ra_list *L = svnae_ra_list(base_url, repo, rev, prefix);
-    if (!L) return -1;
-    extern const char *aether_path_join_rel(const char *prefix, const char *name);
-    int n = svnae_ra_list_count(L);
-    for (int i = 0; i < n; i++) {
-        const char *name = svnae_ra_list_name(L, i);
-        const char *kind = svnae_ra_list_kind(L, i);
-        const char *rel = aether_path_join_rel(prefix, name);
-
-        if (strcmp(kind, "dir") == 0) {
-            rtree_add(rt, rel, 1, NULL, 0);
-            if (walk_remote(base_url, repo, rev, rel, rt) != 0) {
-                svnae_ra_list_free(L); return -1;
-            }
-        } else {
-            char *data = svnae_ra_cat(base_url, repo, rev, rel);
-            if (!data) { svnae_ra_list_free(L); return -1; }
-            int len = (int)strlen(data);
-            rtree_add(rt, rel, 0, data, len);
-            svnae_ra_free(data);
-        }
-    }
-    svnae_ra_list_free(L);
-    return 0;
+    return aether_update_walk_remote(base_url, repo, rev, prefix, rt);
 }
 
 /* Pull props for `rel` from the server at `rev`, overwriting any that
