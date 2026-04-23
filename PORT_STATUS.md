@@ -44,12 +44,34 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
   `int_to_dec` + `digit_char` in favour of `std.string.from_int` now
   that it's available, and ported the WC pristine-store path builder
   to ae/wc/pristine_path.ae (handles the two-level XX/YY/ fanout).
-- **Round 11** (current): **Aether widens the parity lead —
-  46.82% C, 53.17% Aether.** Started the session at 68% C. Aether
-  0.81.0 made std.http request/response accessors tolerate
-  externally-constructed `HttpRequest*`/`HttpServerResponse*`
-  pointers, so C-dispatched handlers can flow all the way through
-  Aether. All svnserver read+mutate handlers are now Aether-owned:
+- **Round 12**: **46.20% C, 53.79% Aether.** Aether 0.83/0.84
+  landed three round-3 wish items: `std.intarr` (0.83),
+  `string.strip_prefix` + `string.copy` (0.84), and confirmed
+  `export extern` already works at module-import time. Used the
+  new stdlib helpers to retire ~60 LOC of hand-written URL
+  slicing across 8 handlers, and gave the TLS-snapshot idiom
+  (44 call sites, 12 files) a discoverable name.
+
+  Four structural internals then ported on top of the cleanup:
+  - `acl_user_has_rw_subtree` (28 LOC C → ae/svnserver/acl_subtree.ae):
+    the /copy handler's "you can only copy what you fully own at
+    RO + RW" recursive walker.
+  - `load_rev_blob_field` (22 LOC C → ae/svnserver/rev_load.ae):
+    the two-hop "read $repo/revs/NNNNNN → read rep blob → pull
+    field" utility used by every rev-scoped ACL/props/root read.
+  - `auto_follow_copy_acl` (21 LOC C → added to
+    ae/svnserver/copy_acl.ae): end-to-end ACL auto-follow for
+    svn cp — now composes copy_acl_follow alongside its users.
+  - `acl_allows_mode` (35 LOC C → ae/svnserver/acl_mode.ae): the
+    ancestry-walking mode check. Retires the last hand-written
+    newline-string tokeniser in svnserver/shim.c.
+
+- **Round 11**: **46.82% C, 53.17% Aether.** Started the session
+  at 68% C. Aether 0.81.0 made std.http request/response
+  accessors tolerate externally-constructed `HttpRequest*` /
+  `HttpServerResponse*` pointers, so C-dispatched handlers can
+  flow all the way through Aether. All svnserver read+mutate
+  handlers Aether-owned:
 
   - Read: `handler_info`, `handler_log`, `handler_rev_info`,
     `handler_rev_cat`, `handler_rev_list`, `handler_rev_paths`,
