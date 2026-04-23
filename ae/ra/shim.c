@@ -575,6 +575,7 @@ svnae_ra_paths_free(struct svnae_ra_paths *P)
 struct blame_line_ra { int rev; char *author; char *text; };
 struct svnae_ra_blame { struct blame_line_ra *items; int n; };
 
+extern const char *aether_ra_parse_blame(const char *body);
 struct svnae_ra_blame *
 svnae_ra_blame(const char *base_url, const char *repo_name,
               int rev, const char *path)
@@ -584,28 +585,45 @@ svnae_ra_blame(const char *base_url, const char *repo_name,
     if (http_get(url, &body, &len, &status) != 0) return NULL;
     if (status != 200) { free(body); return NULL; }
 
-    cJSON *root = cJSON_ParseWithLength(body, len);
+    /* JSON parse ported to ae/ra/parse.ae::ra_parse_blame.
+     * Returns "N\x02<rev>\x01<author>\x01<text>\x02..." */
+    const char *packed = aether_ra_parse_blame(body);
     free(body);
-    if (!root) return NULL;
-    cJSON *jlines = cJSON_GetObjectItemCaseSensitive(root, "lines");
-    if (!cJSON_IsArray(jlines)) { cJSON_Delete(root); return NULL; }
+    if (!packed || !*packed) return NULL;
 
-    int n = cJSON_GetArraySize(jlines);
+    const char *p = packed;
+    const char *sep = strchr(p, 2);
+    if (!sep) return NULL;
+    char nbuf[32];
+    size_t nlen = (size_t)(sep - p);
+    if (nlen >= sizeof nbuf) nlen = sizeof nbuf - 1;
+    memcpy(nbuf, p, nlen); nbuf[nlen] = '\0';
+    int n = (int)strtol(nbuf, NULL, 10);
+    p = sep + 1;
+
     struct svnae_ra_blame *B = calloc(1, sizeof *B);
     B->n = n;
     B->items = calloc((size_t)(n > 0 ? n : 1), sizeof *B->items);
-    int i = 0;
-    cJSON *e;
-    cJSON_ArrayForEach(e, jlines) {
-        cJSON *jr = cJSON_GetObjectItemCaseSensitive(e, "rev");
-        cJSON *ja = cJSON_GetObjectItemCaseSensitive(e, "author");
-        cJSON *jt = cJSON_GetObjectItemCaseSensitive(e, "text");
-        B->items[i].rev    = cJSON_IsNumber(jr) ? json_valueint(jr) : -1;
-        B->items[i].author = cJSON_IsString(ja) ? strdup(json_valuestring(ja)) : strdup("");
-        B->items[i].text   = cJSON_IsString(jt) ? strdup(json_valuestring(jt)) : strdup("");
-        i++;
+    for (int i = 0; i < n; i++) {
+        const char *entry_end = strchr(p, 2);
+        if (!entry_end) entry_end = p + strlen(p);
+        const char *f1 = NULL, *f2 = NULL;
+        for (const char *q = p; q < entry_end; q++) {
+            if (*q == 1) {
+                if      (!f1) f1 = q + 1;
+                else if (!f2) f2 = q + 1;
+            }
+        }
+        if (!f1 || !f2) continue;
+        char rbuf[32];
+        size_t rlen = (size_t)(f1 - 1 - p);
+        if (rlen >= sizeof rbuf) rlen = sizeof rbuf - 1;
+        memcpy(rbuf, p, rlen); rbuf[rlen] = '\0';
+        B->items[i].rev    = (int)strtol(rbuf, NULL, 10);
+        B->items[i].author = strndup(f1, (size_t)(f2 - 1 - f1));
+        B->items[i].text   = strndup(f2, (size_t)(entry_end - f2));
+        p = *entry_end == 2 ? entry_end + 1 : entry_end;
     }
-    cJSON_Delete(root);
     return B;
 }
 
@@ -871,6 +889,7 @@ svnae_ra_branch_create(const char *base_url, const char *repo_name,
 struct list_entry { char *name; char kind; };
 struct svnae_ra_list { struct list_entry *items; int n; };
 
+extern const char *aether_ra_parse_list(const char *body);
 struct svnae_ra_list *
 svnae_ra_list(const char *base_url, const char *repo_name, int rev, const char *path)
 {
@@ -880,26 +899,35 @@ svnae_ra_list(const char *base_url, const char *repo_name, int rev, const char *
     if (http_get(url, &body, &len, &status) != 0) return NULL;
     if (status != 200) { free(body); return NULL; }
 
-    cJSON *root = cJSON_ParseWithLength(body, len);
+    /* JSON parse ported to ae/ra/parse.ae::ra_parse_list.
+     * Returns "N\x02<name>\x01<kind-char>\x02..." where kind-char
+     * is 'd' for dir, 'f' otherwise. */
+    const char *packed = aether_ra_parse_list(body);
     free(body);
-    if (!root) return NULL;
-    cJSON *jentries = cJSON_GetObjectItemCaseSensitive(root, "entries");
-    if (!cJSON_IsArray(jentries)) { cJSON_Delete(root); return NULL; }
+    if (!packed || !*packed) return NULL;
 
-    int n = cJSON_GetArraySize(jentries);
+    const char *p = packed;
+    const char *sep = strchr(p, 2);
+    if (!sep) return NULL;
+    char nbuf[32];
+    size_t nlen = (size_t)(sep - p);
+    if (nlen >= sizeof nbuf) nlen = sizeof nbuf - 1;
+    memcpy(nbuf, p, nlen); nbuf[nlen] = '\0';
+    int n = (int)strtol(nbuf, NULL, 10);
+    p = sep + 1;
+
     struct svnae_ra_list *L = calloc(1, sizeof *L);
     L->n = n;
-    L->items = calloc((size_t)n, sizeof *L->items);
-    cJSON *e;
-    int i = 0;
-    cJSON_ArrayForEach(e, jentries) {
-        cJSON *jn = cJSON_GetObjectItemCaseSensitive(e, "name");
-        cJSON *jk = cJSON_GetObjectItemCaseSensitive(e, "kind");
-        L->items[i].name = cJSON_IsString(jn) ? strdup(json_valuestring(jn)) : strdup("");
-        L->items[i].kind = (cJSON_IsString(jk) && strcmp(json_valuestring(jk), "dir") == 0) ? 'd' : 'f';
-        i++;
+    L->items = calloc((size_t)(n > 0 ? n : 1), sizeof *L->items);
+    for (int i = 0; i < n; i++) {
+        const char *entry_end = strchr(p, 2);
+        if (!entry_end) entry_end = p + strlen(p);
+        const char *mid = memchr(p, 1, (size_t)(entry_end - p));
+        if (!mid) continue;
+        L->items[i].name = strndup(p, (size_t)(mid - p));
+        L->items[i].kind = (mid + 1 < entry_end) ? *(mid + 1) : 'f';
+        p = *entry_end == 2 ? entry_end + 1 : entry_end;
     }
-    cJSON_Delete(root);
     return L;
 }
 

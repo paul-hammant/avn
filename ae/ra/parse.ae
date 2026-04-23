@@ -231,6 +231,88 @@ export ra_parse_props(body: string) -> string {
     return string.concat(header, out)
 }
 
+// Parse a blame JSON {"lines":[{rev,author,text}, ...]} into
+// "N\x02<rev>\x01<author>\x01<text>\x02..."
+export ra_parse_blame(body: string) -> string {
+    if string.length(body) == 0 { return "" }
+    root, err = json.parse(body)
+    if string.length(err) > 0 { return "" }
+
+    jlines, lerr = json.object_get(root, "lines")
+    if string.length(lerr) > 0 { json.free(root); return "" }
+    if jlines == null { json.free(root); return "" }
+
+    n = json.array_size(jlines)
+    out = ""
+    i = 0
+    while i < n {
+        entry, _ = json.array_get(jlines, i)
+        rev = -1
+        jr, rerr = json.object_get(entry, "rev")
+        if string.length(rerr) == 0 { rev = json.get_int(jr) }
+
+        author = get_string_field(entry, "author")
+        text   = get_string_field(entry, "text")
+
+        packed = string.concat(string.from_int(rev), "\x01")
+        packed = string.concat(packed, author)
+        packed = string.concat(packed, "\x01")
+        packed = string.concat(packed, text)
+
+        if i == 0 { out = packed }
+        if i > 0 {
+            out = string.concat(out, "\x02")
+            out = string.concat(out, packed)
+        }
+        i = i + 1
+    }
+
+    header = string.concat(string.from_int(n), "\x02")
+    json.free(root)
+    if n == 0 { return header }
+    return string.concat(header, out)
+}
+
+// Parse a list JSON {"entries":[{name,kind}, ...]} into
+// "N\x02<name>\x01<kind-char>\x02..."
+// kind-char is 'd' for "dir", 'f' otherwise (the existing C
+// svnae_ra_list accessors only distinguish dir vs file).
+export ra_parse_list(body: string) -> string {
+    if string.length(body) == 0 { return "" }
+    root, err = json.parse(body)
+    if string.length(err) > 0 { return "" }
+
+    jentries, jerr = json.object_get(root, "entries")
+    if string.length(jerr) > 0 { json.free(root); return "" }
+    if jentries == null { json.free(root); return "" }
+
+    n = json.array_size(jentries)
+    out = ""
+    i = 0
+    while i < n {
+        entry, _ = json.array_get(jentries, i)
+        name = get_string_field(entry, "name")
+        kind = get_string_field(entry, "kind")
+        kind_c = "f"
+        if string.equals(kind, "dir") == 1 { kind_c = "d" }
+
+        packed = string.concat(name, "\x01")
+        packed = string.concat(packed, kind_c)
+
+        if i == 0 { out = packed }
+        if i > 0 {
+            out = string.concat(out, "\x02")
+            out = string.concat(out, packed)
+        }
+        i = i + 1
+    }
+
+    header = string.concat(string.from_int(n), "\x02")
+    json.free(root)
+    if n == 0 { return header }
+    return string.concat(header, out)
+}
+
 main() {
     println("ae/ra/parse.ae is a library; not meant to run standalone")
 }
