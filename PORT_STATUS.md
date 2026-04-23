@@ -44,6 +44,33 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
   `int_to_dec` + `digit_char` in favour of `std.string.from_int` now
   that it's available, and ported the WC pristine-store path builder
   to ae/wc/pristine_path.ae (handles the two-level XX/YY/ fanout).
+- **Round 13** (current): **44.44% C, 55.55% Aether.** With
+  std.json reachable from Aether, the three remaining
+  cJSON-heavy server-side mutation handlers all move up:
+  - `svnserver_branch_create_from_body` (45 LOC C → 80 LOC
+    ae/svnserver/branch_create_parse.ae). Includes the include-
+    globs array, passed to C as a newline-joined string.
+  - `svnserver_copy_from_body` (60 LOC C → 130 LOC
+    ae/svnserver/copy_parse.ae). Whole-body parse + auth + ACL +
+    spec + resolve + auto-follow + commit all Aether-side.
+  - `svnserver_commit_from_body` (220 LOC C → 280 LOC
+    ae/svnserver/commit_parse.ae). Biggest JSON-walker in the
+    port: multi-edit txn + per-path props map + per-path ACL
+    map. Four new "joined" C wrappers split newline-joined
+    strings back into char** arrays for the blob builders that
+    don't have an Aether-friendly signature.
+  - RA client (ae/ra/shim.c) also got parse-side ports for
+    head_rev, hash_algo, info_rev, log, paths_changed, props,
+    blame, and list. C still owns curl + auth headers + struct
+    allocation; std.json does the JSON walk.
+  One bug along the way worth noting: auto_follow_copy_acl
+  returned via a TLS-thread-local buffer that subsequent
+  txn_copy path also used, silently trashing the ACL sha before
+  commit_finalise ran. Fixed with an explicit string.copy
+  snapshot, matching the existing pattern in the other 49 sites.
+
+  svnserver/shim.c: 1623 → 1390 LOC over rounds 12+13.
+
 - **Round 12**: **46.20% C, 53.79% Aether.** Aether 0.83/0.84
   landed three round-3 wish items: `std.intarr` (0.83),
   `string.strip_prefix` + `string.copy` (0.84), and confirmed
