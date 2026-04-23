@@ -1474,24 +1474,21 @@ auto_follow_copy_acl(const char *repo, int base_rev,
  * pointing at the exact sha1 of from_path@base_rev. Full rep-sharing.
  * Caller gets back {"rev": N+1}.
  */
-static void
-handle_repo_copy(HttpRequest *req, HttpServerResponse *res, void *user_data)
-{
-    (void)user_data;
-    char name[128];
-    const char *tail = parse_repo_and_tail(req->path, name, sizeof name);
-    if (!tail || strcmp(tail, "/copy") != 0) {
-        respond_error(res, 404, "not found");
-        return;
-    }
-    const char *repo = find_repo_path(name);
-    if (!repo) { respond_error(res, 404, "no such repo"); return; }
-    if (!req->body || req->body_length == 0) {
-        respond_error(res, 400, "empty body");
-        return;
-    }
+/* Parse the copy JSON body, ACL/spec-check, resolve from, auto-follow
+ * ACLs, txn-copy, commit. Return value encodes the outcome:
+ *    >= 0 : new_rev
+ *    -1   : empty body
+ *    -2   : malformed JSON
+ *    -3   : missing/wrong-typed field
+ *    -4   : forbidden (non-super lacks RW on from subtree or to)
+ *    -5   : cross-branch copy refused
+ *    -6   : from_path missing at base_rev
+ *    -7   : commit failed
+ * The Aether handler maps each to an HTTP response code. */
+int svnserver_copy_from_body(HttpRequest *req, const char *repo) {
+    if (!req->body || req->body_length == 0) return -1;
     cJSON *root = cJSON_ParseWithLength(req->body, req->body_length);
-    if (!root) { respond_error(res, 400, "malformed JSON"); return; }
+    if (!root) return -2;
 
     cJSON *jbase = cJSON_GetObjectItemCaseSensitive(root, "base_rev");
     cJSON *jfrom = cJSON_GetObjectItemCaseSensitive(root, "from_path");
@@ -1502,8 +1499,7 @@ handle_repo_copy(HttpRequest *req, HttpServerResponse *res, void *user_data)
         !cJSON_IsString(jto)   || !cJSON_IsString(jaut)  ||
         !cJSON_IsString(jlog)) {
         cJSON_Delete(root);
-        respond_error(res, 400, "missing or wrong-typed field");
-        return;
+        return -3;
     }
 
     int base_rev = json_valueint(jbase);
@@ -1513,68 +1509,46 @@ handle_repo_copy(HttpRequest *req, HttpServerResponse *res, void *user_data)
     char *logmsg    = strdup(json_valuestring(jlog));
     cJSON_Delete(root);
 
-    /* ACL check (Phase 7.7):
-     *   You can only server-copy what you already have RW on in
-     *   full. Walk from_path's subtree and require RW everywhere.
-     *   Caller also needs write on to_path. Super-user bypasses.
-     *
-     *   If the check passes, the copy proceeds and ACLs auto-follow:
-     *   every paths-acl entry under from_path gets a parallel entry
-     *   rebased under to_path, so the branch inherits its source's
-     *   restrictions verbatim. Nothing's visibility changes from
-     *   any other user's perspective.
-     */
-    {
-        const char *user = NULL;
-        int is_super = auth_context(req, &user);
-        if (!is_super) {
-            if (!acl_user_has_rw_subtree(repo, base_rev, user, from_path)) {
-                free(from_path); free(to_path); free(author); free(logmsg);
-                respond_error(res, 403, "forbidden");
-                return;
-            }
-            if (!acl_allows_mode(repo, base_rev, user, to_path, 1)) {
-                free(from_path); free(to_path); free(author); free(logmsg);
-                respond_error(res, 403, "forbidden");
-                return;
-            }
-        }
-        /* Phase 8.2b: server-side cp must stay inside one branch. Both
-         * endpoints have to satisfy the branch's include spec. Cross-
-         * branch cp is refused — the user should use `svn branch create`
-         * to seed one branch from another. */
-        const char *cp_branch = request_branch(req);
-        if (!spec_allows(repo, cp_branch, from_path, is_super) ||
-            !spec_allows(repo, cp_branch, to_path,   is_super)) {
+    const char *user = NULL;
+    int is_super = auth_context(req, &user);
+    if (!is_super) {
+        if (!acl_user_has_rw_subtree(repo, base_rev, user, from_path) ||
+            !acl_allows_mode(repo, base_rev, user, to_path, 1)) {
             free(from_path); free(to_path); free(author); free(logmsg);
-            respond_error(res, 403, "cross-branch copy refused");
-            return;
+            return -4;
         }
+    }
+    const char *cp_branch = request_branch(req);
+    if (!spec_allows(repo, cp_branch, from_path, is_super) ||
+        !spec_allows(repo, cp_branch, to_path,   is_super)) {
+        free(from_path); free(to_path); free(author); free(logmsg);
+        return -5;
     }
 
     char sha1[65];
     char kind_char;
     if (!svnae_repos_resolve(repo, base_rev, from_path, sha1, &kind_char)) {
         free(from_path); free(to_path); free(author); free(logmsg);
-        respond_error(res, 404, "from_path not found at base_rev");
-        return;
+        return -6;
     }
 
-    /* Compute the new rev's paths-acl blob sha (if any ACLs follow). */
     char *new_acl_sha = auto_follow_copy_acl(repo, base_rev, from_path, to_path);
 
     struct svnae_txn *txn = svnae_txn_new(base_rev);
     svnae_txn_copy(txn, to_path, sha1, kind_char == 'd' ? 1 : 0);
     int new_rev = svnae_commit_finalise_with_acl(repo, txn, author, logmsg,
-                                                  "", /* props inherit */
+                                                  "",
                                                   new_acl_sha ? new_acl_sha : "");
     svnae_txn_free(txn);
     free(from_path); free(to_path); free(author); free(logmsg);
     free(new_acl_sha);
 
-    if (new_rev < 0) { respond_error(res, 500, "copy commit failed"); return; }
-    respond_json(res, 200, aether_rev_response_json(new_rev));
+    if (new_rev < 0) return -7;
+    return new_rev;
 }
+
+/* POST /copy — ported to ae/svnserver/handler_copy.ae. */
+extern void aether_handler_copy(void *req, void *res);
 
 /* Phase 8.2a: POST /repos/{r}/branches/<NAME>/create
  *
@@ -1617,7 +1591,7 @@ dispatch(HttpRequest *req, HttpServerResponse *res, void *user_data)
 
     if (strcmp(req->method, "POST") == 0) {
         if (strcmp(tail, "/commit") == 0) { handle_repo_commit(req, res, user_data); return; }
-        if (strcmp(tail, "/copy")   == 0) { handle_repo_copy  (req, res, user_data); return; }
+        if (strcmp(tail, "/copy")   == 0) { aether_handler_copy(req, res); return; }
 
         /* /branches/<NAME>/create — Phase 8.2a. Parse+auth+commit all
          * in ae/svnserver/handler_branch_create.ae. Delegate for any
