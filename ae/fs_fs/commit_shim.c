@@ -118,27 +118,19 @@ extern const char *aether_rev_blob_body(const char *root, const char *branch,
                                         const char *date, const char *log);
 extern const char *aether_paths_index_sort_by_path(const char *body);
 
+/* Thin wrapper preserving the existing "NULL on miss, malloc'd on
+ * hit" contract the two callers below rely on. The actual two-hop
+ * read (rev-pointer → rep blob → named field) lives in
+ * ae/repos/rev_io.ae::repos_load_rev_blob_field. */
+extern const char *aether_repos_load_rev_blob_field(const char *repo, int rev,
+                                                    const char *key);
+
 static char *
 rev_blob_field(const char *repo, int rev, const char *key)
 {
-    char path[PATH_MAX];
-    snprintf(path, sizeof path, "%s/revs/%06d", repo, rev);
-    if (aether_io_file_size(path) < 0) return NULL;
-    const char *src = aether_io_read_file(path);
-    char buf[128];
-    size_t slen = strlen(src);
-    if (slen >= sizeof buf) slen = sizeof buf - 1;
-    memcpy(buf, src, slen);
-    buf[slen] = '\0';
-    size_t n = slen;
-    while (n > 0 && (buf[n-1] == '\n' || buf[n-1] == '\r')) buf[--n] = '\0';
-
-    char *body = svnae_rep_read_blob(repo, buf);
-    if (!body) return NULL;
-    const char *v = aether_blobfield_get(body, key);
-    char *out = (v && *v) ? strdup(v) : NULL;
-    svnae_rep_free(body);
-    return out;
+    const char *v = aether_repos_load_rev_blob_field(repo, rev, key);
+    if (!v || !*v) return NULL;
+    return strdup(v);
 }
 
 int
