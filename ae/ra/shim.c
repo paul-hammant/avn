@@ -308,6 +308,7 @@ http_post_json(const char *url, const char *body, char **out_resp, size_t *out_l
 
 /* head_rev: returns the current revision number, or -1 on any failure. */
 extern int aether_ra_parse_head_rev(const char *body);
+extern int aether_ra_parse_rev_response(const char *body);
 int
 svnae_ra_head_rev(const char *base_url, const char *repo_name)
 {
@@ -775,15 +776,11 @@ svnae_ra_server_copy(const char *base_url, const char *repo_name,
     const char *url = aether_url_copy(base_url, repo_name);
     char *resp = NULL; size_t len = 0; int status = 0;
     int rc = http_post_json(url, json, &resp, &len, &status);
+    (void)len;
 
     int new_rev = -1;
     if (rc == 0 && status == 200 && resp) {
-        cJSON *root = cJSON_ParseWithLength(resp, len);
-        if (root) {
-            cJSON *jr = cJSON_GetObjectItemCaseSensitive(root, "rev");
-            if (cJSON_IsNumber(jr)) new_rev = json_valueint(jr);
-            cJSON_Delete(root);
-        }
+        new_rev = aether_ra_parse_rev_response(resp);
     }
     free(resp);
     return new_rev;
@@ -811,15 +808,11 @@ svnae_ra_branch_create(const char *base_url, const char *repo_name,
     const char *url = aether_url_branches_create(base_url, repo_name, name);
     char *resp = NULL; size_t len = 0; int status = 0;
     int rc = http_post_json(url, json, &resp, &len, &status);
+    (void)len;
 
     int new_rev = -1;
     if (rc == 0 && status == 201 && resp) {
-        cJSON *root = cJSON_ParseWithLength(resp, len);
-        if (root) {
-            cJSON *jr = cJSON_GetObjectItemCaseSensitive(root, "rev");
-            if (cJSON_IsNumber(jr)) new_rev = json_valueint(jr);
-            cJSON_Delete(root);
-        }
+        new_rev = aether_ra_parse_rev_response(resp);
     }
     free(resp);
     return new_rev;
@@ -1139,15 +1132,11 @@ svnae_ra_commit_finish(struct svnae_ra_commit *cb,
 
     char *resp = NULL; size_t len = 0; int status = 0;
     int rc = http_post_json(url, body_json, &resp, &len, &status);
+    (void)len;
 
     int new_rev = -1;
     if (rc == 0 && status == 200 && resp) {
-        cJSON *root = cJSON_ParseWithLength(resp, len);
-        if (root) {
-            cJSON *jr = cJSON_GetObjectItemCaseSensitive(root, "rev");
-            if (cJSON_IsNumber(jr)) new_rev = json_valueint(jr);
-            cJSON_Delete(root);
-        }
+        new_rev = aether_ra_parse_rev_response(resp);
     }
     free(resp);
 

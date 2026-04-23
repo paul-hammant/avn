@@ -40,6 +40,21 @@ export ra_parse_head_rev(body: string) -> int {
     return rv
 }
 
+// Parse {"rev": N} → N. Same shape as ra_parse_head_rev but for
+// the commit/copy/branch-create response bodies. Returns -1 on any
+// failure.
+export ra_parse_rev_response(body: string) -> int {
+    if string.length(body) == 0 { return -1 }
+    root, err = json.parse(body)
+    if string.length(err) > 0 { return -1 }
+    h, gerr = json.object_get(root, "rev")
+    if string.length(gerr) > 0 { json.free(root); return -1 }
+    if h == null { json.free(root); return -1 }
+    rv = json.get_int(h)
+    json.free(root)
+    return rv
+}
+
 // Parse {"hash_algo": "sha1" | "sha256"} → algo name. Older
 // servers (pre Phase 6.1) omit the field; in that case we default
 // to "sha1" so callers can forge ahead.
