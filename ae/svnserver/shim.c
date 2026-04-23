@@ -73,56 +73,16 @@ const char *svnae_build_paths_acl_blob(const char *repo,
 
 extern const char *aether_error_response_json(const char *msg);
 
-/* For server-side copy: resolve a (rev, path) pair to its sha1 + kind.
- * We piggy-back on the existing repos/shim.c's resolve_path by exposing
- * a small helper there. */
-int  svnae_repos_resolve(const char *repo, int rev, const char *path,
-                         char *out_sha1, char *out_kind /* 'f' or 'd' */);
-
-int          svnae_repos_head_rev(const char *repo);
-
-struct svnae_log  *svnae_repos_log(const char *repo);
-int               svnae_repos_log_count(const struct svnae_log *lg);
-int               svnae_repos_log_rev(const struct svnae_log *lg, int i);
-const char       *svnae_repos_log_author(const struct svnae_log *lg, int i);
-const char       *svnae_repos_log_date(const struct svnae_log *lg, int i);
-const char       *svnae_repos_log_msg(const struct svnae_log *lg, int i);
-void              svnae_repos_log_free(struct svnae_log *lg);
-
-char             *svnae_repos_cat(const char *repo, int rev, const char *path);
-char             *svnae_rep_read_blob(const char *repo, const char *sha1_hex);
-void              svnae_rep_free(char *p);
-const char       *svnae_repo_primary_hash(const char *repo);
-int                svnae_repo_secondary_hashes(const char *repo, char out[4][32]);
-char              *svnae_rep_lookup_secondary(const char *repo,
-                                              const char *primary_hex,
-                                              const char *algo);
-
-struct svnae_blame *svnae_repos_blame(const char *repo, int rev, const char *path);
-int         svnae_blame_count (const struct svnae_blame *B);
-int         svnae_blame_rev   (const struct svnae_blame *B, int i);
-const char *svnae_blame_author(const struct svnae_blame *B, int i);
-const char *svnae_blame_text  (const struct svnae_blame *B, int i);
-void        svnae_blame_free  (struct svnae_blame *B);
-
-struct svnae_list *svnae_repos_list(const char *repo, int rev, const char *path);
-int               svnae_repos_list_count(const struct svnae_list *L);
-const char       *svnae_repos_list_name(const struct svnae_list *L, int i);
-const char       *svnae_repos_list_kind(const struct svnae_list *L, int i);
-void              svnae_repos_list_free(struct svnae_list *L);
-
-struct svnae_info *svnae_repos_info_rev(const char *repo, int rev);
-int               svnae_repos_info_rev_num(const struct svnae_info *I);
-const char       *svnae_repos_info_author(const struct svnae_info *I);
-const char       *svnae_repos_info_date(const struct svnae_info *I);
-const char       *svnae_repos_info_msg(const struct svnae_info *I);
-void              svnae_repos_info_free(struct svnae_info *I);
-
-struct svnae_paths *svnae_repos_paths_changed(const char *repo, int rev);
-int                 svnae_repos_paths_count(const struct svnae_paths *P);
-const char         *svnae_repos_paths_path(const struct svnae_paths *P, int i);
-const char         *svnae_repos_paths_action(const struct svnae_paths *P, int i);
-void                svnae_repos_paths_free(struct svnae_paths *P);
+/* Functions this file actually calls (everything else reaches the
+ * C symbol at link time from another translation unit, no forward
+ * decl required). */
+char *svnae_rep_read_blob(const char *repo, const char *sha1_hex);
+void  svnae_rep_free(char *p);
+const char *svnae_repo_primary_hash(const char *repo);
+int         svnae_repo_secondary_hashes(const char *repo, char out[4][32]);
+char       *svnae_rep_lookup_secondary(const char *repo,
+                                       const char *primary_hex,
+                                       const char *algo);
 
 /* Aether HTTP server types we reach into. Must match the layout in
  * aether/std/net/aether_http_server.h exactly. */
