@@ -44,7 +44,29 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
   `int_to_dec` + `digit_char` in favour of `std.string.from_int` now
   that it's available, and ported the WC pristine-store path builder
   to ae/wc/pristine_path.ae (handles the two-level XX/YY/ fanout).
-- **Round 20** (current): **40.07% C, 59.93% Aether.** Second
+- **Round 21** (current): **39.36% C, 60.64% Aether** — crossed
+  below 40% C. Untied the biggest knot in `ra/shim.c`: four
+  near-identical ~40-line packed-string reparsers (log, paths,
+  blame, list) plus a 28-line single-record parser (info) all
+  disappeared in favour of typed accessors over the packed
+  string itself.
+  - New `ae/ra/packed.ae` (366 LOC Aether) exposes
+    `ra_{log,paths,blame,list}_{count,rev,author,...}` and the
+    five `ra_info_*` accessors. Each one walks the packed
+    `<N>\x02<entry>\x02<entry>...` string on demand.
+  - C side keeps only `{char *packed; int n; struct pin_list pins;}`
+    per handle. No more struct-of-arrays, no more per-field
+    tokenising loops. Accessors `strdup` each Aether-returned
+    string into a per-handle pin list so the stable-pointer
+    contract the C API always had still holds (a per-accessor
+    TLS slot was tried first and fell over on recursive checkout
+    where `prefix` and `name` aliased the same slot across a
+    recursive call).
+  - ra/shim.c: 1507 → 1445 LOC (−62), but the old code was
+    tangled tokenising that's now much cleaner structurally.
+  - All 32 shell tests green.
+
+- **Round 20**: **40.07% C, 59.93% Aether.** Second
   cross-shim pass, this time on `svnae_*` forward decls. The wc
   shims had accumulated large decl blocks for symbols whose call
   sites had all migrated into Aether siblings (update_apply.ae,

@@ -1,6 +1,6 @@
 AETHERC ?= $(HOME)/scm/aether/build/aetherc
 
-GENERATED := urls_generated.c parse_generated.c commit_build_generated.c
+GENERATED := urls_generated.c parse_generated.c commit_build_generated.c packed_generated.c
 
 all: $(GENERATED)
 
@@ -11,6 +11,9 @@ parse_generated.c: parse.ae
 	$(AETHERC) --emit=lib $< $@
 
 commit_build_generated.c: commit_build.ae
+	$(AETHERC) --emit=lib $< $@
+
+packed_generated.c: packed.ae
 	$(AETHERC) --emit=lib $< $@
 
 .PHONY: all

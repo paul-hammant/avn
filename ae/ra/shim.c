@@ -278,12 +278,62 @@ svnae_ra_hash_algo(const char *base_url, const char *repo_name)
     return strdup(algo);
 }
 
-/* ---- log handle (matches repos/shim.c accessor shape) ---------------- */
+/* ---- packed-record accessor glue ------------------------------------ *
+ *
+ * ae/ra/parse.ae produces packed "<N>\x02<entry>\x02<entry>..." strings
+ * where each entry is a "<f0>\x01<f1>\x01..." record. The per-field
+ * accessors (log/paths/blame/list) used to re-parse that packed form
+ * in C, rebuilding a struct-of-arrays. ae/ra/packed.ae now exposes
+ * typed accessors over the packed string directly, so each handle
+ * here just owns the packed payload plus a per-handle "pin list"
+ * that keeps returned string copies alive until the handle is freed.
+ *
+ * The pin list exists because callers routinely hold one accessor's
+ * return value across another accessor call (or across a recursive
+ * call that hits the same accessor). A per-accessor TLS slot would
+ * clobber them; strdup-and-pin-to-handle gives the stable-pointer
+ * contract the C API has always had. */
 
-struct log_entry { int rev; char *author; char *date; char *msg; };
-struct svnae_ra_log { struct log_entry *entries; int n; };
+struct pin_list {
+    char **items;
+    int n, cap;
+};
+
+static const char *
+pin_str(struct pin_list *pl, const char *fresh)
+{
+    if (!fresh) fresh = "";
+    if (pl->n == pl->cap) {
+        int nc = pl->cap ? pl->cap * 2 : 8;
+        char **np = realloc(pl->items, (size_t)nc * sizeof *np);
+        if (!np) return "";
+        pl->items = np;
+        pl->cap = nc;
+    }
+    char *copy = strdup(fresh);
+    if (!copy) return "";
+    pl->items[pl->n++] = copy;
+    return copy;
+}
+
+static void
+pin_list_free(struct pin_list *pl)
+{
+    for (int i = 0; i < pl->n; i++) free(pl->items[i]);
+    free(pl->items);
+    pl->items = NULL;
+    pl->n = pl->cap = 0;
+}
+
+struct svnae_ra_log { char *packed; int n; struct pin_list pins; };
 
 extern const char *aether_ra_parse_log(const char *body);
+extern int         aether_ra_log_count(const char *packed);
+extern int         aether_ra_log_rev(const char *packed, int i);
+extern const char *aether_ra_log_author(const char *packed, int i);
+extern const char *aether_ra_log_date(const char *packed, int i);
+extern const char *aether_ra_log_msg(const char *packed, int i);
+
 struct svnae_ra_log *
 svnae_ra_log(const char *base_url, const char *repo_name)
 {
@@ -292,55 +342,13 @@ svnae_ra_log(const char *base_url, const char *repo_name)
     if (http_get(url, &body, &len, &status) != 0) return NULL;
     if (status != 200) { free(body); return NULL; }
 
-    /* JSON parse ported to ae/ra/parse.ae::ra_parse_log.
-     * Returns "<N>\x02<entry0>\x02<entry1>\x02..." where each
-     * entry is "<rev>\x01<author>\x01<date>\x01<msg>". */
     const char *packed = aether_ra_parse_log(body);
     free(body);
     if (!packed || !*packed) return NULL;
 
-    /* Pull the leading "<N>\x02" count. */
-    const char *p = packed;
-    const char *sep = strchr(p, 2);
-    if (!sep) return NULL;
-    char nbuf[32];
-    size_t nlen = (size_t)(sep - p);
-    if (nlen >= sizeof nbuf) nlen = sizeof nbuf - 1;
-    memcpy(nbuf, p, nlen); nbuf[nlen] = '\0';
-    int n = (int)strtol(nbuf, NULL, 10);
-    p = sep + 1;
-
     struct svnae_ra_log *lg = calloc(1, sizeof *lg);
-    lg->n = n;
-    lg->entries = calloc((size_t)(n > 0 ? n : 1), sizeof *lg->entries);
-
-    for (int i = 0; i < n; i++) {
-        const char *entry_end = strchr(p, 2);
-        if (!entry_end) entry_end = p + strlen(p);
-
-        /* Split entry on \x01: rev, author, date, msg. */
-        const char *f0 = p;
-        const char *f1 = NULL, *f2 = NULL, *f3 = NULL;
-        for (const char *q = p; q < entry_end; q++) {
-            if (*q == 1) {
-                if      (!f1) f1 = q + 1;
-                else if (!f2) f2 = q + 1;
-                else if (!f3) f3 = q + 1;
-            }
-        }
-        if (!f1 || !f2 || !f3) continue;  /* malformed — leave zeroed */
-
-        char rbuf[32];
-        size_t rlen = (size_t)(f1 - 1 - f0);
-        if (rlen >= sizeof rbuf) rlen = sizeof rbuf - 1;
-        memcpy(rbuf, f0, rlen); rbuf[rlen] = '\0';
-        lg->entries[i].rev    = (int)strtol(rbuf, NULL, 10);
-        lg->entries[i].author = strndup(f1, (size_t)(f2 - 1 - f1));
-        lg->entries[i].date   = strndup(f2, (size_t)(f3 - 1 - f2));
-        lg->entries[i].msg    = strndup(f3, (size_t)(entry_end - f3));
-
-        p = *entry_end == 2 ? entry_end + 1 : entry_end;
-    }
+    lg->packed = strdup(packed);
+    lg->n = aether_ra_log_count(lg->packed);
     return lg;
 }
 
@@ -350,49 +358,48 @@ int
 svnae_ra_log_rev(const struct svnae_ra_log *lg, int i)
 {
     if (!lg || i < 0 || i >= lg->n) return -1;
-    return lg->entries[i].rev;
+    return aether_ra_log_rev(lg->packed, i);
 }
 
 const char *
-svnae_ra_log_author(const struct svnae_ra_log *lg, int i)
+svnae_ra_log_author(struct svnae_ra_log *lg, int i)
 {
     if (!lg || i < 0 || i >= lg->n) return "";
-    return lg->entries[i].author;
+    return pin_str(&lg->pins, aether_ra_log_author(lg->packed, i));
 }
 
 const char *
-svnae_ra_log_date(const struct svnae_ra_log *lg, int i)
+svnae_ra_log_date(struct svnae_ra_log *lg, int i)
 {
     if (!lg || i < 0 || i >= lg->n) return "";
-    return lg->entries[i].date;
+    return pin_str(&lg->pins, aether_ra_log_date(lg->packed, i));
 }
 
 const char *
-svnae_ra_log_msg(const struct svnae_ra_log *lg, int i)
+svnae_ra_log_msg(struct svnae_ra_log *lg, int i)
 {
     if (!lg || i < 0 || i >= lg->n) return "";
-    return lg->entries[i].msg;
+    return pin_str(&lg->pins, aether_ra_log_msg(lg->packed, i));
 }
 
 void
 svnae_ra_log_free(struct svnae_ra_log *lg)
 {
     if (!lg) return;
-    for (int i = 0; i < lg->n; i++) {
-        free(lg->entries[i].author);
-        free(lg->entries[i].date);
-        free(lg->entries[i].msg);
-    }
-    free(lg->entries);
+    free(lg->packed);
+    pin_list_free(&lg->pins);
     free(lg);
 }
 
 /* ---- paths-changed handle (for `svn log --verbose`) ----------------- */
 
-struct path_change_ra { char action; char *path; };
-struct svnae_ra_paths { struct path_change_ra *items; int n; };
+struct svnae_ra_paths { char *packed; int n; struct pin_list pins; };
 
 extern const char *aether_ra_parse_paths(const char *body);
+extern int         aether_ra_paths_count(const char *packed);
+extern const char *aether_ra_paths_action(const char *packed, int i);
+extern const char *aether_ra_paths_path(const char *packed, int i);
+
 struct svnae_ra_paths *
 svnae_ra_paths_changed(const char *base_url, const char *repo_name, int rev)
 {
@@ -401,74 +408,51 @@ svnae_ra_paths_changed(const char *base_url, const char *repo_name, int rev)
     if (http_get(url, &body, &len, &status) != 0) return NULL;
     if (status != 200) { free(body); return NULL; }
 
-    /* JSON parse ported to ae/ra/parse.ae::ra_parse_paths.
-     * Returns "N\x02<action>\x01<path>\x02..." */
     const char *packed = aether_ra_parse_paths(body);
     free(body);
     if (!packed || !*packed) return NULL;
 
-    const char *p = packed;
-    const char *sep = strchr(p, 2);
-    if (!sep) return NULL;
-    char nbuf[32];
-    size_t nlen = (size_t)(sep - p);
-    if (nlen >= sizeof nbuf) nlen = sizeof nbuf - 1;
-    memcpy(nbuf, p, nlen); nbuf[nlen] = '\0';
-    int n = (int)strtol(nbuf, NULL, 10);
-    p = sep + 1;
-
     struct svnae_ra_paths *P = calloc(1, sizeof *P);
-    P->n = n;
-    P->items = calloc((size_t)(n > 0 ? n : 1), sizeof *P->items);
-    for (int i = 0; i < n; i++) {
-        const char *entry_end = strchr(p, 2);
-        if (!entry_end) entry_end = p + strlen(p);
-        const char *mid = memchr(p, 1, (size_t)(entry_end - p));
-        if (!mid) continue;
-        P->items[i].action = (mid > p) ? *p : '?';
-        P->items[i].path   = strndup(mid + 1, (size_t)(entry_end - (mid + 1)));
-        p = *entry_end == 2 ? entry_end + 1 : entry_end;
-    }
+    P->packed = strdup(packed);
+    P->n = aether_ra_paths_count(P->packed);
     return P;
 }
 
 int svnae_ra_paths_count(const struct svnae_ra_paths *P) { return P ? P->n : 0; }
 
 const char *
-svnae_ra_paths_action(const struct svnae_ra_paths *P, int i)
+svnae_ra_paths_action(struct svnae_ra_paths *P, int i)
 {
-    static const char a_[] = "A", m_[] = "M", d_[] = "D", u_[] = "";
-    if (!P || i < 0 || i >= P->n) return u_;
-    switch (P->items[i].action) {
-        case 'A': return a_;
-        case 'M': return m_;
-        case 'D': return d_;
-        default:  return u_;
-    }
+    if (!P || i < 0 || i >= P->n) return "";
+    return pin_str(&P->pins, aether_ra_paths_action(P->packed, i));
 }
 
 const char *
-svnae_ra_paths_path(const struct svnae_ra_paths *P, int i)
+svnae_ra_paths_path(struct svnae_ra_paths *P, int i)
 {
     if (!P || i < 0 || i >= P->n) return "";
-    return P->items[i].path;
+    return pin_str(&P->pins, aether_ra_paths_path(P->packed, i));
 }
 
 void
 svnae_ra_paths_free(struct svnae_ra_paths *P)
 {
     if (!P) return;
-    for (int i = 0; i < P->n; i++) free(P->items[i].path);
-    free(P->items);
+    free(P->packed);
+    pin_list_free(&P->pins);
     free(P);
 }
 
 /* ---- blame handle (Phase 7.6) --------------------------------------- */
 
-struct blame_line_ra { int rev; char *author; char *text; };
-struct svnae_ra_blame { struct blame_line_ra *items; int n; };
+struct svnae_ra_blame { char *packed; int n; struct pin_list pins; };
 
 extern const char *aether_ra_parse_blame(const char *body);
+extern int         aether_ra_blame_count(const char *packed);
+extern int         aether_ra_blame_rev(const char *packed, int i);
+extern const char *aether_ra_blame_author(const char *packed, int i);
+extern const char *aether_ra_blame_text(const char *packed, int i);
+
 struct svnae_ra_blame *
 svnae_ra_blame(const char *base_url, const char *repo_name,
               int rev, const char *path)
@@ -478,70 +462,59 @@ svnae_ra_blame(const char *base_url, const char *repo_name,
     if (http_get(url, &body, &len, &status) != 0) return NULL;
     if (status != 200) { free(body); return NULL; }
 
-    /* JSON parse ported to ae/ra/parse.ae::ra_parse_blame.
-     * Returns "N\x02<rev>\x01<author>\x01<text>\x02..." */
     const char *packed = aether_ra_parse_blame(body);
     free(body);
     if (!packed || !*packed) return NULL;
 
-    const char *p = packed;
-    const char *sep = strchr(p, 2);
-    if (!sep) return NULL;
-    char nbuf[32];
-    size_t nlen = (size_t)(sep - p);
-    if (nlen >= sizeof nbuf) nlen = sizeof nbuf - 1;
-    memcpy(nbuf, p, nlen); nbuf[nlen] = '\0';
-    int n = (int)strtol(nbuf, NULL, 10);
-    p = sep + 1;
-
     struct svnae_ra_blame *B = calloc(1, sizeof *B);
-    B->n = n;
-    B->items = calloc((size_t)(n > 0 ? n : 1), sizeof *B->items);
-    for (int i = 0; i < n; i++) {
-        const char *entry_end = strchr(p, 2);
-        if (!entry_end) entry_end = p + strlen(p);
-        const char *f1 = NULL, *f2 = NULL;
-        for (const char *q = p; q < entry_end; q++) {
-            if (*q == 1) {
-                if      (!f1) f1 = q + 1;
-                else if (!f2) f2 = q + 1;
-            }
-        }
-        if (!f1 || !f2) continue;
-        char rbuf[32];
-        size_t rlen = (size_t)(f1 - 1 - p);
-        if (rlen >= sizeof rbuf) rlen = sizeof rbuf - 1;
-        memcpy(rbuf, p, rlen); rbuf[rlen] = '\0';
-        B->items[i].rev    = (int)strtol(rbuf, NULL, 10);
-        B->items[i].author = strndup(f1, (size_t)(f2 - 1 - f1));
-        B->items[i].text   = strndup(f2, (size_t)(entry_end - f2));
-        p = *entry_end == 2 ? entry_end + 1 : entry_end;
-    }
+    B->packed = strdup(packed);
+    B->n = aether_ra_blame_count(B->packed);
     return B;
 }
 
-int         svnae_ra_blame_count(const struct svnae_ra_blame *B) { return B ? B->n : 0; }
-int         svnae_ra_blame_rev  (const struct svnae_ra_blame *B, int i) {
-    return (B && i >= 0 && i < B->n) ? B->items[i].rev : -1;
+int svnae_ra_blame_count(const struct svnae_ra_blame *B) { return B ? B->n : 0; }
+
+int
+svnae_ra_blame_rev(const struct svnae_ra_blame *B, int i)
+{
+    if (!B || i < 0 || i >= B->n) return -1;
+    return aether_ra_blame_rev(B->packed, i);
 }
-const char *svnae_ra_blame_author(const struct svnae_ra_blame *B, int i) {
-    return (B && i >= 0 && i < B->n) ? B->items[i].author : "";
+
+const char *
+svnae_ra_blame_author(struct svnae_ra_blame *B, int i)
+{
+    if (!B || i < 0 || i >= B->n) return "";
+    return pin_str(&B->pins, aether_ra_blame_author(B->packed, i));
 }
-const char *svnae_ra_blame_text(const struct svnae_ra_blame *B, int i) {
-    return (B && i >= 0 && i < B->n) ? B->items[i].text : "";
+
+const char *
+svnae_ra_blame_text(struct svnae_ra_blame *B, int i)
+{
+    if (!B || i < 0 || i >= B->n) return "";
+    return pin_str(&B->pins, aether_ra_blame_text(B->packed, i));
 }
-void svnae_ra_blame_free(struct svnae_ra_blame *B) {
+
+void
+svnae_ra_blame_free(struct svnae_ra_blame *B)
+{
     if (!B) return;
-    for (int i = 0; i < B->n; i++) { free(B->items[i].author); free(B->items[i].text); }
-    free(B->items);
+    free(B->packed);
+    pin_list_free(&B->pins);
     free(B);
 }
 
 /* ---- info handle ----------------------------------------------------- */
 
-struct svnae_ra_info { int rev; char *author; char *date; char *msg; char *root; };
+struct svnae_ra_info { char *packed; struct pin_list pins; };
 
 extern const char *aether_ra_parse_info_rev(const char *body);
+extern int         aether_ra_info_rev(const char *packed);
+extern const char *aether_ra_info_author(const char *packed);
+extern const char *aether_ra_info_date(const char *packed);
+extern const char *aether_ra_info_msg(const char *packed);
+extern const char *aether_ra_info_root(const char *packed);
+
 struct svnae_ra_info *
 svnae_ra_info_rev(const char *base_url, const char *repo_name, int rev)
 {
@@ -550,54 +523,41 @@ svnae_ra_info_rev(const char *base_url, const char *repo_name, int rev)
     if (http_get(url, &body, &len, &status) != 0) return NULL;
     if (status != 200) { free(body); return NULL; }
 
-    /* JSON parse ported to ae/ra/parse.ae::ra_parse_info_rev,
-     * which returns a packed "<rev>\x01<author>\x01<date>\x01<msg>\x01<root>"
-     * string. Split into the struct fields here. */
     const char *packed = aether_ra_parse_info_rev(body);
     free(body);
     if (!packed || !*packed) return NULL;
 
     struct svnae_ra_info *I = calloc(1, sizeof *I);
-    const char *p = packed;
-    const char *fields[5] = {0};
-    int n_fields = 0;
-    fields[n_fields++] = p;
-    while (*p) {
-        if (*p == 1 && n_fields < 5) {
-            fields[n_fields++] = p + 1;
-        }
-        p++;
-    }
-    /* p now points at the NUL terminator. Each field extends from
-     * its start pointer to the next \x01 or (for the last field) to p. */
-    size_t flens[5];
-    for (int i = 0; i < 5; i++) {
-        const char *end = (i + 1 < n_fields) ? fields[i + 1] - 1 : p;
-        flens[i] = (size_t)(end - fields[i]);
-    }
-    /* rev is the first field, parsed as int. */
-    char rev_buf[32];
-    size_t rl = flens[0] < sizeof rev_buf - 1 ? flens[0] : sizeof rev_buf - 1;
-    memcpy(rev_buf, fields[0], rl); rev_buf[rl] = '\0';
-    I->rev    = (int)strtol(rev_buf, NULL, 10);
-    I->author = strndup(fields[1], flens[1]);
-    I->date   = strndup(fields[2], flens[2]);
-    I->msg    = strndup(fields[3], flens[3]);
-    I->root   = strndup(fields[4], flens[4]);
+    I->packed = strdup(packed);
     return I;
 }
 
-int         svnae_ra_info_rev_num(const struct svnae_ra_info *I) { return I ? I->rev : -1; }
-const char *svnae_ra_info_author (const struct svnae_ra_info *I) { return I ? I->author : ""; }
-const char *svnae_ra_info_date   (const struct svnae_ra_info *I) { return I ? I->date : ""; }
-const char *svnae_ra_info_msg    (const struct svnae_ra_info *I) { return I ? I->msg : ""; }
-const char *svnae_ra_info_root   (const struct svnae_ra_info *I) { return I && I->root ? I->root : ""; }
+int         svnae_ra_info_rev_num(const struct svnae_ra_info *I) {
+    return I ? aether_ra_info_rev(I->packed) : -1;
+}
+const char *svnae_ra_info_author (struct svnae_ra_info *I) {
+    if (!I) return "";
+    return pin_str(&I->pins, aether_ra_info_author(I->packed));
+}
+const char *svnae_ra_info_date   (struct svnae_ra_info *I) {
+    if (!I) return "";
+    return pin_str(&I->pins, aether_ra_info_date(I->packed));
+}
+const char *svnae_ra_info_msg    (struct svnae_ra_info *I) {
+    if (!I) return "";
+    return pin_str(&I->pins, aether_ra_info_msg(I->packed));
+}
+const char *svnae_ra_info_root   (struct svnae_ra_info *I) {
+    if (!I) return "";
+    return pin_str(&I->pins, aether_ra_info_root(I->packed));
+}
 
 void
 svnae_ra_info_free(struct svnae_ra_info *I)
 {
     if (!I) return;
-    free(I->author); free(I->date); free(I->msg); free(I->root);
+    free(I->packed);
+    pin_list_free(&I->pins);
     free(I);
 }
 
@@ -754,10 +714,13 @@ svnae_ra_branch_create(const char *base_url, const char *repo_name,
 
 /* ---- list ------------------------------------------------------------ */
 
-struct list_entry { char *name; char kind; };
-struct svnae_ra_list { struct list_entry *items; int n; };
+struct svnae_ra_list { char *packed; int n; struct pin_list pins; };
 
 extern const char *aether_ra_parse_list(const char *body);
+extern int         aether_ra_list_count(const char *packed);
+extern const char *aether_ra_list_name(const char *packed, int i);
+extern const char *aether_ra_list_kind(const char *packed, int i);
+
 struct svnae_ra_list *
 svnae_ra_list(const char *base_url, const char *repo_name, int rev, const char *path)
 {
@@ -767,63 +730,38 @@ svnae_ra_list(const char *base_url, const char *repo_name, int rev, const char *
     if (http_get(url, &body, &len, &status) != 0) return NULL;
     if (status != 200) { free(body); return NULL; }
 
-    /* JSON parse ported to ae/ra/parse.ae::ra_parse_list.
-     * Returns "N\x02<name>\x01<kind-char>\x02..." where kind-char
-     * is 'd' for dir, 'f' otherwise. */
     const char *packed = aether_ra_parse_list(body);
     free(body);
     if (!packed || !*packed) return NULL;
 
-    const char *p = packed;
-    const char *sep = strchr(p, 2);
-    if (!sep) return NULL;
-    char nbuf[32];
-    size_t nlen = (size_t)(sep - p);
-    if (nlen >= sizeof nbuf) nlen = sizeof nbuf - 1;
-    memcpy(nbuf, p, nlen); nbuf[nlen] = '\0';
-    int n = (int)strtol(nbuf, NULL, 10);
-    p = sep + 1;
-
     struct svnae_ra_list *L = calloc(1, sizeof *L);
-    L->n = n;
-    L->items = calloc((size_t)(n > 0 ? n : 1), sizeof *L->items);
-    for (int i = 0; i < n; i++) {
-        const char *entry_end = strchr(p, 2);
-        if (!entry_end) entry_end = p + strlen(p);
-        const char *mid = memchr(p, 1, (size_t)(entry_end - p));
-        if (!mid) continue;
-        L->items[i].name = strndup(p, (size_t)(mid - p));
-        L->items[i].kind = (mid + 1 < entry_end) ? *(mid + 1) : 'f';
-        p = *entry_end == 2 ? entry_end + 1 : entry_end;
-    }
+    L->packed = strdup(packed);
+    L->n = aether_ra_list_count(L->packed);
     return L;
 }
 
 int svnae_ra_list_count(const struct svnae_ra_list *L) { return L ? L->n : 0; }
 
 const char *
-svnae_ra_list_name(const struct svnae_ra_list *L, int i)
+svnae_ra_list_name(struct svnae_ra_list *L, int i)
 {
     if (!L || i < 0 || i >= L->n) return "";
-    return L->items[i].name;
+    return pin_str(&L->pins, aether_ra_list_name(L->packed, i));
 }
 
 const char *
-svnae_ra_list_kind(const struct svnae_ra_list *L, int i)
+svnae_ra_list_kind(struct svnae_ra_list *L, int i)
 {
-    static const char f[] = "file";
-    static const char d[] = "dir";
-    static const char u[] = "";
-    if (!L || i < 0 || i >= L->n) return u;
-    return L->items[i].kind == 'd' ? d : f;
+    if (!L || i < 0 || i >= L->n) return "";
+    return pin_str(&L->pins, aether_ra_list_kind(L->packed, i));
 }
 
 void
 svnae_ra_list_free(struct svnae_ra_list *L)
 {
     if (!L) return;
-    for (int i = 0; i < L->n; i++) free(L->items[i].name);
-    free(L->items);
+    free(L->packed);
+    pin_list_free(&L->pins);
     free(L);
 }
 
@@ -1142,7 +1080,7 @@ struct svnae_ra_info;
 struct svnae_ra_info *svnae_ra_info_rev(const char *base_url, const char *repo,
                                         int rev);
 int         svnae_ra_info_rev_num(const struct svnae_ra_info *I);
-const char *svnae_ra_info_root   (const struct svnae_ra_info *I);
+const char *svnae_ra_info_root   (struct svnae_ra_info *I);
 void        svnae_ra_info_free   (struct svnae_ra_info *I);
 
 char *svnae_ra_hash_algo(const char *base_url, const char *repo);
