@@ -720,28 +720,17 @@ handle_repo_log(HttpRequest *req, HttpServerResponse *res, void *user_data)
  * keeps the rev-pointer + rep-blob I/O. */
 extern const char *aether_blobfield_get(const char *body, const char *key);
 
+/* Ported to ae/svnserver/rev_load.ae. The Aether version returns
+ * "" on miss instead of NULL; adapt at the boundary so existing
+ * C callers keep their `if (!acl_root) ...` idiom. */
+extern const char *aether_load_rev_blob_field(const char *repo, int rev,
+                                              const char *key);
 static char *
 load_rev_blob_field(const char *repo, int rev, const char *key)
 {
-    extern const char *aether_io_read_file(const char *p);
-    extern int aether_io_file_size(const char *p);
-    char path[PATH_MAX];
-    snprintf(path, sizeof path, "%s/revs/%06d", repo, rev);
-    if (aether_io_file_size(path) < 0) return NULL;
-    const char *src = aether_io_read_file(path);
-    char buf[128];
-    size_t slen = strlen(src);
-    if (slen >= sizeof buf) slen = sizeof buf - 1;
-    memcpy(buf, src, slen);
-    buf[slen] = '\0';
-    size_t n = slen;
-    while (n > 0 && (buf[n-1] == '\n' || buf[n-1] == '\r')) buf[--n] = '\0';
-    char *body = svnae_rep_read_blob(repo, buf);
-    if (!body) return NULL;
-    const char *v = aether_blobfield_get(body, key);
-    char *out = (v && *v) ? strdup(v) : NULL;
-    svnae_rep_free(body);
-    return out;
+    const char *v = aether_load_rev_blob_field(repo, rev, key);
+    if (!v || !*v) return NULL;
+    return strdup(v);
 }
 
 /* load_rev_props_sha1 / paths_props_lookup / sb_put_props_as_json
