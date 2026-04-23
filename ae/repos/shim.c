@@ -77,8 +77,8 @@ rev_blob_sha1(const char *repo, int rev) {
 
 /* "key: value" extractor — ported to Aether (ae/repos/blobfield.ae).
  * Wrapper preserves the original "malloc or NULL" contract: Aether
- * returns "" for missing, so we map that back to NULL and otherwise
- * copy (the Aether-owned string could be GC'd). */
+ * returns "" for both missing and empty; no caller in the port
+ * differentiates, so collapse to one case. */
 extern const char *aether_blobfield_get(const char *body, const char *key);
 
 static char *
@@ -86,23 +86,7 @@ parse_field(const char *body, const char *key)
 {
     if (!body) return NULL;
     const char *v = aether_blobfield_get(body, key);
-    if (!v || !*v) {
-        /* Distinguish "present but empty" from "absent". Re-scan for
-         * "<key>:" presence; empty-valued keys are rare (author/date/log
-         * are always non-empty in a well-formed rev blob) but we stay
-         * byte-compatible with the old impl anyway. */
-        size_t klen = strlen(key);
-        const char *p = body;
-        int present = 0;
-        while (*p) {
-            if (strncmp(p, key, klen) == 0 && p[klen] == ':') { present = 1; break; }
-            const char *eol = strchr(p, '\n');
-            if (!eol) break;
-            p = eol + 1;
-        }
-        if (!present) return NULL;
-        return strdup("");
-    }
+    if (!v || !*v) return NULL;
     return strdup(v);
 }
 
