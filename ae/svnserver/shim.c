@@ -49,33 +49,13 @@
 
 /* --- forward decls from other shims ------------------------------------ */
 
-struct svnae_log;
-struct svnae_list;
-struct svnae_info;
 struct svnae_txn;
 
-struct svnae_txn *svnae_txn_new(int base_rev);
+/* Only functions this C file actually calls — the Aether modules
+ * that live alongside it declare what they need locally. */
 int  svnae_txn_add_file(struct svnae_txn *t, const char *path, const char *content, int len);
-int  svnae_txn_mkdir(struct svnae_txn *t, const char *path);
-int  svnae_txn_delete(struct svnae_txn *t, const char *path);
-int  svnae_txn_copy  (struct svnae_txn *t, const char *path, const char *from_sha1, int from_kind);
-void svnae_txn_free(struct svnae_txn *t);
-
-/* Phase 8.2b enforcement. */
 int  svnae_branch_spec_allows(const char *repo, const char *branch, const char *path);
 
-/* aether_* JSON builder + dir-blob + ACL externs previously
- * declared here for the C-side route handlers. All handlers moved
- * to Aether modules which declare what they need locally; the only
- * surviving user here is aether_error_response_json via
- * svnserver_respond_error below. */
-extern const char *aether_error_response_json(const char *msg);
-
-int  svnae_commit_finalise(const char *repo, struct svnae_txn *txn,
-                           const char *author, const char *logmsg);
-int  svnae_commit_finalise_with_props(const char *repo, struct svnae_txn *txn,
-                                      const char *author, const char *logmsg,
-                                      const char *props_sha1);
 const char *svnae_build_props_blob(const char *repo,
                                    const char *const *keys,
                                    const char *const *values,
@@ -84,15 +64,14 @@ const char *svnae_build_paths_props_blob(const char *repo,
                                          const char *const *paths,
                                          const char *const *props_shas,
                                          int n_paths);
-int  svnae_commit_finalise_with_acl(const char *repo, struct svnae_txn *txn,
-                                    const char *author, const char *logmsg,
-                                    const char *props_sha1, const char *acl_sha1);
 const char *svnae_build_acl_blob(const char *repo,
                                  const char *const *rules, int n_rules);
 const char *svnae_build_paths_acl_blob(const char *repo,
                                        const char *const *paths,
                                        const char *const *acl_shas,
                                        int n_paths);
+
+extern const char *aether_error_response_json(const char *msg);
 
 /* For server-side copy: resolve a (rev, path) pair to its sha1 + kind.
  * We piggy-back on the existing repos/shim.c's resolve_path by exposing
