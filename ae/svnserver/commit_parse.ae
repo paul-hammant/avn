@@ -1,0 +1,340 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// permissions and limitations under the License.
+
+// POST /commit body parser + mutation.
+// Request JSON (sketch):
+//   {
+//     "base_rev": N, "author": "...", "log": "...",
+//     "edits": [ {"op":"add-file","path":p,"content":b64}, ... ],
+//     "props"?: { "path1": {"k":"v",...}, ... },
+//     "acl"?:   { "path1": ["+alice","-eve"], ... },
+//     "branch"?: "main"
+//   }
+//
+// Return-value contract (matches the old C function):
+//   >= 0 : new_rev
+//   -1   : empty body
+//   -2   : malformed JSON
+//   -3   : missing/wrong-typed top-level field
+//   -4   : forbidden (ACL write denied)
+//   -5   : path outside branch spec
+//   -6   : oom building txn
+//   -7   : edit missing op/path
+//   -8   : add-file missing content
+//   -9   : base64 decode failed
+//   -10  : unknown op
+//   -11  : commit finalise failed
+
+import std.string
+import std.json
+
+extern svnserver_request_body(req: ptr) -> string
+extern svnserver_request_body_length(req: ptr) -> int
+extern svnserver_request_user(req: ptr) -> string
+extern svnserver_request_is_super(req: ptr) -> int
+extern svnserver_request_branch(req: ptr) -> string
+
+extern svnserver_acl_allows_mode(repo: string, rev: int, user: string,
+                                  path: string, want_write: int) -> int
+extern svnserver_spec_allows(repo: string, branch: string,
+                              path: string, is_super: int) -> int
+
+extern svnae_txn_new(base_rev: int) -> ptr
+extern svnae_txn_mkdir(t: ptr, path: string) -> int
+extern svnae_txn_delete(t: ptr, path: string) -> int
+extern svnae_txn_free(t: ptr)
+extern svnserver_txn_add_b64(txn: ptr, path: string, b64: string) -> int
+extern svnae_commit_finalise_with_acl(repo: string, txn: ptr,
+                                       author: string, log_msg: string,
+                                       props_sha: string, acl_sha: string) -> int
+
+extern svnserver_build_props_blob_joined(repo: string,
+                                          keys_joined: string,
+                                          values_joined: string) -> string
+extern svnserver_build_paths_props_blob_joined(repo: string,
+                                                paths_joined: string,
+                                                shas_joined: string) -> string
+extern svnserver_build_acl_blob_joined(repo: string,
+                                        rules_joined: string) -> string
+extern svnserver_build_paths_acl_blob_joined(repo: string,
+                                              paths_joined: string,
+                                              shas_joined: string) -> string
+
+export commit_from_body(req: ptr, res: ptr, repo: string) -> int {
+    return commit_from_body_impl(req, res, repo)
+}
+
+commit_from_body_impl(req: ptr, res: ptr, repo: string) -> int {
+    body_len = svnserver_request_body_length(req)
+    if body_len == 0 { return -1 }
+    body = svnserver_request_body(req)
+
+    root, err = json.parse(body)
+    if string.length(err) > 0 { return -2 }
+
+    // Required top-level fields: base_rev (number), author, log, edits.
+    jbase, bbe = json.object_get(root, "base_rev")
+    if string.length(bbe) > 0 { json.free(root); return -3 }
+    if jbase == null { json.free(root); return -3 }
+    base_rev = json.get_int(jbase)
+
+    jauthor, jae = json.object_get(root, "author")
+    if string.length(jae) > 0 { json.free(root); return -3 }
+    if jauthor == null { json.free(root); return -3 }
+    author, ase = json.get_string(jauthor)
+    if string.length(ase) > 0 { json.free(root); return -3 }
+    author = string.copy(author)
+
+    jlog, jle = json.object_get(root, "log")
+    if string.length(jle) > 0 { json.free(root); return -3 }
+    if jlog == null { json.free(root); return -3 }
+    logmsg, lse = json.get_string(jlog)
+    if string.length(lse) > 0 { json.free(root); return -3 }
+    logmsg = string.copy(logmsg)
+
+    jedits, jee = json.object_get(root, "edits")
+    if string.length(jee) > 0 { json.free(root); return -3 }
+    if jedits == null { json.free(root); return -3 }
+
+    // commit_branch — body "branch" field wins, else Svn-Branch
+    // request header, else "main".
+    commit_branch = svnserver_request_branch(req)
+    jbranch, jbre = json.object_get(root, "branch")
+    if string.length(jbre) == 0 {
+        if jbranch != null {
+            bs, bse = json.get_string(jbranch)
+            if string.length(bse) == 0 {
+                if string.length(bs) > 0 { commit_branch = string.copy(bs) }
+            }
+        }
+    }
+
+    user = svnserver_request_user(req)
+    is_super = svnserver_request_is_super(req)
+
+    // Pre-scan: every edit path needs ACL write + branch-spec allow.
+    n_edits = json.array_size(jedits)
+    i = 0
+    while i < n_edits {
+        entry, _ = json.array_get(jedits, i)
+        if entry != null {
+            jp, jpe = json.object_get(entry, "path")
+            if string.length(jpe) == 0 {
+                if jp != null {
+                    ps, pse = json.get_string(jp)
+                    if string.length(pse) == 0 {
+                        if is_super == 0 {
+                            if svnserver_acl_allows_mode(repo, base_rev, user, ps, 1) == 0 {
+                                json.free(root)
+                                return -4
+                            }
+                        }
+                        if svnserver_spec_allows(repo, commit_branch, ps, is_super) == 0 {
+                            json.free(root)
+                            return -5
+                        }
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+
+    // ACL-change pre-scan for non-super: each acl-touched path needs write.
+    if is_super == 0 {
+        jacl_pre, jape = json.object_get(root, "acl")
+        if string.length(jape) == 0 {
+            if jacl_pre != null {
+                pre_n = json.object_size(jacl_pre)
+                pi = 0
+                while pi < pre_n {
+                    apath, _apv, _aperr = json.object_entry(jacl_pre, pi)
+                    if svnserver_acl_allows_mode(repo, base_rev, user, apath, 1) == 0 {
+                        json.free(root)
+                        return -4
+                    }
+                    pi = pi + 1
+                }
+            }
+        }
+    }
+
+    // Build the txn.
+    txn = svnae_txn_new(base_rev)
+    if txn == null { json.free(root); return -6 }
+
+    i = 0
+    while i < n_edits {
+        entry, _ = json.array_get(jedits, i)
+        if entry == null { svnae_txn_free(txn); json.free(root); return -7 }
+
+        jop, _ = json.object_get(entry, "op")
+        if jop == null { svnae_txn_free(txn); json.free(root); return -7 }
+        op, oerr = json.get_string(jop)
+        if string.length(oerr) > 0 { svnae_txn_free(txn); json.free(root); return -7 }
+
+        jpath, _ = json.object_get(entry, "path")
+        if jpath == null { svnae_txn_free(txn); json.free(root); return -7 }
+        epath, perr = json.get_string(jpath)
+        if string.length(perr) > 0 { svnae_txn_free(txn); json.free(root); return -7 }
+
+        if string.equals(op, "add-file") == 1 {
+            jcontent, _ = json.object_get(entry, "content")
+            if jcontent == null { svnae_txn_free(txn); json.free(root); return -8 }
+            b64, berr = json.get_string(jcontent)
+            if string.length(berr) > 0 { svnae_txn_free(txn); json.free(root); return -8 }
+            if svnserver_txn_add_b64(txn, epath, b64) != 0 {
+                svnae_txn_free(txn); json.free(root); return -9
+            }
+        }
+        if string.equals(op, "mkdir") == 1 {
+            svnae_txn_mkdir(txn, epath)
+        }
+        if string.equals(op, "delete") == 1 {
+            svnae_txn_delete(txn, epath)
+        }
+        if string.equals(op, "add-file") == 0 {
+            if string.equals(op, "mkdir") == 0 {
+                if string.equals(op, "delete") == 0 {
+                    svnae_txn_free(txn); json.free(root); return -10
+                }
+            }
+        }
+        i = i + 1
+    }
+
+    // Optional "props" object: build per-path props blobs, collect
+    // sha1s, roll up into a paths-props blob.
+    use_props_sha = ""
+    jprops, _jpe = json.object_get(root, "props")
+    if jprops != null {
+        np = json.object_size(jprops)
+        if np > 0 {
+            paths_joined = ""
+            shas_joined = ""
+            i = 0
+            while i < np {
+                this_path, pval, _ = json.object_entry(jprops, i)
+                // Snapshot the key — json.object_entry returns an owned key,
+                // but we're about to recurse into subsequent iterations.
+                this_path = string.copy(this_path)
+
+                keys_joined = ""
+                values_joined = ""
+                if pval != null {
+                    nk = json.object_size(pval)
+                    ki = 0
+                    while ki < nk {
+                        kname, kval, _ = json.object_entry(pval, ki)
+                        kname = string.copy(kname)
+                        if kval != null {
+                            vstr, verr = json.get_string(kval)
+                            if string.length(verr) == 0 {
+                                if ki > 0 {
+                                    keys_joined = string.concat(keys_joined, "\n")
+                                    values_joined = string.concat(values_joined, "\n")
+                                }
+                                keys_joined = string.concat(keys_joined, kname)
+                                values_joined = string.concat(values_joined, vstr)
+                            }
+                        }
+                        ki = ki + 1
+                    }
+                }
+                psha = svnserver_build_props_blob_joined(repo, keys_joined, values_joined)
+                psha = string.copy(psha)
+
+                if i > 0 {
+                    paths_joined = string.concat(paths_joined, "\n")
+                    shas_joined = string.concat(shas_joined, "\n")
+                }
+                paths_joined = string.concat(paths_joined, this_path)
+                shas_joined = string.concat(shas_joined, psha)
+                i = i + 1
+            }
+            use_props_sha = svnserver_build_paths_props_blob_joined(repo,
+                                paths_joined, shas_joined)
+            use_props_sha = string.copy(use_props_sha)
+        }
+    }
+
+    // Optional "acl" object: same pattern but per-path value is an
+    // array of rule strings. Empty array skips the path (= remove ACL).
+    use_acl_sha = ""
+    jacl, _jaoe = json.object_get(root, "acl")
+    if jacl != null {
+        np = json.object_size(jacl)
+        if np > 0 {
+            paths_joined = ""
+            shas_joined = ""
+            emitted = 0
+            i = 0
+            while i < np {
+                this_path, pval, _ = json.object_entry(jacl, i)
+                this_path = string.copy(this_path)
+                if pval != null {
+                    nr = json.array_size(pval)
+                    if nr > 0 {
+                        rules_joined = ""
+                        rj_count = 0
+                        k = 0
+                        while k < nr {
+                            r_elem, _ = json.array_get(pval, k)
+                            if r_elem != null {
+                                rs, rer = json.get_string(r_elem)
+                                if string.length(rer) == 0 {
+                                    if rj_count > 0 {
+                                        rules_joined = string.concat(rules_joined, "\n")
+                                    }
+                                    rules_joined = string.concat(rules_joined, rs)
+                                    rj_count = rj_count + 1
+                                }
+                            }
+                            k = k + 1
+                        }
+                        asha = svnserver_build_acl_blob_joined(repo, rules_joined)
+                        asha = string.copy(asha)
+                        if emitted > 0 {
+                            paths_joined = string.concat(paths_joined, "\n")
+                            shas_joined = string.concat(shas_joined, "\n")
+                        }
+                        paths_joined = string.concat(paths_joined, this_path)
+                        shas_joined = string.concat(shas_joined, asha)
+                        emitted = emitted + 1
+                    }
+                }
+                i = i + 1
+            }
+            if emitted > 0 {
+                use_acl_sha = svnserver_build_paths_acl_blob_joined(repo,
+                                paths_joined, shas_joined)
+                use_acl_sha = string.copy(use_acl_sha)
+            }
+        }
+    }
+
+    json.free(root)
+
+    new_rev = svnae_commit_finalise_with_acl(repo, txn, author, logmsg,
+                                              use_props_sha, use_acl_sha)
+    svnae_txn_free(txn)
+
+    if new_rev < 0 { return -11 }
+    return new_rev
+}
+
+main() {
+    println("ae/svnserver/commit_parse.ae is a library; not meant to run standalone")
+}

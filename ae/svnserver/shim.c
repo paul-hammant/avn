@@ -1018,6 +1018,126 @@ int svnserver_request_body_length(HttpRequest *req) {
  * The Aether handler maps each negative value to the appropriate HTTP
  * error response. Keeps the cJSON + glob-array bits on the C side
  * since Aether doesn't have array-of-string FFI. */
+/* --- Newline-joined wrappers around the array-taking blob builders.
+ * Aether can't pass const char** directly, so we pass two parallel
+ * \n-separated strings (same length in line count). These are used
+ * by the Aether commit-body handler to build paths-props and
+ * paths-acl blobs without an FFI array type. */
+
+/* Count newlines + 1 (or 0 if empty). Shared helper. */
+static int count_lines(const char *joined) {
+    if (!joined || !*joined) return 0;
+    int n = 1;
+    for (const char *q = joined; *q; q++) if (*q == '\n') n++;
+    return n;
+}
+
+/* Split a \n-joined string into a strdup'd array of line pieces.
+ * Caller frees each copy and the array. Returns the number of
+ * lines populated. Trailing empty line (from final \n) is skipped. */
+static int split_joined(const char *joined, char ***out_pieces) {
+    int n_lines = count_lines(joined);
+    char **pieces = calloc((size_t)(n_lines > 0 ? n_lines : 1), sizeof *pieces);
+    int gi = 0;
+    const char *p = joined ? joined : "";
+    while (*p) {
+        const char *eol = strchr(p, '\n');
+        size_t slen = eol ? (size_t)(eol - p) : strlen(p);
+        pieces[gi++] = strndup(p, slen);   /* empty lines preserved */
+        if (!eol) break;
+        p = eol + 1;
+    }
+    *out_pieces = pieces;
+    return gi;
+}
+
+static void free_joined_split(char **pieces, int n) {
+    for (int i = 0; i < n; i++) free(pieces[i]);
+    free(pieces);
+}
+
+/* Build a props blob from \n-joined (keys, values). Caller frees
+ * via svnae_rep_free. "" on failure. */
+const char *svnserver_build_props_blob_joined(const char *repo,
+                                               const char *keys_joined,
+                                               const char *values_joined) {
+    char **keys = NULL, **values = NULL;
+    int nk = split_joined(keys_joined, &keys);
+    int nv = split_joined(values_joined, &values);
+    int n = nk < nv ? nk : nv;
+    const char **kp = calloc((size_t)(n > 0 ? n : 1), sizeof *kp);
+    const char **vp = calloc((size_t)(n > 0 ? n : 1), sizeof *vp);
+    for (int i = 0; i < n; i++) { kp[i] = keys[i]; vp[i] = values[i]; }
+    const char *sha = svnae_build_props_blob(repo, kp, vp, n);
+    free(kp); free(vp);
+    free_joined_split(keys, nk);
+    free_joined_split(values, nv);
+    return sha ? sha : "";
+}
+
+/* Build a paths-props blob from \n-joined (paths, props_shas). */
+const char *svnserver_build_paths_props_blob_joined(const char *repo,
+                                                     const char *paths_joined,
+                                                     const char *shas_joined) {
+    char **paths = NULL, **shas = NULL;
+    int np = split_joined(paths_joined, &paths);
+    int ns = split_joined(shas_joined, &shas);
+    int n = np < ns ? np : ns;
+    const char **pp = calloc((size_t)(n > 0 ? n : 1), sizeof *pp);
+    const char **sp = calloc((size_t)(n > 0 ? n : 1), sizeof *sp);
+    for (int i = 0; i < n; i++) { pp[i] = paths[i]; sp[i] = shas[i]; }
+    const char *sha = svnae_build_paths_props_blob(repo, pp, sp, n);
+    free(pp); free(sp);
+    free_joined_split(paths, np);
+    free_joined_split(shas, ns);
+    return sha ? sha : "";
+}
+
+/* Build an ACL rule blob from \n-joined rules. */
+const char *svnserver_build_acl_blob_joined(const char *repo,
+                                             const char *rules_joined) {
+    char **rules = NULL;
+    int n = split_joined(rules_joined, &rules);
+    const char **rp = calloc((size_t)(n > 0 ? n : 1), sizeof *rp);
+    for (int i = 0; i < n; i++) rp[i] = rules[i];
+    const char *sha = svnae_build_acl_blob(repo, rp, n);
+    free(rp);
+    free_joined_split(rules, n);
+    return sha ? sha : "";
+}
+
+/* Build a paths-acl blob from \n-joined (paths, acl_shas). */
+const char *svnserver_build_paths_acl_blob_joined(const char *repo,
+                                                   const char *paths_joined,
+                                                   const char *shas_joined) {
+    char **paths = NULL, **shas = NULL;
+    int np = split_joined(paths_joined, &paths);
+    int ns = split_joined(shas_joined, &shas);
+    int n = np < ns ? np : ns;
+    const char **pp = calloc((size_t)(n > 0 ? n : 1), sizeof *pp);
+    const char **sp = calloc((size_t)(n > 0 ? n : 1), sizeof *sp);
+    for (int i = 0; i < n; i++) { pp[i] = paths[i]; sp[i] = shas[i]; }
+    const char *sha = svnae_build_paths_acl_blob(repo, pp, sp, n);
+    free(pp); free(sp);
+    free_joined_split(paths, np);
+    free_joined_split(shas, ns);
+    return sha ? sha : "";
+}
+
+/* base64 decode wrapper for Aether: decodes in-place-ish, calls
+ * svnae_txn_add_file with the decoded bytes+length. Returns 0 on
+ * success, -1 on base64 decode failure. Keeps the byte-length-
+ * aware txn_add_file call in C. */
+int svnserver_txn_add_b64(void *txn, const char *path, const char *b64) {
+    if (!b64) return -1;
+    unsigned char *raw = NULL;
+    int raw_len = 0;
+    if (b64_decode(b64, (int)strlen(b64), &raw, &raw_len) != 0) return -1;
+    svnae_txn_add_file((struct svnae_txn *)txn, path, (const char *)raw, raw_len);
+    free(raw);
+    return 0;
+}
+
 /* Thin C wrapper: Aether builds `globs_joined` as newline-separated
  * glob strings; we split into a const char** array for the existing
  * svnae_branch_create FFI. */
@@ -1110,222 +1230,11 @@ handle_repo_path_delete(HttpRequest *req, HttpServerResponse *res)
  *    -10  : unknown op
  *    -11  : commit finalise failed
  * The Aether handler maps each to the right HTTP status. */
+extern int aether_commit_from_body(HttpRequest *req, HttpServerResponse *res,
+                                   const char *repo);
 int svnserver_commit_from_body(HttpRequest *req, HttpServerResponse *res,
                                 const char *repo) {
-    (void)res;   /* all error paths return -N; Aether handler emits response */
-    if (!req->body || req->body_length == 0) return -1;
-
-    cJSON *root = cJSON_ParseWithLength(req->body, req->body_length);
-    if (!root) return -2;
-
-    cJSON *jbase   = cJSON_GetObjectItemCaseSensitive(root, "base_rev");
-    cJSON *jauthor = cJSON_GetObjectItemCaseSensitive(root, "author");
-    cJSON *jlog    = cJSON_GetObjectItemCaseSensitive(root, "log");
-    cJSON *jedits  = cJSON_GetObjectItemCaseSensitive(root, "edits");
-    if (!cJSON_IsNumber(jbase) || !cJSON_IsString(jauthor) ||
-        !cJSON_IsString(jlog)  || !cJSON_IsArray(jedits)) {
-        cJSON_Delete(root);
-        return -3;
-    }
-
-    int base_rev = json_valueint(jbase);
-
-    /* Write-ACL pre-scan (Phase 7.2): before building the txn, walk
-     * every edit path (and every ACL-touched path, below) and confirm
-     * the caller has write permission. Super-user bypasses. A denied
-     * path yields 403 for the whole commit — we don't partially apply.
-     *
-     * Phase 8.2b: same scan also enforces the branch include spec.
-     * Body may carry "branch": "<name>" (preferred); Svn-Branch header
-     * is the fallback. Absent both → "main". */
-    const char *commit_branch;
-    {
-        cJSON *jbranch = cJSON_GetObjectItemCaseSensitive(root, "branch");
-        commit_branch = (jbranch && cJSON_IsString(jbranch) && *json_valuestring(jbranch))
-                        ? json_valuestring(jbranch)
-                        : request_branch(req);
-    }
-    {
-        const char *user = NULL;
-        int is_super = auth_context(req, &user);
-        cJSON *ck;
-        cJSON_ArrayForEach(ck, jedits) {
-            cJSON *jp = cJSON_GetObjectItemCaseSensitive(ck, "path");
-            if (!cJSON_IsString(jp)) continue;
-            const char *epath = json_valuestring(jp);
-            if (!is_super &&
-                !acl_allows_mode(repo, base_rev, user, epath, 1)) {
-                cJSON_Delete(root);
-                return -4;
-            }
-            if (!spec_allows(repo, commit_branch, epath, is_super)) {
-                cJSON_Delete(root);
-                return -5;
-            }
-        }
-        if (!is_super) {
-            /* ACL changes themselves require write on the target path —
-             * otherwise a restricted user could self-elevate by setting
-             * +alice on /secret. */
-            cJSON *jacl_pre = cJSON_GetObjectItemCaseSensitive(root, "acl");
-            if (jacl_pre && cJSON_IsObject(jacl_pre)) {
-                int pre_n = json_object_size_raw(jacl_pre);
-                for (int pi = 0; pi < pre_n; pi++) {
-                    const char *apath = json_object_key_at(jacl_pre, pi);
-                    if (!apath) apath = "";
-                    if (!acl_allows_mode(repo, base_rev, user, apath, 1)) {
-                        cJSON_Delete(root);
-                        return -4;
-                    }
-                }
-            }
-        }
-    }
-
-    /* Copy out — we cJSON_Delete before calling finalise. */
-    char *author = strdup(json_valuestring(jauthor));
-    char *logmsg = strdup(json_valuestring(jlog));
-
-    struct svnae_txn *txn = svnae_txn_new(base_rev);
-    if (!txn) { free(author); free(logmsg); cJSON_Delete(root); return -6; }
-
-    cJSON *e;
-    cJSON_ArrayForEach(e, jedits) {
-        cJSON *jop   = cJSON_GetObjectItemCaseSensitive(e, "op");
-        cJSON *jpath = cJSON_GetObjectItemCaseSensitive(e, "path");
-        if (!cJSON_IsString(jop) || !cJSON_IsString(jpath)) {
-            svnae_txn_free(txn); free(author); free(logmsg); cJSON_Delete(root);
-            return -7;
-        }
-        const char *op   = json_valuestring(jop);
-        const char *path = json_valuestring(jpath);
-
-        if (strcmp(op, "add-file") == 0) {
-            cJSON *jcontent = cJSON_GetObjectItemCaseSensitive(e, "content");
-            if (!cJSON_IsString(jcontent)) {
-                svnae_txn_free(txn); free(author); free(logmsg); cJSON_Delete(root);
-                return -8;
-            }
-            const char *b64 = json_valuestring(jcontent);
-            unsigned char *raw = NULL;
-            int raw_len = 0;
-            if (b64_decode(b64, (int)strlen(b64), &raw, &raw_len) != 0) {
-                svnae_txn_free(txn); free(author); free(logmsg); cJSON_Delete(root);
-                return -9;
-            }
-            svnae_txn_add_file(txn, path, (const char *)raw, raw_len);
-            free(raw);
-        } else if (strcmp(op, "mkdir") == 0) {
-            svnae_txn_mkdir(txn, path);
-        } else if (strcmp(op, "delete") == 0) {
-            svnae_txn_delete(txn, path);
-        } else {
-            svnae_txn_free(txn); free(author); free(logmsg); cJSON_Delete(root);
-            return -10;
-        }
-    }
-
-    /* Optional top-level "props" object: { path: {key: value, ...}, ... } */
-    /* The WC always sends ALL current props for the set of paths it wants
-     * to persist. We honour what we're given verbatim. Must run BEFORE
-     * cJSON_Delete(root) since jprops lives inside root. */
-    cJSON *jprops = cJSON_GetObjectItemCaseSensitive(root, "props");
-    const char *use_props_sha1 = "";   /* default -> inherit prev */
-    char *built_props_sha1 = NULL;
-    if (jprops && cJSON_IsObject(jprops)) {
-        /* Build paths-props blob. */
-        int np = json_object_size_raw(jprops);
-        if (np > 0) {
-            const char **paths      = calloc((size_t)np, sizeof *paths);
-            const char **props_shas = calloc((size_t)np, sizeof *props_shas);
-            char       **props_sha_copies = calloc((size_t)np, sizeof *props_sha_copies);
-            int i = 0;
-            for (int pi = 0; pi < np; pi++) {
-                const char *this_path = json_object_key_at(jprops, pi);
-                cJSON *p = json_object_value_at(jprops, pi);
-                paths[i] = this_path ? this_path : "";
-                /* p is an object; its children are key:value string pairs. */
-                int nk = cJSON_IsObject(p) ? json_object_size_raw(p) : 0;
-                const char **keys   = calloc((size_t)(nk > 0 ? nk : 1), sizeof *keys);
-                const char **values = calloc((size_t)(nk > 0 ? nk : 1), sizeof *values);
-                int k = 0;
-                for (int ki = 0; ki < nk; ki++) {
-                    cJSON *kv = json_object_value_at(p, ki);
-                    if (cJSON_IsString(kv)) {
-                        const char *kname = json_object_key_at(p, ki);
-                        keys[k]   = kname ? kname : "";
-                        values[k] = json_valuestring(kv) ? json_valuestring(kv) : "";
-                        k++;
-                    }
-                }
-                const char *psha = svnae_build_props_blob(repo, keys, values, k);
-                free(keys); free(values);
-                if (!psha) psha = "";
-                props_sha_copies[i] = strdup(psha);
-                props_shas[i]       = props_sha_copies[i];
-                i++;
-            }
-            const char *psb = svnae_build_paths_props_blob(repo, paths, props_shas, i);
-            if (psb) built_props_sha1 = strdup(psb);
-            for (int j = 0; j < i; j++) free(props_sha_copies[j]);
-            free(props_sha_copies); free(paths); free(props_shas);
-            if (built_props_sha1) use_props_sha1 = built_props_sha1;
-        }
-    }
-    /* Optional top-level "acl" object: { path: ["+alice","-eve"], ... }.
-     * Empty array removes the ACL on that path. If the key is omitted
-     * entirely, ACLs inherit from the previous rev (handled by
-     * svnae_commit_finalise_with_acl when we pass ""). */
-    cJSON *jacl = cJSON_GetObjectItemCaseSensitive(root, "acl");
-    const char *use_acl_sha1 = "";
-    char *built_acl_sha1 = NULL;
-    if (jacl && cJSON_IsObject(jacl)) {
-        int np = json_object_size_raw(jacl);
-        if (np > 0) {
-            const char **paths     = calloc((size_t)np, sizeof *paths);
-            const char **acl_shas  = calloc((size_t)np, sizeof *acl_shas);
-            char       **sha_copies = calloc((size_t)np, sizeof *sha_copies);
-            int i = 0;
-            for (int pi = 0; pi < np; pi++) {
-                const char *this_path = json_object_key_at(jacl, pi);
-                cJSON *p = json_object_value_at(jacl, pi);
-                if (!cJSON_IsArray(p)) continue;
-                int nr = cJSON_GetArraySize(p);
-                if (nr == 0) continue;   /* empty = remove */
-                const char **rules = calloc((size_t)nr, sizeof *rules);
-                int rcount = 0;
-                for (int k = 0; k < nr; k++) {
-                    cJSON *r = cJSON_GetArrayItem(p, k);
-                    if (cJSON_IsString(r)) rules[rcount++] = json_valuestring(r);
-                }
-                const char *asha = svnae_build_acl_blob(repo, rules, rcount);
-                free(rules);
-                if (!asha) asha = "";
-                paths[i] = this_path ? this_path : "";
-                sha_copies[i] = strdup(asha);
-                acl_shas[i] = sha_copies[i];
-                i++;
-            }
-            if (i > 0) {
-                const char *pab = svnae_build_paths_acl_blob(repo, paths, acl_shas, i);
-                if (pab) built_acl_sha1 = strdup(pab);
-            }
-            for (int j = 0; j < i; j++) free(sha_copies[j]);
-            free(sha_copies); free(paths); free(acl_shas);
-            if (built_acl_sha1) use_acl_sha1 = built_acl_sha1;
-        }
-    }
-    cJSON_Delete(root);
-
-    int new_rev = svnae_commit_finalise_with_acl(repo, txn, author, logmsg,
-                                                 use_props_sha1, use_acl_sha1);
-    svnae_txn_free(txn);
-    free(author);
-    free(logmsg);
-    free(built_props_sha1);
-    free(built_acl_sha1);
-    if (new_rev < 0) return -11;
-    return new_rev;
+    return aether_commit_from_body(req, res, repo);
 }
 
 /* POST /commit — ported to ae/svnserver/handler_commit.ae. */
