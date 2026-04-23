@@ -207,14 +207,6 @@ rtree_free(struct remote_tree *rt)
     free(rt->items);
 }
 
-static const struct remote_node *
-rtree_find(const struct remote_tree *rt, const char *path)
-{
-    for (int i = 0; i < rt->n; i++)
-        if (strcmp(rt->items[i].path, path) == 0) return &rt->items[i];
-    return NULL;
-}
-
 /* Accessors for the Aether apply-pass port. Indexed by position in
  * the remote_tree list (0..rtree_count-1). The data pointer+length
  * pair works like std.fs's TLS buffer: valid for the lifetime of

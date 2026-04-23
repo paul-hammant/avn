@@ -146,13 +146,6 @@ rt_free(struct rtree *rt)
     free(rt->items);
 }
 
-static const struct rnode *
-rt_find(const struct rtree *rt, const char *path)
-{
-    for (int i = 0; i < rt->n; i++) if (strcmp(rt->items[i].path, path) == 0) return &rt->items[i];
-    return NULL;
-}
-
 /* Accessors for the Aether apply-pass port. Mirror the ones in
  * update_shim.c (different struct name — `rtree` here vs
  * `remote_tree` there — but same fields). */
