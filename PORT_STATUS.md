@@ -72,6 +72,13 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
   shims. No functional change, no port activity — just cleanup
   toward the natural end state at 36-37% C.
 
+- **Round 30** (current): **36.66% C, 63.34% Aether.** Inlined
+  trivial `mkdir_p` and `write_file_atomic` wrappers in
+  svnadmin/shim.c. Both are pure pass-throughs to aether_io_mkdir_p
+  and aether_io_write_atomic (7-11 call sites each); fall in the
+  "always inline" range per pattern 3. svnadmin/shim.c: 511 → 504
+  LOC (-7 LOC). Total C drop: -7 LOC. Final steady state: 36.66% C.
+
 - **Rounds 26-27**: **37.85% C, 62.15% Aether.** Leaf
   sweep after the structural passes:
   - svnae_repos_info_rev: ported to ae/repos/log.ae's
