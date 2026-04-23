@@ -44,7 +44,25 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
   `int_to_dec` + `digit_char` in favour of `std.string.from_int` now
   that it's available, and ported the WC pristine-store path builder
   to ae/wc/pristine_path.ae (handles the two-level XX/YY/ fanout).
-- **Round 25** (current): **38.08% C, 61.92% Aether** (C now
+- **Rounds 26-27** (current): **37.85% C, 62.15% Aether.** Leaf
+  sweep after the structural passes:
+  - svnae_repos_info_rev: ported to ae/repos/log.ae's
+    repos_info_packed. One rev-blob read in Aether → packed
+    "<rev>\x01<author>\x01<date>\x01<msg>" record → C reuses
+    ra_info_* accessors from packed.ae verbatim. 4× fewer
+    rev-blob reads per info lookup at runtime.
+  - Nine trivial C→aether_* trampolines inlined at call sites:
+    repos head_rev (2), svnserver acl_allows_mode / acl_allows /
+    based_on_check / spec_allows / request_branch / header_or_null,
+    wc/update + wc/merge walk_remote, fs_fs/rep_store mkdir_p.
+    All were pure name-translation layers left over from when
+    the ports landed incrementally.
+  - mkdir_p + write_atomic alias pairs inlined in wc/checkout,
+    wc/pristine, wc/revert, fs_fs/rep_store. Kept the ones in
+    commit_shim.c (12 uses) and svnadmin/shim.c (17 uses) where
+    the short alias still earns its line.
+
+- **Round 25**: **38.08% C, 61.92% Aether** (C now
   under 10,000 LOC for the first time). A particularly silly
   round-trip: Aether built `globs_joined` as a newline-separated
   string → called svnserver_branch_create_globs (C) → C split
