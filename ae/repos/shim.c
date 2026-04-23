@@ -41,6 +41,8 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include "../subr/pin_list.h"
+
 /* We piggyback on the rep-store shim for blob reads and on the fs_fs shim
  * for small-file reads. Declarations here; definitions link in from the
  * other shims (see aether.toml extra_sources for the test binary). */
@@ -72,36 +74,6 @@ extern int aether_repos_head_rev(const char *repo);
  * strdup'd copies alive across recursive / interleaved calls, the
  * same stable-pointer contract this API has always had. */
 
-struct pin_list {
-    char **items;
-    int n, cap;
-};
-
-static const char *
-pin_str(struct pin_list *pl, const char *fresh)
-{
-    if (!fresh) fresh = "";
-    if (pl->n == pl->cap) {
-        int nc = pl->cap ? pl->cap * 2 : 8;
-        char **np = realloc(pl->items, (size_t)nc * sizeof *np);
-        if (!np) return "";
-        pl->items = np;
-        pl->cap = nc;
-    }
-    char *copy = strdup(fresh);
-    if (!copy) return "";
-    pl->items[pl->n++] = copy;
-    return copy;
-}
-
-static void
-pin_list_free(struct pin_list *pl)
-{
-    for (int i = 0; i < pl->n; i++) free(pl->items[i]);
-    free(pl->items);
-    pl->items = NULL;
-    pl->n = pl->cap = 0;
-}
 
 struct svnae_log { char *packed; int n; struct pin_list pins; };
 
