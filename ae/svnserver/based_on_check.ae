@@ -1,0 +1,87 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// permissions and limitations under the License.
+
+// Optimistic-concurrency check: compare Svn-Based-On header against
+// the current content sha at `path` at `head_rev`.
+//   Returns 1 OK (either based-on matches, or caller omitted it
+//              and "create new" is allowed and path doesn't exist).
+//   Returns 0 conflict — response already emitted with 404 or 409.
+//
+// allow_missing_as_create=1 for PUT, 0 for DELETE.
+//
+// The Aether handler layer calls this via svnserver_based_on_check
+// C wrapper; previously 40 lines of C in svnserver/shim.c.
+
+import std.http
+import std.string
+
+extern svnserver_request_header(req: ptr, name: string) -> string
+extern svnae_repos_resolve_kind(repo: string, rev: int, path: string) -> int
+extern svnae_repos_resolve_sha(repo: string, rev: int, path: string) -> string
+extern svnserver_respond_error(res: ptr, code: int, msg: string)
+
+export based_on_check(req: ptr, res: ptr, repo: string, head_rev: int,
+                      path: string, allow_missing_as_create: int) -> int {
+    return based_on_check_impl(req, res, repo, head_rev, path,
+                                allow_missing_as_create)
+}
+
+based_on_check_impl(req: ptr, res: ptr, repo: string, head_rev: int,
+                     path: string, allow_missing_as_create: int) -> int {
+    based_on = svnserver_request_header(req, "Svn-Based-On")
+
+    // svnae_repos_resolve_kind returns 0 on miss, else the kind byte.
+    kind = svnae_repos_resolve_kind(repo, head_rev, path)
+    exists = 0
+    cur_sha = ""
+    if kind != 0 {
+        exists = 1
+        cur_sha = string.copy(svnae_repos_resolve_sha(repo, head_rev, path))
+    }
+
+    if string.length(based_on) == 0 {
+        // Omitted. Caller is asserting "create new".
+        if exists == 1 {
+            if allow_missing_as_create == 1 {
+                http.response_set_header(res, "X-Svnae-Current-Hash", cur_sha)
+                svnserver_respond_error(res, 409, "based_on missing but path exists")
+                return 0
+            }
+        }
+        if exists == 0 {
+            if allow_missing_as_create == 0 {
+                svnserver_respond_error(res, 404, "not found")
+                return 0
+            }
+        }
+        return 1
+    }
+
+    // Header present. Path must exist.
+    if exists == 0 {
+        svnserver_respond_error(res, 404, "not found")
+        return 0
+    }
+    if string.equals(based_on, cur_sha) == 0 {
+        http.response_set_header(res, "X-Svnae-Current-Hash", cur_sha)
+        svnserver_respond_error(res, 409, "based_on mismatch")
+        return 0
+    }
+    return 1
+}
+
+main() {
+    println("ae/svnserver/based_on_check.ae is a library; not meant to run standalone")
+}

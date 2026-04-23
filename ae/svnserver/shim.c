@@ -359,16 +359,7 @@ acl_allows(const char *repo, int rev, const char *user, const char *target_path)
     return acl_allows_mode(repo, rev, user, target_path, 0);
 }
 
-/* Compute the algorithm's hex digest of `data[0..len]` into `out`.
- * `out` is [65] bytes. Returns hex length or 0. */
-/* Consolidated in ae/ffi/openssl/shim.c. */
 extern int svnae_openssl_hash_hex_into(const char *algo, const char *data, int len, char *out);
-
-static int
-hex_digest(const char *algo, const char *data, int len, char *out)
-{
-    return svnae_openssl_hash_hex_into(algo, data, len, out);
-}
 
 /* Aether-callable ACL + hash wrappers. The redact walker is ported
  * to ae/svnserver/redact.ae, which reaches through these. */
@@ -380,8 +371,8 @@ int svnserver_acl_allows(const char *repo, int rev, const char *user,
 const char *svnserver_hash_hex(const char *repo, const char *data, int length) {
     static __thread char buf[65];
     buf[0] = '\0';
-    const char *algo = svnae_repo_primary_hash(repo);
-    hex_digest(algo, data ? data : "", length, buf);
+    svnae_openssl_hash_hex_into(svnae_repo_primary_hash(repo),
+                                data ? data : "", length, buf);
     return buf;
 }
 
@@ -863,53 +854,19 @@ handle_repo_path_get(HttpRequest *req, HttpServerResponse *res)
     aether_handler_path_get(req, res);
 }
 
-/* Optimistic-concurrency check: compare Svn-Based-On header against
- * the current content sha at `path`. Returns:
- *    1 OK (either the caller's based-on matches, or the caller omitted
- *      it and the path currently doesn't exist — "create new")
- *    0 conflict (response already emitted with 409)
- */
+/* Optimistic-concurrency check ported to
+ * ae/svnserver/based_on_check.ae. */
+extern int aether_based_on_check(void *req, void *res,
+                                 const char *repo, int head_rev,
+                                 const char *path,
+                                 int allow_missing_as_create);
 static int
 based_on_check(HttpRequest *req, HttpServerResponse *res,
                const char *repo, int head_rev, const char *path,
                int allow_missing_as_create)
 {
-    const char *based_on = header_or_null(req, "Svn-Based-On");
-
-    char cur_sha[65] = {0};
-    char cur_kind = 0;
-    int exists = svnae_repos_resolve(repo, head_rev, path, cur_sha, &cur_kind);
-
-    if (!based_on) {
-        /* Omitted. Caller is asserting "create new": fail if path
-         * already exists (unless allow_missing_as_create is 0 — DELETE
-         * always needs based_on, even though the path must exist). */
-        if (exists && allow_missing_as_create) {
-            http_response_set_header(res, "X-Svnae-Current-Hash", cur_sha);
-            respond_error(res, 409, "based_on missing but path exists");
-            return 0;
-        }
-        if (!exists && !allow_missing_as_create) {
-            respond_error(res, 404, "not found");
-            return 0;
-        }
-        return 1;
-    }
-
-    /* Header present. If the path doesn't exist we return 404 —
-     * "already gone" is a more actionable signal to scripted callers
-     * than a generic based_on mismatch. Distinguishable from an
-     * auth-denial 404 by the header being attempted at all. */
-    if (!exists) {
-        respond_error(res, 404, "not found");
-        return 0;
-    }
-    if (strcmp(based_on, cur_sha) != 0) {
-        http_response_set_header(res, "X-Svnae-Current-Hash", cur_sha);
-        respond_error(res, 409, "based_on mismatch");
-        return 0;
-    }
-    return 1;
+    return aether_based_on_check(req, res, repo, head_rev, path,
+                                 allow_missing_as_create);
 }
 
 /* Aether-callable wrappers around the static request-inspection and
