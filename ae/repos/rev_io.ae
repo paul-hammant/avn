@@ -120,6 +120,42 @@ export repos_load_rev_blob_field(repo: string, rev: int, key: string) -> string 
     return v
 }
 
+// $repo/format → first-line contents, whitespace-stripped.
+// Returns "" on missing file (or whole-empty line).
+// The format file is always single-line, but legacy readers used
+// fgets' "first line or bust" semantics, so we preserve that by
+// clipping at the first '\n' if one happens to slip in.
+export repos_format_line(repo: string) -> string {
+    return repos_format_line_impl(repo)
+}
+
+repos_format_line_impl(repo: string) -> string {
+    path = string.concat(repo, "/format")
+    if aether_io_file_size(path) < 0 { return "" }
+    src = aether_io_read_file(path)
+
+    // Clip at first '\n' if present.
+    n = string.length(src)
+    i = 0
+    while i < n {
+        if string.char_at(src, i) == 10 { break }
+        i = i + 1
+    }
+    line = string.substring(src, 0, i)
+
+    // Trim trailing '\r' and spaces.
+    l = string.length(line)
+    while l > 0 {
+        c = string.char_at(line, l - 1)
+        if c == 13 { l = l - 1 }
+        if c != 13 {
+            if c == 32 { l = l - 1 }
+            if c != 32 { break }
+        }
+    }
+    return string.substring(line, 0, l)
+}
+
 main() {
     println("ae/repos/rev_io.ae is a library; not meant to run standalone")
 }
