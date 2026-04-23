@@ -162,6 +162,75 @@ export ra_parse_log(body: string) -> string {
     return string.concat(header, out)
 }
 
+// Parse paths-changed JSON into packed "N\x02<entry>\x02<entry>..."
+// where each entry is "<action>\x01<path>". action is a single
+// char from {A,M,D,?}.
+export ra_parse_paths(body: string) -> string {
+    if string.length(body) == 0 { return "" }
+    root, err = json.parse(body)
+    if string.length(err) > 0 { return "" }
+
+    jentries, jerr = json.object_get(root, "entries")
+    if string.length(jerr) > 0 { json.free(root); return "" }
+    if jentries == null { json.free(root); return "" }
+
+    n = json.array_size(jentries)
+    out = ""
+    i = 0
+    while i < n {
+        entry, _ = json.array_get(jentries, i)
+        action = get_string_field(entry, "action")
+        if string.length(action) == 0 { action = "?" }
+        path = get_string_field(entry, "path")
+
+        packed = string.concat(action, "\x01")
+        packed = string.concat(packed, path)
+
+        if i == 0 { out = packed }
+        if i > 0 {
+            out = string.concat(out, "\x02")
+            out = string.concat(out, packed)
+        }
+        i = i + 1
+    }
+
+    header = string.concat(string.from_int(n), "\x02")
+    json.free(root)
+    if n == 0 { return header }
+    return string.concat(header, out)
+}
+
+// Parse a props JSON object {k: v, k: v, ...} into
+// "N\x02<key>\x01<value>\x02<key>\x01<value>..."
+export ra_parse_props(body: string) -> string {
+    if string.length(body) == 0 { return "" }
+    root, err = json.parse(body)
+    if string.length(err) > 0 { return "" }
+
+    n = json.object_size(root)
+    out = ""
+    i = 0
+    while i < n {
+        key, jv, _eerr = json.object_entry(root, i)
+        sv, _serr = json.get_string(jv)
+
+        packed = string.concat(key, "\x01")
+        packed = string.concat(packed, sv)
+
+        if i == 0 { out = packed }
+        if i > 0 {
+            out = string.concat(out, "\x02")
+            out = string.concat(out, packed)
+        }
+        i = i + 1
+    }
+
+    header = string.concat(string.from_int(n), "\x02")
+    json.free(root)
+    if n == 0 { return header }
+    return string.concat(header, out)
+}
+
 main() {
     println("ae/ra/parse.ae is a library; not meant to run standalone")
 }

@@ -499,6 +499,7 @@ svnae_ra_log_free(struct svnae_ra_log *lg)
 struct path_change_ra { char action; char *path; };
 struct svnae_ra_paths { struct path_change_ra *items; int n; };
 
+extern const char *aether_ra_parse_paths(const char *body);
 struct svnae_ra_paths *
 svnae_ra_paths_changed(const char *base_url, const char *repo_name, int rev)
 {
@@ -507,27 +508,34 @@ svnae_ra_paths_changed(const char *base_url, const char *repo_name, int rev)
     if (http_get(url, &body, &len, &status) != 0) return NULL;
     if (status != 200) { free(body); return NULL; }
 
-    cJSON *root = cJSON_ParseWithLength(body, len);
+    /* JSON parse ported to ae/ra/parse.ae::ra_parse_paths.
+     * Returns "N\x02<action>\x01<path>\x02..." */
+    const char *packed = aether_ra_parse_paths(body);
     free(body);
-    if (!root) return NULL;
-    cJSON *jentries = cJSON_GetObjectItemCaseSensitive(root, "entries");
-    if (!cJSON_IsArray(jentries)) { cJSON_Delete(root); return NULL; }
+    if (!packed || !*packed) return NULL;
 
-    int n = cJSON_GetArraySize(jentries);
+    const char *p = packed;
+    const char *sep = strchr(p, 2);
+    if (!sep) return NULL;
+    char nbuf[32];
+    size_t nlen = (size_t)(sep - p);
+    if (nlen >= sizeof nbuf) nlen = sizeof nbuf - 1;
+    memcpy(nbuf, p, nlen); nbuf[nlen] = '\0';
+    int n = (int)strtol(nbuf, NULL, 10);
+    p = sep + 1;
+
     struct svnae_ra_paths *P = calloc(1, sizeof *P);
     P->n = n;
     P->items = calloc((size_t)(n > 0 ? n : 1), sizeof *P->items);
-    int i = 0;
-    cJSON *e;
-    cJSON_ArrayForEach(e, jentries) {
-        cJSON *ja = cJSON_GetObjectItemCaseSensitive(e, "action");
-        cJSON *jp = cJSON_GetObjectItemCaseSensitive(e, "path");
-        P->items[i].action = (cJSON_IsString(ja) && json_valuestring(ja)[0])
-                                 ? json_valuestring(ja)[0] : '?';
-        P->items[i].path   = cJSON_IsString(jp) ? strdup(json_valuestring(jp)) : strdup("");
-        i++;
+    for (int i = 0; i < n; i++) {
+        const char *entry_end = strchr(p, 2);
+        if (!entry_end) entry_end = p + strlen(p);
+        const char *mid = memchr(p, 1, (size_t)(entry_end - p));
+        if (!mid) continue;
+        P->items[i].action = (mid > p) ? *p : '?';
+        P->items[i].path   = strndup(mid + 1, (size_t)(entry_end - (mid + 1)));
+        p = *entry_end == 2 ? entry_end + 1 : entry_end;
     }
-    cJSON_Delete(root);
     return P;
 }
 
@@ -714,6 +722,7 @@ void svnae_ra_free(char *p) { free(p); }
 struct prop_entry_ra { char *name; char *value; };
 struct svnae_ra_props { struct prop_entry_ra *items; int n; };
 
+extern const char *aether_ra_parse_props(const char *body);
 struct svnae_ra_props *
 svnae_ra_get_props(const char *base_url, const char *repo_name,
                    int rev, const char *path)
@@ -723,23 +732,35 @@ svnae_ra_get_props(const char *base_url, const char *repo_name,
     char *body = NULL; size_t len = 0; int status = 0;
     if (http_get(url, &body, &len, &status) != 0) return NULL;
     if (status != 200) { free(body); return NULL; }
-    cJSON *root = cJSON_ParseWithLength(body, len);
-    free(body);
-    if (!root) return NULL;
-    if (!cJSON_IsObject(root)) { cJSON_Delete(root); return NULL; }
 
-    int n = json_object_size_raw(root);
-    if (n < 0) n = 0;
+    /* JSON parse ported to ae/ra/parse.ae::ra_parse_props.
+     * Returns "N\x02<key>\x01<value>\x02..." */
+    const char *packed = aether_ra_parse_props(body);
+    free(body);
+    if (!packed || !*packed) return NULL;
+
+    const char *p = packed;
+    const char *sep = strchr(p, 2);
+    if (!sep) return NULL;
+    char nbuf[32];
+    size_t nlen = (size_t)(sep - p);
+    if (nlen >= sizeof nbuf) nlen = sizeof nbuf - 1;
+    memcpy(nbuf, p, nlen); nbuf[nlen] = '\0';
+    int n = (int)strtol(nbuf, NULL, 10);
+    p = sep + 1;
+
     struct svnae_ra_props *P = calloc(1, sizeof *P);
     P->n = n;
     P->items = calloc((size_t)(n > 0 ? n : 1), sizeof *P->items);
     for (int i = 0; i < n; i++) {
-        const char *k = json_object_key_at(root, i);
-        JsonValue  *v = json_object_value_at(root, i);
-        P->items[i].name  = strdup(k ? k : "");
-        P->items[i].value = cJSON_IsString(v) ? strdup(json_valuestring(v)) : strdup("");
+        const char *entry_end = strchr(p, 2);
+        if (!entry_end) entry_end = p + strlen(p);
+        const char *mid = memchr(p, 1, (size_t)(entry_end - p));
+        if (!mid) continue;
+        P->items[i].name  = strndup(p, (size_t)(mid - p));
+        P->items[i].value = strndup(mid + 1, (size_t)(entry_end - (mid + 1)));
+        p = *entry_end == 2 ? entry_end + 1 : entry_end;
     }
-    cJSON_Delete(root);
     return P;
 }
 
