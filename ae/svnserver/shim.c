@@ -1394,66 +1394,9 @@ auto_follow_copy_acl(const char *repo, int base_rev,
  *    -6   : from_path missing at base_rev
  *    -7   : commit failed
  * The Aether handler maps each to an HTTP response code. */
+extern int aether_copy_from_body(HttpRequest *req, const char *repo);
 int svnserver_copy_from_body(HttpRequest *req, const char *repo) {
-    if (!req->body || req->body_length == 0) return -1;
-    cJSON *root = cJSON_ParseWithLength(req->body, req->body_length);
-    if (!root) return -2;
-
-    cJSON *jbase = cJSON_GetObjectItemCaseSensitive(root, "base_rev");
-    cJSON *jfrom = cJSON_GetObjectItemCaseSensitive(root, "from_path");
-    cJSON *jto   = cJSON_GetObjectItemCaseSensitive(root, "to_path");
-    cJSON *jaut  = cJSON_GetObjectItemCaseSensitive(root, "author");
-    cJSON *jlog  = cJSON_GetObjectItemCaseSensitive(root, "log");
-    if (!cJSON_IsNumber(jbase) || !cJSON_IsString(jfrom) ||
-        !cJSON_IsString(jto)   || !cJSON_IsString(jaut)  ||
-        !cJSON_IsString(jlog)) {
-        cJSON_Delete(root);
-        return -3;
-    }
-
-    int base_rev = json_valueint(jbase);
-    char *from_path = strdup(json_valuestring(jfrom));
-    char *to_path   = strdup(json_valuestring(jto));
-    char *author    = strdup(json_valuestring(jaut));
-    char *logmsg    = strdup(json_valuestring(jlog));
-    cJSON_Delete(root);
-
-    const char *user = NULL;
-    int is_super = auth_context(req, &user);
-    if (!is_super) {
-        if (!acl_user_has_rw_subtree(repo, base_rev, user, from_path) ||
-            !acl_allows_mode(repo, base_rev, user, to_path, 1)) {
-            free(from_path); free(to_path); free(author); free(logmsg);
-            return -4;
-        }
-    }
-    const char *cp_branch = request_branch(req);
-    if (!spec_allows(repo, cp_branch, from_path, is_super) ||
-        !spec_allows(repo, cp_branch, to_path,   is_super)) {
-        free(from_path); free(to_path); free(author); free(logmsg);
-        return -5;
-    }
-
-    char sha1[65];
-    char kind_char;
-    if (!svnae_repos_resolve(repo, base_rev, from_path, sha1, &kind_char)) {
-        free(from_path); free(to_path); free(author); free(logmsg);
-        return -6;
-    }
-
-    char *new_acl_sha = auto_follow_copy_acl(repo, base_rev, from_path, to_path);
-
-    struct svnae_txn *txn = svnae_txn_new(base_rev);
-    svnae_txn_copy(txn, to_path, sha1, kind_char == 'd' ? 1 : 0);
-    int new_rev = svnae_commit_finalise_with_acl(repo, txn, author, logmsg,
-                                                  "",
-                                                  new_acl_sha ? new_acl_sha : "");
-    svnae_txn_free(txn);
-    free(from_path); free(to_path); free(author); free(logmsg);
-    free(new_acl_sha);
-
-    if (new_rev < 0) return -7;
-    return new_rev;
+    return aether_copy_from_body(req, repo);
 }
 
 /* POST /copy — ported to ae/svnserver/handler_copy.ae. */
