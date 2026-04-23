@@ -91,8 +91,6 @@ extern const char *aether_dir_entry_name(const char *body, int i);
 /* All other aether_* externs used throughout. Consolidated here so
  * every call site (including respond_error which lives very early) has
  * the declarations in scope. */
-extern const char *aether_json_escape_string(const char *v);
-extern const char *aether_json_int_to_dec(int v);
 extern const char *aether_props_blob_to_json(const char *body);
 extern const char *aether_specs_to_json_array(const char *body);
 extern const char *aether_log_entry_json(int rev, const char *author, const char *date, const char *msg);
@@ -278,15 +276,6 @@ set_merkle_headers(HttpServerResponse *res, const char *algo,
         http_response_set_header(res, "X-Svnae-Node-Hash", sha);
 }
 
-/* Forward declarations — ACL helpers below reference these before
- * they're defined in this file. Full struct sb definition inlined so
- * the ACL pass can use it (moves the shared definition up). */
-struct sb { char *data; size_t len, cap; };
-static void sb_push(struct sb *s, const char *p, size_t n);
-static void sb_putc(struct sb *s, char c);
-static void sb_puts(struct sb *s, const char *p);
-static void sb_putjson_string(struct sb *s, const char *v);
-static void sb_putjson_int(struct sb *s, int v);
 static char *load_rev_blob_field(const char *repo, int rev, const char *key);
 
 /* --- authorization (Phase 7.1) --------------------------------------
@@ -496,37 +485,9 @@ int svnserver_request_is_super(HttpRequest *req) {
     return auth_context(req, &user);
 }
 
-/* --- JSON string builder ---------------------------------------------- */
-
-static void sb_push(struct sb *s, const char *p, size_t n)
-{
-    if (s->len + n + 1 > s->cap) {
-        size_t nc = s->cap ? s->cap * 2 : 256;
-        while (nc < s->len + n + 1) nc *= 2;
-        s->data = realloc(s->data, nc);
-        s->cap = nc;
-    }
-    memcpy(s->data + s->len, p, n);
-    s->len += n;
-    s->data[s->len] = '\0';
-}
-static void sb_putc(struct sb *s, char c) { sb_push(s, &c, 1); }
-static void sb_puts(struct sb *s, const char *p) { sb_push(s, p, strlen(p)); }
-
-/* JSON formatting ported to Aether (ae/svnserver/json.ae, --emit=lib).
- * The C entry points are now thin wrappers so none of the 35-ish call
- * sites need to change. */
-static void
-sb_putjson_string(struct sb *s, const char *v)
-{
-    sb_puts(s, aether_json_escape_string(v ? v : ""));
-}
-
-static void
-sb_putjson_int(struct sb *s, int v)
-{
-    sb_puts(s, aether_json_int_to_dec(v));
-}
+/* sb_* JSON-string-builder helpers previously lived here; all call
+ * sites have moved to Aether-side builders in ae/svnserver/json.ae
+ * and friends. Dead code removed. */
 
 /* --- repo path registry ------------------------------------------------ *
  *
