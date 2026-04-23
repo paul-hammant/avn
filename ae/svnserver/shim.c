@@ -954,43 +954,12 @@ spec_allows(const char *repo, const char *branch, const char *path, int is_super
     return svnae_branch_spec_allows(repo, branch, path) == 1;
 }
 
-/* GET /repos/{r}/path/<path>: convenience — returns HEAD content.
- * Internally a redirect-in-code to the /rev/HEAD/cat handler's logic.
- * We reimplement inline rather than fabricate a fake req because the
- * cat handler parses URL tails. */
+/* GET /repos/{r}/path/<path> — ported to ae/svnserver/handler_path_get.ae. */
+extern void aether_handler_path_get(void *req, void *res);
 static void
 handle_repo_path_get(HttpRequest *req, HttpServerResponse *res)
 {
-    char name[128];
-    const char *tail = parse_repo_and_tail(req->path, name, sizeof name);
-    if (!tail || strncmp(tail, "/path/", 6) != 0) {
-        respond_error(res, 404, "not found"); return;
-    }
-    const char *repo = find_repo_path(name);
-    if (!repo) { respond_error(res, 404, "no such repo"); return; }
-    const char *file_path = tail + 6;
-
-    int rev = svnae_repos_head_rev(repo);
-    if (rev < 0) { respond_error(res, 500, "cannot read head"); return; }
-
-    const char *user = NULL;
-    int is_super = auth_context(req, &user);
-    if (!is_super && !acl_allows(repo, rev, user, file_path)) {
-        respond_error(res, 404, "not found");
-        return;
-    }
-
-    char *data = svnae_repos_cat(repo, rev, file_path);
-    if (!data) { respond_error(res, 404, "not found"); return; }
-    size_t len = strlen(data);
-    char node_sha[65] = {0};
-    char node_kind = 0;
-    if (svnae_repos_resolve(repo, rev, file_path, node_sha, &node_kind)) {
-        set_merkle_headers(res, svnae_repo_primary_hash(repo),
-                           node_kind == 'd' ? "dir" : "file", node_sha);
-    }
-    respond_binary(res, data, len, "application/octet-stream");
-    svnae_rep_free(data);
+    aether_handler_path_get(req, res);
 }
 
 /* Optimistic-concurrency check: compare Svn-Based-On header against
