@@ -417,28 +417,6 @@ const char *svnserver_load_rev_root_sha(const char *repo, int rev) {
     return buf;
 }
 
-/* Recursively compute the redacted-for-`user` sha of the dir at
- * `dir_sha`. Writes 65-byte hex into `out`. Returns 0 on success.
- * Ported to Aether (ae/svnserver/redact.ae); the wrapper preserves
- * the old out-param signature for the three call sites. */
-extern const char *aether_redacted_dir_sha(const char *repo, int rev,
-                                           const char *user,
-                                           const char *dir_sha,
-                                           const char *prefix);
-
-static int
-compute_redacted_dir_sha(const char *repo, int rev, const char *user,
-                         const char *dir_sha, const char *prefix, char *out)
-{
-    const char *hex = aether_redacted_dir_sha(repo, rev, user, dir_sha, prefix);
-    if (!hex || !*hex) { out[0] = '\0'; return -1; }
-    size_t n = strlen(hex);
-    if (n >= 65) n = 64;
-    memcpy(out, hex, n);
-    out[n] = '\0';
-    return 0;
-}
-
 /* Figure out the effective auth context for this request. Returns
  * 1 if super-user (bypass ACL), 0 otherwise. Writes the effective
  * username (possibly "") into `*out_user` as a static-thread-local. */
@@ -563,39 +541,9 @@ const char *svnserver_build_secondary_pairs(const char *repo, const char *node_s
  * doesn't cover the "capture rest of path" pattern we need for cat/list.
  */
 
-/* Given "/repos/NAME/tail", populate name (up to sizeof buf) and return
- * pointer to the tail (starting with '/'), or NULL on malformed input. */
-static const char *
-parse_repo_and_tail(const char *path, char *name_buf, size_t name_sz)
-{
-    const char *prefix = "/repos/";
-    size_t plen = strlen(prefix);
-    if (strncmp(path, prefix, plen) != 0) return NULL;
-    const char *p = path + plen;
-    const char *slash = strchr(p, '/');
-    size_t nlen = slash ? (size_t)(slash - p) : strlen(p);
-    if (nlen == 0 || nlen >= name_sz) return NULL;
-    memcpy(name_buf, p, nlen);
-    name_buf[nlen] = '\0';
-    return slash ? slash : p + nlen;  /* if no slash, return empty-string tail */
-}
-
-/* --- handlers --------------------------------------------------------- */
-
-/* Ported to Aether (ae/svnserver/url_parse.ae). The thin wrapper keeps
- * the original out-param shape the two call sites use. */
-extern int aether_parse_rev_prefix(const char *tail);
-extern int aether_parse_rev_prefix_end(const char *tail);
-
-static int
-parse_rev_from_tail(const char *tail, int *out_rev, const char **after)
-{
-    int end = aether_parse_rev_prefix_end(tail);
-    if (end < 0) return 0;
-    *out_rev = aether_parse_rev_prefix(tail);
-    *after = tail + end;   /* points at '/', or '\0' */
-    return 1;
-}
+/* parse_repo_and_tail + parse_rev_from_tail were URL parsers used by
+ * the C-side dispatcher. Both dispatchers are now Aether-side
+ * (dispatch.ae + handle_repo_rev.ae); dropped. */
 
 /* handle_repo_info / handle_repo_log were C-side trampolines for the
  * dispatch table. Both dispatch + table entries are now Aether-side
