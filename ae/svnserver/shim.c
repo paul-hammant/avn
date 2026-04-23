@@ -1018,50 +1018,46 @@ int svnserver_request_body_length(HttpRequest *req) {
  * The Aether handler maps each negative value to the appropriate HTTP
  * error response. Keeps the cJSON + glob-array bits on the C side
  * since Aether doesn't have array-of-string FFI. */
+/* Thin C wrapper: Aether builds `globs_joined` as newline-separated
+ * glob strings; we split into a const char** array for the existing
+ * svnae_branch_create FFI. */
+int svnserver_branch_create_globs(const char *repo, const char *branch_name,
+                                   const char *base, const char *globs_joined,
+                                   const char *author) {
+    /* Count newlines + 1 for a tight upper bound. */
+    int n = 1;
+    for (const char *q = globs_joined; *q; q++) if (*q == '\n') n++;
+    const char **globs = calloc((size_t)(n > 0 ? n : 1), sizeof *globs);
+    char **copies = calloc((size_t)(n > 0 ? n : 1), sizeof *copies);
+    int gi = 0;
+    const char *p = globs_joined;
+    while (*p) {
+        const char *eol = strchr(p, '\n');
+        size_t slen = eol ? (size_t)(eol - p) : strlen(p);
+        if (slen > 0) {
+            copies[gi] = strndup(p, slen);
+            globs[gi] = copies[gi];
+            gi++;
+        }
+        if (!eol) break;
+        p = eol + 1;
+    }
+    int new_rev = svnae_branch_create(repo, branch_name, base, globs, gi,
+                                      (author && *author) ? author : "super");
+    for (int i = 0; i < gi; i++) free(copies[i]);
+    free(copies); free(globs);
+    return new_rev;
+}
+extern int aether_branch_create_from_body(const char *repo,
+                                          const char *branch_name,
+                                          const char *body, int body_len,
+                                          const char *user_for_author);
 int svnserver_branch_create_from_body(const char *repo,
                                        const char *branch_name,
                                        const char *body, int body_len,
                                        const char *user_for_author) {
-    if (!body || body_len <= 0) return -1;
-    cJSON *root = cJSON_ParseWithLength(body, (size_t)body_len);
-    if (!root) return -1;
-
-    cJSON *jbase = cJSON_GetObjectItemCaseSensitive(root, "base");
-    cJSON *jinc  = cJSON_GetObjectItemCaseSensitive(root, "include");
-    if (!cJSON_IsString(jbase) || !cJSON_IsArray(jinc)) {
-        cJSON_Delete(root);
-        return -2;
-    }
-    int n_inc = cJSON_GetArraySize(jinc);
-    if (n_inc <= 0) {
-        cJSON_Delete(root);
-        return -3;
-    }
-
-    const char **globs = calloc((size_t)n_inc, sizeof *globs);
-    char **glob_copies = calloc((size_t)n_inc, sizeof *glob_copies);
-    int gi = 0;
-    for (int i = 0; i < n_inc; i++) {
-        cJSON *e = cJSON_GetArrayItem(jinc, i);
-        if (cJSON_IsString(e) && json_valuestring(e) && *json_valuestring(e)) {
-            glob_copies[gi] = strdup(json_valuestring(e));
-            globs[gi] = glob_copies[gi];
-            gi++;
-        }
-    }
-    char *base_copy = strdup(json_valuestring(jbase));
-    cJSON_Delete(root);
-
-    int new_rev = svnae_branch_create(repo, branch_name, base_copy,
-                                      globs, gi,
-                                      (user_for_author && *user_for_author)
-                                        ? user_for_author : "super");
-
-    for (int i = 0; i < gi; i++) free(glob_copies[i]);
-    free(glob_copies); free(globs); free(base_copy);
-
-    if (new_rev < 0) return -4;
-    return new_rev;
+    return aether_branch_create_from_body(repo, branch_name, body, body_len,
+                                          user_for_author);
 }
 
 /* PUT /repos/{r}/path/<path> — ported to ae/svnserver/handler_path_put.ae. */
