@@ -48,14 +48,8 @@ handler_copy_impl(req: ptr, res: ptr) {
         svnserver_respond_error(res, 404, "not found")
         return
     }
-    n = string.length(path)
-    expected_tail_start = 7 + string.length(name)
-    if n != expected_tail_start + 5 {
-        svnserver_respond_error(res, 404, "not found")
-        return
-    }
-    tail = string.substring(path, expected_tail_start, n)
-    if string.equals(tail, "/copy") == 0 {
+    rest, _r1 = string.strip_prefix(path, string.concat(string.concat("/repos/", name), "/"))
+    if string.equals(rest, "copy") == 0 {
         svnserver_respond_error(res, 404, "not found")
         return
     }

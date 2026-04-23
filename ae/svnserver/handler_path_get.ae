@@ -55,19 +55,19 @@ handler_path_get_impl(req: ptr, res: ptr) {
         return
     }
 
-    // Tail must start with "/path/" (and have at least one char after).
-    n = string.length(path)
-    tail_start = 7 + string.length(name)    // "/repos/" + name
-    if n < tail_start + 6 {
+    // Strip "/repos/<name>/" then "path/" via stdlib helpers; the
+    // leftover is the file path. Empty leftover == root, which we
+    // reject as a route match.
+    after_repo, _r1 = string.strip_prefix(path, string.concat(string.concat("/repos/", name), "/"))
+    file_path, matched = string.strip_prefix(after_repo, "path/")
+    if matched == 0 {
         svnserver_respond_error(res, 404, "not found")
         return
     }
-    prefix = string.substring(path, tail_start, tail_start + 6)
-    if string.equals(prefix, "/path/") == 0 {
+    if string.length(file_path) == 0 {
         svnserver_respond_error(res, 404, "not found")
         return
     }
-    file_path = string.substring(path, tail_start + 6, n)
 
     repo = svnserver_find_repo_path(name)
     if string.length(repo) == 0 {

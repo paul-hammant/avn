@@ -49,16 +49,8 @@ handler_info_impl(req: ptr, res: ptr) {
         svnserver_respond_error(res, 404, "not found")
         return
     }
-    // The rest of the path must be exactly "/info". Cheap test:
-    // /repos/ + name + /info = 7 + len(name) + 5.
-    n = string.length(path)
-    expected_tail_start = 7 + string.length(name)
-    if n != expected_tail_start + 5 {
-        svnserver_respond_error(res, 404, "not found")
-        return
-    }
-    tail = string.substring(path, expected_tail_start, n)
-    if string.equals(tail, "/info") == 0 {
+    rest, _r1 = string.strip_prefix(path, string.concat(string.concat("/repos/", name), "/"))
+    if string.equals(rest, "info") == 0 {
         svnserver_respond_error(res, 404, "not found")
         return
     }

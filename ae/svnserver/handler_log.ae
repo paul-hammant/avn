@@ -40,15 +40,8 @@ handler_log_impl(req: ptr, res: ptr) {
         handler_log_respond_error(res, 404, "not found")
         return
     }
-    // Tail must be exactly "/log".
-    n = string.length(path)
-    expected_tail_start = 7 + string.length(name)
-    if n != expected_tail_start + 4 {
-        handler_log_respond_error(res, 404, "not found")
-        return
-    }
-    tail = string.substring(path, expected_tail_start, n)
-    if string.equals(tail, "/log") == 0 {
+    rest, _r1 = string.strip_prefix(path, string.concat(string.concat("/repos/", name), "/"))
+    if string.equals(rest, "log") == 0 {
         handler_log_respond_error(res, 404, "not found")
         return
     }

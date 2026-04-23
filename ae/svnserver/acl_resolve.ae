@@ -92,7 +92,7 @@ props_resolve_impl(repo: string, rev: int, target: string) -> string {
     if string.length(paths_body) == 0 { return "\x01{}" }
 
     per_path_sha = aether_paths_index_lookup(paths_body, target)
-    per_path_sha = string.concat(per_path_sha, "")
+    per_path_sha = string.copy(per_path_sha)
     svnae_rep_free(paths_body)
     if string.length(per_path_sha) == 0 { return "\x01{}" }
 

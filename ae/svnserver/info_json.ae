@@ -83,7 +83,7 @@ info_json_impl(repo: string, name: string, head: int, hash_algo: string) -> stri
             nm = aether_io_listdir_name(d2, i)
             // Snapshot — aether_path_join_rel allocs, but
             // aether_io_listdir_name returns into the list's buffer.
-            nm = string.concat(nm, "")
+            nm = string.copy(nm)
             spec_path = aether_path_join_rel(branches_dir, nm)
             spec_path = aether_path_join_rel(spec_path, "spec")
 

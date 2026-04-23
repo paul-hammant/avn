@@ -52,32 +52,20 @@ handler_branch_create_impl(req: ptr, res: ptr) {
         return
     }
 
-    // Tail must match "/branches/<NAME>/create".
-    n = string.length(path)
-    tail_start = 7 + string.length(name)
-    if n < tail_start + 17 {    // "/branches/X/create" minimum
+    // Tail must match "/branches/<NAME>/create". Strip the fixed
+    // prefix, then confirm+strip the fixed suffix — whatever's left
+    // is the branch name.
+    after_repo, _r1 = string.strip_prefix(path, string.concat(string.concat("/repos/", name), "/"))
+    after_br, matched = string.strip_prefix(after_repo, "branches/")
+    if matched == 0 {
         svnserver_respond_error(res, 404, "not found")
         return
     }
-    prefix = string.substring(path, tail_start, tail_start + 10)
-    if string.equals(prefix, "/branches/") == 0 {
+    if string.ends_with(after_br, "/create") == 0 {
         svnserver_respond_error(res, 404, "not found")
         return
     }
-    // After "/branches/" comes the branch name, then "/create".
-    rest = string.substring(path, tail_start + 10, n)
-    rlen = string.length(rest)
-    if rlen < 8 {    // at least 1-char name + "/create"
-        svnserver_respond_error(res, 400, "missing branch name")
-        return
-    }
-    // Check suffix == "/create".
-    suffix = string.substring(rest, rlen - 7, rlen)
-    if string.equals(suffix, "/create") == 0 {
-        svnserver_respond_error(res, 404, "not found")
-        return
-    }
-    branch_name = string.substring(rest, 0, rlen - 7)
+    branch_name = string.substring(after_br, 0, string.length(after_br) - 7)
     if string.length(branch_name) == 0 {
         svnserver_respond_error(res, 400, "missing branch name")
         return

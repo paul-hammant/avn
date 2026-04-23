@@ -62,18 +62,12 @@ handler_path_delete_impl(req: ptr, res: ptr) {
         svnserver_respond_error(res, 404, "not found")
         return
     }
-    n = string.length(path)
-    tail_start = 7 + string.length(name)
-    if n < tail_start + 7 {    // "/path/" + at least one char
-        svnserver_respond_error(res, 400, "empty path")
-        return
-    }
-    prefix = string.substring(path, tail_start, tail_start + 6)
-    if string.equals(prefix, "/path/") == 0 {
+    after_repo, _r1 = string.strip_prefix(path, string.concat(string.concat("/repos/", name), "/"))
+    file_path, matched = string.strip_prefix(after_repo, "path/")
+    if matched == 0 {
         svnserver_respond_error(res, 404, "not found")
         return
     }
-    file_path = string.substring(path, tail_start + 6, n)
     if string.length(file_path) == 0 {
         svnserver_respond_error(res, 400, "empty path")
         return

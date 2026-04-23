@@ -53,14 +53,8 @@ handler_commit_impl(req: ptr, res: ptr) {
         svnserver_respond_error(res, 404, "not found")
         return
     }
-    n = string.length(path)
-    expected_tail_start = 7 + string.length(name)
-    if n != expected_tail_start + 7 {
-        svnserver_respond_error(res, 404, "not found")
-        return
-    }
-    tail = string.substring(path, expected_tail_start, n)
-    if string.equals(tail, "/commit") == 0 {
+    rest, _r1 = string.strip_prefix(path, string.concat(string.concat("/repos/", name), "/"))
+    if string.equals(rest, "commit") == 0 {
         svnserver_respond_error(res, 404, "not found")
         return
     }

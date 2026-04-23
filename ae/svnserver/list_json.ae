@@ -60,8 +60,8 @@ list_build_impl(repo: string, rev: int, user: string, is_super: int,
         sha = aether_dir_entry_sha(dir_body, i)
         name = aether_dir_entry_name(dir_body, i)
         // Snapshot — we're going to concat and reuse across loop.
-        sha = string.concat(sha, "")
-        name = string.concat(name, "")
+        sha = string.copy(sha)
+        name = string.copy(name)
         child_path = aether_path_join_rel(dir_path, name)
 
         allowed = is_super

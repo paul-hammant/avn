@@ -61,7 +61,7 @@ hashes_handle_impl(req: ptr, res: ptr, repo: string, rev: int,
         return
     }
     node_sha = svnae_repos_resolve_sha(repo, rev, target)
-    node_sha = string.concat(node_sha, "")    // snapshot
+    node_sha = string.copy(node_sha)          // TLS snapshot
 
     algo = svnae_repo_primary_hash(repo)
     pairs = svnserver_build_secondary_pairs(repo, node_sha)

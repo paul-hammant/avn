@@ -61,8 +61,8 @@ redacted_dir_sha_impl(repo: string, rev: int, user: string,
         name = aether_dir_entry_name(body, i)
         // Snapshot — recursion calls svnae_rep_read_blob which may
         // reuse shared buffers.
-        sha = string.concat(sha, "")
-        name = string.concat(name, "")
+        sha = string.copy(sha)
+        name = string.copy(name)
         child_path = aether_path_join_rel(prefix, name)
 
         allowed = svnserver_acl_allows(repo, rev, user, child_path)
