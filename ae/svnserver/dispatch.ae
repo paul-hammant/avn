@@ -1,0 +1,131 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// permissions and limitations under the License.
+
+// Top-level svnserver dispatcher. std.http's wildcard pattern is
+// end-of-pattern-greedy, so we can't distinguish sub-routes at the
+// std.http route-registration level — one catch-all route points
+// here, and we dispatch by (method, URL-tail).
+//
+// Routes:
+//   GET  /repos/{r}/info
+//   GET  /repos/{r}/log
+//   GET  /repos/{r}/rev/N/<sub>          → handle_repo_rev
+//   GET  /repos/{r}/path/<path>          → handler_path_get
+//   PUT  /repos/{r}/path/<path>          → handler_path_put
+//   DEL  /repos/{r}/path/<path>          → handler_path_delete
+//   POST /repos/{r}/commit               → handler_commit
+//   POST /repos/{r}/copy                 → handler_copy
+//   POST /repos/{r}/branches/<N>/create  → handler_branch_create
+
+import std.http
+import std.string
+
+extern svnserver_respond_error(res: ptr, code: int, msg: string)
+extern aether_parse_repo_name_in(path: string) -> string
+
+extern aether_handler_info(req: ptr, res: ptr)
+extern aether_handler_log(req: ptr, res: ptr)
+extern aether_handle_repo_rev(req: ptr, res: ptr)
+extern aether_handler_path_get(req: ptr, res: ptr)
+extern aether_handler_path_put(req: ptr, res: ptr)
+extern aether_handler_path_delete(req: ptr, res: ptr)
+extern aether_handler_commit(req: ptr, res: ptr)
+extern aether_handler_copy(req: ptr, res: ptr)
+extern aether_handler_branch_create(req: ptr, res: ptr)
+
+export svnserver_dispatch(req: ptr, res: ptr, _user_data: ptr) {
+    svnserver_dispatch_impl(req, res)
+}
+
+svnserver_dispatch_impl(req: ptr, res: ptr) {
+    path = http.request_path(req)
+    method = http.request_method(req)
+
+    // Validate the URL shape — every route is /repos/{name}/<tail>.
+    name = aether_parse_repo_name_in(path)
+    if string.length(name) == 0 {
+        svnserver_respond_error(res, 404, "not found")
+        return
+    }
+    after_repo, _r = string.strip_prefix(path, string.concat(string.concat("/repos/", name), "/"))
+    // after_repo now starts with the sub-route (no leading slash).
+    // All downstream handlers expect a leading slash in the tail,
+    // so prepend one.
+    tail = string.concat("/", after_repo)
+
+    if string.equals(method, "POST") == 1 {
+        if string.equals(tail, "/commit") == 1 {
+            aether_handler_commit(req, res)
+            return
+        }
+        if string.equals(tail, "/copy") == 1 {
+            aether_handler_copy(req, res)
+            return
+        }
+        _branch_tail, br_match = string.strip_prefix(tail, "/branches/")
+        if br_match == 1 {
+            aether_handler_branch_create(req, res)
+            return
+        }
+        svnserver_respond_error(res, 404, "unknown POST route")
+        return
+    }
+
+    if string.equals(method, "PUT") == 1 {
+        _put_tail, put_match = string.strip_prefix(tail, "/path/")
+        if put_match == 1 {
+            aether_handler_path_put(req, res)
+            return
+        }
+        svnserver_respond_error(res, 404, "unknown PUT route")
+        return
+    }
+
+    if string.equals(method, "DELETE") == 1 {
+        _del_tail, del_match = string.strip_prefix(tail, "/path/")
+        if del_match == 1 {
+            aether_handler_path_delete(req, res)
+            return
+        }
+        svnserver_respond_error(res, 404, "unknown DELETE route")
+        return
+    }
+
+    // GET (and anything else) — read-side routes.
+    _get_path_tail, get_path_match = string.strip_prefix(tail, "/path/")
+    if get_path_match == 1 {
+        aether_handler_path_get(req, res)
+        return
+    }
+    if string.equals(tail, "/info") == 1 {
+        aether_handler_info(req, res)
+        return
+    }
+    if string.equals(tail, "/log") == 1 {
+        aether_handler_log(req, res)
+        return
+    }
+    _rev_tail, rev_match = string.strip_prefix(tail, "/rev/")
+    if rev_match == 1 {
+        aether_handle_repo_rev(req, res)
+        return
+    }
+
+    svnserver_respond_error(res, 404, "unknown sub-route")
+}
+
+main() {
+    println("ae/svnserver/dispatch.ae is a library; not meant to run standalone")
+}

@@ -1112,58 +1112,8 @@ void *svnae_svnserver_handler_info(void) { return (void *)handle_repo_info; }
 void *svnae_svnserver_handler_log (void) { return (void *)handle_repo_log;  }
 void *svnae_svnserver_handler_rev (void) { return (void *)handle_repo_rev;  }
 
-/* Unified dispatcher — examines the path and picks the right handler.
- * Needed because std.http's wildcard is end-of-pattern-greedy, so
- * we can't distinguish sub-routes at the route layer — they all
- * match the same pattern. Dispatcher re-parses the URL tail.
- *
- * GET  /info, /log, /rev/N/*     -> read handlers above
- * POST /commit                    -> handle_repo_commit
- *
- * std.http routes POST and GET separately; we register two routes both
- * pointing at this dispatcher. It looks at req->method to disambiguate. */
-static void
-dispatch(HttpRequest *req, HttpServerResponse *res, void *user_data)
-{
-    char name[128];
-    const char *tail = parse_repo_and_tail(req->path, name, sizeof name);
-    if (!tail) { respond_error(res, 404, "not found"); return; }
+/* Top-level dispatcher ported to ae/svnserver/dispatch.ae. It routes
+ * (method, URL-tail) to the already-ported handlers directly. */
+extern void aether_svnserver_dispatch(void *req, void *res, void *user_data);
 
-    if (strcmp(req->method, "POST") == 0) {
-        if (strcmp(tail, "/commit") == 0) { aether_handler_commit(req, res); return; }
-        if (strcmp(tail, "/copy")   == 0) { aether_handler_copy(req, res); return; }
-
-        /* /branches/<NAME>/create — Phase 8.2a. Parse+auth+commit all
-         * in ae/svnserver/handler_branch_create.ae. Delegate for any
-         * tail starting with "/branches/" and let Aether 404 on
-         * malformed shapes. */
-        if (strncmp(tail, "/branches/", 10) == 0) {
-            aether_handler_branch_create(req, res);
-            return;
-        }
-
-        respond_error(res, 404, "unknown POST route");
-        return;
-    }
-
-    /* Phase 7.4: REST node edits. /path/<rel> is the resource URL. */
-    if (strcmp(req->method, "PUT") == 0) {
-        if (strncmp(tail, "/path/", 6) == 0) { handle_repo_path_put(req, res); return; }
-        respond_error(res, 404, "unknown PUT route");
-        return;
-    }
-    if (strcmp(req->method, "DELETE") == 0) {
-        if (strncmp(tail, "/path/", 6) == 0) { handle_repo_path_delete(req, res); return; }
-        respond_error(res, 404, "unknown DELETE route");
-        return;
-    }
-
-    if (strncmp(tail, "/path/", 6) == 0) { handle_repo_path_get(req, res); return; }
-    if (strcmp(tail, "/info") == 0)      { handle_repo_info(req, res, user_data); return; }
-    if (strcmp(tail, "/log") == 0)       { handle_repo_log (req, res, user_data); return; }
-    if (strncmp(tail, "/rev/", 5) == 0)  { handle_repo_rev (req, res, user_data); return; }
-
-    respond_error(res, 404, "unknown sub-route");
-}
-
-void *svnae_svnserver_handler_dispatch(void) { return (void *)dispatch; }
+void *svnae_svnserver_handler_dispatch(void) { return (void *)aether_svnserver_dispatch; }
