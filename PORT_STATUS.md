@@ -44,7 +44,22 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
   `int_to_dec` + `digit_char` in favour of `std.string.from_int` now
   that it's available, and ported the WC pristine-store path builder
   to ae/wc/pristine_path.ae (handles the two-level XX/YY/ fanout).
-- **Round 23** (current): **38.20% C, 61.80% Aether.** Cut the
+- **Round 24** (current): **38.12% C, 61.88% Aether.** Leaves
+  round picking up the last two packed-string reparsers in
+  ra/shim.c that rounds 21-22 didn't cover.
+  - `svnae_ra_get_props` — same round-trip as log/paths/blame/
+    list: Aether produces "<N>\x02<name>\x01<value>\x02...", C
+    rebuilt a struct-of-arrays with per-field accessors.
+    Collapsed to the {packed, n, pin_list} pattern + new
+    ra_props_count/name/value accessors in ae/ra/packed.ae.
+  - `verify_dir` inside the verify client had an inline copy
+    of the same reparse (~20 LOC) to populate its local
+    `struct entry[]`. Swapped it for ra_list_count/name/kind
+    calls over a strdup'd packed copy (the recursion hits
+    many Aether string calls, so we own the packed buffer
+    locally).
+
+- **Round 23**: **38.20% C, 61.80% Aether.** Cut the
   commit-blob-build knot — four `svnserver_build_*_joined` C
   wrappers (svnserver/shim.c, ~85 LOC) that split "\n"-joined
   parallel strings back into arrays, plus four `svnae_build_*_blob`

@@ -590,10 +590,13 @@ void svnae_ra_free(char *p) { free(p); }
  * We expose it as a handle with indexed name/value accessors.
  */
 
-struct prop_entry_ra { char *name; char *value; };
-struct svnae_ra_props { struct prop_entry_ra *items; int n; };
+struct svnae_ra_props { char *packed; int n; struct pin_list pins; };
 
 extern const char *aether_ra_parse_props(const char *body);
+extern int         aether_ra_props_count(const char *packed);
+extern const char *aether_ra_props_name(const char *packed, int i);
+extern const char *aether_ra_props_value(const char *packed, int i);
+
 struct svnae_ra_props *
 svnae_ra_get_props(const char *base_url, const char *repo_name,
                    int rev, const char *path)
@@ -604,47 +607,38 @@ svnae_ra_get_props(const char *base_url, const char *repo_name,
     if (http_get(url, &body, &len, &status) != 0) return NULL;
     if (status != 200) { free(body); return NULL; }
 
-    /* JSON parse ported to ae/ra/parse.ae::ra_parse_props.
-     * Returns "N\x02<key>\x01<value>\x02..." */
     const char *packed = aether_ra_parse_props(body);
     free(body);
     if (!packed || !*packed) return NULL;
 
-    const char *p = packed;
-    const char *sep = strchr(p, 2);
-    if (!sep) return NULL;
-    char nbuf[32];
-    size_t nlen = (size_t)(sep - p);
-    if (nlen >= sizeof nbuf) nlen = sizeof nbuf - 1;
-    memcpy(nbuf, p, nlen); nbuf[nlen] = '\0';
-    int n = (int)strtol(nbuf, NULL, 10);
-    p = sep + 1;
-
     struct svnae_ra_props *P = calloc(1, sizeof *P);
-    P->n = n;
-    P->items = calloc((size_t)(n > 0 ? n : 1), sizeof *P->items);
-    for (int i = 0; i < n; i++) {
-        const char *entry_end = strchr(p, 2);
-        if (!entry_end) entry_end = p + strlen(p);
-        const char *mid = memchr(p, 1, (size_t)(entry_end - p));
-        if (!mid) continue;
-        P->items[i].name  = strndup(p, (size_t)(mid - p));
-        P->items[i].value = strndup(mid + 1, (size_t)(entry_end - (mid + 1)));
-        p = *entry_end == 2 ? entry_end + 1 : entry_end;
-    }
+    P->packed = strdup(packed);
+    P->n = aether_ra_props_count(P->packed);
     return P;
 }
 
-int         svnae_ra_props_count(const struct svnae_ra_props *P) { return P ? P->n : 0; }
-const char *svnae_ra_props_name (const struct svnae_ra_props *P, int i) { return (P && i >= 0 && i < P->n) ? P->items[i].name  : ""; }
-const char *svnae_ra_props_value(const struct svnae_ra_props *P, int i) { return (P && i >= 0 && i < P->n) ? P->items[i].value : ""; }
+int svnae_ra_props_count(const struct svnae_ra_props *P) { return P ? P->n : 0; }
+
+const char *
+svnae_ra_props_name(struct svnae_ra_props *P, int i)
+{
+    if (!P || i < 0 || i >= P->n) return "";
+    return pin_str(&P->pins, aether_ra_props_name(P->packed, i));
+}
+
+const char *
+svnae_ra_props_value(struct svnae_ra_props *P, int i)
+{
+    if (!P || i < 0 || i >= P->n) return "";
+    return pin_str(&P->pins, aether_ra_props_value(P->packed, i));
+}
 
 void
 svnae_ra_props_free(struct svnae_ra_props *P)
 {
     if (!P) return;
-    for (int i = 0; i < P->n; i++) { free(P->items[i].name); free(P->items[i].value); }
-    free(P->items);
+    free(P->packed);
+    pin_list_free(&P->pins);
     free(P);
 }
 
@@ -1165,34 +1159,32 @@ verify_dir(const char *base_url, const char *repo, int rev,
         return -1;
     }
 
-    /* Reuse the same packed-string parser the public svnae_ra_list
-     * accessors use — ae/ra/parse.ae::ra_parse_list. Returns
-     * "N\x02<name>\x01<kind-char>\x02..." */
+    /* Use the same packed-string accessors from ae/ra/packed.ae that
+     * the public svnae_ra_list handle does — ra_list_kind returns
+     * "dir"/"file" so we compare against that instead of a kind char. */
     extern const char *aether_ra_parse_list(const char *body);
+    extern int         aether_ra_list_count(const char *packed);
+    extern const char *aether_ra_list_name(const char *packed, int i);
+    extern const char *aether_ra_list_kind(const char *packed, int i);
+
     const char *packed = aether_ra_parse_list(body);
     free(body);
     if (!packed || !*packed) { free(dir_hdr); return -1; }
+    /* Stable copy — the Aether return lifetime ends at the next
+     * string-producing call; the recursion below hits many. */
+    char *packed_owned = strdup(packed);
+    if (!packed_owned) { free(dir_hdr); return -1; }
 
-    const char *p = packed;
-    const char *sep = strchr(p, 2);
-    if (!sep) { free(dir_hdr); return -1; }
-    char nbuf[32];
-    size_t nlen = (size_t)(sep - p);
-    if (nlen >= sizeof nbuf) nlen = sizeof nbuf - 1;
-    memcpy(nbuf, p, nlen); nbuf[nlen] = '\0';
-    int n = (int)strtol(nbuf, NULL, 10);
-    p = sep + 1;
-
+    int n = aether_ra_list_count(packed_owned);
     struct entry *entries = calloc((size_t)(n > 0 ? n : 1), sizeof *entries);
     for (int i = 0; i < n; i++) {
-        const char *entry_end = strchr(p, 2);
-        if (!entry_end) entry_end = p + strlen(p);
-        const char *mid = memchr(p, 1, (size_t)(entry_end - p));
-        entries[i].name   = mid ? strndup(p, (size_t)(mid - p)) : strdup("");
-        entries[i].kind_c = (mid && mid + 1 < entry_end) ? *(mid + 1) : 'f';
+        const char *nm = aether_ra_list_name(packed_owned, i);
+        const char *kd = aether_ra_list_kind(packed_owned, i);
+        entries[i].name   = strdup(nm ? nm : "");
+        entries[i].kind_c = (kd && strcmp(kd, "dir") == 0) ? 'd' : 'f';
         entries[i].sha    = NULL;
-        p = *entry_end == 2 ? entry_end + 1 : entry_end;
     }
+    free(packed_owned);
 
     /* Recurse into every child to compute its sha. */
     extern const char *aether_path_join_rel(const char *prefix, const char *name);

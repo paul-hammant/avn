@@ -268,6 +268,44 @@ ra_blame_text_impl(packed: string, i: int) -> string {
     return record_field_(packed, start, end, 2)
 }
 
+// ---- props ---------------------------------------------------------------
+//
+// Record shape: "<name>\x01<value>". Produced by ra_parse_props over a
+// JSON {k:v,...} object.
+
+export ra_props_count(packed: string) -> int {
+    return ra_props_count_impl(packed)
+}
+
+ra_props_count_impl(packed: string) -> int {
+    if string.length(packed) == 0 { return 0 }
+    n = array_count_(packed)
+    if n < 0 { return 0 }
+    return n
+}
+
+export ra_props_name(packed: string, i: int) -> string {
+    return ra_props_name_impl(packed, i)
+}
+
+ra_props_name_impl(packed: string, i: int) -> string {
+    start = entry_start_(packed, i)
+    if start < 0 { return "" }
+    end = entry_end_(packed, start)
+    return record_field_(packed, start, end, 0)
+}
+
+export ra_props_value(packed: string, i: int) -> string {
+    return ra_props_value_impl(packed, i)
+}
+
+ra_props_value_impl(packed: string, i: int) -> string {
+    start = entry_start_(packed, i)
+    if start < 0 { return "" }
+    end = entry_end_(packed, start)
+    return record_field_(packed, start, end, 1)
+}
+
 // ---- list ----------------------------------------------------------------
 //
 // Record shape: "<name>\x01<kind-char>", where kind-char is 'd' or 'f'.
