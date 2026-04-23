@@ -218,64 +218,6 @@ void http_response_set_header(HttpServerResponse *res, const char *k, const char
 void http_response_set_body(HttpServerResponse *res, const char *body);
 void http_response_json(HttpServerResponse *res, const char *json);
 
-/* We need to set a binary body (for cat). std.http exposes set_body which
- * strdup's + strlen's — no good. Stuff the fields directly. */
-static void
-respond_binary(HttpServerResponse *res, const char *data, size_t len, const char *content_type)
-{
-    http_response_set_status(res, 200);
-    http_response_set_header(res, "Content-Type", content_type);
-
-    /* Free any prior body set via http_response_set_body. */
-    free(res->body);
-    res->body = malloc(len + 1);
-    if (res->body) {
-        memcpy(res->body, data, len);
-        res->body[len] = '\0';          /* safe sentinel; real length is body_length */
-        res->body_length = len;
-    } else {
-        res->body_length = 0;
-    }
-    char lenbuf[32];
-    snprintf(lenbuf, sizeof lenbuf, "%zu", len);
-    http_response_set_header(res, "Content-Length", lenbuf);
-}
-
-static void
-respond_json(HttpServerResponse *res, int code, const char *json)
-{
-    http_response_set_status(res, code);
-    http_response_json(res, json);
-}
-
-static void
-respond_error(HttpServerResponse *res, int code, const char *message)
-{
-    respond_json(res, code, aether_error_response_json(message ? message : ""));
-}
-
-/* Attach Merkle-verification headers describing the node being
- * returned by this response. Callers that know the node's kind and
- * content sha use this; callers that don't (errors, untyped JSON)
- * leave them off. The headers advertise:
- *   X-Svnae-Hash-Algo  — the repo's primary hash name (e.g. sha256)
- *   X-Svnae-Node-Kind  — "file" or "dir"
- *   X-Svnae-Node-Hash  — hex sha of this node's content blob
- *
- * Clients use these to independently re-hash fetched bytes and build
- * a Merkle proof back to the revision's root sha. */
-static void
-set_merkle_headers(HttpServerResponse *res, const char *algo,
-                   const char *kind, const char *sha)
-{
-    if (algo && *algo)
-        http_response_set_header(res, "X-Svnae-Hash-Algo", algo);
-    if (kind && *kind)
-        http_response_set_header(res, "X-Svnae-Node-Kind", kind);
-    if (sha && *sha)
-        http_response_set_header(res, "X-Svnae-Node-Hash", sha);
-}
-
 static char *load_rev_blob_field(const char *repo, int rev, const char *key);
 
 /* --- authorization (Phase 7.1) --------------------------------------
@@ -472,24 +414,45 @@ const char *svnserver_find_repo_path(const char *name) {
     return p ? p : "";
 }
 
-/* Aether-callable passthroughs to the static helpers defined earlier
- * in the file (respond_error / respond_binary / set_merkle_headers). */
+/* Response-emitting helpers for Aether. Each binds against std.http
+ * directly; no intervening static wrappers since the dispatch + route
+ * handlers all live on the Aether side now. */
 void svnserver_respond_error(HttpServerResponse *res, int code, const char *msg) {
-    respond_error(res, code, msg);
-}
-
-void svnserver_respond_binary_ok(HttpServerResponse *res, const char *data,
-                                 int length, const char *content_type) {
-    respond_binary(res, data, (size_t)length, content_type);
-}
-
-void svnserver_set_merkle_headers(HttpServerResponse *res, const char *algo,
-                                  const char *kind, const char *sha) {
-    set_merkle_headers(res, algo, kind, sha);
+    http_response_set_status(res, code);
+    http_response_json(res, aether_error_response_json(msg ? msg : ""));
 }
 
 void svnserver_respond_json_ok(HttpServerResponse *res, const char *body) {
-    respond_json(res, 200, body);
+    http_response_set_status(res, 200);
+    http_response_json(res, body);
+}
+
+/* Binary body (cat). std.http's set_body strdup+strlen's the payload,
+ * so we poke res->body directly to preserve byte-length for NULs. */
+void svnserver_respond_binary_ok(HttpServerResponse *res, const char *data,
+                                 int length, const char *content_type) {
+    http_response_set_status(res, 200);
+    http_response_set_header(res, "Content-Type", content_type);
+    free(res->body);
+    res->body = malloc((size_t)length + 1);
+    if (res->body) {
+        memcpy(res->body, data, (size_t)length);
+        res->body[length] = '\0';
+        res->body_length = (size_t)length;
+    } else {
+        res->body_length = 0;
+    }
+    char lenbuf[32];
+    snprintf(lenbuf, sizeof lenbuf, "%d", length);
+    http_response_set_header(res, "Content-Length", lenbuf);
+}
+
+/* Merkle verification headers for file/dir responses. */
+void svnserver_set_merkle_headers(HttpServerResponse *res, const char *algo,
+                                  const char *kind, const char *sha) {
+    if (algo && *algo) http_response_set_header(res, "X-Svnae-Hash-Algo", algo);
+    if (kind && *kind) http_response_set_header(res, "X-Svnae-Node-Kind", kind);
+    if (sha  && *sha)  http_response_set_header(res, "X-Svnae-Node-Hash", sha);
 }
 
 /* Aether-callable helper: newline-separated "algo hash\n" pairs for each
