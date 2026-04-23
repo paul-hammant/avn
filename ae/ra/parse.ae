@@ -108,6 +108,60 @@ get_string_field(obj: ptr, key: string) -> string {
     return string.copy(s)
 }
 
+// Parse a log-list JSON response into a packed string of entries
+// separated by \x02 (record separator). Each entry is itself
+// packed as "<rev>\x01<author>\x01<date>\x01<msg>" (same shape
+// as ra_parse_info_rev minus the root field).
+//
+// C caller splits on \x02 to get entries, then on \x01 to get
+// fields, populating struct log_entry[].
+//
+// Returns "" on malformed JSON or when entries[] is missing.
+export ra_parse_log(body: string) -> string {
+    if string.length(body) == 0 { return "" }
+    root, err = json.parse(body)
+    if string.length(err) > 0 { return "" }
+
+    jentries, jerr = json.object_get(root, "entries")
+    if string.length(jerr) > 0 { json.free(root); return "" }
+    if jentries == null { json.free(root); return "" }
+
+    n = json.array_size(jentries)
+    out = ""
+    i = 0
+    while i < n {
+        entry, _ae = json.array_get(jentries, i)
+        rev = -1
+        jr, rerr = json.object_get(entry, "rev")
+        if string.length(rerr) == 0 { rev = json.get_int(jr) }
+
+        author = get_string_field(entry, "author")
+        date   = get_string_field(entry, "date")
+        msg    = get_string_field(entry, "msg")
+
+        packed = string.concat(string.from_int(rev), "\x01")
+        packed = string.concat(packed, author)
+        packed = string.concat(packed, "\x01")
+        packed = string.concat(packed, date)
+        packed = string.concat(packed, "\x01")
+        packed = string.concat(packed, msg)
+
+        if i == 0 { out = packed }
+        if i > 0 {
+            out = string.concat(out, "\x02")
+            out = string.concat(out, packed)
+        }
+        i = i + 1
+    }
+
+    // Prepend "N\x02" — record count — so the C caller doesn't
+    // have to pre-scan for \x02 count.
+    header = string.concat(string.from_int(n), "\x02")
+    json.free(root)
+    if n == 0 { return header }
+    return string.concat(header, out)
+}
+
 main() {
     println("ae/ra/parse.ae is a library; not meant to run standalone")
 }

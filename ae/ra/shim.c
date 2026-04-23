@@ -390,6 +390,7 @@ svnae_ra_hash_algo(const char *base_url, const char *repo_name)
 struct log_entry { int rev; char *author; char *date; char *msg; };
 struct svnae_ra_log { struct log_entry *entries; int n; };
 
+extern const char *aether_ra_parse_log(const char *body);
 struct svnae_ra_log *
 svnae_ra_log(const char *base_url, const char *repo_name)
 {
@@ -398,31 +399,55 @@ svnae_ra_log(const char *base_url, const char *repo_name)
     if (http_get(url, &body, &len, &status) != 0) return NULL;
     if (status != 200) { free(body); return NULL; }
 
-    cJSON *root = cJSON_ParseWithLength(body, len);
+    /* JSON parse ported to ae/ra/parse.ae::ra_parse_log.
+     * Returns "<N>\x02<entry0>\x02<entry1>\x02..." where each
+     * entry is "<rev>\x01<author>\x01<date>\x01<msg>". */
+    const char *packed = aether_ra_parse_log(body);
     free(body);
-    if (!root) return NULL;
-    cJSON *jentries = cJSON_GetObjectItemCaseSensitive(root, "entries");
-    if (!cJSON_IsArray(jentries)) { cJSON_Delete(root); return NULL; }
+    if (!packed || !*packed) return NULL;
 
-    int n = cJSON_GetArraySize(jentries);
+    /* Pull the leading "<N>\x02" count. */
+    const char *p = packed;
+    const char *sep = strchr(p, 2);
+    if (!sep) return NULL;
+    char nbuf[32];
+    size_t nlen = (size_t)(sep - p);
+    if (nlen >= sizeof nbuf) nlen = sizeof nbuf - 1;
+    memcpy(nbuf, p, nlen); nbuf[nlen] = '\0';
+    int n = (int)strtol(nbuf, NULL, 10);
+    p = sep + 1;
+
     struct svnae_ra_log *lg = calloc(1, sizeof *lg);
     lg->n = n;
-    lg->entries = calloc((size_t)n, sizeof *lg->entries);
+    lg->entries = calloc((size_t)(n > 0 ? n : 1), sizeof *lg->entries);
 
-    cJSON *e;
-    int i = 0;
-    cJSON_ArrayForEach(e, jentries) {
-        cJSON *jr = cJSON_GetObjectItemCaseSensitive(e, "rev");
-        cJSON *ja = cJSON_GetObjectItemCaseSensitive(e, "author");
-        cJSON *jd = cJSON_GetObjectItemCaseSensitive(e, "date");
-        cJSON *jm = cJSON_GetObjectItemCaseSensitive(e, "msg");
-        lg->entries[i].rev    = cJSON_IsNumber(jr) ? json_valueint(jr) : -1;
-        lg->entries[i].author = cJSON_IsString(ja) ? strdup(json_valuestring(ja)) : strdup("");
-        lg->entries[i].date   = cJSON_IsString(jd) ? strdup(json_valuestring(jd)) : strdup("");
-        lg->entries[i].msg    = cJSON_IsString(jm) ? strdup(json_valuestring(jm)) : strdup("");
-        i++;
+    for (int i = 0; i < n; i++) {
+        const char *entry_end = strchr(p, 2);
+        if (!entry_end) entry_end = p + strlen(p);
+
+        /* Split entry on \x01: rev, author, date, msg. */
+        const char *f0 = p;
+        const char *f1 = NULL, *f2 = NULL, *f3 = NULL;
+        for (const char *q = p; q < entry_end; q++) {
+            if (*q == 1) {
+                if      (!f1) f1 = q + 1;
+                else if (!f2) f2 = q + 1;
+                else if (!f3) f3 = q + 1;
+            }
+        }
+        if (!f1 || !f2 || !f3) continue;  /* malformed — leave zeroed */
+
+        char rbuf[32];
+        size_t rlen = (size_t)(f1 - 1 - f0);
+        if (rlen >= sizeof rbuf) rlen = sizeof rbuf - 1;
+        memcpy(rbuf, f0, rlen); rbuf[rlen] = '\0';
+        lg->entries[i].rev    = (int)strtol(rbuf, NULL, 10);
+        lg->entries[i].author = strndup(f1, (size_t)(f2 - 1 - f1));
+        lg->entries[i].date   = strndup(f2, (size_t)(f3 - 1 - f2));
+        lg->entries[i].msg    = strndup(f3, (size_t)(entry_end - f3));
+
+        p = *entry_end == 2 ? entry_end + 1 : entry_end;
     }
-    cJSON_Delete(root);
     return lg;
 }
 
