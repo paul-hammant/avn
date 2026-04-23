@@ -54,11 +54,6 @@
 extern int aether_io_write_atomic(const char *path, const char *data, int length);
 extern int aether_io_mkdir_p(const char *path);
 
-static int write_file_atomic(const char *path, const char *data, int len)
-{
-    return aether_io_write_atomic(path, data, len) == 0 ? 0 : -1;
-}
-
 /* rep blob layout: 1 header byte + payload. The Aether atomic-write
  * is binary-safe, so we just prepend the header to a single buffer
  * and write it in one go. Cleaner than the original two-syscall
