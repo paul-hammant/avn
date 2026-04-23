@@ -44,7 +44,25 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
   `int_to_dec` + `digit_char` in favour of `std.string.from_int` now
   that it's available, and ported the WC pristine-store path builder
   to ae/wc/pristine_path.ae (handles the two-level XX/YY/ fanout).
-- **Round 13** (current): **44.44% C, 55.55% Aether.** With
+- **Round 14** (current): **43.40% C, 56.59% Aether.** Focus
+  shifts to the RA client side + repos helpers:
+  - `svnae_ra_commit_finish`: 140 LOC of cJSON-heavy body
+    serialisation moves up to ae/ra/commit_build.ae. std.json
+    for construction; C-side accessors expose struct svnae_ra_commit.
+  - `svnae_ra_server_copy` + `svnae_ra_branch_create` bodies:
+    small cJSON builders, also Aether via std.json.
+  - verify_dir: swapped inline cJSON walker for the already-ported
+    ra_parse_list packed-string parser.
+  - `head_rev` + `rev_blob_sha1` → ae/repos/rev_io.ae.
+  - `walk_remote` (svn update) → ae/wc/update_walk.ae.
+  - `walk_remote` (svn merge) → ae/wc/merge_walk.ae.
+
+  One attempted port deferred: fs_fs/commit_shim.c::load_rev_root_sha1
+  via the new repos_load_rev_blob_field helper produced a runtime
+  crash during /commit — set aside; the function sits in
+  rev_io.ae unused until diagnosed.
+
+- **Round 13**: **44.44% C, 55.55% Aether.** With
   std.json reachable from Aether, the three remaining
   cJSON-heavy server-side mutation handlers all move up:
   - `svnserver_branch_create_from_body` (45 LOC C → 80 LOC
