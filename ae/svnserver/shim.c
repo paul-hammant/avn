@@ -1410,27 +1410,20 @@ extern const char *svnae_build_paths_acl_blob(const char *repo,
                                               const char *const *acl_shas,
                                               int n_paths);
 
+/* End-to-end auto-follow ported to ae/svnserver/copy_acl.ae::
+ * auto_follow_copy_acl. Returns "" on miss; adapt at the
+ * boundary so the copy handler's existing NULL check keeps
+ * working. */
+extern const char *aether_auto_follow_copy_acl(const char *repo, int base_rev,
+                                               const char *from_path,
+                                               const char *to_path);
 static char *
 auto_follow_copy_acl(const char *repo, int base_rev,
                     const char *from_path, const char *to_path)
 {
-    /* Read the base rev's paths-acl blob. */
-    char *acl_root = load_rev_blob_field(repo, base_rev, "acl");
-    if (!acl_root || !*acl_root) { free(acl_root); return NULL; }
-    char *body = svnae_rep_read_blob(repo, acl_root);
-    free(acl_root);
-    if (!body) return NULL;
-
-    /* Body-scan + rebase ported to Aether (ae/svnserver/copy_acl.ae).
-     * Returns the preserved-plus-rebased body; we sort it then write
-     * via the rep store. */
-    const char *augmented = aether_copy_acl_follow(body, from_path, to_path);
-    svnae_rep_free(body);
-    if (!augmented || !*augmented) return NULL;
-    const char *sorted = aether_paths_index_sort_by_path(augmented);
-    extern const char *svnae_rep_write_blob(const char *repo, const char *data, int len);
-    const char *new_blob = svnae_rep_write_blob(repo, sorted, (int)strlen(sorted));
-    return new_blob ? strdup(new_blob) : NULL;
+    const char *v = aether_auto_follow_copy_acl(repo, base_rev, from_path, to_path);
+    if (!v || !*v) return NULL;
+    return strdup(v);
 }
 
 /* --- copy handler ------------------------------------------------------ *
