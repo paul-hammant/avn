@@ -313,6 +313,44 @@ export ra_parse_list(body: string) -> string {
     return string.concat(header, out)
 }
 
+// Parse a /hashes JSON {"primary":..., "secondaries":[{algo,hash},...]}
+// into "N\x02<algo>\x01<hash>\x02..." (same two-separator shape as
+// the other ra_parse_* helpers). Returns "0\x02" on a hash response
+// with no secondaries, "" on malformed JSON or empty body.
+export ra_parse_hashes_secondaries(body: string) -> string {
+    if string.length(body) == 0 { return "" }
+    root, err = json.parse(body)
+    if string.length(err) > 0 { return "" }
+
+    jsec, jse = json.object_get(root, "secondaries")
+    if string.length(jse) > 0 { json.free(root); return "0\x02" }
+    if jsec == null { json.free(root); return "0\x02" }
+
+    n = json.array_size(jsec)
+    out = ""
+    i = 0
+    while i < n {
+        entry, _ = json.array_get(jsec, i)
+        algo = get_string_field(entry, "algo")
+        h    = get_string_field(entry, "hash")
+
+        packed = string.concat(algo, "\x01")
+        packed = string.concat(packed, h)
+
+        if i == 0 { out = packed }
+        if i > 0 {
+            out = string.concat(out, "\x02")
+            out = string.concat(out, packed)
+        }
+        i = i + 1
+    }
+
+    header = string.concat(string.from_int(n), "\x02")
+    json.free(root)
+    if n == 0 { return header }
+    return string.concat(header, out)
+}
+
 main() {
     println("ae/ra/parse.ae is a library; not meant to run standalone")
 }
