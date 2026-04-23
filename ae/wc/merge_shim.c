@@ -58,44 +58,18 @@
 sqlite3 *svnae_wc_db_open(const char *wc_root);
 void     svnae_wc_db_close(sqlite3 *db);
 int      svnae_wc_db_upsert_node(sqlite3 *db, const char *path, int kind, int base_rev, const char *sha1, int state);
-int      svnae_wc_db_delete_node(sqlite3 *db, const char *path);
 int      svnae_wc_db_node_exists(sqlite3 *db, const char *path);
-
-struct svnae_wc_node;
-struct svnae_wc_node *svnae_wc_db_get_node(sqlite3 *db, const char *path);
-int         svnae_wc_node_kind(const struct svnae_wc_node *n);
-const char *svnae_wc_node_base_sha1(const struct svnae_wc_node *n);
-int         svnae_wc_node_base_rev(const struct svnae_wc_node *n);
-void        svnae_wc_node_free(struct svnae_wc_node *n);
 
 char *svnae_wc_db_get_info(sqlite3 *db, const char *key);
 void  svnae_wc_info_free(char *s);
-
-const char *svnae_wc_pristine_put(const char *wc_root, const char *data, int len);
-
-int   svnae_ra_head_rev(const char *base_url, const char *repo_name);
-struct svnae_ra_list;
-struct svnae_ra_list *svnae_ra_list(const char *base_url, const char *repo_name, int rev, const char *path);
-int         svnae_ra_list_count(const struct svnae_ra_list *L);
-const char *svnae_ra_list_name(const struct svnae_ra_list *L, int i);
-const char *svnae_ra_list_kind(const struct svnae_ra_list *L, int i);
-void        svnae_ra_list_free(struct svnae_ra_list *L);
-char       *svnae_ra_cat(const char *base_url, const char *repo_name, int rev, const char *path);
-void        svnae_ra_free(char *p);
 
 int   svnae_wc_propset(const char *wc_root, const char *path, const char *name, const char *value);
 char *svnae_wc_propget(const char *wc_root, const char *path, const char *name);
 void  svnae_wc_props_free(char *s);
 
-int   svnae_wc_db_set_conflicted(sqlite3 *db, const char *path, int conflicted);
-int   svnae_merge3_apply(const char *wc_path,
-                         const char *base, int base_len, int base_rev,
-                         const char *theirs, int theirs_len, int theirs_rev);
-
 /* --- tiny helpers ---------------------------------------------------- */
 
 extern int svnae_wc_hash_bytes(const char *wc_root, const char *data, int len, char *out);
-extern int svnae_wc_hash_file (const char *wc_root, const char *path, char *out);
 
 static __thread const char *g_wc_root = NULL;
 

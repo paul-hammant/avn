@@ -44,7 +44,32 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
   `int_to_dec` + `digit_char` in favour of `std.string.from_int` now
   that it's available, and ported the WC pristine-store path builder
   to ae/wc/pristine_path.ae (handles the two-level XX/YY/ fanout).
-- **Round 19** (current): **40.23% C, 59.77% Aether.** Another
+- **Round 20** (current): **40.07% C, 59.93% Aether.** Second
+  cross-shim pass, this time on `svnae_*` forward decls. The wc
+  shims had accumulated large decl blocks for symbols whose call
+  sites had all migrated into Aether siblings (update_apply.ae,
+  merge3 etc.); the bodies live in other translation units, so
+  the forward decls were pure noise once no local caller
+  remained.
+  - wc/update_shim.c: dropped ~45 lines of forward decls —
+    svnae_wc_db_upsert_node/delete_node/set_conflicted,
+    svnae_merge3_apply, svnae_wc_pristine_get/size/free/put,
+    the per-item nodelist accessors (kind/base_rev/base_sha1/
+    state/path), svnae_ra_list family, svnae_ra_cat/free,
+    svnae_ra_get_props + props accessors, svnae_wc_propset/
+    propdel/proplist family. Kept only what the shim itself
+    still calls: db_open/close/set_info/get_info/list_nodes/
+    nodelist_count/nodelist_free, wc_info_free, ra_head_rev.
+  - wc/merge_shim.c: dropped ~26 lines analogously — get_node
+    family, ra_list family, ra_cat, wc_pristine_put,
+    wc_db_delete_node/set_conflicted, wc_hash_file,
+    svnae_merge3_apply.
+  - svnserver/shim.c: dropped svnae_rep_read_blob,
+    svnae_rep_free, all forward decls — no remaining caller
+    in this translation unit.
+  - fs_fs/commit_shim.c: same two dropped.
+
+- **Round 19**: **40.23% C, 59.77% Aether.** Another
   dead-decl sweep across the remaining shims after the svnserver
   cleanup in round 18:
   - svnserver/shim.c: dropped aether_blobfield_get (unused),

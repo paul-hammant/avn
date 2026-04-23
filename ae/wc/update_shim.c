@@ -55,65 +55,25 @@
 #define PATH_MAX 4096
 #endif
 
-/* Externs from neighbouring shims. */
+/* Externs from neighbouring shims.
+ * Pass A/B of the update (db mutations, pristine puts/gets, ra_cat,
+ * ra_list walk, props ingest) all live in ae/wc/update_apply.ae now;
+ * this shim only opens the db, reads static info fields, does the
+ * initial head-rev probe via RA, and walks the wc_db nodelist so it
+ * can hand the count to Aether. */
 sqlite3 *svnae_wc_db_open(const char *wc_root);
 void     svnae_wc_db_close(sqlite3 *db);
-int      svnae_wc_db_upsert_node(sqlite3 *db, const char *path, int kind, int base_rev, const char *sha1, int state);
-int      svnae_wc_db_delete_node(sqlite3 *db, const char *path);
 int      svnae_wc_db_set_info(sqlite3 *db, const char *key, const char *value);
-int      svnae_wc_db_set_conflicted(sqlite3 *db, const char *path, int conflicted);
-
-int      svnae_merge3_apply(const char *wc_path,
-                            const char *base, int base_len, int base_rev,
-                            const char *theirs, int theirs_len, int theirs_rev);
-
-char    *svnae_wc_pristine_get(const char *wc_root, const char *sha1);
-int      svnae_wc_pristine_size(const char *wc_root, const char *sha1);
-void     svnae_wc_pristine_free(char *p);
 
 struct svnae_wc_nodelist;
 struct svnae_wc_nodelist *svnae_wc_db_list_nodes(sqlite3 *db);
 int         svnae_wc_nodelist_count(const struct svnae_wc_nodelist *L);
-const char *svnae_wc_nodelist_path(const struct svnae_wc_nodelist *L, int i);
-int         svnae_wc_nodelist_kind(const struct svnae_wc_nodelist *L, int i);
-int         svnae_wc_nodelist_base_rev(const struct svnae_wc_nodelist *L, int i);
-const char *svnae_wc_nodelist_base_sha1(const struct svnae_wc_nodelist *L, int i);
-int         svnae_wc_nodelist_state(const struct svnae_wc_nodelist *L, int i);
 void        svnae_wc_nodelist_free(struct svnae_wc_nodelist *L);
 
 char *svnae_wc_db_get_info(sqlite3 *db, const char *key);
 void  svnae_wc_info_free(char *s);
 
-const char *svnae_wc_pristine_put(const char *wc_root, const char *data, int len);
-
 int   svnae_ra_head_rev(const char *base_url, const char *repo_name);
-struct svnae_ra_list;
-struct svnae_ra_list *svnae_ra_list(const char *base_url, const char *repo_name, int rev, const char *path);
-int         svnae_ra_list_count(const struct svnae_ra_list *L);
-const char *svnae_ra_list_name(const struct svnae_ra_list *L, int i);
-const char *svnae_ra_list_kind(const struct svnae_ra_list *L, int i);
-void        svnae_ra_list_free(struct svnae_ra_list *L);
-char       *svnae_ra_cat(const char *base_url, const char *repo_name, int rev, const char *path);
-void        svnae_ra_free(char *p);
-
-struct svnae_ra_props;
-struct svnae_ra_props *svnae_ra_get_props(const char *base_url, const char *repo_name,
-                                          int rev, const char *path);
-int         svnae_ra_props_count(const struct svnae_ra_props *P);
-const char *svnae_ra_props_name (const struct svnae_ra_props *P, int i);
-const char *svnae_ra_props_value(const struct svnae_ra_props *P, int i);
-void        svnae_ra_props_free (struct svnae_ra_props *P);
-
-int svnae_wc_propset(const char *wc_root, const char *path,
-                     const char *name, const char *value);
-int svnae_wc_propdel(const char *wc_root, const char *path, const char *name);
-
-struct svnae_wc_proplist;
-struct svnae_wc_proplist *svnae_wc_proplist(const char *wc_root, const char *path);
-int         svnae_wc_proplist_count(const struct svnae_wc_proplist *L);
-const char *svnae_wc_proplist_name (const struct svnae_wc_proplist *L, int i);
-const char *svnae_wc_proplist_value(const struct svnae_wc_proplist *L, int i);
-void        svnae_wc_proplist_free (struct svnae_wc_proplist *L);
 
 /* --- hashing helpers ------------------------------------------------
  *

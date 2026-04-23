@@ -49,8 +49,6 @@ int   svnae_txn_base_rev(const struct svnae_txn *t);
 char *svnae_txn_rebuild_root(const char *repo, const char *base_root_sha1,
                              const struct svnae_txn *t);
 const char *svnae_rep_write_blob(const char *repo, const char *data, int len);
-char       *svnae_rep_read_blob(const char *repo, const char *sha1_hex);
-void        svnae_rep_free(char *p);
 const char *svnae_fsfs_now_iso8601(void);
 int         svnae_repos_head_rev(const char *repo);
 

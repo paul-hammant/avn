@@ -76,8 +76,6 @@ extern const char *aether_error_response_json(const char *msg);
 /* Functions this file actually calls (everything else reaches the
  * C symbol at link time from another translation unit, no forward
  * decl required). */
-char *svnae_rep_read_blob(const char *repo, const char *sha1_hex);
-void  svnae_rep_free(char *p);
 const char *svnae_repo_primary_hash(const char *repo);
 int         svnae_repo_secondary_hashes(const char *repo, char out[4][32]);
 char       *svnae_rep_lookup_secondary(const char *repo,
