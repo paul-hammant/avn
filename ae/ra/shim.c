@@ -90,52 +90,10 @@ static inline const char *json_valuestring(JsonValue *v) { return json_get_strin
          _ro_idx++)
 
 /* --- builders used by the commit-body writer ----------------------
- *
- * IMPORTANT ownership note: std.json's json_object_set_raw /
- * json_array_add_raw deep-copy the passed value into the container's
- * arena and free the original. The old cJSON_Add*ToObject variants
- * below therefore can NOT return the passed-in pointer — they have to
- * re-fetch the copied value out of the container so the caller gets
- * a pointer they can keep using. */
-
-static inline JsonValue *cJSON_CreateObject(void) { return json_create_object(); }
-static inline JsonValue *cJSON_CreateString(const char *s) { return json_create_string(s); }
-
-static inline int cJSON_AddItemToArray(JsonValue *arr, JsonValue *v) {
-    return json_array_add_raw(arr, v);
-}
-
-static inline JsonValue *cJSON_AddNumberToObject(JsonValue *obj, const char *key, double n) {
-    JsonValue *v = json_create_number(n);
-    if (!v) return NULL;
-    if (!json_object_set_raw(obj, key, v)) return NULL;
-    return json_object_get_raw(obj, key);
-}
-
-static inline JsonValue *cJSON_AddStringToObject(JsonValue *obj, const char *key, const char *s) {
-    JsonValue *v = json_create_string(s);
-    if (!v) return NULL;
-    if (!json_object_set_raw(obj, key, v)) return NULL;
-    return json_object_get_raw(obj, key);
-}
-
-static inline JsonValue *cJSON_AddObjectToObject(JsonValue *obj, const char *key) {
-    JsonValue *v = json_create_object();
-    if (!v) return NULL;
-    if (!json_object_set_raw(obj, key, v)) return NULL;
-    return json_object_get_raw(obj, key);
-}
-
-static inline JsonValue *cJSON_AddArrayToObject(JsonValue *obj, const char *key) {
-    JsonValue *v = json_create_array();
-    if (!v) return NULL;
-    if (!json_object_set_raw(obj, key, v)) return NULL;
-    return json_object_get_raw(obj, key);
-}
-
-static inline char *cJSON_PrintUnformatted(JsonValue *v) {
-    return json_stringify_raw(v);
-}
+ * The cJSON_Create* / cJSON_Add* builder inlines previously lived
+ * here for svnae_ra_commit_finish and friends. All builder sites
+ * ported to Aether (ae/ra/commit_build.ae via std.json); the C-side
+ * inlines are unused and removed. */
 
 /* ---- HTTP plumbing ---------------------------------------------------- */
 
