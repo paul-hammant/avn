@@ -209,13 +209,6 @@ int rtree_find_by_path(const struct remote_tree *rt, const char *path) {
 extern int aether_update_walk_remote(const char *base_url, const char *repo,
                                      int rev, const char *prefix, void *rt);
 
-static int
-walk_remote(const char *base_url, const char *repo, int rev,
-            const char *prefix, struct remote_tree *rt)
-{
-    return aether_update_walk_remote(base_url, repo, rev, prefix, rt);
-}
-
 /* Pull props for `rel` from the server at `rev`, overwriting any that
  * changed and removing any local props that the server no longer has.
  * Set of keys we're told about = "remote". We (a) propset each remote
@@ -266,7 +259,7 @@ svnae_wc_update(const char *wc_root, int target_rev)
 
     /* 1. Pull full remote tree at target_rev. */
     struct remote_tree rt = {0};
-    if (walk_remote(base_url, repo, target_rev, "", &rt) != 0) {
+    if (aether_update_walk_remote(base_url, repo, target_rev, "", &rt) != 0) {
         rtree_free(&rt);
         svnae_wc_info_free(base_url); svnae_wc_info_free(repo);
         svnae_wc_db_close(db);

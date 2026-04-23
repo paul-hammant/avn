@@ -150,27 +150,15 @@ extern const char *http_get_header(HttpRequest *req, const char *name);
 extern int aether_acl_allows_mode(const char *repo, int rev,
                                   const char *user, const char *target_path,
                                   int want_write);
-static int
-acl_allows_mode(const char *repo, int rev, const char *user,
-                const char *target_path, int want_write)
-{
-    return aether_acl_allows_mode(repo, rev, user, target_path, want_write);
-}
-
-/* Back-compat read-check wrapper — used by list/cat/props/log/paths. */
-static int
-acl_allows(const char *repo, int rev, const char *user, const char *target_path)
-{
-    return acl_allows_mode(repo, rev, user, target_path, 0);
-}
 
 extern int svnae_openssl_hash_hex_into(const char *algo, const char *data, int len, char *out);
 
-/* Aether-callable ACL + hash wrappers. The redact walker is ported
- * to ae/svnserver/redact.ae, which reaches through these. */
+/* Read-check wrapper — used by list/cat/props/log/paths via the
+ * Aether redact walker (ae/svnserver/redact.ae). Thin front for the
+ * ported acl_allows_mode (want_write=0). */
 int svnserver_acl_allows(const char *repo, int rev, const char *user,
                          const char *path) {
-    return acl_allows(repo, rev, user, path);
+    return aether_acl_allows_mode(repo, rev, user, path, 0);
 }
 
 const char *svnserver_hash_hex(const char *repo, const char *data, int length) {
@@ -448,14 +436,6 @@ extern int aether_based_on_check(void *req, void *res,
                                  const char *repo, int head_rev,
                                  const char *path,
                                  int allow_missing_as_create);
-static int
-based_on_check(HttpRequest *req, HttpServerResponse *res,
-               const char *repo, int head_rev, const char *path,
-               int allow_missing_as_create)
-{
-    return aether_based_on_check(req, res, repo, head_rev, path,
-                                 allow_missing_as_create);
-}
 
 /* Aether-callable wrappers around the static request-inspection and
  * mutation-policy helpers above. Each returns "" for a NULL string so
@@ -471,7 +451,7 @@ const char *svnserver_request_branch(HttpRequest *req) {
 }
 int svnserver_acl_allows_write(const char *repo, int rev,
                                 const char *user, const char *path) {
-    return acl_allows_mode(repo, rev, user, path, 1);
+    return aether_acl_allows_mode(repo, rev, user, path, 1);
 }
 /* Both-mode wrapper. Aether's acl_subtree walker needs to check
  * RO and RW separately on the same path, so it's cleaner to take
@@ -479,7 +459,7 @@ int svnserver_acl_allows_write(const char *repo, int rev,
 int svnserver_acl_allows_mode(const char *repo, int rev,
                                const char *user, const char *path,
                                int want_write) {
-    return acl_allows_mode(repo, rev, user, path, want_write);
+    return aether_acl_allows_mode(repo, rev, user, path, want_write);
 }
 int svnserver_spec_allows(const char *repo, const char *branch,
                            const char *path, int is_super) {
@@ -489,8 +469,8 @@ int svnserver_based_on_check(HttpRequest *req, HttpServerResponse *res,
                               const char *repo, int head_rev,
                               const char *path,
                               int allow_missing_as_create) {
-    return based_on_check(req, res, repo, head_rev, path,
-                          allow_missing_as_create);
+    return aether_based_on_check(req, res, repo, head_rev, path,
+                                 allow_missing_as_create);
 }
 
 /* Aether can't safely carry an arbitrary binary body (its `string` is

@@ -172,15 +172,6 @@ extern int aether_merge_walk_remote(const char *base_url, const char *repo,
                                     int rev, const char *source_path,
                                     const char *sub_prefix, void *rt);
 
-static int
-walk_remote(const char *base_url, const char *repo, int rev,
-            const char *source_path, const char *sub_prefix,
-            struct rtree *rt)
-{
-    return aether_merge_walk_remote(base_url, repo, rev, source_path,
-                                    sub_prefix, rt);
-}
-
 /* --- mergeinfo plumbing ---------------------------------------------- *
  *
  * The parse/add/cancel/emit pipeline for svn:mergeinfo has been ported to
@@ -268,8 +259,8 @@ svnae_wc_merge(const char *wc_root, const char *source_path, int rev_a, int rev_
      * merge A=rev_b, B=rev_a — so undoing a change means the pre-change
      * tree is "theirs" and replaces the post-change tree. */
     struct rtree A = {0}, B = {0};
-    if (walk_remote(base_url, repo, rev_base,   source_path, "", &A) != 0 ||
-        walk_remote(base_url, repo, rev_theirs, source_path, "", &B) != 0) {
+    if (aether_merge_walk_remote(base_url, repo, rev_base,   source_path, "", &A) != 0 ||
+        aether_merge_walk_remote(base_url, repo, rev_theirs, source_path, "", &B) != 0) {
         rt_free(&A); rt_free(&B);
         svnae_wc_info_free(base_url); svnae_wc_info_free(repo);
         return -1;

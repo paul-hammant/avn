@@ -55,14 +55,11 @@ void  svnae_rep_free(char *p);
 
 /* --- helpers --------------------------------------------------------- */
 
-/* head_rev + rev_blob_sha ported to ae/repos/rev_io.ae. Only head_rev
- * is still called from this file directly (blame); rev_blob_sha1 +
- * parse_field + aether_blobfield_get's C wrapper are all obsolete
- * now that ae/repos/log.ae does the log build in one Aether call. */
+/* head_rev + rev_blob_sha ported to ae/repos/rev_io.ae. Direct calls
+ * to aether_repos_head_rev at the remaining two call sites (blame
+ * and the public svnae_repos_head_rev wrapper) — the static trampoline
+ * was a pure rename. */
 extern int aether_repos_head_rev(const char *repo);
-
-static int
-head_rev(const char *repo) { return aether_repos_head_rev(repo); }
 
 /* --- log ---------------------------------------------------------------
  *
@@ -339,7 +336,7 @@ svnae_repos_info_free(struct svnae_info *I)
     free(I);
 }
 
-int svnae_repos_head_rev(const char *repo) { return head_rev(repo); }
+int svnae_repos_head_rev(const char *repo) { return aether_repos_head_rev(repo); }
 
 /* --- paths changed in a single revision -----------------------------
  *
@@ -573,7 +570,7 @@ lcs_match(const char *a_data, int *a_off, int *a_len, int na,
 struct svnae_blame *
 svnae_repos_blame(const char *repo, int target_rev, const char *path)
 {
-    if (target_rev < 0) target_rev = head_rev(repo);
+    if (target_rev < 0) target_rev = aether_repos_head_rev(repo);
     if (target_rev < 1) return NULL;
 
     /* Walk revs 1..target_rev, maintaining a current annotation list
