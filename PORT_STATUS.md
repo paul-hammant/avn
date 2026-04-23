@@ -44,7 +44,24 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
   `int_to_dec` + `digit_char` in favour of `std.string.from_int` now
   that it's available, and ported the WC pristine-store path builder
   to ae/wc/pristine_path.ae (handles the two-level XX/YY/ fanout).
-- **Round 14** (current): **43.40% C, 56.59% Aether.** Focus
+- **Round 15** (current): **42.70% C, 57.29% Aether.** Smaller-
+  bore cleanup round focusing on the last cJSON sites and some
+  dead-code pruning:
+  - `verify_secondaries_in_dir`: its two inline cJSON walkers
+    (list and /hashes secondaries) switch to the already-ported
+    `ra_parse_list` and a new `ra_parse_hashes_secondaries`.
+  - `ingest_props` (svn update's per-path prop reconciliation)
+    → ae/wc/update_props.ae. Opaque-handle walk via already-
+    Aether-callable ra/wc accessors.
+  - `read_format_line` ($repo/format reader) →
+    ae/repos/rev_io.ae::repos_format_line.
+  - `based_on_check` (PUT/DELETE optimistic-concurrency) →
+    ae/svnserver/based_on_check.ae.
+  - Dead code sweep: `sb_*` JSON builder scaffolding in
+    svnserver/shim.c and read_small / trim_trailing_newline /
+    parse_int / rev_pointer_path in repos/shim.c.
+
+- **Round 14**: **43.40% C, 56.59% Aether.** Focus
   shifts to the RA client side + repos helpers:
   - `svnae_ra_commit_finish`: 140 LOC of cJSON-heavy body
     serialisation moves up to ae/ra/commit_build.ae. std.json
