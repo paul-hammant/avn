@@ -44,7 +44,24 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
   `int_to_dec` + `digit_char` in favour of `std.string.from_int` now
   that it's available, and ported the WC pristine-store path builder
   to ae/wc/pristine_path.ae (handles the two-level XX/YY/ fanout).
-- **Round 17** (current): **40.75% C, 59.24% Aether.** Finishing
+- **Round 18** (current): **40.33% C, 59.66% Aether.** Cleanup
+  round focused on pulling one more layer of C-side trampolines
+  up and pruning stale forward decls:
+  - svnae_repo_secondary_hashes parse → ae/repos/rev_io.ae
+    (\n-joined names; C splits into char[4][32]).
+  - svnadmin dump rev-pointer read → aether_repos_rev_blob_sha.
+  - repos_info_rev + root_dir_sha1_for_rev both use the shared
+    aether_repos_load_rev_blob_field helper now.
+  - count_reps_recurse → ae/fs_fs/count_reps.ae.
+  - Dead trampolines gone from update_shim.c (ingest_props),
+    svnserver/shim.c (acl_user_has_rw_subtree, 24 stale aether_*
+    extern decls, 5 obsolete svnae_txn_*/commit_finalise forward
+    decls), svnadmin/shim.c (slurp_small).
+  - Dead read_format_line in rep_store_shim.c.
+
+  svnserver/shim.c: 918 → 868 LOC.
+
+- **Round 17**: **40.75% C, 59.24% Aether.** Finishing
   off the cJSON cleanup and picking up a few small fs_fs helpers:
   - Dead cJSON compat layers removed from ra/shim.c and
     svnserver/shim.c (both had no remaining users; kept as
