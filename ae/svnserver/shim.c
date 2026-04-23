@@ -597,27 +597,9 @@ parse_rev_from_tail(const char *tail, int *out_rev, const char **after)
     return 1;
 }
 
-/* GET /repos/{r}/info — fully in Aether (ae/svnserver/handler_info.ae).
- * The C wrapper only exists so the dispatch table keeps pointing at a
- * stable C function. */
-extern void aether_handler_info(HttpRequest *req, HttpServerResponse *res);
-
-static void
-handle_repo_info(HttpRequest *req, HttpServerResponse *res, void *user_data)
-{
-    (void)user_data;
-    aether_handler_info(req, res);
-}
-
-/* GET /repos/{r}/log — fully in Aether (ae/svnserver/handler_log.ae). */
-extern void aether_handler_log(HttpRequest *req, HttpServerResponse *res);
-
-static void
-handle_repo_log(HttpRequest *req, HttpServerResponse *res, void *user_data)
-{
-    (void)user_data;
-    aether_handler_log(req, res);
-}
+/* handle_repo_info / handle_repo_log were C-side trampolines for the
+ * dispatch table. Both dispatch + table entries are now Aether-side
+ * (dispatch.ae); the trampolines are unused and dropped. */
 
 /* Field extraction ported to Aether (ae/repos/blobfield.ae). The C side
  * keeps the rev-pointer + rep-blob I/O. */
@@ -640,16 +622,6 @@ load_rev_blob_field(const char *repo, int rev, const char *key)
  * were the building blocks of the /rev/N/props handler; all moved
  * to Aether (ae/svnserver/acl_resolve.ae::props_resolve) and
  * ae/svnserver/json.ae. */
-
-/* GET /repos/{r}/rev/N/<sub> dispatcher ported to
- * ae/svnserver/handle_repo_rev.ae. */
-extern void aether_handle_repo_rev(void *req, void *res);
-static void
-handle_repo_rev(HttpRequest *req, HttpServerResponse *res, void *user_data)
-{
-    (void)user_data;
-    aether_handle_repo_rev(req, res);
-}
 
 /* --- registration entry points --------------------------------------- *
  *
@@ -705,14 +677,6 @@ spec_allows(const char *repo, const char *branch, const char *path, int is_super
 {
     if (is_super) return 1;
     return svnae_branch_spec_allows(repo, branch, path) == 1;
-}
-
-/* GET /repos/{r}/path/<path> — ported to ae/svnserver/handler_path_get.ae. */
-extern void aether_handler_path_get(void *req, void *res);
-static void
-handle_repo_path_get(HttpRequest *req, HttpServerResponse *res)
-{
-    aether_handler_path_get(req, res);
 }
 
 /* Optimistic-concurrency check ported to
@@ -959,22 +923,6 @@ int svnserver_branch_create_from_body(const char *repo,
                                           user_for_author);
 }
 
-/* PUT /repos/{r}/path/<path> — ported to ae/svnserver/handler_path_put.ae. */
-extern void aether_handler_path_put(void *req, void *res);
-static void
-handle_repo_path_put(HttpRequest *req, HttpServerResponse *res)
-{
-    aether_handler_path_put(req, res);
-}
-
-/* DELETE /repos/{r}/path/<path> — ported to ae/svnserver/handler_path_delete.ae. */
-extern void aether_handler_path_delete(void *req, void *res);
-static void
-handle_repo_path_delete(HttpRequest *req, HttpServerResponse *res)
-{
-    aether_handler_path_delete(req, res);
-}
-
 /* --- commit handler --------------------------------------------------- *
  *
  *   POST /repos/{r}/commit
@@ -1108,12 +1056,12 @@ extern int svnae_branch_create(const char *repo, const char *name,
  * no longer needs to split it out. */
 extern void aether_handler_branch_create(void *req, void *res);
 
-void *svnae_svnserver_handler_info(void) { return (void *)handle_repo_info; }
-void *svnae_svnserver_handler_log (void) { return (void *)handle_repo_log;  }
-void *svnae_svnserver_handler_rev (void) { return (void *)handle_repo_rev;  }
-
-/* Top-level dispatcher ported to ae/svnserver/dispatch.ae. It routes
- * (method, URL-tail) to the already-ported handlers directly. */
+/* svnae_svnserver_handler_{info,log,rev} used to expose C-side
+ * function pointers to an earlier Aether orchestration pass. Both
+ * the trampolines and their exporters have been dead since the
+ * full dispatcher moved to Aether; dropped. svnae_svnserver_handler_dispatch
+ * is the only survivor — it hands std.http's route registration a
+ * pointer at the Aether dispatch entry. */
 extern void aether_svnserver_dispatch(void *req, void *res, void *user_data);
 
 void *svnae_svnserver_handler_dispatch(void) { return (void *)aether_svnserver_dispatch; }
