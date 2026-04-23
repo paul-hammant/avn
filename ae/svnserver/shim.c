@@ -1150,26 +1150,29 @@ handle_repo_path_delete(HttpRequest *req, HttpServerResponse *res)
  *   → 500 on txn rebuild failure
  */
 
-static void
-handle_repo_commit(HttpRequest *req, HttpServerResponse *res, void *user_data)
-{
-    (void)user_data;
-    char name[128];
-    const char *tail = parse_repo_and_tail(req->path, name, sizeof name);
-    if (!tail || strcmp(tail, "/commit") != 0) {
-        respond_error(res, 404, "not found");
-        return;
-    }
-    const char *repo = find_repo_path(name);
-    if (!repo) { respond_error(res, 404, "no such repo"); return; }
-
-    if (!req->body || req->body_length == 0) {
-        respond_error(res, 400, "empty body");
-        return;
-    }
+/* Parse the commit JSON body, run ACL/spec pre-scan, build a txn,
+ * build paths-props and paths-acl blobs if included, and
+ * commit-finalise-with-acl. Return value encodes the outcome:
+ *    >= 0 : new_rev
+ *    -1   : empty body
+ *    -2   : malformed JSON
+ *    -3   : missing/wrong-typed top-level field
+ *    -4   : forbidden (ACL write denied OR acl-change without write)
+ *    -5   : path outside branch spec
+ *    -6   : oom building txn
+ *    -7   : edit missing op/path
+ *    -8   : add-file missing content
+ *    -9   : base64 decode failed
+ *    -10  : unknown op
+ *    -11  : commit finalise failed
+ * The Aether handler maps each to the right HTTP status. */
+int svnserver_commit_from_body(HttpRequest *req, HttpServerResponse *res,
+                                const char *repo) {
+    (void)res;   /* all error paths return -N; Aether handler emits response */
+    if (!req->body || req->body_length == 0) return -1;
 
     cJSON *root = cJSON_ParseWithLength(req->body, req->body_length);
-    if (!root) { respond_error(res, 400, "malformed JSON"); return; }
+    if (!root) return -2;
 
     cJSON *jbase   = cJSON_GetObjectItemCaseSensitive(root, "base_rev");
     cJSON *jauthor = cJSON_GetObjectItemCaseSensitive(root, "author");
@@ -1178,8 +1181,7 @@ handle_repo_commit(HttpRequest *req, HttpServerResponse *res, void *user_data)
     if (!cJSON_IsNumber(jbase) || !cJSON_IsString(jauthor) ||
         !cJSON_IsString(jlog)  || !cJSON_IsArray(jedits)) {
         cJSON_Delete(root);
-        respond_error(res, 400, "missing or wrong-typed field");
-        return;
+        return -3;
     }
 
     int base_rev = json_valueint(jbase);
@@ -1210,13 +1212,11 @@ handle_repo_commit(HttpRequest *req, HttpServerResponse *res, void *user_data)
             if (!is_super &&
                 !acl_allows_mode(repo, base_rev, user, epath, 1)) {
                 cJSON_Delete(root);
-                respond_error(res, 403, "forbidden");
-                return;
+                return -4;
             }
             if (!spec_allows(repo, commit_branch, epath, is_super)) {
                 cJSON_Delete(root);
-                respond_error(res, 403, "path outside branch spec");
-                return;
+                return -5;
             }
         }
         if (!is_super) {
@@ -1231,8 +1231,7 @@ handle_repo_commit(HttpRequest *req, HttpServerResponse *res, void *user_data)
                     if (!apath) apath = "";
                     if (!acl_allows_mode(repo, base_rev, user, apath, 1)) {
                         cJSON_Delete(root);
-                        respond_error(res, 403, "forbidden");
-                        return;
+                        return -4;
                     }
                 }
             }
@@ -1244,16 +1243,15 @@ handle_repo_commit(HttpRequest *req, HttpServerResponse *res, void *user_data)
     char *logmsg = strdup(json_valuestring(jlog));
 
     struct svnae_txn *txn = svnae_txn_new(base_rev);
-    if (!txn) { cJSON_Delete(root); respond_error(res, 500, "oom"); return; }
+    if (!txn) { free(author); free(logmsg); cJSON_Delete(root); return -6; }
 
     cJSON *e;
     cJSON_ArrayForEach(e, jedits) {
         cJSON *jop   = cJSON_GetObjectItemCaseSensitive(e, "op");
         cJSON *jpath = cJSON_GetObjectItemCaseSensitive(e, "path");
         if (!cJSON_IsString(jop) || !cJSON_IsString(jpath)) {
-            svnae_txn_free(txn); cJSON_Delete(root);
-            respond_error(res, 400, "edit missing op/path");
-            return;
+            svnae_txn_free(txn); free(author); free(logmsg); cJSON_Delete(root);
+            return -7;
         }
         const char *op   = json_valuestring(jop);
         const char *path = json_valuestring(jpath);
@@ -1261,17 +1259,15 @@ handle_repo_commit(HttpRequest *req, HttpServerResponse *res, void *user_data)
         if (strcmp(op, "add-file") == 0) {
             cJSON *jcontent = cJSON_GetObjectItemCaseSensitive(e, "content");
             if (!cJSON_IsString(jcontent)) {
-                svnae_txn_free(txn); cJSON_Delete(root);
-                respond_error(res, 400, "add-file missing content");
-                return;
+                svnae_txn_free(txn); free(author); free(logmsg); cJSON_Delete(root);
+                return -8;
             }
             const char *b64 = json_valuestring(jcontent);
             unsigned char *raw = NULL;
             int raw_len = 0;
             if (b64_decode(b64, (int)strlen(b64), &raw, &raw_len) != 0) {
-                svnae_txn_free(txn); cJSON_Delete(root);
-                respond_error(res, 400, "base64 decode failed");
-                return;
+                svnae_txn_free(txn); free(author); free(logmsg); cJSON_Delete(root);
+                return -9;
             }
             svnae_txn_add_file(txn, path, (const char *)raw, raw_len);
             free(raw);
@@ -1280,9 +1276,8 @@ handle_repo_commit(HttpRequest *req, HttpServerResponse *res, void *user_data)
         } else if (strcmp(op, "delete") == 0) {
             svnae_txn_delete(txn, path);
         } else {
-            svnae_txn_free(txn); cJSON_Delete(root);
-            respond_error(res, 400, "unknown op");
-            return;
+            svnae_txn_free(txn); free(author); free(logmsg); cJSON_Delete(root);
+            return -10;
         }
     }
 
@@ -1385,13 +1380,12 @@ handle_repo_commit(HttpRequest *req, HttpServerResponse *res, void *user_data)
     free(logmsg);
     free(built_props_sha1);
     free(built_acl_sha1);
-    if (new_rev < 0) {
-        respond_error(res, 500, "commit failed");
-        return;
-    }
-
-    respond_json(res, 200, aether_rev_response_json(new_rev));
+    if (new_rev < 0) return -11;
+    return new_rev;
 }
+
+/* POST /commit — ported to ae/svnserver/handler_commit.ae. */
+extern void aether_handler_commit(void *req, void *res);
 
 /* Recursively walk `path` at `rev` and confirm that `user` has RW on
  * every descendant (including `path` itself). Returns 1 if fully RW,
@@ -1590,7 +1584,7 @@ dispatch(HttpRequest *req, HttpServerResponse *res, void *user_data)
     if (!tail) { respond_error(res, 404, "not found"); return; }
 
     if (strcmp(req->method, "POST") == 0) {
-        if (strcmp(tail, "/commit") == 0) { handle_repo_commit(req, res, user_data); return; }
+        if (strcmp(tail, "/commit") == 0) { aether_handler_commit(req, res); return; }
         if (strcmp(tail, "/copy")   == 0) { aether_handler_copy(req, res); return; }
 
         /* /branches/<NAME>/create — Phase 8.2a. Parse+auth+commit all
