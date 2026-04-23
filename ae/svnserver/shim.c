@@ -795,17 +795,8 @@ int svnserver_branch_create_globs(const char *repo, const char *branch_name,
     free(copies); free(globs);
     return new_rev;
 }
-extern int aether_branch_create_from_body(const char *repo,
-                                          const char *branch_name,
-                                          const char *body, int body_len,
-                                          const char *user_for_author);
-int svnserver_branch_create_from_body(const char *repo,
-                                       const char *branch_name,
-                                       const char *body, int body_len,
-                                       const char *user_for_author) {
-    return aether_branch_create_from_body(repo, branch_name, body, body_len,
-                                          user_for_author);
-}
+/* svnserver_branch_create_from_body C trampoline removed — the
+ * Aether handler calls aether_branch_create_from_body directly. */
 
 /* --- commit handler --------------------------------------------------- *
  *
@@ -841,12 +832,8 @@ int svnserver_branch_create_from_body(const char *repo,
  *    -10  : unknown op
  *    -11  : commit finalise failed
  * The Aether handler maps each to the right HTTP status. */
-extern int aether_commit_from_body(HttpRequest *req, HttpServerResponse *res,
-                                   const char *repo);
-int svnserver_commit_from_body(HttpRequest *req, HttpServerResponse *res,
-                                const char *repo) {
-    return aether_commit_from_body(req, res, repo);
-}
+/* svnserver_commit_from_body C trampoline removed — the Aether
+ * handler calls aether_commit_from_body directly. */
 
 /* POST /commit — ported to ae/svnserver/handler_commit.ae. */
 extern void aether_handler_commit(void *req, void *res);
@@ -914,10 +901,8 @@ auto_follow_copy_acl(const char *repo, int base_rev,
  *    -6   : from_path missing at base_rev
  *    -7   : commit failed
  * The Aether handler maps each to an HTTP response code. */
-extern int aether_copy_from_body(HttpRequest *req, const char *repo);
-int svnserver_copy_from_body(HttpRequest *req, const char *repo) {
-    return aether_copy_from_body(req, repo);
-}
+/* svnserver_copy_from_body C trampoline removed — the Aether
+ * handler calls aether_copy_from_body directly. */
 
 /* POST /copy — ported to ae/svnserver/handler_copy.ae. */
 extern void aether_handler_copy(void *req, void *res);

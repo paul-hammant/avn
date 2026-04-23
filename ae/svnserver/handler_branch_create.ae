@@ -31,9 +31,13 @@ extern svnserver_request_is_super(req: ptr) -> int
 extern svnserver_request_body(req: ptr) -> string
 extern svnserver_request_body_length(req: ptr) -> int
 
-extern svnserver_branch_create_from_body(repo: string, branch_name: string,
-                                          body: string, body_len: int,
-                                          user: string) -> int
+// branch_create_from_body lives in branch_create_parse.ae; linked
+// as both `branch_create_from_body` and `aether_branch_create_from_body`
+// on the C side. Call the aether-prefixed one so the .c's external
+// symbol table has a single match.
+extern aether_branch_create_from_body(repo: string, branch_name: string,
+                                       body: string, body_len: int,
+                                       user: string) -> int
 
 extern aether_rev_branch_response_json(rev: int, branch_name: string) -> string
 
@@ -92,7 +96,7 @@ handler_branch_create_impl(req: ptr, res: ptr) {
         return
     }
 
-    rv = svnserver_branch_create_from_body(repo, branch_name, body, body_len, user)
+    rv = aether_branch_create_from_body(repo, branch_name, body, body_len, user)
     if rv == -1 {
         svnserver_respond_error(res, 400, "malformed JSON")
         return

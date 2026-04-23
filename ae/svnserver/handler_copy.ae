@@ -29,7 +29,7 @@ import std.string
 
 extern aether_parse_repo_name_in(path: string) -> string
 extern svnserver_find_repo_path(name: string) -> string
-extern svnserver_copy_from_body(req: ptr, repo: string) -> int
+extern aether_copy_from_body(req: ptr, repo: string) -> int
 
 extern aether_rev_response_json(rev: int) -> string
 
@@ -60,7 +60,7 @@ handler_copy_impl(req: ptr, res: ptr) {
         return
     }
 
-    rv = svnserver_copy_from_body(req, repo)
+    rv = aether_copy_from_body(req, repo)
     if rv == -1 {
         svnserver_respond_error(res, 400, "empty body")
         return
