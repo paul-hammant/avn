@@ -597,6 +597,7 @@ void svnae_ra_blame_free(struct svnae_ra_blame *B) {
 
 struct svnae_ra_info { int rev; char *author; char *date; char *msg; char *root; };
 
+extern const char *aether_ra_parse_info_rev(const char *body);
 struct svnae_ra_info *
 svnae_ra_info_rev(const char *base_url, const char *repo_name, int rev)
 {
@@ -605,21 +606,40 @@ svnae_ra_info_rev(const char *base_url, const char *repo_name, int rev)
     if (http_get(url, &body, &len, &status) != 0) return NULL;
     if (status != 200) { free(body); return NULL; }
 
-    cJSON *root = cJSON_ParseWithLength(body, len);
+    /* JSON parse ported to ae/ra/parse.ae::ra_parse_info_rev,
+     * which returns a packed "<rev>\x01<author>\x01<date>\x01<msg>\x01<root>"
+     * string. Split into the struct fields here. */
+    const char *packed = aether_ra_parse_info_rev(body);
     free(body);
-    if (!root) return NULL;
+    if (!packed || !*packed) return NULL;
+
     struct svnae_ra_info *I = calloc(1, sizeof *I);
-    cJSON *jr = cJSON_GetObjectItemCaseSensitive(root, "rev");
-    cJSON *ja = cJSON_GetObjectItemCaseSensitive(root, "author");
-    cJSON *jd = cJSON_GetObjectItemCaseSensitive(root, "date");
-    cJSON *jm = cJSON_GetObjectItemCaseSensitive(root, "msg");
-    cJSON *jroot = cJSON_GetObjectItemCaseSensitive(root, "root");
-    I->rev    = cJSON_IsNumber(jr) ? json_valueint(jr) : -1;
-    I->author = cJSON_IsString(ja) ? strdup(json_valuestring(ja)) : strdup("");
-    I->date   = cJSON_IsString(jd) ? strdup(json_valuestring(jd)) : strdup("");
-    I->msg    = cJSON_IsString(jm) ? strdup(json_valuestring(jm)) : strdup("");
-    I->root   = cJSON_IsString(jroot) ? strdup(json_valuestring(jroot)) : strdup("");
-    cJSON_Delete(root);
+    const char *p = packed;
+    const char *fields[5] = {0};
+    int n_fields = 0;
+    fields[n_fields++] = p;
+    while (*p) {
+        if (*p == 1 && n_fields < 5) {
+            fields[n_fields++] = p + 1;
+        }
+        p++;
+    }
+    /* p now points at the NUL terminator. Each field extends from
+     * its start pointer to the next \x01 or (for the last field) to p. */
+    size_t flens[5];
+    for (int i = 0; i < 5; i++) {
+        const char *end = (i + 1 < n_fields) ? fields[i + 1] - 1 : p;
+        flens[i] = (size_t)(end - fields[i]);
+    }
+    /* rev is the first field, parsed as int. */
+    char rev_buf[32];
+    size_t rl = flens[0] < sizeof rev_buf - 1 ? flens[0] : sizeof rev_buf - 1;
+    memcpy(rev_buf, fields[0], rl); rev_buf[rl] = '\0';
+    I->rev    = (int)strtol(rev_buf, NULL, 10);
+    I->author = strndup(fields[1], flens[1]);
+    I->date   = strndup(fields[2], flens[2]);
+    I->msg    = strndup(fields[3], flens[3]);
+    I->root   = strndup(fields[4], flens[4]);
     return I;
 }
 

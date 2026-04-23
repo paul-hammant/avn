@@ -58,6 +58,56 @@ export ra_parse_hash_algo(body: string) -> string {
     return result
 }
 
+// Parse a rev-info JSON response into a packed string:
+//   "<rev_int>\x01<author>\x01<date>\x01<msg>\x01<root>"
+// The C caller splits on \x01 and populates its svnae_ra_info
+// struct. Returns "" on malformed JSON so the caller can fail
+// the whole request.
+//
+// Absent individual string fields become empty segments; absent
+// rev becomes "-1".
+export ra_parse_info_rev(body: string) -> string {
+    if string.length(body) == 0 { return "" }
+    root, err = json.parse(body)
+    if string.length(err) > 0 { return "" }
+
+    rev_str = "-1"
+    jr, err1 = json.object_get(root, "rev")
+    if string.length(err1) == 0 {
+        rev_str = string.from_int(json.get_int(jr))
+    }
+
+    author = get_string_field(root, "author")
+    date   = get_string_field(root, "date")
+    msg    = get_string_field(root, "msg")
+    root_s = get_string_field(root, "root")
+
+    json.free(root)
+
+    // Pack as "<rev>\x01<author>\x01<date>\x01<msg>\x01<root>".
+    out = string.concat(rev_str, "\x01")
+    out = string.concat(out, author)
+    out = string.concat(out, "\x01")
+    out = string.concat(out, date)
+    out = string.concat(out, "\x01")
+    out = string.concat(out, msg)
+    out = string.concat(out, "\x01")
+    out = string.concat(out, root_s)
+    return out
+}
+
+// Shared helper: object[key] → string, defaulting to "".
+// Caller is responsible for json.free'ing the root; the borrowed
+// string returned by json.get_string is copied so the return
+// outlives the parent object.
+get_string_field(obj: ptr, key: string) -> string {
+    v, err = json.object_get(obj, key)
+    if string.length(err) > 0 { return "" }
+    s, serr = json.get_string(v)
+    if string.length(serr) > 0 { return "" }
+    return string.copy(s)
+}
+
 main() {
     println("ae/ra/parse.ae is a library; not meant to run standalone")
 }
