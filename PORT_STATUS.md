@@ -44,7 +44,29 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
   `int_to_dec` + `digit_char` in favour of `std.string.from_int` now
   that it's available, and ported the WC pristine-store path builder
   to ae/wc/pristine_path.ae (handles the two-level XX/YY/ fanout).
-- **Round 15** (current): **42.70% C, 57.29% Aether.** Smaller-
+- **Round 16** (current): **41.28% C, 58.71% Aether.** The 8 MB
+  vendored `apr/` tree is deleted (zero Aether references). The
+  two remaining svnserver C-side dispatchers move up:
+  - /rev/N/<sub> dispatcher: 140 LOC → ae/svnserver/handle_repo_rev.ae.
+  - Top-level /repos/{r}/<...> dispatcher: 55 LOC →
+    ae/svnserver/dispatch.ae (std.http's route callback now points
+    directly at aether_svnserver_dispatch).
+  - parse_field's "present but empty" rescan: dropped (no caller
+    differentiates from absent).
+  - More dead C — handle_repo_info/log/rev/path_* trampolines,
+    parse_repo_and_tail, parse_rev_from_tail, compute_redacted_dir_sha,
+    rtree_find / rt_find lookups: -110 LOC.
+  - req_header delegated to std.http's http_get_header (same
+    strcasecmp loop).
+  - respond_* statics merged into Aether-callable wrappers; no
+    intermediate indirection.
+  - Three "from_body" trampolines (branch_create, copy, commit)
+    dropped — handlers bind to aether_* exports directly.
+
+  svnserver/shim.c: 1015 → 936 LOC; total C share crosses below
+  42 %.
+
+- **Round 15**: **42.70% C, 57.29% Aether.** Smaller-
   bore cleanup round focusing on the last cJSON sites and some
   dead-code pruning:
   - `verify_secondaries_in_dir`: its two inline cJSON walkers
