@@ -104,20 +104,9 @@ static int write_file_atomic(const char *path, const char *data, int len)
     return aether_io_write_atomic(path, data, len) == 0 ? 0 : -1;
 }
 
-/* Slurp ported to Aether (ae/subr/io.ae). Distinguish missing (NULL)
- * from empty via io_file_size. */
-extern const char *aether_io_read_file(const char *path);
-extern int aether_io_file_size(const char *path);
-
-static char *
-slurp_small(const char *path)
-{
-    if (aether_io_file_size(path) < 0) return NULL;
-    const char *src = aether_io_read_file(path);
-    return strdup(src ? src : "");
-}
-
-/* parse_int moved to ae/svnadmin/dump.ae::parse_tagged_int. */
+/* slurp_small / parse_int previously lived here; both unused after
+ * the dump-body read moved to aether_repos_rev_blob_sha and the load
+ * parser moved to ae/svnadmin/dump.ae::parse_tagged_int. */
 
 /* ---- create --------------------------------------------------------- */
 
@@ -376,17 +365,13 @@ svnae_svnadmin_dump(const char *repo, int out_fd)
         svnae_rep_free(bytes);
     }
 
-    /* Rev pointers. */
+    /* Rev pointers — trimmed read already handled by
+     * ae/repos/rev_io.ae::repos_rev_blob_sha. */
+    extern const char *aether_repos_rev_blob_sha(const char *repo, int rev);
     for (int r = 0; r <= head; r++) {
-        char rp[PATH_MAX];
-        snprintf(rp, sizeof rp, "%s/revs/%06d", repo, r);
-        char *body = slurp_small(rp);
-        if (!body) { free_rep_list(reps); return -1; }
-        size_t n = strlen(body);
-        while (n > 0 && (body[n-1] == '\n' || body[n-1] == '\r')) body[--n] = '\0';
-
-        const char *block = aether_rev_pointer_block(r, body);
-        free(body);
+        const char *sha = aether_repos_rev_blob_sha(repo, r);
+        if (!sha || !*sha) { free_rep_list(reps); return -1; }
+        const char *block = aether_rev_pointer_block(r, sha);
         if (write_all(out_fd, block, (int)strlen(block)) != 0) { free_rep_list(reps); return -1; }
     }
 
