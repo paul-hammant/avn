@@ -56,21 +56,6 @@ struct svnae_txn;
 int  svnae_txn_add_file(struct svnae_txn *t, const char *path, const char *content, int len);
 int  svnae_branch_spec_allows(const char *repo, const char *branch, const char *path);
 
-const char *svnae_build_props_blob(const char *repo,
-                                   const char *const *keys,
-                                   const char *const *values,
-                                   int n_pairs);
-const char *svnae_build_paths_props_blob(const char *repo,
-                                         const char *const *paths,
-                                         const char *const *props_shas,
-                                         int n_paths);
-const char *svnae_build_acl_blob(const char *repo,
-                                 const char *const *rules, int n_rules);
-const char *svnae_build_paths_acl_blob(const char *repo,
-                                       const char *const *paths,
-                                       const char *const *acl_shas,
-                                       int n_paths);
-
 extern const char *aether_error_response_json(const char *msg);
 
 /* Functions this file actually calls (everything else reaches the
@@ -545,105 +530,11 @@ int svnserver_request_body_length(HttpRequest *req) {
  * by the Aether commit-body handler to build paths-props and
  * paths-acl blobs without an FFI array type. */
 
-/* Count newlines + 1 (or 0 if empty). Shared helper. */
-static int count_lines(const char *joined) {
-    if (!joined || !*joined) return 0;
-    int n = 1;
-    for (const char *q = joined; *q; q++) if (*q == '\n') n++;
-    return n;
-}
-
-/* Split a \n-joined string into a strdup'd array of line pieces.
- * Caller frees each copy and the array. Returns the number of
- * lines populated. Trailing empty line (from final \n) is skipped. */
-static int split_joined(const char *joined, char ***out_pieces) {
-    int n_lines = count_lines(joined);
-    char **pieces = calloc((size_t)(n_lines > 0 ? n_lines : 1), sizeof *pieces);
-    int gi = 0;
-    const char *p = joined ? joined : "";
-    while (*p) {
-        const char *eol = strchr(p, '\n');
-        size_t slen = eol ? (size_t)(eol - p) : strlen(p);
-        pieces[gi++] = strndup(p, slen);   /* empty lines preserved */
-        if (!eol) break;
-        p = eol + 1;
-    }
-    *out_pieces = pieces;
-    return gi;
-}
-
-static void free_joined_split(char **pieces, int n) {
-    for (int i = 0; i < n; i++) free(pieces[i]);
-    free(pieces);
-}
-
-/* Build a props blob from \n-joined (keys, values). Caller frees
- * via svnae_rep_free. "" on failure. */
-const char *svnserver_build_props_blob_joined(const char *repo,
-                                               const char *keys_joined,
-                                               const char *values_joined) {
-    char **keys = NULL, **values = NULL;
-    int nk = split_joined(keys_joined, &keys);
-    int nv = split_joined(values_joined, &values);
-    int n = nk < nv ? nk : nv;
-    const char **kp = calloc((size_t)(n > 0 ? n : 1), sizeof *kp);
-    const char **vp = calloc((size_t)(n > 0 ? n : 1), sizeof *vp);
-    for (int i = 0; i < n; i++) { kp[i] = keys[i]; vp[i] = values[i]; }
-    const char *sha = svnae_build_props_blob(repo, kp, vp, n);
-    free(kp); free(vp);
-    free_joined_split(keys, nk);
-    free_joined_split(values, nv);
-    return sha ? sha : "";
-}
-
-/* Build a paths-props blob from \n-joined (paths, props_shas). */
-const char *svnserver_build_paths_props_blob_joined(const char *repo,
-                                                     const char *paths_joined,
-                                                     const char *shas_joined) {
-    char **paths = NULL, **shas = NULL;
-    int np = split_joined(paths_joined, &paths);
-    int ns = split_joined(shas_joined, &shas);
-    int n = np < ns ? np : ns;
-    const char **pp = calloc((size_t)(n > 0 ? n : 1), sizeof *pp);
-    const char **sp = calloc((size_t)(n > 0 ? n : 1), sizeof *sp);
-    for (int i = 0; i < n; i++) { pp[i] = paths[i]; sp[i] = shas[i]; }
-    const char *sha = svnae_build_paths_props_blob(repo, pp, sp, n);
-    free(pp); free(sp);
-    free_joined_split(paths, np);
-    free_joined_split(shas, ns);
-    return sha ? sha : "";
-}
-
-/* Build an ACL rule blob from \n-joined rules. */
-const char *svnserver_build_acl_blob_joined(const char *repo,
-                                             const char *rules_joined) {
-    char **rules = NULL;
-    int n = split_joined(rules_joined, &rules);
-    const char **rp = calloc((size_t)(n > 0 ? n : 1), sizeof *rp);
-    for (int i = 0; i < n; i++) rp[i] = rules[i];
-    const char *sha = svnae_build_acl_blob(repo, rp, n);
-    free(rp);
-    free_joined_split(rules, n);
-    return sha ? sha : "";
-}
-
-/* Build a paths-acl blob from \n-joined (paths, acl_shas). */
-const char *svnserver_build_paths_acl_blob_joined(const char *repo,
-                                                   const char *paths_joined,
-                                                   const char *shas_joined) {
-    char **paths = NULL, **shas = NULL;
-    int np = split_joined(paths_joined, &paths);
-    int ns = split_joined(shas_joined, &shas);
-    int n = np < ns ? np : ns;
-    const char **pp = calloc((size_t)(n > 0 ? n : 1), sizeof *pp);
-    const char **sp = calloc((size_t)(n > 0 ? n : 1), sizeof *sp);
-    for (int i = 0; i < n; i++) { pp[i] = paths[i]; sp[i] = shas[i]; }
-    const char *sha = svnae_build_paths_acl_blob(repo, pp, sp, n);
-    free(pp); free(sp);
-    free_joined_split(paths, np);
-    free_joined_split(shas, ns);
-    return sha ? sha : "";
-}
+/* Blob builders (props, acl, paths-props, paths-acl) ported to
+ * ae/svnserver/blob_build.ae. Aether now emits the "key=value\n" /
+ * "+user\n" / "<sha> <path>\n" bodies directly from its internal
+ * representation and calls svnae_rep_write_blob; the round trip
+ * through C-side split_joined + svnae_build_*_blob is gone. */
 
 /* base64 decode wrapper for Aether: decodes in-place-ish, calls
  * svnae_txn_add_file with the decoded bytes+length. Returns 0 on
@@ -747,10 +638,6 @@ int svnserver_branch_create_globs(const char *repo, const char *branch_name,
  * than the caller doesn't change.
  *
  * Caller frees via free() on the returned sha. */
-extern const char *svnae_build_paths_acl_blob(const char *repo,
-                                              const char *const *paths,
-                                              const char *const *acl_shas,
-                                              int n_paths);
 
 /* End-to-end auto-follow ported to ae/svnserver/copy_acl.ae::
  * auto_follow_copy_acl. Returns "" on miss; adapt at the

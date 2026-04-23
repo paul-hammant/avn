@@ -92,7 +92,6 @@ extern const char *aether_rev_blob_body(const char *root, const char *branch,
                                         const char *props, const char *acl,
                                         int prev, const char *author,
                                         const char *date, const char *log);
-extern const char *aether_paths_index_sort_by_path(const char *body);
 
 /* rev_blob_field: thin wrapper around the same Aether helper
  * load_rev_root_sha1 uses. "NULL on miss, malloc'd on hit"
@@ -112,113 +111,12 @@ svnae_commit_finalise(const char *repo, struct svnae_txn *txn,
     return svnae_commit_finalise_with_props(repo, txn, author, logmsg, "");
 }
 
-/* Build a per-path props blob ("key=value\n" lines), write it to the
- * rep store, return its sha1 (as static thread-local, copy before
- * reuse). NULL on failure. */
-const char *
-svnae_build_props_blob(const char *repo,
-                      const char *const *keys,
-                      const char *const *values,
-                      int n_pairs)
-{
-    /* Sort (key, value) pairs by key so identical prop sets always
-     * hash to the same sha1. Cheap: bubble sort on indices. */
-    int *order = malloc(sizeof(int) * (size_t)(n_pairs > 0 ? n_pairs : 1));
-    for (int i = 0; i < n_pairs; i++) order[i] = i;
-    for (int i = 0; i < n_pairs; i++) {
-        for (int j = i + 1; j < n_pairs; j++) {
-            if (strcmp(keys[order[i]], keys[order[j]]) > 0) {
-                int t = order[i]; order[i] = order[j]; order[j] = t;
-            }
-        }
-    }
-    size_t cap = 256, len = 0;
-    char *body = malloc(cap);
-    body[0] = '\0';
-    for (int i = 0; i < n_pairs; i++) {
-        int idx = order[i];
-        size_t need = strlen(keys[idx]) + 1 + strlen(values[idx]) + 1 + 1;
-        if (len + need >= cap) {
-            cap = (len + need) * 2;
-            body = realloc(body, cap);
-        }
-        len += (size_t)snprintf(body + len, cap - len, "%s=%s\n", keys[idx], values[idx]);
-    }
-    free(order);
-    const char *sha = svnae_rep_write_blob(repo, body, (int)len);
-    free(body);
-    return sha;   /* static-thread-local in rep_store_shim */
-}
-
-/* Build a per-path ACL blob (one "+user" or "-user" per line, caller
- * supplies sorted rules). Write to rep store, return sha. The blob
- * is content-addressed, so identical ACLs across paths share storage
- * just like anything else in the rep store. */
-const char *
-svnae_build_acl_blob(const char *repo,
-                    const char *const *rules,
-                    int n_rules)
-{
-    size_t cap = 128, len = 0;
-    char *body = malloc(cap);
-    body[0] = '\0';
-    for (int i = 0; i < n_rules; i++) {
-        size_t need = strlen(rules[i]) + 2;
-        if (len + need >= cap) {
-            cap = (len + need) * 2;
-            body = realloc(body, cap);
-        }
-        len += (size_t)snprintf(body + len, cap - len, "%s\n", rules[i]);
-    }
-    const char *sha = svnae_rep_write_blob(repo, body, (int)len);
-    free(body);
-    return sha;
-}
-
-/* Build a paths-acl blob. The per-line "<acl-sha> <path>" lines are
- * assembled here, then sorted by path via aether_paths_index_sort_by_path
- * (ae/fs_fs/format_line.ae). Same shape as the paths-props blob. */
-static const char *
-build_paths_index_blob(const char *repo,
-                       const char *const *paths,
-                       const char *const *shas,
-                       int n_paths)
-{
-    size_t cap = 256, len = 0;
-    char *body = malloc(cap);
-    body[0] = '\0';
-    for (int i = 0; i < n_paths; i++) {
-        size_t need = strlen(shas[i]) + 1 + strlen(paths[i]) + 1 + 1;
-        if (len + need >= cap) {
-            cap = (len + need) * 2;
-            body = realloc(body, cap);
-        }
-        len += (size_t)snprintf(body + len, cap - len, "%s %s\n",
-                                shas[i], paths[i]);
-    }
-    const char *sorted = aether_paths_index_sort_by_path(body);
-    free(body);
-    const char *sha = svnae_rep_write_blob(repo, sorted, (int)strlen(sorted));
-    return sha;
-}
-
-const char *
-svnae_build_paths_acl_blob(const char *repo,
-                          const char *const *paths,
-                          const char *const *acl_shas,
-                          int n_paths)
-{
-    return build_paths_index_blob(repo, paths, acl_shas, n_paths);
-}
-
-const char *
-svnae_build_paths_props_blob(const char *repo,
-                            const char *const *paths,
-                            const char *const *props_shas,
-                            int n_paths)
-{
-    return build_paths_index_blob(repo, paths, props_shas, n_paths);
-}
+/* svnae_build_props_blob / svnae_build_acl_blob /
+ * svnae_build_paths_{acl,props}_blob ported to
+ * ae/svnserver/blob_build.ae. Aether builds the blob body directly
+ * (sorts the props pairs by key, reuses aether_paths_index_sort_by_path
+ * for the paths-* variants) and calls svnae_rep_write_blob itself;
+ * the C round-trip through arrays is gone. */
 
 int
 svnae_commit_finalise_with_props(const char *repo, struct svnae_txn *txn,

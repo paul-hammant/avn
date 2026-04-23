@@ -60,17 +60,19 @@ extern svnae_commit_finalise_with_acl(repo: string, txn: ptr,
                                        author: string, log_msg: string,
                                        props_sha: string, acl_sha: string) -> int
 
-extern svnserver_build_props_blob_joined(repo: string,
-                                          keys_joined: string,
-                                          values_joined: string) -> string
-extern svnserver_build_paths_props_blob_joined(repo: string,
-                                                paths_joined: string,
-                                                shas_joined: string) -> string
-extern svnserver_build_acl_blob_joined(repo: string,
-                                        rules_joined: string) -> string
-extern svnserver_build_paths_acl_blob_joined(repo: string,
-                                              paths_joined: string,
-                                              shas_joined: string) -> string
+// Blob builders. These produce "key=value\n" / "+user\n" /
+// "<sha> <path>\n" bodies directly from the "\n"-joined parallel
+// strings the JSON parse loop below accumulates, then write to the
+// rep store via svnae_rep_write_blob. Used to bounce through C
+// (svnserver_build_*_joined + svnae_build_*_blob); all that round
+// trip is gone now.
+//
+// Kept as same-file helpers rather than a separate module because
+// aether.toml's extra_sources line + the gcc link command are
+// bumping up against a path-list length limit; adding another
+// _generated.c would truncate the link argv.
+extern svnae_rep_write_blob(repo: string, data: string, length: int) -> string
+extern aether_paths_index_sort_by_path(body: string) -> string
 
 export commit_from_body(req: ptr, res: ptr, repo: string) -> int {
     return commit_from_body_impl(req, res, repo)
@@ -253,7 +255,7 @@ commit_from_body_impl(req: ptr, res: ptr, repo: string) -> int {
                         ki = ki + 1
                     }
                 }
-                psha = svnserver_build_props_blob_joined(repo, keys_joined, values_joined)
+                psha = build_props_blob_joined(repo, keys_joined, values_joined)
                 psha = string.copy(psha)
 
                 if i > 0 {
@@ -264,7 +266,7 @@ commit_from_body_impl(req: ptr, res: ptr, repo: string) -> int {
                 shas_joined = string.concat(shas_joined, psha)
                 i = i + 1
             }
-            use_props_sha = svnserver_build_paths_props_blob_joined(repo,
+            use_props_sha = build_paths_props_blob_joined(repo,
                                 paths_joined, shas_joined)
             use_props_sha = string.copy(use_props_sha)
         }
@@ -304,7 +306,7 @@ commit_from_body_impl(req: ptr, res: ptr, repo: string) -> int {
                             }
                             k = k + 1
                         }
-                        asha = svnserver_build_acl_blob_joined(repo, rules_joined)
+                        asha = build_acl_blob_joined(repo, rules_joined)
                         asha = string.copy(asha)
                         if emitted > 0 {
                             paths_joined = string.concat(paths_joined, "\n")
@@ -318,7 +320,7 @@ commit_from_body_impl(req: ptr, res: ptr, repo: string) -> int {
                 i = i + 1
             }
             if emitted > 0 {
-                use_acl_sha = svnserver_build_paths_acl_blob_joined(repo,
+                use_acl_sha = build_paths_acl_blob_joined(repo,
                                 paths_joined, shas_joined)
                 use_acl_sha = string.copy(use_acl_sha)
             }
@@ -333,6 +335,212 @@ commit_from_body_impl(req: ptr, res: ptr, repo: string) -> int {
 
     if new_rev < 0 { return -11 }
     return new_rev
+}
+
+// --- blob builders (inlined from what would be ae/svnserver/blob_build.ae) --
+
+// Count lines in a "\n"-joined string. Trailing "\n" doesn't add a
+// phantom empty line.
+count_lines(joined: string) -> int {
+    n = string.length(joined)
+    if n == 0 { return 0 }
+    lines = 1
+    i = 0
+    while i < n {
+        if string.char_at(joined, i) == 10 {
+            if i + 1 < n { lines = lines + 1 }
+        }
+        i = i + 1
+    }
+    return lines
+}
+
+// Return the i-th line of `joined`, 0-indexed. "" when out of range.
+line_at(joined: string, i: int) -> string {
+    n = string.length(joined)
+    pos = 0
+    k = 0
+    while k < i {
+        if pos >= n { return "" }
+        ch = string.char_at(joined, pos)
+        pos = pos + 1
+        if ch == 10 { k = k + 1 }
+    }
+    start = pos
+    while pos < n {
+        if string.char_at(joined, pos) == 10 { break }
+        pos = pos + 1
+    }
+    return string.substring(joined, start, pos)
+}
+
+// Return the i-th "\x02"-separated record in `packed`. Trailing "\x02"
+// is tolerated. "" on miss.
+packed_record_at(packed: string, i: int) -> string {
+    n = string.length(packed)
+    pos = 0
+    k = 0
+    while k < i {
+        if pos >= n { return "" }
+        sep = -1
+        j = pos
+        while j < n {
+            if string.char_at(packed, j) == 2 { sep = j; break }
+            j = j + 1
+        }
+        if sep < 0 { return "" }
+        pos = sep + 1
+        k = k + 1
+    }
+    if pos >= n { return "" }
+    end = n
+    j = pos
+    while j < n {
+        if string.char_at(packed, j) == 2 { end = j; break }
+        j = j + 1
+    }
+    return string.substring(packed, pos, end)
+}
+
+// Selection sort of a "<N records separated by \x02>" packed stream,
+// sorted by the first "\x01"-delimited field of each record. O(n^2)
+// in record count; commit-time prop lists are tiny (a few keys per
+// path), so this is plenty fast and keeps the helper allocation-
+// free beyond the normalised copy.
+sort_packed_by_first_field(packed: string, n: int) -> string {
+    if n <= 1 { return packed }
+    normalised = ""
+    i = 0
+    while i < n {
+        rec = packed_record_at(packed, i)
+        normalised = string.concat(normalised, rec)
+        normalised = string.concat(normalised, "\x02")
+        i = i + 1
+    }
+    result = ""
+    taken = ""
+    k = 0
+    while k < n {
+        best = -1
+        best_key = ""
+        j = 0
+        while j < n {
+            tok = string.concat(string.concat("|", string.from_int(j)), "|")
+            if string.contains(taken, tok) == 0 {
+                rec = packed_record_at(normalised, j)
+                tab = string.index_of(rec, "\x01")
+                key = rec
+                if tab >= 0 { key = string.substring(rec, 0, tab) }
+                if best < 0 {
+                    best = j
+                    best_key = key
+                }
+                if best >= 0 {
+                    if string.compare(key, best_key) < 0 {
+                        best = j
+                        best_key = key
+                    }
+                }
+            }
+            j = j + 1
+        }
+        if best < 0 { break }
+        chosen = packed_record_at(normalised, best)
+        if k > 0 { result = string.concat(result, "\x02") }
+        result = string.concat(result, chosen)
+        taken = string.concat(taken, string.concat(string.concat("|", string.from_int(best)), "|"))
+        k = k + 1
+    }
+    return result
+}
+
+// Build "key=value\n" sorted by key, write to rep store.
+build_props_blob_joined(repo: string, keys_joined: string, values_joined: string) -> string {
+    nk = count_lines(keys_joined)
+    nv = count_lines(values_joined)
+    n = nk
+    if nv < n { n = nv }
+
+    packed = ""
+    i = 0
+    while i < n {
+        k = line_at(keys_joined, i)
+        v = line_at(values_joined, i)
+        rec = string.concat(k, "\x01")
+        rec = string.concat(rec, v)
+        if i > 0 { packed = string.concat(packed, "\x02") }
+        packed = string.concat(packed, rec)
+        i = i + 1
+    }
+
+    sorted_keys_first = sort_packed_by_first_field(packed, n)
+
+    body = ""
+    i = 0
+    while i < n {
+        rec = packed_record_at(sorted_keys_first, i)
+        tab = string.index_of(rec, "\x01")
+        if tab < 0 {
+            i = i + 1
+            continue
+        }
+        k = string.substring(rec, 0, tab)
+        v = string.substring(rec, tab + 1, string.length(rec))
+        body = string.concat(body, k)
+        body = string.concat(body, "=")
+        body = string.concat(body, v)
+        body = string.concat(body, "\n")
+        i = i + 1
+    }
+
+    return svnae_rep_write_blob(repo, body, string.length(body))
+}
+
+// Build "<rule>\n" in caller-supplied order, write to rep store.
+build_acl_blob_joined(repo: string, rules_joined: string) -> string {
+    n = count_lines(rules_joined)
+    body = ""
+    i = 0
+    while i < n {
+        r = line_at(rules_joined, i)
+        body = string.concat(body, r)
+        body = string.concat(body, "\n")
+        i = i + 1
+    }
+    return svnae_rep_write_blob(repo, body, string.length(body))
+}
+
+// Build "<sha> <path>\n" sorted by path, write to rep store. Shared
+// shape for paths-props and paths-acl; sort delegated to
+// aether_paths_index_sort_by_path (ae/fs_fs/format_line.ae).
+build_paths_index_blob(repo: string, paths_joined: string, shas_joined: string) -> string {
+    np = count_lines(paths_joined)
+    ns = count_lines(shas_joined)
+    n = np
+    if ns < n { n = ns }
+
+    body = ""
+    i = 0
+    while i < n {
+        p = line_at(paths_joined, i)
+        s = line_at(shas_joined, i)
+        body = string.concat(body, s)
+        body = string.concat(body, " ")
+        body = string.concat(body, p)
+        body = string.concat(body, "\n")
+        i = i + 1
+    }
+
+    sorted = aether_paths_index_sort_by_path(body)
+    return svnae_rep_write_blob(repo, sorted, string.length(sorted))
+}
+
+build_paths_props_blob_joined(repo: string, paths_joined: string, shas_joined: string) -> string {
+    return build_paths_index_blob(repo, paths_joined, shas_joined)
+}
+
+build_paths_acl_blob_joined(repo: string, paths_joined: string, shas_joined: string) -> string {
+    return build_paths_index_blob(repo, paths_joined, shas_joined)
 }
 
 main() {

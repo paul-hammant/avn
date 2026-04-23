@@ -44,7 +44,33 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
   `int_to_dec` + `digit_char` in favour of `std.string.from_int` now
   that it's available, and ported the WC pristine-store path builder
   to ae/wc/pristine_path.ae (handles the two-level XX/YY/ fanout).
-- **Round 22** (current): **39.01% C, 60.99% Aether.** Same
+- **Round 23** (current): **38.20% C, 61.80% Aether.** Cut the
+  commit-blob-build knot — four `svnserver_build_*_joined` C
+  wrappers (svnserver/shim.c, ~85 LOC) that split "\n"-joined
+  parallel strings back into arrays, plus four `svnae_build_*_blob`
+  C functions (fs_fs/commit_shim.c, ~100 LOC) that concatenated
+  those arrays into the final blob body with sort+write. The
+  whole round trip was pure text work bouncing across the FFI.
+  - Aether (commit_parse.ae) had already been accumulating the
+    keys / values / paths / shas / rules as `\n`-joined strings
+    — now it builds the "key=value\n" / "+user\n" /
+    "<sha> <path>\n" bodies directly and calls
+    svnae_rep_write_blob itself. The sort-by-key for props
+    uses a selection-sort over a packed `<f0>\x01<f1>\x02...`
+    stream; paths-index reuses aether_paths_index_sort_by_path
+    which was already ported. C keeps only the rep-store write
+    (which it had all along — the svnae_build_* fronts were
+    just allocation + snprintf).
+  - svnserver/shim.c: 824 → 711 LOC (−113). fs_fs/commit_shim.c:
+    669 → 567 LOC (−102). Total C drop: −215 LOC.
+  - Builder helpers live inline in commit_parse.ae rather than
+    a separate module because a new `_generated.c` path on
+    aether.toml's extra_sources pushed the gcc link command
+    past an argv-length limit in the aether build tool and
+    truncated `handler_commit_generated.c` to `han`. Single-
+    file inline avoids the extra path.
+
+- **Round 22**: **39.01% C, 60.99% Aether.** Same
   knot cut again, this time on the server-side twin of round 21:
   `svnae_repos_log` and `svnae_repos_paths_changed` both followed
   the same "eager build into struct-of-arrays, expose indexed
