@@ -1121,120 +1121,83 @@ extern char *svnae_openssl_b64_encode(const unsigned char *src, int len);
 /* Commit: serialise edits into JSON body, POST to the server, parse the
  * response. Returns the new revision number or -1 on any failure. Frees
  * the builder on the way out. */
+/* --- Aether-callable accessors for struct svnae_ra_commit ---------- *
+ *
+ * The JSON body serialisation happens in Aether (ae/ra/commit_build.ae)
+ * via std.json; these accessors let it walk the in-memory builder
+ * without duplicating the struct layout across the boundary. */
+int         svnae_ra_cb_base_rev(const struct svnae_ra_commit *cb) {
+    return cb ? cb->base_rev : 0;
+}
+const char *svnae_ra_cb_author(const struct svnae_ra_commit *cb) {
+    return (cb && cb->author) ? cb->author : "";
+}
+const char *svnae_ra_cb_logmsg(const struct svnae_ra_commit *cb) {
+    return (cb && cb->logmsg) ? cb->logmsg : "";
+}
+int         svnae_ra_cb_edit_count(const struct svnae_ra_commit *cb) {
+    return cb ? cb->n : 0;
+}
+int         svnae_ra_cb_edit_op(const struct svnae_ra_commit *cb, int i) {
+    return (cb && i >= 0 && i < cb->n) ? cb->edits[i].op : 0;
+}
+const char *svnae_ra_cb_edit_path(const struct svnae_ra_commit *cb, int i) {
+    return (cb && i >= 0 && i < cb->n && cb->edits[i].path) ? cb->edits[i].path : "";
+}
+/* For add-file edits: base64-encode the content bytes into a TLS
+ * buffer and return. Aether doesn't safely carry binary bytes across
+ * FFI, so encoding stays on the C side. */
+const char *svnae_ra_cb_edit_content_b64(const struct svnae_ra_commit *cb, int i) {
+    static __thread char *last = NULL;
+    free(last); last = NULL;
+    if (!cb || i < 0 || i >= cb->n || cb->edits[i].op != 1) return "";
+    last = b64_encode(cb->edits[i].content, cb->edits[i].content_len);
+    return last ? last : "";
+}
+int         svnae_ra_cb_prop_count(const struct svnae_ra_commit *cb) {
+    return cb ? cb->n_props : 0;
+}
+const char *svnae_ra_cb_prop_path(const struct svnae_ra_commit *cb, int i) {
+    return (cb && i >= 0 && i < cb->n_props && cb->props[i].path) ? cb->props[i].path : "";
+}
+const char *svnae_ra_cb_prop_key(const struct svnae_ra_commit *cb, int i) {
+    return (cb && i >= 0 && i < cb->n_props && cb->props[i].key) ? cb->props[i].key : "";
+}
+const char *svnae_ra_cb_prop_value(const struct svnae_ra_commit *cb, int i) {
+    return (cb && i >= 0 && i < cb->n_props && cb->props[i].value) ? cb->props[i].value : "";
+}
+int         svnae_ra_cb_acl_count(const struct svnae_ra_commit *cb) {
+    return cb ? cb->n_acls : 0;
+}
+const char *svnae_ra_cb_acl_path(const struct svnae_ra_commit *cb, int i) {
+    return (cb && i >= 0 && i < cb->n_acls && cb->acls[i].path) ? cb->acls[i].path : "";
+}
+const char *svnae_ra_cb_acl_rule(const struct svnae_ra_commit *cb, int i) {
+    return (cb && i >= 0 && i < cb->n_acls && cb->acls[i].rule) ? cb->acls[i].rule : "";
+}
+
+/* Aether's std.json.create_number takes a float; this tiny shim
+ * lets the commit-builder emit an int rev number without int-to-
+ * float conversion syntax on the Aether side. json_create_number
+ * is already forward-declared at top of file via cJSON typedefs. */
+void *svnae_ra_json_int(int v) { return json_create_number((double)v); }
+
+/* Aether builds the JSON body string; C side takes over for HTTP POST
+ * + response parse + builder free. Split this way because http_post_json
+ * + libcurl + the TLS-aware resp buffer all live in C. */
+extern const char *aether_ra_commit_build_body(const struct svnae_ra_commit *cb);
+
 int
 svnae_ra_commit_finish(struct svnae_ra_commit *cb,
                       const char *base_url, const char *repo_name)
 {
     if (!cb) return -1;
 
-    /* Build bottom-up: std.json's set/add deep-copy the value into the
-     * container's arena and free the original. Composition therefore
-     * has to finish every child before it's attached to a parent —
-     * otherwise later modifications land on the freed original, not
-     * on the (fresh) copy inside the parent. We compose each container
-     * standalone and only attach to `body` at the very end. */
-
-    /* edits array — populated before attaching to body. */
-    cJSON *jedits = json_create_array();
-    for (int i = 0; i < cb->n; i++) {
-        cJSON *e = cJSON_CreateObject();
-        if (cb->edits[i].op == 1) {
-            cJSON_AddStringToObject(e, "op", "add-file");
-            cJSON_AddStringToObject(e, "path", cb->edits[i].path);
-            char *b64 = b64_encode(cb->edits[i].content, cb->edits[i].content_len);
-            cJSON_AddStringToObject(e, "content", b64);
-            free(b64);
-        } else if (cb->edits[i].op == 2) {
-            cJSON_AddStringToObject(e, "op", "mkdir");
-            cJSON_AddStringToObject(e, "path", cb->edits[i].path);
-        } else if (cb->edits[i].op == 3) {
-            cJSON_AddStringToObject(e, "op", "delete");
-            cJSON_AddStringToObject(e, "path", cb->edits[i].path);
-        }
-        json_array_add_raw(jedits, e);
-    }
-
-    /* props object: { path: {key: value, ...}, ... } — group by path
-     * into standalone per-path objects, then assemble the outer object. */
-    cJSON *jp = NULL;
-    if (cb->n_props > 0) {
-        jp = json_create_object();
-        for (int i = 0; i < cb->n_props; i++) {
-            const char *p = cb->props[i].path;
-            /* Accumulate per-path entries into a map-like structure.
-             * Since we can't mutate children already attached to jp
-             * (set_raw deep-copies), we build per-path dicts up front. */
-            cJSON *per = json_object_get_raw(jp, p);
-            if (!per) {
-                /* Create a new per-path object, fill it with just
-                 * this one key, then attach — subsequent props on the
-                 * same path hit the slow path below. */
-                per = json_create_object();
-                cJSON_AddStringToObject(per, cb->props[i].key, cb->props[i].value);
-                json_object_set_raw(jp, p, per);
-            } else {
-                /* Path already exists in jp. We need to add another
-                 * key to it, but `per` points at the attached copy
-                 * and set_raw on its grandparent doesn't persist
-                 * grandchild modifications. Workaround: rebuild the
-                 * whole per-path object with the old keys + new key
-                 * and re-attach under the same path. This is O(K²) on
-                 * props-per-path but K is tiny in practice. */
-                cJSON *replacement = json_create_object();
-                int keys_n = json_object_size_raw(per);
-                for (int k = 0; k < keys_n; k++) {
-                    const char *kk = json_object_key_at(per, k);
-                    JsonValue  *vv = json_object_value_at(per, k);
-                    cJSON_AddStringToObject(replacement, kk, json_valuestring(vv));
-                }
-                cJSON_AddStringToObject(replacement, cb->props[i].key, cb->props[i].value);
-                json_object_set_raw(jp, p, replacement);
-            }
-        }
-    }
-
-    /* acl object: { path: ["+rule1", "-rule2", ...], ... } — same pattern. */
-    cJSON *ja = NULL;
-    if (cb->n_acls > 0) {
-        ja = json_create_object();
-        for (int i = 0; i < cb->n_acls; i++) {
-            const char *p = cb->acls[i].path;
-            cJSON *arr = json_object_get_raw(ja, p);
-            if (!arr) {
-                arr = json_create_array();
-                json_array_add_raw(arr, json_create_string(cb->acls[i].rule));
-                json_object_set_raw(ja, p, arr);
-            } else {
-                /* Rebuild the array with existing entries + new one. */
-                cJSON *replacement = json_create_array();
-                int arr_n = json_array_size(arr);
-                for (int j = 0; j < arr_n; j++) {
-                    JsonValue *rv = json_array_get_raw(arr, j);
-                    json_array_add_raw(replacement, json_create_string(json_valuestring(rv)));
-                }
-                json_array_add_raw(replacement, json_create_string(cb->acls[i].rule));
-                json_object_set_raw(ja, p, replacement);
-            }
-        }
-    }
-
-    /* Now assemble the outer body with everything pre-populated. */
-    cJSON *body = cJSON_CreateObject();
-    cJSON_AddNumberToObject(body, "base_rev", cb->base_rev);
-    cJSON_AddStringToObject(body, "author",   cb->author);
-    cJSON_AddStringToObject(body, "log",      cb->logmsg);
-    json_object_set_raw(body, "edits", jedits);
-    if (jp) json_object_set_raw(body, "props", jp);
-    if (ja) json_object_set_raw(body, "acl",   ja);
-
-    char *json = cJSON_PrintUnformatted(body);
-    cJSON_Delete(body);
-
+    const char *body_json = aether_ra_commit_build_body(cb);
     const char *url = aether_url_commit(base_url, repo_name);
 
     char *resp = NULL; size_t len = 0; int status = 0;
-    int rc = http_post_json(url, json, &resp, &len, &status);
-    free(json);
+    int rc = http_post_json(url, body_json, &resp, &len, &status);
 
     int new_rev = -1;
     if (rc == 0 && status == 200 && resp) {
