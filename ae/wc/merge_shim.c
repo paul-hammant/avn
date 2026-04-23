@@ -189,37 +189,29 @@ int mergert_find_by_path(const struct rtree *rt, const char *path) {
  * paths are RELATIVE TO source_path — so a merge of source_path=trunk
  * yields entries like "main.c", "lib/util.c" which we can apply in the
  * current WC (which was checked out at repo root). */
+/* Aether-callable wrappers for the opaque rtree in this
+ * translation unit. See ae/wc/merge_walk.ae — the Aether walker
+ * calls these to populate the struct. */
+void svnae_mergert_add_dir(void *rt, const char *path) {
+    rt_add((struct rtree *)rt, path, 1, NULL, 0);
+}
+void svnae_mergert_add_file(void *rt, const char *path,
+                             const char *data, int data_len) {
+    rt_add((struct rtree *)rt, path, 0, data, data_len);
+}
+
+/* Recursive walker ported to ae/wc/merge_walk.ae. */
+extern int aether_merge_walk_remote(const char *base_url, const char *repo,
+                                    int rev, const char *source_path,
+                                    const char *sub_prefix, void *rt);
+
 static int
 walk_remote(const char *base_url, const char *repo, int rev,
             const char *source_path, const char *sub_prefix,
             struct rtree *rt)
 {
-    extern const char *aether_path_join_rel(const char *prefix, const char *name);
-    const char *full = aether_path_join_rel(source_path, sub_prefix);
-
-    struct svnae_ra_list *L = svnae_ra_list(base_url, repo, rev, full);
-    if (!L) return -1;
-    int n = svnae_ra_list_count(L);
-    for (int i = 0; i < n; i++) {
-        const char *name = svnae_ra_list_name(L, i);
-        const char *kind = svnae_ra_list_kind(L, i);
-        const char *rel = aether_path_join_rel(sub_prefix, name);
-
-        if (strcmp(kind, "dir") == 0) {
-            rt_add(rt, rel, 1, NULL, 0);
-            if (walk_remote(base_url, repo, rev, source_path, rel, rt) != 0) {
-                svnae_ra_list_free(L); return -1;
-            }
-        } else {
-            const char *remote_full = aether_path_join_rel(full, name);
-            char *data = svnae_ra_cat(base_url, repo, rev, remote_full);
-            if (!data) { svnae_ra_list_free(L); return -1; }
-            rt_add(rt, rel, 0, data, (int)strlen(data));
-            svnae_ra_free(data);
-        }
-    }
-    svnae_ra_list_free(L);
-    return 0;
+    return aether_merge_walk_remote(base_url, repo, rev, source_path,
+                                    sub_prefix, rt);
 }
 
 /* --- mergeinfo plumbing ---------------------------------------------- *
