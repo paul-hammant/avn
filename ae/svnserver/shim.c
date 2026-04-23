@@ -347,69 +347,20 @@ req_header(HttpRequest *req, const char *name)
  * Returns 1 allow, 0 deny, -1 no-match. Precedence: explicit user
  * rule beats wildcard; deny beats allow at the same precedence level.
  */
-/* ACL rule evaluation ported to Aether (ae/svnserver/acl.ae). */
-extern int aether_acl_decide(const char *body, const char *user, int want_write);
+/* ACL rule evaluation + paths-index ancestor walk both ported; the
+ * sole remaining user was acl_allows_mode above, which now calls
+ * ae/svnserver/acl_mode.ae directly. */
 
-static int
-acl_body_decide(const char *body, const char *user, int want_write)
-{
-    if (!body || !user) return -1;
-    return aether_acl_decide(body, user, want_write);
-}
-
-/* Paths-index lookup ported to Aether (ae/svnserver/paths_index.ae).
- * Handles either sha1 (40) or sha256 (64) blobs without hardcoding a
- * fixed width. */
-extern const char *aether_paths_index_lookup(const char *body, const char *path);
-extern const char *aether_paths_index_ancestor_shas(const char *body, const char *target);
-extern const char *aether_paths_index_ancestor_nearest(const char *body, const char *target);
-
-static char *
-paths_acl_lookup(const char *body, const char *path)
-{
-    if (!body) return NULL;
-    const char *v = aether_paths_index_lookup(body, path);
-    return (v && *v) ? strdup(v) : NULL;
-}
-
-/* Decide whether `user` is allowed on `target_path` at `rev` in mode
- * `want_write` (0=read, 1=write). Walks path upward through the
- * paths-acl blob; nearest match wins. Empty path = root. Open by
- * default if no rule applies anywhere in the ancestry. */
+/* Ancestry-walking ACL mode check ported to
+ * ae/svnserver/acl_mode.ae::acl_allows_mode. */
+extern int aether_acl_allows_mode(const char *repo, int rev,
+                                  const char *user, const char *target_path,
+                                  int want_write);
 static int
 acl_allows_mode(const char *repo, int rev, const char *user,
                 const char *target_path, int want_write)
 {
-    char *acl_root = load_rev_blob_field(repo, rev, "acl");
-    if (!acl_root || !*acl_root) { free(acl_root); return 1; }
-    char *paths_body = svnae_rep_read_blob(repo, acl_root);
-    free(acl_root);
-    if (!paths_body) return 1;
-
-    /* Aether returns newline-separated acl shas in deepest-first order
-     * (ae/svnserver/paths_index.ae :: paths_index_ancestor_shas). The
-     * C side just reads each one's rule blob and asks Aether to decide. */
-    const char *shas = aether_paths_index_ancestor_shas(paths_body, target_path);
-    const char *p = shas;
-    while (*p) {
-        const char *eol = strchr(p, '\n');
-        size_t slen = eol ? (size_t)(eol - p) : strlen(p);
-        if (slen > 0 && slen < 65) {
-            char sha[65];
-            memcpy(sha, p, slen); sha[slen] = '\0';
-            char *rules = svnae_rep_read_blob(repo, sha);
-            if (rules) {
-                int d = acl_body_decide(rules, user, want_write);
-                svnae_rep_free(rules);
-                if (d == 0) { svnae_rep_free(paths_body); return 0; }
-                if (d == 1) { svnae_rep_free(paths_body); return 1; }
-            }
-        }
-        if (!eol) break;
-        p = eol + 1;
-    }
-    svnae_rep_free(paths_body);
-    return 1;
+    return aether_acl_allows_mode(repo, rev, user, target_path, want_write);
 }
 
 /* Back-compat read-check wrapper — used by list/cat/props/log/paths. */

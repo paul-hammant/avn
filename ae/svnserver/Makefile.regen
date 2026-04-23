@@ -2,7 +2,7 @@
 
 AETHERC ?= $(HOME)/scm/aether/build/aetherc
 
-GENERATED := json_generated.c paths_index_generated.c acl_generated.c copy_acl_generated.c url_parse_generated.c redact_generated.c info_json_generated.c log_json_generated.c list_json_generated.c acl_resolve_generated.c acl_subtree_generated.c rev_load_generated.c handler_info_generated.c handler_log_generated.c handler_rev_info_generated.c handler_rev_cat_generated.c handler_rev_list_generated.c handler_rev_paths_generated.c handler_rev_hashes_generated.c handler_rev_acl_generated.c handler_rev_props_generated.c handler_rev_blame_generated.c handler_path_get_generated.c handler_path_delete_generated.c handler_path_put_generated.c handler_branch_create_generated.c handler_copy_generated.c handler_commit_generated.c
+GENERATED := json_generated.c paths_index_generated.c acl_generated.c copy_acl_generated.c url_parse_generated.c redact_generated.c info_json_generated.c log_json_generated.c list_json_generated.c acl_resolve_generated.c acl_subtree_generated.c rev_load_generated.c acl_mode_generated.c handler_info_generated.c handler_log_generated.c handler_rev_info_generated.c handler_rev_cat_generated.c handler_rev_list_generated.c handler_rev_paths_generated.c handler_rev_hashes_generated.c handler_rev_acl_generated.c handler_rev_props_generated.c handler_rev_blame_generated.c handler_path_get_generated.c handler_path_delete_generated.c handler_path_put_generated.c handler_branch_create_generated.c handler_copy_generated.c handler_commit_generated.c
 
 all: $(GENERATED)
 
@@ -40,6 +40,9 @@ acl_subtree_generated.c: acl_subtree.ae
 	$(AETHERC) --emit=lib $< $@
 
 rev_load_generated.c: rev_load.ae
+	$(AETHERC) --emit=lib $< $@
+
+acl_mode_generated.c: acl_mode.ae
 	$(AETHERC) --emit=lib $< $@
 
 handler_info_generated.c: handler_info.ae
