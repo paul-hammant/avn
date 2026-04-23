@@ -55,86 +55,75 @@ void  svnae_rep_free(char *p);
 
 /* --- helpers --------------------------------------------------------- */
 
-/* Slurp an entire small file ported to Aether (ae/subr/io.ae). The
- * head_rev + rev_blob_sha1 ported to ae/repos/rev_io.ae
- * (repos_head_rev / repos_rev_blob_sha). Wrappers preserve the
- * existing int / char* conventions; read_small / parse_int /
- * trim_trailing_newline / rev_pointer_path have no remaining
- * callers and were removed. */
-extern int         aether_repos_head_rev(const char *repo);
-extern const char *aether_repos_rev_blob_sha(const char *repo, int rev);
+/* head_rev + rev_blob_sha ported to ae/repos/rev_io.ae. Only head_rev
+ * is still called from this file directly (blame); rev_blob_sha1 +
+ * parse_field + aether_blobfield_get's C wrapper are all obsolete
+ * now that ae/repos/log.ae does the log build in one Aether call. */
+extern int aether_repos_head_rev(const char *repo);
 
 static int
 head_rev(const char *repo) { return aether_repos_head_rev(repo); }
 
-static char *
-rev_blob_sha1(const char *repo, int rev) {
-    const char *sha = aether_repos_rev_blob_sha(repo, rev);
-    if (!sha || !*sha) return NULL;
-    return strdup(sha);
-}
-
-/* "key: value" extractor — ported to Aether (ae/repos/blobfield.ae).
- * Wrapper preserves the original "malloc or NULL" contract: Aether
- * returns "" for both missing and empty; no caller in the port
- * differentiates, so collapse to one case. */
-extern const char *aether_blobfield_get(const char *body, const char *key);
-
-static char *
-parse_field(const char *body, const char *key)
-{
-    if (!body) return NULL;
-    const char *v = aether_blobfield_get(body, key);
-    if (!v || !*v) return NULL;
-    return strdup(v);
-}
-
 /* --- log ---------------------------------------------------------------
  *
- * The commit order in the repo is simply 0..HEAD, which is the natural
- * "historical" order. For now we expose log as an array of entries
- * indexed by revision number. Path filtering and copy tracing come later
- * when the tree-diff machinery lands.
- */
+ * Build-and-query: Aether's ae/repos/log.ae reads every rev blob and
+ * emits a packed "<N>\x02<rev>\x01<author>\x01<date>\x01<msg>\x02..."
+ * string in the same shape ae/ra/parse.ae::ra_parse_log produces on
+ * the client side. We reuse the `ra_log_*` accessors from
+ * ae/ra/packed.ae to walk it — same record shape, same semantics,
+ * and zero additional C-side tokeniser. A per-handle pin list keeps
+ * strdup'd copies alive across recursive / interleaved calls, the
+ * same stable-pointer contract this API has always had. */
 
-struct log_entry {
-    int   rev;
-    char *author;
-    char *date;
-    char *msg;
+struct pin_list {
+    char **items;
+    int n, cap;
 };
 
-struct svnae_log {
-    struct log_entry *entries;
-    int n;
-};
+static const char *
+pin_str(struct pin_list *pl, const char *fresh)
+{
+    if (!fresh) fresh = "";
+    if (pl->n == pl->cap) {
+        int nc = pl->cap ? pl->cap * 2 : 8;
+        char **np = realloc(pl->items, (size_t)nc * sizeof *np);
+        if (!np) return "";
+        pl->items = np;
+        pl->cap = nc;
+    }
+    char *copy = strdup(fresh);
+    if (!copy) return "";
+    pl->items[pl->n++] = copy;
+    return copy;
+}
 
-/* Build a full log from rev 0 to HEAD. Returns NULL on error. */
+static void
+pin_list_free(struct pin_list *pl)
+{
+    for (int i = 0; i < pl->n; i++) free(pl->items[i]);
+    free(pl->items);
+    pl->items = NULL;
+    pl->n = pl->cap = 0;
+}
+
+struct svnae_log { char *packed; int n; struct pin_list pins; };
+
+extern const char *aether_repos_log_packed(const char *repo);
+extern int         aether_ra_log_count(const char *packed);
+extern int         aether_ra_log_rev(const char *packed, int i);
+extern const char *aether_ra_log_author(const char *packed, int i);
+extern const char *aether_ra_log_date(const char *packed, int i);
+extern const char *aether_ra_log_msg(const char *packed, int i);
+
 struct svnae_log *
 svnae_repos_log(const char *repo)
 {
-    int head = head_rev(repo);
-    if (head < 0) return NULL;
+    const char *packed = aether_repos_log_packed(repo);
+    if (!packed || !*packed) return NULL;
 
     struct svnae_log *lg = calloc(1, sizeof *lg);
-    if (!lg) return NULL;
-    lg->n = head + 1;
-    lg->entries = calloc((size_t)lg->n, sizeof *lg->entries);
-    if (!lg->entries) { free(lg); return NULL; }
-
-    for (int r = 0; r <= head; r++) {
-        char *sha1 = rev_blob_sha1(repo, r);
-        if (!sha1) continue;
-        char *body = svnae_rep_read_blob(repo, sha1);
-        free(sha1);
-        if (!body) continue;
-
-        lg->entries[r].rev    = r;
-        lg->entries[r].author = parse_field(body, "author");
-        lg->entries[r].date   = parse_field(body, "date");
-        lg->entries[r].msg    = parse_field(body, "log");
-        svnae_rep_free(body);
-    }
+    lg->packed = strdup(packed);
+    lg->n = aether_ra_log_count(lg->packed);
     return lg;
 }
 
@@ -144,40 +133,36 @@ int
 svnae_repos_log_rev(const struct svnae_log *lg, int i)
 {
     if (!lg || i < 0 || i >= lg->n) return -1;
-    return lg->entries[i].rev;
+    return aether_ra_log_rev(lg->packed, i);
 }
 
 const char *
-svnae_repos_log_author(const struct svnae_log *lg, int i)
+svnae_repos_log_author(struct svnae_log *lg, int i)
 {
-    if (!lg || i < 0 || i >= lg->n || !lg->entries[i].author) return "";
-    return lg->entries[i].author;
+    if (!lg || i < 0 || i >= lg->n) return "";
+    return pin_str(&lg->pins, aether_ra_log_author(lg->packed, i));
 }
 
 const char *
-svnae_repos_log_date(const struct svnae_log *lg, int i)
+svnae_repos_log_date(struct svnae_log *lg, int i)
 {
-    if (!lg || i < 0 || i >= lg->n || !lg->entries[i].date) return "";
-    return lg->entries[i].date;
+    if (!lg || i < 0 || i >= lg->n) return "";
+    return pin_str(&lg->pins, aether_ra_log_date(lg->packed, i));
 }
 
 const char *
-svnae_repos_log_msg(const struct svnae_log *lg, int i)
+svnae_repos_log_msg(struct svnae_log *lg, int i)
 {
-    if (!lg || i < 0 || i >= lg->n || !lg->entries[i].msg) return "";
-    return lg->entries[i].msg;
+    if (!lg || i < 0 || i >= lg->n) return "";
+    return pin_str(&lg->pins, aether_ra_log_msg(lg->packed, i));
 }
 
 void
 svnae_repos_log_free(struct svnae_log *lg)
 {
     if (!lg) return;
-    for (int i = 0; i < lg->n; i++) {
-        free(lg->entries[i].author);
-        free(lg->entries[i].date);
-        free(lg->entries[i].msg);
-    }
-    free(lg->entries);
+    free(lg->packed);
+    pin_list_free(&lg->pins);
     free(lg);
 }
 
@@ -374,91 +359,53 @@ int svnae_repos_head_rev(const char *repo) { return head_rev(repo); }
 /* flat_tree + flatten_tree + flat_add + flat_free + flat_cmp all
  * ported to Aether (ae/repos/paths_changed.ae). */
 
-struct path_change { char action; char *path; };
-struct svnae_paths { struct path_change *items; int n; };
+struct svnae_paths { char *packed; int n; struct pin_list pins; };
 
 /* Paths-changed diff ported to Aether (ae/repos/paths_changed.ae).
- * Aether side flattens both trees, sorts, and merge-walks. Returns
- * "ACTION\nPATH\n..." — we parse it into the C svnae_paths struct. */
-extern const char *aether_paths_changed_between(const char *repo,
-                                                const char *prev_root_sha,
-                                                const char *cur_root_sha);
+ * paths_changed_packed does the whole tree flatten + merge + diff +
+ * pack in one call; we reuse the ra_paths_* accessors from
+ * ae/ra/packed.ae since the "<N>\x02<action>\x01<path>\x02..." shape
+ * is identical to what the RA client side serves up. */
+extern const char *aether_paths_changed_packed(const char *repo, int rev);
+extern int         aether_ra_paths_count(const char *packed);
+extern const char *aether_ra_paths_action(const char *packed, int i);
+extern const char *aether_ra_paths_path  (const char *packed, int i);
 
 struct svnae_paths *
 svnae_repos_paths_changed(const char *repo, int rev)
 {
     if (rev < 0) return NULL;
+    const char *packed = aether_paths_changed_packed(repo, rev);
+    if (!packed || !*packed) return NULL;
 
-    char *cur_root = root_dir_sha1_for_rev(repo, rev);
-    if (!cur_root) return NULL;
-    char *prev_root = NULL;
-    if (rev > 0) {
-        prev_root = root_dir_sha1_for_rev(repo, rev - 1);
-        if (!prev_root) { free(cur_root); return NULL; }
-    }
-
-    const char *diff = aether_paths_changed_between(repo,
-                                                    prev_root ? prev_root : "",
-                                                    cur_root);
-    free(cur_root);
-    free(prev_root);
-
-    /* Parse "ACTION\nPATH\n" line pairs into the svnae_paths list. */
     struct svnae_paths *P = calloc(1, sizeof *P);
-    if (!P) return NULL;
-    int cap = 0;
-    const char *p = diff ? diff : "";
-    while (*p) {
-        char action = *p;
-        if (*(p+1) != '\n') break;
-        p += 2;
-        const char *path_start = p;
-        while (*p && *p != '\n') p++;
-        int path_len = (int)(p - path_start);
-        if (*p == '\n') p++;
-
-        if (P->n == cap) {
-            cap = cap ? cap * 2 : 16;
-            P->items = realloc(P->items, (size_t)cap * sizeof *P->items);
-        }
-        P->items[P->n].action = action;
-        P->items[P->n].path = malloc((size_t)path_len + 1);
-        memcpy(P->items[P->n].path, path_start, (size_t)path_len);
-        P->items[P->n].path[path_len] = '\0';
-        P->n++;
-    }
+    P->packed = strdup(packed);
+    P->n = aether_ra_paths_count(P->packed);
     return P;
 }
 
 int svnae_repos_paths_count(const struct svnae_paths *P) { return P ? P->n : 0; }
 
 const char *
-svnae_repos_paths_path(const struct svnae_paths *P, int i)
+svnae_repos_paths_path(struct svnae_paths *P, int i)
 {
     if (!P || i < 0 || i >= P->n) return "";
-    return P->items[i].path;
+    return pin_str(&P->pins, aether_ra_paths_path(P->packed, i));
 }
 
-/* Returns a single-char action string: "A", "M", or "D". */
 const char *
-svnae_repos_paths_action(const struct svnae_paths *P, int i)
+svnae_repos_paths_action(struct svnae_paths *P, int i)
 {
-    static const char a_[] = "A", m_[] = "M", d_[] = "D", u_[] = "";
-    if (!P || i < 0 || i >= P->n) return u_;
-    switch (P->items[i].action) {
-        case 'A': return a_;
-        case 'M': return m_;
-        case 'D': return d_;
-        default:  return u_;
-    }
+    if (!P || i < 0 || i >= P->n) return "";
+    return pin_str(&P->pins, aether_ra_paths_action(P->packed, i));
 }
 
 void
 svnae_repos_paths_free(struct svnae_paths *P)
 {
     if (!P) return;
-    for (int i = 0; i < P->n; i++) free(P->items[i].path);
-    free(P->items);
+    free(P->packed);
+    pin_list_free(&P->pins);
     free(P);
 }
 

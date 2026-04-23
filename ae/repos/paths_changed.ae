@@ -188,6 +188,76 @@ paths_changed_between_impl(repo: string, prev_root_sha: string,
     return out
 }
 
+// Higher-level entry that does the two root-sha lookups itself and
+// repacks the "<action>\n<path>\n" output into the "<N>\x02<action>
+// \x01<path>\x02..." shape ae/ra/packed.ae exposes accessors for.
+// Lets C callers collapse their handle struct + split loop to the
+// same {packed, n, pin_list} pattern the ra client uses.
+//
+// Returns "" on error (missing cur rev). Returns "0\x02" when rev
+// has no changed paths.
+
+extern aether_repos_load_rev_blob_field(repo: string, rev: int, key: string) -> string
+
+export paths_changed_packed(repo: string, rev: int) -> string {
+    return paths_changed_packed_impl(repo, rev)
+}
+
+paths_changed_packed_impl(repo: string, rev: int) -> string {
+    if rev < 0 { return "" }
+
+    cur_root = string.copy(aether_repos_load_rev_blob_field(repo, rev, "root"))
+    if string.length(cur_root) == 0 { return "" }
+
+    prev_root = ""
+    if rev > 0 {
+        prev_root = string.copy(aether_repos_load_rev_blob_field(repo, rev - 1, "root"))
+        if string.length(prev_root) == 0 { return "" }
+    }
+
+    diff = paths_changed_between_impl(repo, prev_root, cur_root)
+    return pack_amd_pairs(diff)
+}
+
+// Convert "<action>\n<path>\n<action>\n<path>\n..." into
+// "<N>\x02<action>\x01<path>\x02...". Count is emitted first so C
+// callers don't pre-scan.
+pack_amd_pairs(diff: string) -> string {
+    n = 0
+    out = ""
+    len = string.length(diff)
+    p = 0
+    while p < len {
+        // One record = one action char, newline, path, newline.
+        if p + 1 >= len { break }
+        if string.char_at(diff, p + 1) != 10 { break }  // 10 = '\n'
+        action = string.substring(diff, p, p + 1)
+        p = p + 2
+        path_start = p
+        while p < len {
+            if string.char_at(diff, p) == 10 { break }
+            p = p + 1
+        }
+        path = string.substring(diff, path_start, p)
+        if p < len { p = p + 1 }  // skip trailing '\n'
+
+        // Emit "<action-char>\x01<path>" into packed record stream.
+        record = string.concat(action, "\x01")
+        record = string.concat(record, path)
+
+        if n == 0 { out = record }
+        if n > 0 {
+            out = string.concat(out, "\x02")
+            out = string.concat(out, record)
+        }
+        n = n + 1
+    }
+
+    header = string.concat(string.from_int(n), "\x02")
+    if n == 0 { return header }
+    return string.concat(header, out)
+}
+
 main() {
     println("ae/repos/paths_changed.ae is a library; not meant to run standalone")
 }

@@ -44,7 +44,34 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
   `int_to_dec` + `digit_char` in favour of `std.string.from_int` now
   that it's available, and ported the WC pristine-store path builder
   to ae/wc/pristine_path.ae (handles the two-level XX/YY/ fanout).
-- **Round 21** (current): **39.36% C, 60.64% Aether** — crossed
+- **Round 22** (current): **39.01% C, 60.99% Aether.** Same
+  knot cut again, this time on the server-side twin of round 21:
+  `svnae_repos_log` and `svnae_repos_paths_changed` both followed
+  the same "eager build into struct-of-arrays, expose indexed
+  accessors" pattern — but worse than the RA client, because
+  here the data is local and the builder was reading HEAD+1
+  rev blobs in C with its own strdup/free plumbing.
+  - New `ae/repos/log.ae::repos_log_packed(repo)` does the whole
+    rev walk in Aether, emitting the exact same "<N>\x02<rev>
+    \x01<author>\x01<date>\x01<msg>\x02..." shape ra_parse_log
+    does. The C accessors reuse ra_log_* from ae/ra/packed.ae
+    directly — same record shape, zero new walkers.
+  - `ae/repos/paths_changed.ae` gained `paths_changed_packed`
+    + `pack_amd_pairs` to produce the packed form from the
+    existing "<action>\n<path>\n" merge output; C accessors
+    reuse ra_paths_*.
+  - repos/shim.c: 757 → 704 LOC. Dropped parse_field,
+    rev_blob_sha1, the svnae_log/svnae_paths structs-of-arrays,
+    their five log + three paths accessors and the associated
+    free machinery. Added the same {packed, n, pin_list}
+    handle + pin_str helper pattern round 21 established for
+    ra/shim.c.
+  - Packed-accessor reuse: ae/ra/packed_generated.c is now linked
+    by svnadmin, svnserver, and test_repos in addition to the
+    existing RA consumers. One set of walkers serves both
+    sides of the wire.
+
+- **Round 21**: **39.36% C, 60.64% Aether** — crossed
   below 40% C. Untied the biggest knot in `ra/shim.c`: four
   near-identical ~40-line packed-string reparsers (log, paths,
   blame, list) plus a 28-line single-record parser (info) all
