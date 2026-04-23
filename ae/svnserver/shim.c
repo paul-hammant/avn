@@ -532,25 +532,16 @@ const char *svnserver_build_secondary_pairs(const char *repo, const char *node_s
     return pairs;
 }
 
-/* --- path parsing helpers --------------------------------------------- *
+/* URL parsing, the dispatcher, and individual route handlers all
+ * moved to Aether (dispatch.ae, handle_repo_rev.ae, handler_*.ae);
+ * the C-side trampolines have been removed.
  *
- * URL shape:  /repos/{R}/...
- * After matching {R} we have the tail starting with /
- *
- * For the sub-routes we parse manually since std.http's path-param support
- * doesn't cover the "capture rest of path" pattern we need for cat/list.
- */
+ * What remains in this file: small wrappers that expose static C
+ * helpers to Aether (request header lookup, auth context), the
+ * repo-name map, respond_* utilities bound to std.http, and the
+ * three cJSON-heavy body-action wrappers for branch_create / copy /
+ * commit. Everything else in svnserver/ is Aether-side. */
 
-/* parse_repo_and_tail + parse_rev_from_tail were URL parsers used by
- * the C-side dispatcher. Both dispatchers are now Aether-side
- * (dispatch.ae + handle_repo_rev.ae); dropped. */
-
-/* handle_repo_info / handle_repo_log were C-side trampolines for the
- * dispatch table. Both dispatch + table entries are now Aether-side
- * (dispatch.ae); the trampolines are unused and dropped. */
-
-/* Field extraction ported to Aether (ae/repos/blobfield.ae). The C side
- * keeps the rev-pointer + rep-blob I/O. */
 extern const char *aether_blobfield_get(const char *body, const char *key);
 
 /* Ported to ae/svnserver/rev_load.ae. The Aether version returns
