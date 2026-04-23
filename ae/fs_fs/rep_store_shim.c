@@ -116,20 +116,27 @@ svnae_repo_primary_hash(const char *repo)
     return cache;
 }
 
+/* Parse ported to ae/repos/rev_io.ae::repo_secondary_hashes_joined
+ * (returns \n-separated names); splitter stays here because Aether
+ * can't hand C a fixed char[4][32] array directly. */
+extern const char *aether_repo_secondary_hashes_joined(const char *repo);
+
 int
 svnae_repo_secondary_hashes(const char *repo, char out[4][32])
 {
-    char line[256];
-    if (read_format_line(repo, line, sizeof line) != 0) return 0;
-    int n = aether_format_secondary_count(line);
-    if (n > 4) n = 4;
+    const char *joined = aether_repo_secondary_hashes_joined(repo);
+    if (!joined || !*joined) return 0;
     int count = 0;
-    for (int i = 0; i < n; i++) {
-        const char *s = aether_format_secondary_hash(line, i);
-        size_t sl = strlen(s);
-        if (sl == 0 || sl >= 32) break;
-        memcpy(out[count], s, sl + 1);
+    const char *p = joined;
+    while (*p && count < 4) {
+        const char *eol = strchr(p, '\n');
+        size_t slen = eol ? (size_t)(eol - p) : strlen(p);
+        if (slen == 0 || slen >= 32) break;
+        memcpy(out[count], p, slen);
+        out[count][slen] = '\0';
         count++;
+        if (!eol) break;
+        p = eol + 1;
     }
     return count;
 }

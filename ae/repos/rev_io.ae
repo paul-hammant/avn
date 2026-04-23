@@ -161,6 +161,8 @@ repos_format_line_impl(repo: string) -> string {
 // "... sha1,sha256" etc.). Returns "sha1" as a safe default for
 // missing file, empty line, or any parse trouble.
 extern aether_format_primary_hash(format_line: string) -> string
+extern aether_format_secondary_count(format_line: string) -> int
+extern aether_format_secondary_hash(format_line: string, i: int) -> string
 
 export repo_primary_hash(repo: string) -> string {
     line = repos_format_line_impl(repo)
@@ -168,6 +170,29 @@ export repo_primary_hash(repo: string) -> string {
     primary = aether_format_primary_hash(line)
     if string.length(primary) == 0 { return "sha1" }
     return string.copy(primary)
+}
+
+// Secondary hash names for this repo as a \n-separated string
+// ("" if none). C side splits into its fixed char[4][32] array.
+// Length limit (32/entry) enforced here so we never return a name
+// the C caller would reject anyway.
+export repo_secondary_hashes_joined(repo: string) -> string {
+    line = repos_format_line_impl(repo)
+    if string.length(line) == 0 { return "" }
+    n = aether_format_secondary_count(line)
+    if n > 4 { n = 4 }
+    out = ""
+    i = 0
+    while i < n {
+        s = aether_format_secondary_hash(line, i)
+        slen = string.length(s)
+        if slen == 0 { break }
+        if slen >= 32 { break }
+        if i > 0 { out = string.concat(out, "\n") }
+        out = string.concat(out, s)
+        i = i + 1
+    }
+    return out
 }
 
 main() {
