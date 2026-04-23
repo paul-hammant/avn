@@ -44,7 +44,22 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
   `int_to_dec` + `digit_char` in favour of `std.string.from_int` now
   that it's available, and ported the WC pristine-store path builder
   to ae/wc/pristine_path.ae (handles the two-level XX/YY/ fanout).
-- **Round 16** (current): **41.28% C, 58.71% Aether.** The 8 MB
+- **Round 17** (current): **40.75% C, 59.24% Aether.** Finishing
+  off the cJSON cleanup and picking up a few small fs_fs helpers:
+  - Dead cJSON compat layers removed from ra/shim.c and
+    svnserver/shim.c (both had no remaining users; kept as
+    historical scaffolding from pre-Aether-stdlib-json days).
+  - ra_parse_rev_response collapses three inline four-line
+    cJSON {"rev":N} parsers into one Aether helper.
+  - svnae_env_get → std.os::getenv.
+  - svnae_branch_spec_allows → ae/fs_fs/branch_spec.ae.
+  - load_rev_root_sha1 + rev_blob_field both swap to the existing
+    ae/repos/rev_io.ae two-hop reader (closes the round-14
+    deferred port).
+  - svnae_repo_primary_hash → ae/repos/rev_io.ae.
+  - Plus the 5.5 MB subversion/bindings/ reference tree deleted.
+
+- **Round 16**: **41.28% C, 58.71% Aether.** The 8 MB
   vendored `apr/` tree is deleted (zero Aether references). The
   two remaining svnserver C-side dispatchers move up:
   - /rev/N/<sub> dispatcher: 140 LOC → ae/svnserver/handle_repo_rev.ae.
