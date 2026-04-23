@@ -89,11 +89,6 @@ int svnae_wc_propset(const char *wc_root, const char *path,
 extern int aether_io_mkdir_p(const char *path);
 extern int aether_io_write_atomic(const char *path, const char *data, int length);
 
-static int mkdir_p(const char *path) { return aether_io_mkdir_p(path) == 0 ? 0 : -1; }
-static int write_file_atomic(const char *path, const char *data, int len) {
-    return aether_io_write_atomic(path, data, len) == 0 ? 0 : -1;
-}
-
 /* Prefix/name join ported to Aether (ae/fs_fs/pathutil.ae). */
 extern const char *aether_path_join_rel(const char *prefix, const char *name);
 
@@ -120,7 +115,7 @@ walk(const char *base_url, const char *repo, int rev,
         const char *disk = aether_path_join_rel(dest, rel);
 
         if (strcmp(kind, "dir") == 0) {
-            if (mkdir_p(disk) != 0) { svnae_ra_list_free(L); return -1; }
+            if (aether_io_mkdir_p(disk) != 0) { svnae_ra_list_free(L); return -1; }
             svnae_wc_db_upsert_node(db, rel, 1 /*dir*/, rev, "", 0);
             /* Ingest props for this dir. */
             struct svnae_ra_props *P = svnae_ra_get_props(base_url, repo, rev, rel);
@@ -140,7 +135,7 @@ walk(const char *base_url, const char *repo, int rev,
             if (!data) { svnae_ra_list_free(L); return -1; }
             int len = (int)strlen(data);
 
-            if (write_file_atomic(disk, data, len) != 0) {
+            if (aether_io_write_atomic(disk, data, len) != 0) {
                 svnae_ra_free(data); svnae_ra_list_free(L); return -1;
             }
             const char *sha = svnae_wc_pristine_put(dest, data, len);
@@ -170,7 +165,7 @@ int
 svnae_wc_checkout(const char *base_url, const char *repo_name,
                   const char *dest, int rev)
 {
-    if (mkdir_p(dest) != 0) return -1;
+    if (aether_io_mkdir_p(dest) != 0) return -1;
 
     sqlite3 *db = svnae_wc_db_open(dest);
     if (!db) return -1;

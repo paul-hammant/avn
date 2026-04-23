@@ -70,7 +70,6 @@ write_file_with_header_atomic(const char *path, char header, const char *data, i
     return rc == 0 ? 0 : -1;
 }
 
-static int mkdir_p(const char *path) { return aether_io_mkdir_p(path) == 0 ? 0 : -1; }
 
 /* Format-line parsing initially ported to ae/fs_fs/format_line.ae,
  * then superseded by ae/repos/rev_io.ae's repo_primary_hash /
@@ -303,7 +302,7 @@ svnae_rep_write_blob(const char *repo, const char *data, int len)
     }
 
     /* mkdir -p the parent dirs. */
-    if (mkdir_p(aether_rep_dir(repo, sha1_buf)) != 0) {
+    if (aether_io_mkdir_p(aether_rep_dir(repo, sha1_buf)) != 0) {
         free(zbuf); sqlite3_close(db); return NULL;
     }
 

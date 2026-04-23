@@ -72,10 +72,6 @@ void  svnae_wc_pristine_free(char *p);
 /* Atomic write ported to Aether (ae/subr/io.ae). */
 extern int aether_io_write_atomic(const char *path, const char *data, int length);
 
-static int write_file_atomic(const char *path, const char *data, int len) {
-    return aether_io_write_atomic(path, data, len) == 0 ? 0 : -1;
-}
-
 int
 svnae_wc_revert(const char *wc_root, const char *rel_path)
 {
@@ -120,7 +116,7 @@ svnae_wc_revert(const char *wc_root, const char *rel_path)
     int psize = svnae_wc_pristine_size(wc_root, sha_copy);
     char *data = svnae_wc_pristine_get(wc_root, sha_copy);
     if (!data) { svnae_wc_db_close(db); return -2; }
-    int rc = write_file_atomic(disk, data, psize);
+    int rc = aether_io_write_atomic(disk, data, psize);
     svnae_wc_pristine_free(data);
     if (rc != 0) { svnae_wc_db_close(db); return -2; }
 

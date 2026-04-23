@@ -166,11 +166,6 @@ build_path(const char *wc_root, const char *sha1, char *out, size_t out_sz)
 extern int aether_io_mkdir_p(const char *path);
 extern int aether_io_write_atomic(const char *path, const char *data, int length);
 
-static int mkdir_p(const char *path) { return aether_io_mkdir_p(path) == 0 ? 0 : -1; }
-static int write_atomic(const char *path, const char *data, int len) {
-    return aether_io_write_atomic(path, data, len) == 0 ? 0 : -1;
-}
-
 /* --- public API ------------------------------------------------------- */
 
 /* Put bytes into the pristine store. Returns sha1 as a static
@@ -190,7 +185,7 @@ svnae_wc_pristine_put(const char *wc_root, const char *data, int len)
     if (aether_io_exists(path)) return sha1;
 
     /* mkdir -p the two-level fanout. */
-    if (mkdir_p(aether_pristine_dir(wc_root, sha1)) != 0) return NULL;
+    if (aether_io_mkdir_p(aether_pristine_dir(wc_root, sha1)) != 0) return NULL;
 
     /* Decide RAW vs ZLIB. Same threshold as fs_fs: zlib only if it
      * saves at least 16 bytes. */
@@ -223,7 +218,7 @@ svnae_wc_pristine_put(const char *wc_root, const char *data, int len)
     else          memcpy(file_buf + 5, data, payload_len);
     free(zbuf);
 
-    int rc = write_atomic(path, file_buf, file_len);
+    int rc = aether_io_write_atomic(path, file_buf, file_len);
     free(file_buf);
     if (rc != 0) return NULL;
     return sha1;
