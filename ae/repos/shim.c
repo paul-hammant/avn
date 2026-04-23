@@ -189,17 +189,15 @@ svnae_repos_log_free(struct svnae_log *lg)
  * read its blob. For list we read the directory blob and parse entries.
  */
 
+extern const char *aether_repos_load_rev_blob_field(const char *repo, int rev,
+                                                    const char *key);
+
 static char *
 root_dir_sha1_for_rev(const char *repo, int rev)
 {
-    char *sha1 = rev_blob_sha1(repo, rev);
-    if (!sha1) return NULL;
-    char *body = svnae_rep_read_blob(repo, sha1);
-    free(sha1);
-    if (!body) return NULL;
-    char *root = parse_field(body, "root");
-    svnae_rep_free(body);
-    return root;
+    const char *v = aether_repos_load_rev_blob_field(repo, rev, "root");
+    if (!v || !*v) return NULL;
+    return strdup(v);
 }
 
 /* resolve_path ported to Aether (ae/repos/resolve.ae). The split-
@@ -322,17 +320,23 @@ struct svnae_info {
 struct svnae_info *
 svnae_repos_info_rev(const char *repo, int rev)
 {
-    char *sha1 = rev_blob_sha1(repo, rev);
-    if (!sha1) return NULL;
-    char *body = svnae_rep_read_blob(repo, sha1);
-    free(sha1);
-    if (!body) return NULL;
+    /* If the rev pointer doesn't exist at all, bail. load_rev_blob_field
+     * returns "" for "rev exists but field absent" and also "" for
+     * "rev doesn't exist" — distinguish the two by probing for the
+     * "root" field, which every valid rev blob carries. */
+    const char *root = aether_repos_load_rev_blob_field(repo, rev, "root");
+    if (!root || !*root) return NULL;
+
     struct svnae_info *I = calloc(1, sizeof *I);
-    I->rev    = rev;
-    I->author = parse_field(body, "author");
-    I->date   = parse_field(body, "date");
-    I->msg    = parse_field(body, "log");
-    svnae_rep_free(body);
+    I->rev = rev;
+
+    const char *v;
+    v = aether_repos_load_rev_blob_field(repo, rev, "author");
+    I->author = (v && *v) ? strdup(v) : NULL;
+    v = aether_repos_load_rev_blob_field(repo, rev, "date");
+    I->date = (v && *v) ? strdup(v) : NULL;
+    v = aether_repos_load_rev_blob_field(repo, rev, "log");
+    I->msg = (v && *v) ? strdup(v) : NULL;
     return I;
 }
 
