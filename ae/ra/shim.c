@@ -1346,25 +1346,34 @@ verify_dir(const char *base_url, const char *repo, int rev,
         return -1;
     }
 
-    /* Parse via std.json (the compat layer at the top of this file
-     * maps cJSON_* names to json_*). */
-    cJSON *root = cJSON_ParseWithLength(body, len);
+    /* Reuse the same packed-string parser the public svnae_ra_list
+     * accessors use — ae/ra/parse.ae::ra_parse_list. Returns
+     * "N\x02<name>\x01<kind-char>\x02..." */
+    extern const char *aether_ra_parse_list(const char *body);
+    const char *packed = aether_ra_parse_list(body);
     free(body);
-    if (!root) { free(dir_hdr); return -1; }
-    cJSON *jents = cJSON_GetObjectItemCaseSensitive(root, "entries");
-    if (!cJSON_IsArray(jents)) { cJSON_Delete(root); free(dir_hdr); return -1; }
-    int n = cJSON_GetArraySize(jents);
+    if (!packed || !*packed) { free(dir_hdr); return -1; }
+
+    const char *p = packed;
+    const char *sep = strchr(p, 2);
+    if (!sep) { free(dir_hdr); return -1; }
+    char nbuf[32];
+    size_t nlen = (size_t)(sep - p);
+    if (nlen >= sizeof nbuf) nlen = sizeof nbuf - 1;
+    memcpy(nbuf, p, nlen); nbuf[nlen] = '\0';
+    int n = (int)strtol(nbuf, NULL, 10);
+    p = sep + 1;
+
     struct entry *entries = calloc((size_t)(n > 0 ? n : 1), sizeof *entries);
     for (int i = 0; i < n; i++) {
-        cJSON *e = cJSON_GetArrayItem(jents, i);
-        cJSON *jname = cJSON_GetObjectItemCaseSensitive(e, "name");
-        cJSON *jkind = cJSON_GetObjectItemCaseSensitive(e, "kind");
-        entries[i].name = strdup(cJSON_IsString(jname) ? json_valuestring(jname) : "");
-        const char *kind = cJSON_IsString(jkind) ? json_valuestring(jkind) : "file";
-        entries[i].kind_c = (kind[0] == 'd') ? 'd' : 'f';
-        entries[i].sha = NULL;
+        const char *entry_end = strchr(p, 2);
+        if (!entry_end) entry_end = p + strlen(p);
+        const char *mid = memchr(p, 1, (size_t)(entry_end - p));
+        entries[i].name   = mid ? strndup(p, (size_t)(mid - p)) : strdup("");
+        entries[i].kind_c = (mid && mid + 1 < entry_end) ? *(mid + 1) : 'f';
+        entries[i].sha    = NULL;
+        p = *entry_end == 2 ? entry_end + 1 : entry_end;
     }
-    cJSON_Delete(root);
 
     /* Recurse into every child to compute its sha. */
     extern const char *aether_path_join_rel(const char *prefix, const char *name);
