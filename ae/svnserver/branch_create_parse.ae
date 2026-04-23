@@ -17,9 +17,10 @@
 //   {"base": "<sha-or-branch>", "include": ["glob", ...]}
 //
 // Validates shape, collects include globs into a newline-
-// separated string (Aether can't hand C a char** directly), and
-// passes to the C-side svnserver_branch_create_globs which
-// splits + calls svnae_branch_create.
+// separated string, and hands them straight to
+// svnae_branch_create. The C side used to split the string back
+// into a char** array only to rejoin it before passing to
+// aether_filter_dir; that round trip is gone.
 //
 // Return-value contract (matches the old C function):
 //   >= 0 : new_rev
@@ -31,9 +32,8 @@
 import std.string
 import std.json
 
-extern svnserver_branch_create_globs(repo: string, branch_name: string,
-                                      base: string, globs_joined: string,
-                                      author: string) -> int
+extern svnae_branch_create(repo: string, name: string, base: string,
+                            globs_joined: string, author: string) -> int
 
 export branch_create_from_body(repo: string, branch_name: string,
                                 body: string, body_len: int,
@@ -73,8 +73,9 @@ export branch_create_from_body(repo: string, branch_name: string,
     }
     json.free(root)
 
-    new_rev = svnserver_branch_create_globs(repo, branch_name, base,
-                                             globs, user_for_author)
+    author = "super"
+    if string.length(user_for_author) > 0 { author = user_for_author }
+    new_rev = svnae_branch_create(repo, branch_name, base, globs, author)
     if new_rev < 0 { return -4 }
     return new_rev
 }

@@ -44,7 +44,21 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
   `int_to_dec` + `digit_char` in favour of `std.string.from_int` now
   that it's available, and ported the WC pristine-store path builder
   to ae/wc/pristine_path.ae (handles the two-level XX/YY/ fanout).
-- **Round 24** (current): **38.12% C, 61.88% Aether.** Leaves
+- **Round 25** (current): **38.08% C, 61.92% Aether** (C now
+  under 10,000 LOC for the first time). A particularly silly
+  round-trip: Aether built `globs_joined` as a newline-separated
+  string → called svnserver_branch_create_globs (C) → C split
+  it back into a `char **globs` array → called svnae_branch_create
+  → svnae_branch_create rejoined the array into `globs_joined`
+  → passed to aether_filter_dir.
+  - Changed svnae_branch_create's signature to take
+    globs_joined directly.
+  - Dropped svnserver_branch_create_globs entirely.
+  - branch_create_parse.ae calls svnae_branch_create directly
+    (its extern no longer has to route through the svnserver
+    trampoline).
+
+- **Round 24**: **38.12% C, 61.88% Aether.** Leaves
   round picking up the last two packed-string reparsers in
   ra/shim.c that rounds 21-22 didn't cover.
   - `svnae_ra_get_props` — same round-trip as log/paths/blame/

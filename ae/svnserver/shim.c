@@ -550,36 +550,12 @@ int svnserver_txn_add_b64(void *txn, const char *path, const char *b64) {
     return 0;
 }
 
-/* Thin C wrapper: Aether builds `globs_joined` as newline-separated
- * glob strings; we split into a const char** array for the existing
- * svnae_branch_create FFI. */
-int svnserver_branch_create_globs(const char *repo, const char *branch_name,
-                                   const char *base, const char *globs_joined,
-                                   const char *author) {
-    /* Count newlines + 1 for a tight upper bound. */
-    int n = 1;
-    for (const char *q = globs_joined; *q; q++) if (*q == '\n') n++;
-    const char **globs = calloc((size_t)(n > 0 ? n : 1), sizeof *globs);
-    char **copies = calloc((size_t)(n > 0 ? n : 1), sizeof *copies);
-    int gi = 0;
-    const char *p = globs_joined;
-    while (*p) {
-        const char *eol = strchr(p, '\n');
-        size_t slen = eol ? (size_t)(eol - p) : strlen(p);
-        if (slen > 0) {
-            copies[gi] = strndup(p, slen);
-            globs[gi] = copies[gi];
-            gi++;
-        }
-        if (!eol) break;
-        p = eol + 1;
-    }
-    int new_rev = svnae_branch_create(repo, branch_name, base, globs, gi,
-                                      (author && *author) ? author : "super");
-    for (int i = 0; i < gi; i++) free(copies[i]);
-    free(copies); free(globs);
-    return new_rev;
-}
+/* svnserver_branch_create_globs used to split the newline-joined glob
+ * string Aether built back into a char** array for svnae_branch_create,
+ * which then rejoined it back to pass to aether_filter_dir. Absurd
+ * round trip; svnae_branch_create now takes globs_joined directly and
+ * the Aether branch-create handler calls it without any C wrapper. */
+
 /* svnserver_branch_create_from_body C trampoline removed — the
  * Aether handler calls aether_branch_create_from_body directly. */
 
@@ -690,10 +666,6 @@ auto_follow_copy_acl(const char *repo, int base_rev,
  * through the include globs. Super-user only (branch creation is
  * privileged by default; future phases may add branch-level ACLs).
  */
-extern int svnae_branch_create(const char *repo, const char *name,
-                               const char *base,
-                               const char *const *globs, int n_globs,
-                               const char *author);
 
 /* POST /branches/<NAME>/create — ported to ae/svnserver/handler_branch_create.ae.
  * Aether parses the branch name from the URL itself, so the dispatcher

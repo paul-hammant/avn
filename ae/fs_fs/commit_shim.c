@@ -354,10 +354,9 @@ svnae_fnmatch_pathname(const char *glob, const char *path)
  */
 int
 svnae_branch_create(const char *repo, const char *name, const char *base,
-                    const char *const *globs, int n_globs,
-                    const char *author)
+                    const char *globs_joined, const char *author)
 {
-    if (!name || !*name || !base || !*base || n_globs <= 0) return -1;
+    if (!name || !*name || !base || !*base || !globs_joined || !*globs_joined) return -1;
 
     /* Reject if branch already exists. */
     extern int aether_io_exists(const char *path);
@@ -431,43 +430,42 @@ svnae_branch_create(const char *repo, const char *name, const char *base,
     if (!base_root) return -1;
 
     /* Filter base's tree via the Aether recursive filter
-     * (ae/fs_fs/filter.ae). It takes globs newline-joined rather than
-     * a C char-array. */
+     * (ae/fs_fs/filter.ae). Takes the globs already newline-joined —
+     * same string we write to the branch's spec file below. */
     extern const char *aether_filter_dir(const char *repo, const char *src_sha,
                                          const char *prefix,
                                          const char *globs_joined);
-    size_t glen = 0;
-    for (int i = 0; i < n_globs; i++) glen += strlen(globs[i]) + 1;
-    char *globs_joined = malloc(glen + 1);
-    if (!globs_joined) { free(base_root); return -1; }
-    size_t gpos = 0;
-    for (int i = 0; i < n_globs; i++) {
-        size_t gl = strlen(globs[i]);
-        memcpy(globs_joined + gpos, globs[i], gl);
-        gpos += gl;
-        globs_joined[gpos++] = '\n';
-    }
-    globs_joined[gpos] = '\0';
     const char *new_root_ref = aether_filter_dir(repo, base_root, "", globs_joined);
     char *new_root = (new_root_ref && *new_root_ref) ? strdup(new_root_ref) : NULL;
-    /* Don't free globs_joined yet — same bytes are written as the
-     * branch's spec file below. */
     free(base_root);
-    if (!new_root) { free(globs_joined); return -1; }
+    if (!new_root) return -1;
 
-    /* Write the spec blob (newline-separated globs) on disk under
-     * $repo/branches/<name>/spec. */
-    /* Parent $repo/branches may not exist yet either (for repos seeded
+    /* Write the spec blob on disk under $repo/branches/<name>/spec.
+     * Parent $repo/branches may not exist yet either (for repos seeded
      * before Phase 8.1 landed). */
     if (aether_io_mkdir_p(br_dir) != 0) { free(new_root); return -1; }
     char spec_path[PATH_MAX];
     snprintf(spec_path, sizeof spec_path, "%s/spec", br_dir);
-    /* globs_joined is already "glob1\nglob2\n...\n" — perfect spec-file
-     * content. Write and release. */
-    if (write_atomic(spec_path, globs_joined, (int)strlen(globs_joined)) != 0) {
-        free(globs_joined); free(new_root); return -1;
+    /* globs_joined is "glob1\nglob2\n..." — usable as spec-file content
+     * directly. Ensure a trailing newline for the on-disk form. */
+    {
+        int glen = (int)strlen(globs_joined);
+        int has_nl = glen > 0 && globs_joined[glen - 1] == '\n';
+        if (has_nl) {
+            if (write_atomic(spec_path, globs_joined, glen) != 0) {
+                free(new_root); return -1;
+            }
+        } else {
+            char *with_nl = malloc((size_t)glen + 2);
+            if (!with_nl) { free(new_root); return -1; }
+            memcpy(with_nl, globs_joined, (size_t)glen);
+            with_nl[glen] = '\n';
+            with_nl[glen + 1] = '\0';
+            int wrc = write_atomic(spec_path, with_nl, glen + 1);
+            free(with_nl);
+            if (wrc != 0) { free(new_root); return -1; }
+        }
     }
-    free(globs_joined);
 
     /* Create the revs directory structure. */
     char revs_dir[PATH_MAX];
@@ -488,6 +486,19 @@ svnae_branch_create(const char *repo, const char *name, const char *base,
     const char *prev_props = "";
     const char *prev_acl   = "";
 
+    /* Count includes by counting non-empty newline-separated segments
+     * in globs_joined — we dropped the pre-split n_globs parameter. */
+    int n_globs = 0;
+    {
+        const char *q = globs_joined;
+        while (*q) {
+            const char *nl = strchr(q, '\n');
+            size_t seg = nl ? (size_t)(nl - q) : strlen(q);
+            if (seg > 0) n_globs++;
+            if (!nl) break;
+            q = nl + 1;
+        }
+    }
     char logmsg[256];
     snprintf(logmsg, sizeof logmsg, "create branch %s from %s with %d include(s)",
              name, base, n_globs);
