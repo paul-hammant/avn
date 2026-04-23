@@ -272,35 +272,14 @@ walk_remote(const char *base_url, const char *repo, int rev,
  * The WC proplist query is per-path; empty remote set means "server
  * has no props for this path", in which case every local prop on
  * this path gets deleted. */
+/* Ported to ae/wc/update_props.ae. */
+extern void aether_ingest_props(const char *base_url, const char *repo,
+                                int rev, const char *wc_root, const char *rel);
 static void
 ingest_props(const char *base_url, const char *repo, int rev,
              const char *wc_root, const char *rel)
 {
-    struct svnae_ra_props *P = svnae_ra_get_props(base_url, repo, rev, rel);
-    int rn = P ? svnae_ra_props_count(P) : 0;
-
-    /* (a) overwrite / add from remote. */
-    for (int j = 0; j < rn; j++) {
-        svnae_wc_propset(wc_root, rel, svnae_ra_props_name(P, j),
-                                        svnae_ra_props_value(P, j));
-    }
-
-    /* (b) for each local prop that isn't in the remote set, delete it. */
-    struct svnae_wc_proplist *L = svnae_wc_proplist(wc_root, rel);
-    if (L) {
-        int ln = svnae_wc_proplist_count(L);
-        for (int i = 0; i < ln; i++) {
-            const char *lname = svnae_wc_proplist_name(L, i);
-            int found = 0;
-            for (int j = 0; j < rn; j++) {
-                if (strcmp(lname, svnae_ra_props_name(P, j)) == 0) { found = 1; break; }
-            }
-            if (!found) svnae_wc_propdel(wc_root, rel, lname);
-        }
-        svnae_wc_proplist_free(L);
-    }
-
-    if (P) svnae_ra_props_free(P);
+    aether_ingest_props(base_url, repo, rev, wc_root, rel);
 }
 
 /* Aether-callable wrapper around ingest_props. The RA-props /
