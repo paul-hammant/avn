@@ -300,27 +300,9 @@ svnae_svnserver_set_superuser_token(const char *token)
     g_superuser_token = token && *token ? strdup(token) : NULL;
 }
 
-/* Case-insensitive header lookup on an HttpRequest. The Aether stdlib
- * doesn't expose header arrays, so we rely on fields added via Phase 7.1.
- * For now we parse them from `req->query_string` if absent (fallback).
- * TODO: plumb through a proper headers array when std.http exposes one. */
-typedef struct {
-    char** keys;
-    char** values;
-    int    count;
-} __HdrPair;
-
-/* Aether http_server request type already declared above; header arrays
- * live on it as header_keys / header_values / header_count (mirroring
- * the response struct). */
-static const char *
-req_header(HttpRequest *req, const char *name)
-{
-    for (int i = 0; i < req->header_count; i++) {
-        if (strcasecmp(req->header_keys[i], name) == 0) return req->header_values[i];
-    }
-    return NULL;
-}
+/* Case-insensitive header lookup via std.http. */
+extern const char *http_get_header(HttpRequest *req, const char *name);
+#define req_header http_get_header
 
 /* Parse a per-path ACL blob body and decide whether `user` is allowed
  * in mode `want_write` (0 = read, 1 = write).
