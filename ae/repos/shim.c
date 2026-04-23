@@ -57,49 +57,11 @@ void  svnae_rep_free(char *p);
 /* --- helpers --------------------------------------------------------- */
 
 /* Slurp an entire small file ported to Aether (ae/subr/io.ae). The
- * Aether side returns an empty string on any error, and we need NULL
- * to distinguish "missing" from "empty" — so check io_file_size first
- * and strdup the result (the Aether-owned string is ref-counted but
- * callers here expect malloc'd). */
-extern const char *aether_io_read_file(const char *path);
-extern int aether_io_file_size(const char *path);
-
-static char *
-read_small(const char *path)
-{
-    if (aether_io_file_size(path) < 0) return NULL;
-    const char *src = aether_io_read_file(path);
-    return strdup(src ? src : "");
-}
-
-static void
-trim_trailing_newline(char *s)
-{
-    size_t n = strlen(s);
-    while (n > 0 && (s[n-1] == '\n' || s[n-1] == '\r')) { s[--n] = '\0'; }
-}
-
-static int
-parse_int(const char *s, int *out)
-{
-    if (!s) return 0;
-    while (*s == ' ' || *s == '\t') s++;
-    char *end;
-    long v = strtol(s, &end, 10);
-    if (end == s) return 0;
-    *out = (int)v;
-    return 1;
-}
-
-static int
-rev_pointer_path(const char *repo, int rev, char *out, size_t out_sz)
-{
-    return snprintf(out, out_sz, "%s/revs/%06d", repo, rev);
-}
-
-/* head_rev + rev_blob_sha1 ported to ae/repos/rev_io.ae
+ * head_rev + rev_blob_sha1 ported to ae/repos/rev_io.ae
  * (repos_head_rev / repos_rev_blob_sha). Wrappers preserve the
- * existing int / char* conventions. */
+ * existing int / char* conventions; read_small / parse_int /
+ * trim_trailing_newline / rev_pointer_path have no remaining
+ * callers and were removed. */
 extern int         aether_repos_head_rev(const char *repo);
 extern const char *aether_repos_rev_blob_sha(const char *repo, int rev);
 
