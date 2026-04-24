@@ -93,16 +93,10 @@ extern const char *aether_rev_blob_body(const char *root, const char *branch,
                                         int prev, const char *author,
                                         const char *date, const char *log);
 
-/* rev_blob_field: thin wrapper around the same Aether helper
- * load_rev_root_sha1 uses. "NULL on miss, malloc'd on hit"
- * matches the in-file callers. */
-static char *
-rev_blob_field(const char *repo, int rev, const char *key)
-{
-    const char *v = aether_repos_load_rev_blob_field(repo, rev, key);
-    if (!v || !*v) return NULL;
-    return strdup(v);
-}
+/* rev_blob_field — the last C caller (props/acl inheritance in
+ * svnae_commit_finalise_on_branch) moved to the Aether side's
+ * aether_repos_inherit_rev_field helper in round 34, so the
+ * strdup/NULL-on-miss wrapper is gone. */
 
 int
 svnae_commit_finalise(const char *repo, struct svnae_txn *txn,
@@ -176,28 +170,22 @@ svnae_commit_finalise_on_branch(const char *repo, struct svnae_txn *txn,
     if (prev < 0) { free(new_root); return -1; }
     int next = prev + 1;
 
-    /* If caller didn't supply a props_sha1, inherit the previous rev's. */
-    char *inherited_props = NULL;
-    const char *ps = props_sha1 && *props_sha1 ? props_sha1 : NULL;
-    if (!ps) {
-        inherited_props = rev_blob_field(repo, prev, "props");
-        ps = inherited_props ? inherited_props : "";
-    }
-
-    /* Same for ACL — inherit if caller didn't explicitly set. */
-    char *inherited_acl = NULL;
-    const char *as = acl_sha1 && *acl_sha1 ? acl_sha1 : NULL;
-    if (!as) {
-        inherited_acl = rev_blob_field(repo, prev, "acl");
-        as = inherited_acl ? inherited_acl : "";
-    }
+    /* Inherit props / acl from the previous rev if the caller didn't
+     * supply an explicit override. Ported to ae/repos/rev_io.ae::
+     * repos_inherit_rev_field — returns the override when non-empty,
+     * otherwise the rev-blob field, otherwise "". */
+    extern const char *aether_repos_inherit_rev_field(const char *repo, int prev,
+                                                      const char *key,
+                                                      const char *override);
+    const char *ps = aether_repos_inherit_rev_field(repo, prev, "props",
+                                                     props_sha1 ? props_sha1 : "");
+    const char *as = aether_repos_inherit_rev_field(repo, prev, "acl",
+                                                     acl_sha1 ? acl_sha1 : "");
 
     /* Build revision blob — rev_blob_body lives in ae/fs_fs/format_line.ae. */
     const char *rev_body = aether_rev_blob_body(new_root, branch, ps, as,
                                                 prev, author,
                                                 svnae_fsfs_now_iso8601(), logmsg);
-    free(inherited_props);
-    free(inherited_acl);
 
     const char *rev_sha = svnae_rep_write_blob(repo, rev_body, (int)strlen(rev_body));
     if (!rev_sha) { free(new_root); return -1; }
