@@ -15,73 +15,40 @@
  * permissions and limitations under the License.
  */
 
-/* ae/wc/pristine_shim.c — working-copy pristine store.
+/* ae/wc/pristine_shim.c — thin adapter over ae/wc/pristine.ae.
  *
- * Mirrors the fs_fs rep-store in layout and byte format, but lives under
- * $wc/.svn/pristine/ and has no rep-cache.db — the file's existence IS
- * the cache. We just compute the SHA-1 of the input, check whether the
- * .rep file exists, and write it if not.
+ * The pristine store (put / get / has / size / hash) is fully
+ * ported to Aether now that std.cryptography (sha1/sha256) and
+ * std.zlib (deflate/inflate) landed. What stays in C:
  *
- * On-disk format (same as fs_fs):
- *   $wc/.svn/pristine/aa/bb/<sha1>.rep
- *   First byte: 'R' for raw, 'Z' for zlib. Rest: payload.
+ *   1. svnae_wc_hash_algo — sqlite lookup of the wc.db info table.
+ *      Aether has no sqlite binding yet.
  *
- * API:
- *   pristine_put(wc_root, data, len) -> sha1
- *   pristine_get(wc_root, sha1)      -> malloc'd bytes (+ NUL term.)
- *   pristine_free(ptr)
- *   pristine_has(wc_root, sha1)      -> 0/1
- *   pristine_size(wc_root, sha1)     -> decompressed byte count (-1 if missing)
+ *   2. Three small byte-level helpers — pack_le32, binary-safe
+ *      concat, binary-safe slice — wrapping Aether's
+ *      string_new_with_length / AetherString layout. std.string
+ *      has no byte-construction primitive that doesn't intermediate
+ *      through a NUL-terminated C-style string; doing these in C
+ *      keeps the Aether implementation binary-safe.
  *
- * We intentionally don't track the decompressed size in a sidecar index:
- * `uncompress` can grow the buffer, so we call it with a size we discover
- * by reading the file's first 4 bytes (deflate block headers) and falling
- * back to an inflating loop. For simplicity at this phase: store the
- * uncompressed length as a 4-byte LE prefix right after the 'R'/'Z' byte.
+ *   3. Adapters for the public svnae_wc_* signatures — existing
+ *      callers expect "out-param buffer with hex length", "NULL
+ *      on miss", etc.; we marshal between those and the Aether
+ *      wrappers' string returns.
  */
 
-#include <errno.h>
-#include <fcntl.h>
-#include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
-#include <sys/types.h>
-#include <unistd.h>
-#include <zlib.h>
-
-#ifndef PATH_MAX
-#define PATH_MAX 4096
-#endif
-
-/* --- helpers ---------------------------------------------------------- */
-
-/* Read the WC's configured content-address algorithm. Stored in wc.db's
- * info table under key "hash_algo" at checkout time. Defaults to sha1
- * for repos that predate Phase 6.1. Returned pointer is to a static
- * thread-local buffer — copy before another call. */
 #include <sqlite3.h>
+
+/* --- hash_algo: the one sqlite touch, kept in C ---------------------- */
+
 extern sqlite3 *svnae_wc_db_open(const char *wc_root);
 extern void     svnae_wc_db_close(sqlite3 *db);
 extern char    *svnae_wc_db_get_info(sqlite3 *db, const char *key);
 extern void     svnae_wc_info_free(char *s);
-
-/* Inline digest dispatch so every binary that links this shim gets the
- * algorithm table for free, without relying on ae/subr/checksum/shim.c
- * being pulled into the link. Keeping the list in sync with
- * ae/subr/checksum/shim.c's evp_by_name is the golden list: {sha1,
- * sha256}. */
-/* Consolidated in ae/ffi/openssl/shim.c. */
-extern char *svnae_openssl_hash_hex(const char *algo, const char *data, int len);
-#define svnae_hash_hex svnae_openssl_hash_hex
-
-/* Binary-safe file read via std.fs TLS buffer. */
-extern int fs_try_read_binary(const char *path);
-extern const char *fs_get_read_binary(void);
-extern int fs_get_read_binary_length(void);
-extern void fs_release_read_binary(void);
 
 const char *
 svnae_wc_hash_algo(const char *wc_root)
@@ -105,197 +72,199 @@ svnae_wc_hash_algo(const char *wc_root)
     return cache;
 }
 
-/* Compute the WC's configured hash of `data[0..len]`. `out` must be at
- * least 65 bytes. Returns the hex length on success, 0 on failure. */
-static int
-wc_hash(const char *wc_root, const char *data, int len, char *out)
+/* --- byte-level helpers for the Aether side ------------------------- *
+ *
+ * string_new_with_length takes a length-prefixed AetherString; we
+ * use it to construct binary payloads with embedded NULs.
+ */
+
+extern void *string_new_with_length(const char *data, int length);
+
+/* Aether magic + header (std/string/aether_string.h). Kept in sync
+ * with the runtime's struct layout — breaks if the ABI shifts, which
+ * is exactly why these are a small localised piece rather than a
+ * re-invention sprinkled through the codebase. Field types match
+ * aether_string.h verbatim: magic is unsigned int, length/capacity
+ * are size_t (8 bytes on 64-bit), data is char*. */
+#define AETHER_STRING_MAGIC 0xAE57C0DE
+struct AetherString {
+    unsigned int magic;
+    int          ref_count;
+    size_t       length;
+    size_t       capacity;
+    char        *data;
+};
+
+/* Return the raw payload + length of a string-like pointer, regardless
+ * of whether it's an AetherString* or a plain NUL-terminated char*.
+ * Inline so the pristine helpers can share. */
+static void
+unwrap_bytes(const void *s, const char **out_data, int *out_len)
 {
-    const char *algo = svnae_wc_hash_algo(wc_root);
-    char *hex = svnae_hash_hex(algo, data, len);
-    if (!hex) return 0;
-    size_t hlen = strlen(hex);
-    if (hlen >= 65) { free(hex); return 0; }
-    memcpy(out, hex, hlen + 1);
-    free(hex);
-    return (int)hlen;
+    if (!s) { *out_data = ""; *out_len = 0; return; }
+    const struct AetherString *as = (const struct AetherString *)s;
+    if (as->magic == AETHER_STRING_MAGIC) {
+        *out_data = as->data;
+        *out_len = (int)as->length;
+        return;
+    }
+    *out_data = (const char *)s;
+    *out_len = (int)strlen((const char *)s);
 }
 
-/* Public: hash `data[0..len]` using the WC's configured algorithm.
- * `out` must be at least 65 bytes. Returns hex length on success, 0
- * on failure. */
+/* 4-byte little-endian packing of `v`. Returns an AetherString of
+ * length 4. */
+const char *
+aether_pristine_pack_le32(int v)
+{
+    char buf[4];
+    buf[0] = (char)(v         & 0xff);
+    buf[1] = (char)((v >> 8)  & 0xff);
+    buf[2] = (char)((v >> 16) & 0xff);
+    buf[3] = (char)((v >> 24) & 0xff);
+    return (const char *)string_new_with_length(buf, 4);
+}
+
+/* Binary-safe concat: result = prefix + (suf[0..suf_len]). Both
+ * inputs may be AetherString*-wrapped or plain char*. */
+const char *
+aether_pristine_concat_binary(const char *prefix, const char *suf, int suf_len)
+{
+    const char *pdata; int plen;
+    unwrap_bytes(prefix, &pdata, &plen);
+
+    const char *sdata; int slen;
+    unwrap_bytes(suf, &sdata, &slen);
+    /* Caller's suf_len is authoritative — they may have a length-
+     * aware buffer where suf itself isn't NUL-terminated. Clamp to
+     * the length-aware slen only if it's smaller. */
+    if (slen < suf_len) suf_len = slen;
+
+    int total = plen + suf_len;
+    char *buf = malloc((size_t)total + 1);
+    if (!buf) return (const char *)string_new_with_length("", 0);
+    if (plen) memcpy(buf,        pdata, (size_t)plen);
+    if (suf_len) memcpy(buf + plen, sdata, (size_t)suf_len);
+    buf[total] = '\0';
+    const char *out = (const char *)string_new_with_length(buf, total);
+    free(buf);
+    return out;
+}
+
+/* Binary-safe slice: s[start..end]. */
+const char *
+aether_pristine_slice_binary(const char *s, int start, int end)
+{
+    const char *data; int len;
+    unwrap_bytes(s, &data, &len);
+    if (start < 0) start = 0;
+    if (end > len) end = len;
+    if (end < start) end = start;
+    return (const char *)string_new_with_length(data + start, end - start);
+}
+
+/* --- public API — thin C adapters over the Aether wrappers --------- *
+ *
+ * The svnae_wc_* signatures are what existing callers (checkout,
+ * update, merge, revert, status, verify) expect; we marshal to /
+ * from the Aether-side string returns.
+ */
+
+extern const char *aether_wc_hash_bytes(const char *wc_root,
+                                        const char *data, int length);
+extern const char *aether_wc_hash_file(const char *wc_root, const char *path);
+extern const char *aether_wc_pristine_put(const char *wc_root,
+                                           const char *data, int length);
+extern const char *aether_wc_pristine_get(const char *wc_root, const char *sha);
+extern int         aether_wc_pristine_has(const char *wc_root, const char *sha);
+extern int         aether_wc_pristine_size(const char *wc_root, const char *sha);
+
+/* Hash `data[0..len]` under the WC's algorithm. Copy into caller's
+ * `out` buffer (>= 65 bytes) and return the hex length. 0 on
+ * failure. */
 int
 svnae_wc_hash_bytes(const char *wc_root, const char *data, int len, char *out)
 {
-    return wc_hash(wc_root, data, len, out);
+    const char *hex = aether_wc_hash_bytes(wc_root, data, len);
+    if (!hex) { out[0] = '\0'; return 0; }
+    const char *hdata; int hlen;
+    unwrap_bytes(hex, &hdata, &hlen);
+    if (hlen >= 65) hlen = 64;
+    memcpy(out, hdata, (size_t)hlen);
+    out[hlen] = '\0';
+    return hlen;
 }
 
-/* Public: hash the contents of `path` on disk using the WC's configured
- * algorithm. `out` must be at least 65 bytes. Returns 0 on success,
- * -1 on I/O or hash failure. */
 int
 svnae_wc_hash_file(const char *wc_root, const char *path, char *out)
 {
-    if (!fs_try_read_binary(path)) return -1;
-    int sz = fs_get_read_binary_length();
-    const char *data = fs_get_read_binary();
-    int rc = wc_hash(wc_root, data, sz, out) ? 0 : -1;
-    fs_release_read_binary();
-    return rc;
+    const char *hex = aether_wc_hash_file(wc_root, path);
+    if (!hex) { out[0] = '\0'; return -1; }
+    const char *hdata; int hlen;
+    unwrap_bytes(hex, &hdata, &hlen);
+    if (hlen == 0) { out[0] = '\0'; return -1; }
+    if (hlen >= 65) hlen = 64;
+    memcpy(out, hdata, (size_t)hlen);
+    out[hlen] = '\0';
+    return 0;
 }
 
-/* Build $wc_root/.svn/pristine/aa/bb/<sha1>.rep into `out`.
- * Returns the parent directory (through a static buffer, one call at a
- * time). */
-/* Path builder ported to Aether (ae/wc/pristine_path.ae, --emit=lib).
- * The C wrapper keeps the caller-supplied-buffer shape so the four
- * call sites don't have to change. */
-extern const char *aether_pristine_path(const char *wc_root, const char *sha);
-extern const char *aether_pristine_dir(const char *wc_root, const char *sha);
-
-static void
-build_path(const char *wc_root, const char *sha1, char *out, size_t out_sz)
-{
-    const char *p = aether_pristine_path(wc_root, sha1);
-    size_t n = strlen(p);
-    if (n >= out_sz) n = out_sz - 1;
-    memcpy(out, p, n);
-    out[n] = '\0';
-}
-
-/* mkdir_p + atomic write ported to Aether (ae/subr/io.ae). */
-extern int aether_io_mkdir_p(const char *path);
-extern int aether_io_write_atomic(const char *path, const char *data, int length);
-
-/* --- public API ------------------------------------------------------- */
-
-/* Put bytes into the pristine store. Returns sha1 as a static
- * thread-local buffer (caller copies if they need to keep it across
- * the next call). NULL on failure. */
+/* Put. Returns the sha hex (TLS-cached; caller copies before next
+ * call) or NULL on failure. */
+/* Ephemeral trace that exposed an OpenSSL stub path: when the build
+ * didn't set -DAETHER_HAS_OPENSSL, std.cryptography returned NULL
+ * digests and downstream code read past a NULL pointer. Kept as a
+ * comment so I don't reach for the same trace a third time. */
 const char *
 svnae_wc_pristine_put(const char *wc_root, const char *data, int len)
 {
-    static __thread char sha1[65];   /* sized for sha256 hex */
-    if (wc_hash(wc_root, data, len, sha1) == 0) return NULL;
-
-    char path[PATH_MAX];
-    build_path(wc_root, sha1, path, sizeof path);
-
-    /* Dedup: if already present, skip the write. */
-    extern int aether_io_exists(const char *p);
-    if (aether_io_exists(path)) return sha1;
-
-    /* mkdir -p the two-level fanout. */
-    if (aether_io_mkdir_p(aether_pristine_dir(wc_root, sha1)) != 0) return NULL;
-
-    /* Decide RAW vs ZLIB. Same threshold as fs_fs: zlib only if it
-     * saves at least 16 bytes. */
-    unsigned char *zbuf = NULL;
-    uLongf zlen = 0;
-    int use_zlib = 0;
-    if (len > 0) {
-        uLongf bound = compressBound((uLong)len);
-        zbuf = malloc(bound);
-        if (zbuf) {
-            zlen = bound;
-            if (compress2(zbuf, &zlen, (const Bytef *)data, (uLong)len, 6) == Z_OK
-                && (int)zlen + 16 < len) {
-                use_zlib = 1;
-            }
-        }
-    }
-
-    /* File layout: 1 header byte + 4 LE bytes of uncompressed length + payload. */
-    int payload_len = use_zlib ? (int)zlen : len;
-    int file_len = 1 + 4 + payload_len;
-    char *file_buf = malloc((size_t)file_len);
-    if (!file_buf) { free(zbuf); return NULL; }
-    file_buf[0] = use_zlib ? 'Z' : 'R';
-    file_buf[1] = (char)(len & 0xff);
-    file_buf[2] = (char)((len >> 8) & 0xff);
-    file_buf[3] = (char)((len >> 16) & 0xff);
-    file_buf[4] = (char)((len >> 24) & 0xff);
-    if (use_zlib) memcpy(file_buf + 5, zbuf, payload_len);
-    else          memcpy(file_buf + 5, data, payload_len);
-    free(zbuf);
-
-    int rc = aether_io_write_atomic(path, file_buf, file_len);
-    free(file_buf);
-    if (rc != 0) return NULL;
-    return sha1;
+    static __thread char sha[65];
+    const char *r = aether_wc_pristine_put(wc_root, data, len);
+    if (!r) return NULL;
+    const char *rdata; int rlen;
+    unwrap_bytes(r, &rdata, &rlen);
+    if (rlen == 0) return NULL;
+    if (rlen >= 65) rlen = 64;
+    memcpy(sha, rdata, (size_t)rlen);
+    sha[rlen] = '\0';
+    return sha;
 }
 
-int
-svnae_wc_pristine_has(const char *wc_root, const char *sha1)
-{
-    extern int aether_io_is_regular_file(const char *path);
-    char path[PATH_MAX];
-    build_path(wc_root, sha1, path, sizeof path);
-    return aether_io_is_regular_file(path);
-}
-
-/* Return the uncompressed size recorded in the header, or -1 on failure. */
-int
-svnae_wc_pristine_size(const char *wc_root, const char *sha1)
-{
-    char path[PATH_MAX];
-    build_path(wc_root, sha1, path, sizeof path);
-    if (!fs_try_read_binary(path)) return -1;
-    int fsize = fs_get_read_binary_length();
-    if (fsize < 5) { fs_release_read_binary(); return -1; }
-    const unsigned char *hdr = (const unsigned char *)fs_get_read_binary();
-    int len = (int)hdr[1]
-            | ((int)hdr[2] << 8)
-            | ((int)hdr[3] << 16)
-            | ((int)hdr[4] << 24);
-    fs_release_read_binary();
-    return len;
-}
-
-/* Read the pristine blob for `sha1`. Returns malloc'd NUL-terminated
- * buffer (embedded NULs preserved up to the recorded length) or NULL on
- * miss. Caller frees with svnae_wc_pristine_free. */
+/* Get. Returns a malloc'd NUL-terminated copy (embedded NULs
+ * preserved up to the recorded uncompressed length, but length
+ * isn't exposed — existing callers either know the content is
+ * text, or query svnae_wc_pristine_size first). NULL on miss. */
 char *
-svnae_wc_pristine_get(const char *wc_root, const char *sha1)
+svnae_wc_pristine_get(const char *wc_root, const char *sha)
 {
-    char path[PATH_MAX];
-    build_path(wc_root, sha1, path, sizeof path);
-
-    /* Binary-safe read via std.fs's TLS-buffered read_binary. */
-    if (!fs_try_read_binary(path)) return NULL;
-    int fsize = fs_get_read_binary_length();
-    if (fsize < 5) { fs_release_read_binary(); return NULL; }
-    char *file = malloc((size_t)fsize);
-    if (!file) { fs_release_read_binary(); return NULL; }
-    memcpy(file, fs_get_read_binary(), (size_t)fsize);
-    fs_release_read_binary();
-
-    char header = file[0];
-    int uncompressed = (int)(unsigned char)file[1]
-                    | ((int)(unsigned char)file[2] << 8)
-                    | ((int)(unsigned char)file[3] << 16)
-                    | ((int)(unsigned char)file[4] << 24);
-
-    char *out = malloc((size_t)uncompressed + 1);
-    if (!out) { free(file); return NULL; }
-
-    if (header == 'R') {
-        if (fsize - 5 != uncompressed) { free(file); free(out); return NULL; }
-        memcpy(out, file + 5, (size_t)uncompressed);
-    } else if (header == 'Z') {
-        uLongf produced = (uLongf)uncompressed;
-        int rc = uncompress((Bytef *)out, &produced,
-                            (const Bytef *)(file + 5),
-                            (uLong)(fsize - 5));
-        if (rc != Z_OK || (int)produced != uncompressed) {
-            free(file); free(out); return NULL;
-        }
-    } else {
-        free(file); free(out); return NULL;
+    const char *r = aether_wc_pristine_get(wc_root, sha);
+    if (!r) return NULL;
+    const char *rdata; int rlen;
+    unwrap_bytes(r, &rdata, &rlen);
+    if (rlen == 0) {
+        /* Empty payload is a miss — pristine entries are never empty:
+         * every real blob has at least one byte in it. (Matches C
+         * version's behaviour, whose uncompressed=0 was never emitted
+         * because svnae_rep_write_blob rejects len==0 too.) */
+        return NULL;
     }
-
-    out[uncompressed] = '\0';
-    free(file);
+    char *out = malloc((size_t)rlen + 1);
+    if (!out) return NULL;
+    memcpy(out, rdata, (size_t)rlen);
+    out[rlen] = '\0';
     return out;
+}
+
+int
+svnae_wc_pristine_has(const char *wc_root, const char *sha)
+{
+    return aether_wc_pristine_has(wc_root, sha);
+}
+
+int
+svnae_wc_pristine_size(const char *wc_root, const char *sha)
+{
+    return aether_wc_pristine_size(wc_root, sha);
 }
 
 void svnae_wc_pristine_free(char *p) { free(p); }

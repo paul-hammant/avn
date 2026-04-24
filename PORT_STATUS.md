@@ -44,6 +44,29 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
   `int_to_dec` + `digit_char` in favour of `std.string.from_int` now
   that it's available, and ported the WC pristine-store path builder
   to ae/wc/pristine_path.ae (handles the two-level XX/YY/ fanout).
+- **Round 29** (current): **36.28% C, 63.72% Aether.** Ported
+  the wc pristine store (sha + zlib + binary file I/O) now that
+  std.cryptography (0.88) and std.zlib (0.90+) landed upstream.
+  - ae/wc/pristine.ae owns: wc_hash_bytes (dispatches
+    sha1_hex/sha256_hex by the wc's configured algo),
+    wc_hash_file (fs.read_binary + hash), wc_pristine_put
+    (hash+dedup+zlib.deflate+fs.write_binary), wc_pristine_get
+    (fs.read_binary+zlib.inflate), wc_pristine_has,
+    wc_pristine_size.
+  - C side keeps svnae_wc_hash_algo (sqlite — no binding yet)
+    and three small byte-level helpers (aether_pristine_pack_le32,
+    _concat_binary, _slice_binary) that std.string can't do
+    without a NUL-terminated intermediary.
+  - pristine_shim.c: 306 → 270 LOC. Dropped the direct zlib
+    include, compress2 / uncompress calls, hex encoding, and
+    the fs_try_read_binary TLS dance.
+  - Bug in the first draft: AetherString has size_t length
+    (8 bytes on 64-bit), not int32_t. My mis-sized struct
+    read past length into data, handing concat a garbage
+    byte count (`sdata=0x5`). Fix: match aether_string.h
+    layout verbatim. Captured as a gotcha in
+    migration_method.md.
+
 - **Round 28**: **36.81% C, 63.19% Aether.** Ported
   svnae_repos_blame — the last big knot in repos/shim.c, ~245
   LOC of C doing line-level LCS, paths-changed walk, and

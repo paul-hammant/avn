@@ -246,6 +246,38 @@ decl sweep and notice "this is only called from one place."
   is the cheapest path for encoding a known `\x01`/`\x02`-delimited
   action char back into a string.
 
+- **If you reach into `AetherString` directly from C, match the
+  real layout byte-for-byte.** The struct in `aether_string.h` is:
+
+  ```c
+  typedef struct AetherString {
+      unsigned int magic;     // 4 bytes
+      int          ref_count; // 4 bytes
+      size_t       length;    // 8 bytes on 64-bit
+      size_t       capacity;  // 8 bytes on 64-bit
+      char        *data;
+  } AetherString;
+  ```
+
+  A first draft that used `int32_t length` silently mis-read the
+  length field (really at offset 8, not offset 4), picked up random
+  bytes from inside `capacity`, and fed a bogus byte count into
+  `memcpy` — crash on a plausible-looking (but garbage) pointer
+  like `sdata=0x5`. Symptoms look like memory corruption upstream
+  of where the real bug is. Prefer using `string_length(s)` +
+  `string_char_at(s, i)` when you can; when you genuinely need
+  to reach into the struct, `#include "aether_string.h"` rather
+  than re-declaring the layout.
+
+- **New stdlib capabilities sometimes land after you need them —
+  keep an eye on the Aether `CHANGELOG`.** We held off on porting
+  the WC pristine store until `std.cryptography` (0.88) and
+  `std.zlib` (current) existed upstream; once they did, ~200
+  LOC of C came out in a single round. The lesson the other
+  way: if a target depends on missing stdlib, park it with a
+  note and check back, don't work around — we wasted a day once
+  before realising an upstream feature was a week out.
+
 
 ## Measuring
 
@@ -278,10 +310,15 @@ Not every candidate is worth doing. Some we looked at and shelved:
   at a time via raw `read(2)`. Aether's `std.fs` doesn't expose an
   incremental line reader. The function stays C.
 
-- **Binary content.** Anywhere we hold arbitrary bytes with embedded
-  NULs (file content, zlib-compressed rep blobs, curl response
-  bodies) crosses Aether's string assumptions. Strings in Aether
-  are NUL-terminated. These paths stay C until that changes.
+- **Binary content.** ~~Anywhere we hold arbitrary bytes with
+  embedded NULs...~~ This changed mid-port. `fs.read_binary`
+  (0.82) / `fs.write_binary` (0.86) plus `string_new_with_length`
+  preserve embedded NULs through an AetherString's explicit
+  length field. `std.zlib` (0.90) and `std.cryptography` (0.88)
+  follow the same convention. So a round that looked impossible
+  (pristine store, SHA + zlib + binary files) was clean after
+  the stdlib caught up. Worth re-checking the changelog every
+  few rounds — capabilities arrive faster than you'd expect.
 
 
 ## Round dependencies in practice
