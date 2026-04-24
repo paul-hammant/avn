@@ -48,7 +48,22 @@ extern aether_pristine_slice_binary(s: string, start: int, end: int) -> string
 // Path builder already lives in ae/fs_fs/reppath.ae.
 extern aether_rep_path(repo: string, sha: string) -> string
 extern aether_rep_dir(repo: string, sha: string) -> string
+extern aether_rep_rel_path(sha: string) -> string
 extern aether_io_mkdir_p(path: string) -> int
+
+// sqlite — for rep-cache.db index access. Same bindings as
+// ae/subr/sqlite.ae; re-declared here so rep_store.ae stays a
+// stand-alone lib.
+const SQLITE_OK  = 0
+const SQLITE_ROW = 100
+extern svnae_sqlite_open(path: string) -> ptr
+extern svnae_sqlite_close(db: ptr) -> int
+extern svnae_sqlite_prepare(db: ptr, sql: string) -> ptr
+extern svnae_sqlite_finalize(stmt: ptr) -> int
+extern svnae_sqlite_step(stmt: ptr) -> int
+extern svnae_sqlite_bind_int(stmt: ptr, idx: int, v: int) -> int
+extern svnae_sqlite_bind_text(stmt: ptr, idx: int, text: string) -> int
+extern svnae_sqlite_column_int(stmt: ptr, col: int) -> int
 
 // ---- encode ------------------------------------------------------------
 //
@@ -168,6 +183,68 @@ rep_read_decoded_impl(repo: string, sha: string, uncompressed_size: int) -> stri
         return bytes
     }
     return ""
+}
+
+// ---- rep-cache.db access --------------------------------------------
+//
+// The rep-cache row is keyed by content hash and carries the on-disk
+// rel_path, the uncompressed byte count (needed to inflate 'Z' blobs),
+// and a storage tag. These helpers are used by the C write/read
+// drivers in rep_store_shim.c so all sqlite access sits in Aether.
+//
+// Return conventions:
+//   rep_cache_has(repo, sha): 1 if present, 0 otherwise (incl. DB miss).
+//   rep_cache_lookup_uncompressed(repo, sha): uncompressed_size on hit,
+//     -1 on miss or DB-open failure. Zero is a legitimate value (empty
+//     blob), so we can't use 0 as a sentinel.
+//   rep_cache_insert(repo, sha, rel_path, uncompressed, storage):
+//     0 on success, non-zero on failure (propagates the sqlite rc).
+
+export rep_cache_has(repo: string, sha: string) -> int {
+    db = svnae_sqlite_open("${repo}/rep-cache.db")
+    if db == 0 { return 0 }
+    stmt = svnae_sqlite_prepare(db, "SELECT 1 FROM rep_cache WHERE hash = ?")
+    if stmt == 0 { svnae_sqlite_close(db); return 0 }
+    svnae_sqlite_bind_text(stmt, 1, sha)
+    rc = svnae_sqlite_step(stmt)
+    found = 0
+    if rc == SQLITE_ROW { found = 1 }
+    svnae_sqlite_finalize(stmt)
+    svnae_sqlite_close(db)
+    return found
+}
+
+export rep_cache_lookup_uncompressed(repo: string, sha: string) -> int {
+    db = svnae_sqlite_open("${repo}/rep-cache.db")
+    if db == 0 { return -1 }
+    stmt = svnae_sqlite_prepare(db, "SELECT uncompressed_size FROM rep_cache WHERE hash = ?")
+    if stmt == 0 { svnae_sqlite_close(db); return -1 }
+    svnae_sqlite_bind_text(stmt, 1, sha)
+    rc = svnae_sqlite_step(stmt)
+    out = -1
+    if rc == SQLITE_ROW { out = svnae_sqlite_column_int(stmt, 0) }
+    svnae_sqlite_finalize(stmt)
+    svnae_sqlite_close(db)
+    return out
+}
+
+export rep_cache_insert(repo: string, sha: string, rel_path: string,
+                         uncompressed: int, storage: int) -> int {
+    db = svnae_sqlite_open("${repo}/rep-cache.db")
+    if db == 0 { return 1 }
+    stmt = svnae_sqlite_prepare(db,
+        "INSERT INTO rep_cache (hash, rel_path, uncompressed_size, storage) VALUES (?, ?, ?, ?)")
+    if stmt == 0 { svnae_sqlite_close(db); return 2 }
+    svnae_sqlite_bind_text(stmt, 1, sha)
+    svnae_sqlite_bind_text(stmt, 2, rel_path)
+    svnae_sqlite_bind_int (stmt, 3, uncompressed)
+    svnae_sqlite_bind_int (stmt, 4, storage)
+    rc = svnae_sqlite_step(stmt)
+    svnae_sqlite_finalize(stmt)
+    svnae_sqlite_close(db)
+    // SQLITE_DONE == 101 on success; map to 0.
+    if rc == 101 { return 0 }
+    return rc
 }
 
 main() {

@@ -207,43 +207,20 @@ repo_hash_of(const char *repo, const char *data, int len, char out[65])
     return hex_of_algo(svnae_repo_primary_hash(repo), data, len, out);
 }
 
-/* --- rep-cache access ---------------------------------------------- */
+/* --- rep-cache access ---------------------------------------------- *
+ *
+ * Primary rep_cache lookup/insert moved to ae/fs_fs/rep_store.ae
+ * (rep_cache_has / rep_cache_lookup_uncompressed / rep_cache_insert).
+ * The secondary-hash table remains here for now: svnae_rep_lookup_secondary
+ * has a caller in svnserver/shim.c and the write path is driven from
+ * this file's already-open sqlite handle when secondary hashes are
+ * configured. */
 
-static int
-rep_cache_lookup(sqlite3 *db, const char *sha1_hex, int *storage, int *uncompressed)
-{
-    sqlite3_stmt *st = NULL;
-    if (sqlite3_prepare_v2(db,
-            "SELECT storage, uncompressed_size FROM rep_cache WHERE hash = ?",
-            -1, &st, NULL) != SQLITE_OK) return 0;
-    sqlite3_bind_text(st, 1, sha1_hex, -1, SQLITE_TRANSIENT);
-    int rc = sqlite3_step(st);
-    int found = 0;
-    if (rc == SQLITE_ROW) {
-        *storage = sqlite3_column_int(st, 0);
-        *uncompressed = sqlite3_column_int(st, 1);
-        found = 1;
-    }
-    sqlite3_finalize(st);
-    return found;
-}
-
-static int
-rep_cache_insert(sqlite3 *db, const char *sha1_hex, const char *rel_path,
-                 int uncompressed_size, int storage)
-{
-    sqlite3_stmt *st = NULL;
-    if (sqlite3_prepare_v2(db,
-            "INSERT INTO rep_cache (hash, rel_path, uncompressed_size, storage) VALUES (?, ?, ?, ?)",
-            -1, &st, NULL) != SQLITE_OK) return -1;
-    sqlite3_bind_text(st, 1, sha1_hex,  -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(st, 2, rel_path,  -1, SQLITE_TRANSIENT);
-    sqlite3_bind_int (st, 3, uncompressed_size);
-    sqlite3_bind_int (st, 4, storage);
-    int rc = sqlite3_step(st);
-    sqlite3_finalize(st);
-    return rc == SQLITE_DONE ? 0 : -1;
-}
+extern int aether_rep_cache_has(const char *repo, const char *sha);
+extern int aether_rep_cache_lookup_uncompressed(const char *repo, const char *sha);
+extern int aether_rep_cache_insert(const char *repo, const char *sha,
+                                    const char *rel_path,
+                                    int uncompressed, int storage);
 
 /* Ensure the secondary-hash table exists. Created lazily on the first
  * secondary-hash write so repos that never grew secondaries don't
@@ -318,21 +295,7 @@ svnae_rep_write_blob(const char *repo, const char *data, int len)
     static __thread char sha1_buf[65];   /* sized for sha256 (64 hex chars + NUL) */
     if (repo_hash_of(repo, data, len, sha1_buf) == 0) return NULL;
 
-    char cache_path[PATH_MAX];
-    snprintf(cache_path, sizeof cache_path, "%s/rep-cache.db", repo);
-
-    sqlite3 *db;
-    if (sqlite3_open_v2(cache_path, &db,
-            SQLITE_OPEN_READWRITE, NULL) != SQLITE_OK) {
-        if (db) sqlite3_close(db);
-        return NULL;
-    }
-
-    int storage, uncompressed;
-    if (rep_cache_lookup(db, sha1_buf, &storage, &uncompressed)) {
-        sqlite3_close(db);
-        return sha1_buf;
-    }
+    if (aether_rep_cache_has(repo, sha1_buf)) return sha1_buf;
 
     /* Hand encode + atomic binary write to ae/fs_fs/rep_store.ae.
      * Aether's envelope carries use_zlib back so we update
@@ -340,14 +303,14 @@ svnae_rep_write_blob(const char *repo, const char *data, int len)
      * encoded payload. */
     extern const char *aether_rep_rel_path(const char *sha);
     const char *encoded = aether_rep_encode_blob(data, len);
-    if (!encoded) { sqlite3_close(db); return NULL; }
+    if (!encoded) return NULL;
     int use_zlib = aether_rep_encoded_use_zlib(encoded);
 
     const char *werr = aether_rep_write_encoded(repo, sha1_buf, encoded);
     if (werr) {
         const char *wdata; int wlen;
         unwrap_bytes(werr, &wdata, &wlen);
-        if (wlen > 0) { sqlite3_close(db); return NULL; }
+        if (wlen > 0) return NULL;
     }
 
     /* rel_path for the rep-cache.db row. */
@@ -355,13 +318,12 @@ svnae_rep_write_blob(const char *repo, const char *data, int len)
     {
         const char *rp = aether_rep_rel_path(sha1_buf);
         size_t n = strlen(rp);
-        if (n >= sizeof rel_path) { sqlite3_close(db); return NULL; }
+        if (n >= sizeof rel_path) return NULL;
         memcpy(rel_path, rp, n + 1);
     }
 
-    if (rep_cache_insert(db, sha1_buf, rel_path, len,
-                         use_zlib ? STORAGE_ZLIB : STORAGE_RAW) != 0) {
-        sqlite3_close(db);
+    if (aether_rep_cache_insert(repo, sha1_buf, rel_path, len,
+                                 use_zlib ? STORAGE_ZLIB : STORAGE_RAW) != 0) {
         return NULL;
     }
 
@@ -370,15 +332,20 @@ svnae_rep_write_blob(const char *repo, const char *data, int len)
     char sec[4][32];
     int sec_n = svnae_repo_secondary_hashes(repo, sec);
     if (sec_n > 0) {
-        rep_cache_sec_ensure(db);
-        for (int i = 0; i < sec_n; i++) {
-            char shex[65];
-            if (hex_of_algo(sec[i], data, len, shex)) {
-                rep_cache_sec_insert(db, sha1_buf, sec[i], shex);
+        char cache_path[PATH_MAX];
+        snprintf(cache_path, sizeof cache_path, "%s/rep-cache.db", repo);
+        sqlite3 *db = NULL;
+        if (sqlite3_open_v2(cache_path, &db, SQLITE_OPEN_READWRITE, NULL) == SQLITE_OK) {
+            rep_cache_sec_ensure(db);
+            for (int i = 0; i < sec_n; i++) {
+                char shex[65];
+                if (hex_of_algo(sec[i], data, len, shex)) {
+                    rep_cache_sec_insert(db, sha1_buf, sec[i], shex);
+                }
             }
+            sqlite3_close(db);
         }
     }
-    sqlite3_close(db);
     return sha1_buf;
 }
 
@@ -388,31 +355,17 @@ svnae_rep_write_blob(const char *repo, const char *data, int len)
 char *
 svnae_rep_read_blob(const char *repo, const char *sha1_hex)
 {
-    char cache_path[PATH_MAX];
-    snprintf(cache_path, sizeof cache_path, "%s/rep-cache.db", repo);
-
-    sqlite3 *db;
-    if (sqlite3_open_v2(cache_path, &db,
-            SQLITE_OPEN_READONLY, NULL) != SQLITE_OK) {
-        if (db) sqlite3_close(db);
-        return NULL;
-    }
-    int storage = 0, uncompressed = 0;
-    if (!rep_cache_lookup(db, sha1_hex, &storage, &uncompressed)) {
-        sqlite3_close(db);
-        return NULL;
-    }
-    sqlite3_close(db);
+    int uncompressed = aether_rep_cache_lookup_uncompressed(repo, sha1_hex);
+    if (uncompressed < 0) return NULL;
 
     /* Hand the file read + header dispatch + zlib inflate to Aether.
-     * uncompressed_size comes from rep-cache.db (Aether has no sqlite
-     * binding). "" on miss / corruption; length may contain embedded
-     * NULs otherwise. */
+     * uncompressed_size comes from rep-cache.db. "" on miss /
+     * corruption; length may contain embedded NULs otherwise. */
     const char *decoded = aether_rep_read_decoded(repo, sha1_hex, uncompressed);
     const char *ddata; int dlen;
     unwrap_bytes(decoded, &ddata, &dlen);
-    if (dlen == 0 && storage == STORAGE_RAW && uncompressed == 0) {
-        /* Empty RAW blob is legitimate (empty string blob). */
+    if (dlen == 0 && uncompressed == 0) {
+        /* Empty blob is legitimate. */
         char *out = malloc(1);
         if (out) out[0] = '\0';
         return out;
