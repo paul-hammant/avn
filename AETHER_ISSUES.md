@@ -167,7 +167,18 @@ behaviour is silent data loss.
 
 ---
 
-## #17 — `extra_sources` silently truncated at 2 KiB (ae 0.89.0)
+## #17 — `extra_sources` silently truncated at 2 KiB (ae 0.89.0) — FIXED upstream
+
+**Status:** fixed in a local branch of ae/ (not yet upstream on
+main). Patch bumps the two `char toml_extra[2048]` buffers and the
+two `char extra_files[2048]` buffers to 8 KiB to match the
+already-bumped parse-side line buffer, adds a truncation-return to
+`get_extra_sources_for_bin`, and emits a clear warning at both
+call sites so future overflows are loud. Regression test added at
+`tests/integration/toml_extra_sources_assembly_buf/` (60 shims /
+~2.7 KiB line). Leaving this entry in the doc because the fix
+lives in `~/scm/aether/` — a fresh clone of aether main still has
+the bug until the patch lands upstream.
 
 Hit during round 30 (fs_fs rep-store port attempt). Adding one more
 `_generated.c` to the `[[bin]] extra_sources` line for the

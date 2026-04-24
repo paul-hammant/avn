@@ -44,8 +44,38 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
   `int_to_dec` + `digit_char` in favour of `std.string.from_int` now
   that it's available, and ported the WC pristine-store path builder
   to ae/wc/pristine_path.ae (handles the two-level XX/YY/ fanout).
-- **Round 30** (current — no-LOC round): **36.28% C,
-  63.72% Aether** (unchanged).
+- **Round 31** (current): **36.00% C, 64.00% Aether.**
+  Round-30's rep-store port landed — the upstream Aether
+  toolchain's `extra_sources` assembly buffer was bumped
+  2 KiB → 8 KiB in a local patch (see AETHER_ISSUES.md #17,
+  rebuilt at `~/scm/aether/build/ae`), which unblocks adding
+  new `_generated.c` paths to svnserver's link line without
+  triggering the silent truncation that sunk round 30.
+  - New `ae/fs_fs/rep_store.ae` (175 LOC) owns the blob
+    encode/decode half of the rep store: use_zlib decision
+    with the 16-byte threshold, RAW/ZLIB-tagged envelope,
+    binary-safe file write via fs.write_binary, inflate via
+    zlib.inflate on read.
+  - `aether_pristine_concat_binary` / `_slice_binary` moved
+    from pristine_shim.c to rep_store_shim.c so both
+    pristine_generated.c and rep_store_generated.c link one
+    copy. The `aether_pristine_*` names kept for stability
+    (now semi-misleading — worth a rename next time we touch
+    every call site).
+  - C side of rep_store_shim.c drops the direct `#include
+    <zlib.h>` and the inline `compress2`/`uncompress` calls;
+    the sqlite rep-cache + hash dispatch stay.
+  - Binaries linking pristine-but-not-rep_store (svn,
+    test_wc_pristine) also link rep_store_shim.c now so the
+    hoisted concat/slice symbols resolve.
+  - net: -17 LOC C, +175 LOC Aether. rep_store_shim.c
+    stayed roughly the same size because the C drops were
+    balanced by the two binary-safe helpers that had to move
+    here. The structural win is format encapsulation —
+    future rep-store format changes touch one Aether file.
+
+- **Round 30**: no-LOC round. **36.28% C, 63.72% Aether**
+  (unchanged).
 
   Attempted port of the fs_fs rep-store (sibling shape to round
   29's wc pristine port — same hash + zlib + binary-file-write

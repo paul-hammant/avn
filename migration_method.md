@@ -287,6 +287,22 @@ decl sweep and notice "this is only called from one place."
   note and check back, don't work around — we wasted a day once
   before realising an upstream feature was a week out.
 
+- **When upstream tooling is the blocker, fix upstream.** Round 30
+  spent half a day on the fs_fs rep-store port only to hit a 2 KiB
+  buffer in the aether build tool that silently truncated the gcc
+  link command mid-filename. The downstream workaround (inline
+  every new module into an existing `_generated.c` path) was
+  possible, but each time it made the per-concern module structure
+  more tangled. Round 31 instead patched `~/scm/aether/tools/ae.c`
+  directly — 20 lines of diff — and the rep-store port dropped in
+  cleanly. Trade-off: you now have an unpushed patch in the
+  upstream repo that any `git pull` on `main` will need to
+  rebase. Keep a record in AETHER_ISSUES.md of what the fix was
+  (and the regression test that proves it works) so it's
+  reproducible. "Fix upstream" isn't free — but for buffer-limit
+  bugs, format-encapsulation blockers, or missing API surfaces
+  that affect multiple rounds, it's the right call.
+
 
 ## Measuring
 

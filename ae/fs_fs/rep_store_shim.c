@@ -36,6 +36,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <sqlite3.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -43,31 +44,97 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
-#include <zlib.h>
+
+#ifndef PATH_MAX
+#define PATH_MAX 4096
+#endif
 
 #define STORAGE_RAW  1
 #define STORAGE_ZLIB 2
 
-/* --- utility -------------------------------------------------------- */
+/* --- Aether bridge ---------------------------------------------------- */
 
-/* Atomic write + mkdir-p ported to Aether (ae/subr/io.ae). */
-extern int aether_io_write_atomic(const char *path, const char *data, int length);
-extern int aether_io_mkdir_p(const char *path);
+/* Blob encode/write/read ported to ae/fs_fs/rep_store.ae using
+ * std.zlib + std.fs. Encoded envelope from rep_encode_blob is
+ * "<use_zlib>\x01<bytes>" where use_zlib is '0' or '1' — the
+ * helpers below read the flag + slice the body, then we pass the
+ * body to rep_write_encoded (which atomically writes via
+ * fs.write_binary). */
+extern const char *aether_rep_encode_blob(const char *data, int length);
+extern int         aether_rep_encoded_use_zlib(const char *encoded);
+extern const char *aether_rep_write_encoded(const char *repo, const char *sha,
+                                             const char *encoded);
+extern const char *aether_rep_read_decoded(const char *repo, const char *sha,
+                                            int uncompressed_size);
 
-/* rep blob layout: 1 header byte + payload. The Aether atomic-write
- * is binary-safe, so we just prepend the header to a single buffer
- * and write it in one go. Cleaner than the original two-syscall
- * version (header write then payload loop). */
-static int
-write_file_with_header_atomic(const char *path, char header, const char *data, int len)
+/* AetherString layout (same as aether_string.h). Kept byte-for-byte
+ * because round 29's first draft mis-sized length as int32_t and
+ * spent an hour chasing a mis-read struct — size_t on 64-bit. */
+#define AETHER_STRING_MAGIC 0xAE57C0DE
+struct AetherString {
+    unsigned int magic;
+    int          ref_count;
+    size_t       length;
+    size_t       capacity;
+    char        *data;
+};
+static void
+unwrap_bytes(const void *s, const char **out_data, int *out_len)
 {
-    char *buf = malloc((size_t)len + 1);
-    if (!buf) return -1;
-    buf[0] = header;
-    if (len > 0) memcpy(buf + 1, data, (size_t)len);
-    int rc = aether_io_write_atomic(path, buf, len + 1);
+    if (!s) { *out_data = ""; *out_len = 0; return; }
+    const struct AetherString *as = (const struct AetherString *)s;
+    if (as->magic == AETHER_STRING_MAGIC) {
+        *out_data = as->data;
+        *out_len = (int)as->length;
+        return;
+    }
+    *out_data = (const char *)s;
+    *out_len = (int)strlen((const char *)s);
+}
+
+/* Binary-safe concat / slice helpers — called from the Aether-
+ * generated pristine_generated.c and rep_store_generated.c. Both
+ * shim files are linked into every binary that uses either
+ * generated.c, so the `aether_pristine_*` names resolve uniquely
+ * from rep_store_shim.c. std.string has no byte-construction
+ * primitive that doesn't route through a NUL-terminated C-style
+ * string; these do.
+ *
+ * Named aether_pristine_* for historical reasons (originated in
+ * pristine_shim.c during round 29); worth a rename to
+ * aether_bin_* if we ever touch every call site. */
+extern void *string_new_with_length(const char *data, int length);
+
+const char *
+aether_pristine_concat_binary(const char *prefix, const char *suf, int suf_len)
+{
+    const char *pdata; int plen;
+    unwrap_bytes(prefix, &pdata, &plen);
+
+    const char *sdata; int slen;
+    unwrap_bytes(suf, &sdata, &slen);
+    if (slen < suf_len) suf_len = slen;
+
+    int total = plen + suf_len;
+    char *buf = malloc((size_t)total + 1);
+    if (!buf) return (const char *)string_new_with_length("", 0);
+    if (plen) memcpy(buf,        pdata, (size_t)plen);
+    if (suf_len) memcpy(buf + plen, sdata, (size_t)suf_len);
+    buf[total] = '\0';
+    const char *out = (const char *)string_new_with_length(buf, total);
     free(buf);
-    return rc == 0 ? 0 : -1;
+    return out;
+}
+
+const char *
+aether_pristine_slice_binary(const char *s, int start, int end)
+{
+    const char *data; int len;
+    unwrap_bytes(s, &data, &len);
+    if (start < 0) start = 0;
+    if (end > len) end = len;
+    if (end < start) end = start;
+    return (const char *)string_new_with_length(data + start, end - start);
 }
 
 
@@ -267,53 +334,30 @@ svnae_rep_write_blob(const char *repo, const char *data, int len)
         return sha1_buf;
     }
 
-    /* Decide RAW vs ZLIB. */
-    int use_zlib = 0;
-    unsigned char *zbuf = NULL;
-    uLongf zlen = 0;
-    if (len > 0) {
-        uLongf bound = compressBound((uLong)len);
-        zbuf = malloc(bound);
-        if (zbuf) {
-            zlen = bound;
-            if (compress2(zbuf, &zlen, (const Bytef *)data, (uLong)len, 6) == Z_OK) {
-                if ((int)zlen + 16 < len) use_zlib = 1;
-            }
-        }
+    /* Hand encode + atomic binary write to ae/fs_fs/rep_store.ae.
+     * Aether's envelope carries use_zlib back so we update
+     * rep-cache.db's `storage` column without re-inspecting the
+     * encoded payload. */
+    extern const char *aether_rep_rel_path(const char *sha);
+    const char *encoded = aether_rep_encode_blob(data, len);
+    if (!encoded) { sqlite3_close(db); return NULL; }
+    int use_zlib = aether_rep_encoded_use_zlib(encoded);
+
+    const char *werr = aether_rep_write_encoded(repo, sha1_buf, encoded);
+    if (werr) {
+        const char *wdata; int wlen;
+        unwrap_bytes(werr, &wdata, &wlen);
+        if (wlen > 0) { sqlite3_close(db); return NULL; }
     }
 
-    /* Path assembly ported to Aether (ae/fs_fs/reppath.ae). */
-    extern const char *aether_rep_rel_path(const char *sha);
-    extern const char *aether_rep_path(const char *repo, const char *sha);
-    extern const char *aether_rep_dir(const char *repo, const char *sha);
+    /* rel_path for the rep-cache.db row. */
     char rel_path[80];
     {
         const char *rp = aether_rep_rel_path(sha1_buf);
         size_t n = strlen(rp);
-        if (n >= sizeof rel_path) { free(zbuf); sqlite3_close(db); return NULL; }
+        if (n >= sizeof rel_path) { sqlite3_close(db); return NULL; }
         memcpy(rel_path, rp, n + 1);
     }
-    char full_path[PATH_MAX];
-    {
-        const char *fp = aether_rep_path(repo, sha1_buf);
-        size_t n = strlen(fp);
-        if (n >= sizeof full_path) { free(zbuf); sqlite3_close(db); return NULL; }
-        memcpy(full_path, fp, n + 1);
-    }
-
-    /* mkdir -p the parent dirs. */
-    if (aether_io_mkdir_p(aether_rep_dir(repo, sha1_buf)) != 0) {
-        free(zbuf); sqlite3_close(db); return NULL;
-    }
-
-    int wrc;
-    if (use_zlib) {
-        wrc = write_file_with_header_atomic(full_path, 'Z', (const char *)zbuf, (int)zlen);
-    } else {
-        wrc = write_file_with_header_atomic(full_path, 'R', data, len);
-    }
-    free(zbuf);
-    if (wrc != 0) { sqlite3_close(db); return NULL; }
 
     if (rep_cache_insert(db, sha1_buf, rel_path, len,
                          use_zlib ? STORAGE_ZLIB : STORAGE_RAW) != 0) {
@@ -360,58 +404,25 @@ svnae_rep_read_blob(const char *repo, const char *sha1_hex)
     }
     sqlite3_close(db);
 
-    extern const char *aether_rep_path(const char *repo, const char *sha);
-    char path[PATH_MAX];
-    {
-        const char *rp = aether_rep_path(repo, sha1_hex);
-        size_t n = strlen(rp);
-        if (n >= sizeof path) return NULL;
-        memcpy(path, rp, n + 1);
-    }
-
-    /* Binary-safe read through std.fs's TLS buffer. fs_try_read_binary
-     * loads the whole file, fs_get_read_binary + _length let us copy
-     * it out, and fs_release_read_binary drops the TLS copy. */
-    extern int fs_try_read_binary(const char *path);
-    extern const char *fs_get_read_binary(void);
-    extern int fs_get_read_binary_length(void);
-    extern void fs_release_read_binary(void);
-    if (!fs_try_read_binary(path)) return NULL;
-    int fsize_i = fs_get_read_binary_length();
-    if (fsize_i < 1) { fs_release_read_binary(); return NULL; }
-    size_t fsize = (size_t)fsize_i;
-    char *file_buf = malloc(fsize);
-    if (!file_buf) { fs_release_read_binary(); return NULL; }
-    memcpy(file_buf, fs_get_read_binary(), fsize);
-    fs_release_read_binary();
-
-    char header = file_buf[0];
-    const char *payload = file_buf + 1;
-    int payload_len = (int)fsize - 1;
-
-    if (header == 'R') {
-        char *out = malloc((size_t)payload_len + 1);
-        if (!out) { free(file_buf); return NULL; }
-        memcpy(out, payload, (size_t)payload_len);
-        out[payload_len] = '\0';
-        free(file_buf);
+    /* Hand the file read + header dispatch + zlib inflate to Aether.
+     * uncompressed_size comes from rep-cache.db (Aether has no sqlite
+     * binding). "" on miss / corruption; length may contain embedded
+     * NULs otherwise. */
+    const char *decoded = aether_rep_read_decoded(repo, sha1_hex, uncompressed);
+    const char *ddata; int dlen;
+    unwrap_bytes(decoded, &ddata, &dlen);
+    if (dlen == 0 && storage == STORAGE_RAW && uncompressed == 0) {
+        /* Empty RAW blob is legitimate (empty string blob). */
+        char *out = malloc(1);
+        if (out) out[0] = '\0';
         return out;
     }
-    if (header == 'Z') {
-        char *out = malloc((size_t)uncompressed + 1);
-        if (!out) { free(file_buf); return NULL; }
-        uLongf produced = (uLongf)uncompressed;
-        if (uncompress((Bytef *)out, &produced,
-                       (const Bytef *)payload, (uLong)payload_len) != Z_OK
-            || (int)produced != uncompressed) {
-            free(out); free(file_buf); return NULL;
-        }
-        out[uncompressed] = '\0';
-        free(file_buf);
-        return out;
-    }
-    free(file_buf);
-    return NULL;
+    if (dlen == 0) return NULL;
+    char *out = malloc((size_t)dlen + 1);
+    if (!out) return NULL;
+    memcpy(out, ddata, (size_t)dlen);
+    out[dlen] = '\0';
+    return out;
 }
 
 /* A small helper the test uses to free the malloc'd output of

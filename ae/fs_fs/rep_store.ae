@@ -1,0 +1,175 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// permissions and limitations under the License.
+
+// fs_fs rep-store — the blob-I/O half of the rep-store machinery.
+//
+// The full rep-store has two parts: rep-cache.db (sqlite-indexed
+// {hash, rel_path, uncompressed_size, storage}), and the on-disk
+// content-addressed blob files themselves. sqlite stays on the C
+// side (no std binding yet), so the blob-I/O moves here.
+//
+// On-disk blob format (unchanged from the C implementation and
+// shared with the fs_fs readers):
+//
+//   $repo/reps/aa/bb/<sha>.rep
+//   byte 0   : 'R' (raw) or 'Z' (zlib)
+//   bytes 1..: payload (compressed if 'Z')
+//
+// Uncompressed length isn't in the blob header — rep-cache.db's
+// `uncompressed_size` column carries it. The pristine store uses
+// a slightly different layout ('R'/'Z' + 4 LE bytes + payload)
+// because the WC has no rep-cache sidecar. Both formats coexist
+// by design.
+
+import std.string
+import std.fs
+import std.zlib
+
+// C-side byte helpers, shared with ae/wc/pristine.ae — same binary-
+// safe concat / slice over AetherString buffers. Defined once in
+// pristine_shim.c and reached from here via rep_store_shim.c's
+// linked copy (they're both pulled into every binary that uses
+// either pristine_generated.c or rep_store_generated.c).
+extern aether_pristine_concat_binary(prefix: string, suf: string, suf_len: int) -> string
+extern aether_pristine_slice_binary(s: string, start: int, end: int) -> string
+
+// Path builder already lives in ae/fs_fs/reppath.ae.
+extern aether_rep_path(repo: string, sha: string) -> string
+extern aether_rep_dir(repo: string, sha: string) -> string
+extern aether_io_mkdir_p(path: string) -> int
+
+// ---- encode ------------------------------------------------------------
+//
+// Produce a packed "<use_zlib>\x01<encoded_body>" string where
+// <use_zlib> is "0" or "1" and <encoded_body> is the bytes to write
+// to disk (including the 'R'/'Z' header byte). The C caller needs
+// the use_zlib flag separately to update rep-cache.db's `storage`
+// column without re-sniffing.
+//
+// Zlib is only kept when it saves at least 16 bytes — same rule
+// the C version used and the wc pristine store reuses.
+
+export rep_encode_blob(data: string, length: int) -> string {
+    return rep_encode_blob_impl(data, length)
+}
+
+rep_encode_blob_impl(data: string, length: int) -> string {
+    use_zlib = 0
+    body = data
+    body_len = length
+
+    if length > 0 {
+        zb, zl, zerr = zlib.deflate(data, length, 6)
+        if string.length(zerr) == 0 {
+            if zl + 16 < length {
+                use_zlib = 1
+                body = zb
+                body_len = zl
+            }
+        }
+    }
+
+    tag = "R"
+    if use_zlib == 1 { tag = "Z" }
+    payload = aether_pristine_concat_binary(tag, body, body_len)
+
+    header = string.concat(string.from_int(use_zlib), "\x01")
+    return aether_pristine_concat_binary(header, payload, 1 + body_len)
+}
+
+// Accessors the C caller uses on the encoded envelope.
+
+export rep_encoded_use_zlib(encoded: string) -> int {
+    if string.length(encoded) == 0 { return 0 }
+    ch = string.char_at(encoded, 0)
+    if ch == 49 { return 1 }   // '1'
+    return 0
+}
+
+export rep_encoded_bytes(encoded: string) -> string {
+    return rep_encoded_bytes_impl(encoded)
+}
+
+rep_encoded_bytes_impl(encoded: string) -> string {
+    n = string.length(encoded)
+    if n < 2 { return "" }
+    return aether_pristine_slice_binary(encoded, 2, n)
+}
+
+export rep_encoded_length(encoded: string) -> int {
+    return rep_encoded_length_impl(encoded)
+}
+
+rep_encoded_length_impl(encoded: string) -> int {
+    n = string.length(encoded)
+    if n < 2 { return 0 }
+    return n - 2
+}
+
+// ---- write -----------------------------------------------------------
+//
+// Given an already-encoded body (from rep_encode_blob), ensure the
+// parent dir exists and write the file binary-safe. Returns "" on
+// success, error message otherwise.
+
+export rep_write_encoded(repo: string, sha: string, encoded: string) -> string {
+    return rep_write_encoded_impl(repo, sha, encoded)
+}
+
+rep_write_encoded_impl(repo: string, sha: string, encoded: string) -> string {
+    dir = string.copy(aether_rep_dir(repo, sha))
+    if aether_io_mkdir_p(dir) != 0 { return "mkdir_p failed" }
+
+    path = string.copy(aether_rep_path(repo, sha))
+    body = rep_encoded_bytes_impl(encoded)
+    body_len = rep_encoded_length_impl(encoded)
+    return fs.write_binary(path, body, body_len)
+}
+
+// ---- read ------------------------------------------------------------
+//
+// Read the .rep file at the given sha, strip the 'R'/'Z' header,
+// and (if 'Z') inflate to `uncompressed_size` bytes. Returns the
+// decoded payload, or "" on miss / decompression failure.
+
+export rep_read_decoded(repo: string, sha: string, uncompressed_size: int) -> string {
+    return rep_read_decoded_impl(repo, sha, uncompressed_size)
+}
+
+rep_read_decoded_impl(repo: string, sha: string, uncompressed_size: int) -> string {
+    path = string.copy(aether_rep_path(repo, sha))
+    file, fsize, err = fs.read_binary(path)
+    if string.length(err) > 0 { return "" }
+    if fsize < 1 { return "" }
+
+    header = string.char_at(file, 0)
+    payload_len = fsize - 1
+    payload = aether_pristine_slice_binary(file, 1, fsize)
+
+    if header == 82 {          // 'R'
+        return payload
+    }
+    if header == 90 {          // 'Z'
+        bytes, outlen, ierr = zlib.inflate(payload, payload_len)
+        if string.length(ierr) > 0 { return "" }
+        if outlen != uncompressed_size { return "" }
+        return bytes
+    }
+    return ""
+}
+
+main() {
+    println("ae/fs_fs/rep_store.ae is a library; not meant to run standalone")
+}

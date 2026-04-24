@@ -125,43 +125,12 @@ aether_pristine_pack_le32(int v)
     return (const char *)string_new_with_length(buf, 4);
 }
 
-/* Binary-safe concat: result = prefix + (suf[0..suf_len]). Both
- * inputs may be AetherString*-wrapped or plain char*. */
-const char *
-aether_pristine_concat_binary(const char *prefix, const char *suf, int suf_len)
-{
-    const char *pdata; int plen;
-    unwrap_bytes(prefix, &pdata, &plen);
-
-    const char *sdata; int slen;
-    unwrap_bytes(suf, &sdata, &slen);
-    /* Caller's suf_len is authoritative — they may have a length-
-     * aware buffer where suf itself isn't NUL-terminated. Clamp to
-     * the length-aware slen only if it's smaller. */
-    if (slen < suf_len) suf_len = slen;
-
-    int total = plen + suf_len;
-    char *buf = malloc((size_t)total + 1);
-    if (!buf) return (const char *)string_new_with_length("", 0);
-    if (plen) memcpy(buf,        pdata, (size_t)plen);
-    if (suf_len) memcpy(buf + plen, sdata, (size_t)suf_len);
-    buf[total] = '\0';
-    const char *out = (const char *)string_new_with_length(buf, total);
-    free(buf);
-    return out;
-}
-
-/* Binary-safe slice: s[start..end]. */
-const char *
-aether_pristine_slice_binary(const char *s, int start, int end)
-{
-    const char *data; int len;
-    unwrap_bytes(s, &data, &len);
-    if (start < 0) start = 0;
-    if (end > len) end = len;
-    if (end < start) end = start;
-    return (const char *)string_new_with_length(data + start, end - start);
-}
+/* aether_pristine_concat_binary / aether_pristine_slice_binary live
+ * in ae/fs_fs/rep_store_shim.c now — the fs_fs rep-store port
+ * (round 31) needed them too, and both shims are linked into every
+ * binary that uses either pristine_generated.c or
+ * rep_store_generated.c. Exporting once from rep_store_shim.c
+ * avoids duplicate-symbol link errors. */
 
 /* --- public API — thin C adapters over the Aether wrappers --------- *
  *
