@@ -211,41 +211,14 @@ svnae_commit_finalise_on_branch(const char *repo, struct svnae_txn *txn,
         memcpy(rev_sha_copy, rev_sha, rl + 1);
     }
 
-    /* Legacy pointer. */
-    char ptr_path[PATH_MAX];
-    snprintf(ptr_path, sizeof ptr_path, "%s/revs/%06d", repo, next);
-    char ptr_body[128];
-    int plen = snprintf(ptr_body, sizeof ptr_body, "%s\n", rev_sha_copy);
-    if (write_atomic(ptr_path, ptr_body, plen) != 0) { free(new_root); return -1; }
-
-    /* Per-branch pointer with two-level fanout: aa/bb/NNNNNN where
-     * aa = hex(rev >> 16), bb = hex((rev >> 8) & 0xff). At rev 10M
-     * this gives ~150 files per leaf dir. */
-    int aa = (next >> 16) & 0xff;
-    int bb = (next >> 8) & 0xff;
-    char branch_dir[PATH_MAX];
-    snprintf(branch_dir, sizeof branch_dir, "%s/branches/%s/revs/%02x/%02x",
-             repo, branch, aa, bb);
-    /* mkdir -p. write_atomic writes to a tempfile + rename, so the
-     * parent dir must exist first. */
-    if (aether_io_mkdir_p(branch_dir) != 0) { free(new_root); return -1; }
-    char branch_ptr[PATH_MAX];
-    snprintf(branch_ptr, sizeof branch_ptr, "%s/%06d", branch_dir, next);
-    if (write_atomic(branch_ptr, ptr_body, plen) != 0) { free(new_root); return -1; }
-
-    /* Legacy head. */
-    char head_path[PATH_MAX];
-    snprintf(head_path, sizeof head_path, "%s/head", repo);
-    char head_body[32];
-    int hlen = snprintf(head_body, sizeof head_body, "%d\n", next);
-    if (write_atomic(head_path, head_body, hlen) != 0) { free(new_root); return -1; }
-
-    /* Per-branch head. */
-    char br_head_path[PATH_MAX];
-    snprintf(br_head_path, sizeof br_head_path, "%s/branches/%s/head", repo, branch);
-    char br_head_body[64];
-    int bhl = snprintf(br_head_body, sizeof br_head_body, "rev=%d\n", next);
-    if (write_atomic(br_head_path, br_head_body, bhl) != 0) { free(new_root); return -1; }
+    /* Write the 4-file pointer set (legacy rev pointer, per-branch
+     * rev pointer with aa/bb fanout, legacy head, per-branch head).
+     * Ported to ae/fs_fs/branch_spec.ae::write_rev_pointer_set. */
+    extern int aether_write_rev_pointer_set(const char *repo, const char *branch,
+                                             int next_rev, const char *rev_sha);
+    if (aether_write_rev_pointer_set(repo, branch, next, rev_sha_copy) != 0) {
+        free(new_root); return -1;
+    }
 
     /* Populate path_rev index: one row per path this rev touched.
      * We derive the set from a tree-diff against base_rev's root,
@@ -413,10 +386,10 @@ svnae_branch_create(const char *repo, const char *name, const char *base,
         }
     }
 
-    /* Create the revs directory structure. */
-    char revs_dir[PATH_MAX];
-    snprintf(revs_dir, sizeof revs_dir, "%s/revs/00/00", br_dir);
-    if (aether_io_mkdir_p(revs_dir) != 0) { free(new_root); return -1; }
+    /* The per-branch revs/aa/bb directory is created by
+     * aether_write_rev_pointer_set below (it knows the fanout math).
+     * The old inline "mkdir -p $br_dir/revs/00/00" was a latent bug:
+     * fine for rev < 256 but wrong dir for rev >= 256. */
 
     /* New rev number: one past the repo's current max.
      *
@@ -462,33 +435,11 @@ svnae_branch_create(const char *repo, const char *name, const char *base,
         memcpy(rev_sha_copy, rev_sha, rl + 1);
     }
 
-    /* Rev pointer. */
-    char ptr_body[128];
-    int plen = snprintf(ptr_body, sizeof ptr_body, "%s\n", rev_sha_copy);
-    char ptr_path[PATH_MAX];
-    snprintf(ptr_path, sizeof ptr_path, "%s/%06d", revs_dir, new_rev);
-    if (write_atomic(ptr_path, ptr_body, plen) != 0) { free(new_root); return -1; }
-
-    /* Also write the legacy $repo/revs/NNNNNN pointer so the single-
-     * branch readers (e.g. the current /info and /log endpoints) can
-     * still traverse the rev space. */
-    char legacy_ptr[PATH_MAX];
-    snprintf(legacy_ptr, sizeof legacy_ptr, "%s/revs/%06d", repo, new_rev);
-    if (write_atomic(legacy_ptr, ptr_body, plen) != 0) { free(new_root); return -1; }
-
-    /* Branch head. */
-    char head_path[PATH_MAX];
-    snprintf(head_path, sizeof head_path, "%s/head", br_dir);
-    char head_body[64];
-    int hlen = snprintf(head_body, sizeof head_body, "rev=%d\n", new_rev);
-    if (write_atomic(head_path, head_body, hlen) != 0) { free(new_root); return -1; }
-
-    /* Legacy head file moves to max rev of any branch. */
-    char legacy_head[PATH_MAX];
-    snprintf(legacy_head, sizeof legacy_head, "%s/head", repo);
-    char lh[32];
-    int lhlen = snprintf(lh, sizeof lh, "%d\n", new_rev);
-    write_atomic(legacy_head, lh, lhlen);
+    /* Write the 4-file pointer set. Shared with commit_finalise_on_branch
+     * via ae/fs_fs/branch_spec.ae::write_rev_pointer_set. */
+    if (aether_write_rev_pointer_set(repo, name, new_rev, rev_sha_copy) != 0) {
+        free(new_root); return -1;
+    }
 
     free(new_root);
     return new_rev;

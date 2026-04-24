@@ -158,6 +158,110 @@ branch_head_rev_impl(repo: string, base: string) -> int {
     return base_rev
 }
 
+// ---- rev pointer + head file set --------------------------------------
+//
+// Every commit or branch-create writes four small files:
+//
+//   $repo/revs/NNNNNN                               (legacy rev pointer)
+//   $repo/branches/<branch>/revs/aa/bb/NNNNNN       (per-branch pointer
+//                                                    with two-level fanout)
+//   $repo/head                                      (legacy: "<N>\n")
+//   $repo/branches/<branch>/head                    (per-branch: "rev=<N>\n")
+//
+// Both svnae_commit_finalise_on_branch and svnae_branch_create in
+// fs_fs/commit_shim.c had essentially the same block inlined — with a
+// real latent bug in branch_create's copy: it hard-coded the
+// per-branch pointer's aa/bb directory to "00/00" instead of deriving
+// from `next_rev`, so a branch-create at rev >= 256 would write to the
+// wrong fanout directory. Porting the file-writing here fixes the bug
+// and collapses both call sites to one extern.
+//
+// `rev_sha` is the content-addressed sha of the rev blob (what
+// svnae_rep_write_blob returned). Returns "" on success, a short
+// error string on failure.
+
+// Format: always emit 6-digit, zero-padded.
+branch_pad6(n: int) -> string {
+    s = string.from_int(n)
+    pad = ""
+    need = 6 - string.length(s)
+    i = 0
+    while i < need {
+        pad = string.concat(pad, "0")
+        i = i + 1
+    }
+    return string.concat(pad, s)
+}
+
+// Format: 2-digit, zero-padded, lowercase hex.
+branch_pad2hex(n: int) -> string {
+    digits = "0123456789abcdef"
+    high = (n >> 4) & 15
+    low  = n & 15
+    h = string.substring(digits, high, high + 1)
+    l = string.substring(digits, low,  low + 1)
+    return string.concat(h, l)
+}
+
+// Returns 0 on success, -1 on any write/mkdir failure. The err-message
+// shape would be nicer but crossing the FFI with an empty AetherString
+// from C requires an unwrap helper we can't rely on in every caller;
+// -1 on failure is enough — the caller aborts the commit anyway.
+export write_rev_pointer_set(repo: string, branch: string, next_rev: int,
+                              rev_sha: string) -> int {
+    return write_rev_pointer_set_impl(repo, branch, next_rev, rev_sha)
+}
+
+write_rev_pointer_set_impl(repo: string, branch: string, next_rev: int,
+                            rev_sha: string) -> int {
+    if string.length(repo) == 0 { return -1 }
+    if string.length(branch) == 0 { return -1 }
+    if string.length(rev_sha) == 0 { return -1 }
+
+    // Pointer body: "<sha>\n". Written to both the per-branch and the
+    // legacy rev-pointer files.
+    ptr_body = string.concat(rev_sha, "\n")
+    ptr_len = string.length(ptr_body)
+
+    nn = branch_pad6(next_rev)
+
+    // Legacy $repo/revs/NNNNNN. Parent dir already exists — svnadmin
+    // create / seed ensure $repo/revs/ is present before the first
+    // commit writes into it.
+    legacy_ptr = string.concat(string.concat(repo, "/revs/"), nn)
+    if aether_io_write_atomic(legacy_ptr, ptr_body, ptr_len) != 0 { return -1 }
+
+    // Per-branch $repo/branches/<branch>/revs/aa/bb/NNNNNN with
+    // two-level fanout. aa = (rev >> 16) & 0xff, bb = (rev >> 8) & 0xff.
+    aa = (next_rev >> 16) & 255
+    bb = (next_rev >> 8) & 255
+    branch_revs_dir = string.concat(string.concat(string.concat(string.concat(
+        repo, "/branches/"), branch), "/revs/"),
+        string.concat(string.concat(branch_pad2hex(aa), "/"), branch_pad2hex(bb)))
+    if aether_io_mkdir_p(branch_revs_dir) != 0 { return -1 }
+    branch_ptr = string.concat(string.concat(branch_revs_dir, "/"), nn)
+    if aether_io_write_atomic(branch_ptr, ptr_body, ptr_len) != 0 { return -1 }
+
+    // Legacy $repo/head: "<N>\n". Moves to the cross-branch max, which
+    // is always `next_rev` since rev numbers are monotonic repo-wide.
+    legacy_head_path = string.concat(repo, "/head")
+    legacy_head_body = string.concat(string.from_int(next_rev), "\n")
+    if aether_io_write_atomic(legacy_head_path, legacy_head_body,
+                               string.length(legacy_head_body)) != 0 { return -1 }
+
+    // Per-branch $repo/branches/<branch>/head: "rev=<N>\n". Room for
+    // additional fields (tree-sha / spec-sha caching) in 8.2 without
+    // another format change.
+    br_head_path = string.concat(string.concat(string.concat(
+        repo, "/branches/"), branch), "/head")
+    br_head_body = string.concat(string.concat(
+        "rev=", string.from_int(next_rev)), "\n")
+    if aether_io_write_atomic(br_head_path, br_head_body,
+                               string.length(br_head_body)) != 0 { return -1 }
+
+    return 0
+}
+
 main() {
     println("ae/fs_fs/branch_spec.ae is a library; not meant to run standalone")
 }
