@@ -45,6 +45,7 @@
 // never through Aether strings.
 
 import std.fs
+import std.os
 import std.string
 
 // --- externs from subr shims ------------------------------------------------
@@ -79,7 +80,6 @@ extern svnae_fsfs_read_small_file(path: string) -> ptr
 extern svnae_fsfs_buf_length(b: ptr) -> int
 extern svnae_fsfs_buf_data(b: ptr) -> string
 extern svnae_fsfs_buf_free(b: ptr)
-extern svnae_fsfs_now_iso8601() -> string
 
 extern svnae_fsfs_tree_builder_new() -> ptr
 extern svnae_fsfs_tree_builder_add(tb: ptr, path: string, kind: int, content: string, content_len: int) -> int
@@ -279,7 +279,7 @@ fsfs_init(path: string) {
 
     // Seed revision 0: empty root directory + rev blob pointing at it.
     empty_dir_sha1 = write_blob_text(path, "")
-    rev0_body = "root: ${empty_dir_sha1}\nprev: 0\nauthor: (init)\ndate: ${svnae_fsfs_now_iso8601()}\nlog: initial empty revision\n"
+    rev0_body = "root: ${empty_dir_sha1}\nprev: 0\nauthor: (init)\ndate: ${os.now_utc_iso8601()}\nlog: initial empty revision\n"
     rev0_sha1 = write_blob_text(path, rev0_body)
 
     rc = svnae_write_and_fsync("${path}/revs/000000", "${rev0_sha1}\n", string.length(rev0_sha1) + 1)
@@ -578,7 +578,7 @@ fsfs_commit_flat(repo: string, tb: ptr, author: string, logmsg: string) {
     next = prev + 1
 
     // Build revision blob.
-    rev_body = "root: ${root_sha1}\nprev: ${prev}\nauthor: ${author}\ndate: ${svnae_fsfs_now_iso8601()}\nlog: ${logmsg}\n"
+    rev_body = "root: ${root_sha1}\nprev: ${prev}\nauthor: ${author}\ndate: ${os.now_utc_iso8601()}\nlog: ${logmsg}\n"
     rev_sha1 = write_blob_text(repo, rev_body)
 
     // Persist revs/<N> pointing at rev_sha1 and bump head.

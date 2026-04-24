@@ -84,14 +84,22 @@ void        svnae_fsfs_buf_free  (struct svnae_buf *b)
 /* Current ISO-8601 UTC timestamp, without milliseconds. For the revision
  * blob's `date:` field. Returned string is static and must be used before
  * the next call. */
+extern char *os_now_utc_iso8601_raw(void);
+
 const char *
 svnae_fsfs_now_iso8601(void)
 {
-    static char buf[32];
-    time_t t = time(NULL);
-    struct tm tm;
-    gmtime_r(&t, &tm);
-    strftime(buf, sizeof buf, "%Y-%m-%dT%H:%M:%SZ", &tm);
+    /* The caller-lifetime contract here is "valid until the next
+     * call"; std.os's raw extern hands back a malloc we'd have to
+     * free, so cache into a TLS buffer for drop-in behaviour. */
+    static __thread char buf[32];
+    char *s = os_now_utc_iso8601_raw();
+    if (!s) { buf[0] = '\0'; return buf; }
+    size_t n = strlen(s);
+    if (n >= sizeof buf) n = sizeof buf - 1;
+    memcpy(buf, s, n);
+    buf[n] = '\0';
+    free(s);
     return buf;
 }
 

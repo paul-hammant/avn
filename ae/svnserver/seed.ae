@@ -23,6 +23,7 @@
 //   rev 3: LICENSE removed
 
 import std.fs
+import std.os
 import std.string
 
 extern aether_args_count() -> int
@@ -46,7 +47,6 @@ extern dir_exists(path: string) -> int
 extern svnae_fsfs_read_small_file(path: string) -> ptr
 extern svnae_fsfs_buf_data(b: ptr) -> string
 extern svnae_fsfs_buf_free(b: ptr)
-extern svnae_fsfs_now_iso8601() -> string
 
 const SQLITE_OK = 0
 extern svnae_sqlite_open(path: string) -> ptr
@@ -71,7 +71,7 @@ fsfs_init(path: string) {
     if rc != SQLITE_OK { return 4 }
     empty_sha = svnae_rep_write_blob(path, "", 0)
     empty_copy = string.concat("", empty_sha)
-    rev0 = "root: ${empty_copy}\nprev: 0\nauthor: (init)\ndate: ${svnae_fsfs_now_iso8601()}\nlog: initial empty revision\n"
+    rev0 = "root: ${empty_copy}\nprev: 0\nauthor: (init)\ndate: ${os.now_utc_iso8601()}\nlog: initial empty revision\n"
     rev0_sha = svnae_rep_write_blob(path, rev0, string.length(rev0))
     rev0_copy = string.concat("", rev0_sha)
     rc = svnae_write_and_fsync("${path}/revs/000000", "${rev0_copy}\n", string.length(rev0_copy) + 1)
@@ -149,7 +149,7 @@ commit_txn(repo: string, txn: ptr, author: string, logmsg: string) {
     svnae_rep_free(new_root_raw)
     prev = fsfs_head_rev(repo)
     next = prev + 1
-    rev_body = "root: ${new_root}\nprev: ${prev}\nauthor: ${author}\ndate: ${svnae_fsfs_now_iso8601()}\nlog: ${logmsg}\n"
+    rev_body = "root: ${new_root}\nprev: ${prev}\nauthor: ${author}\ndate: ${os.now_utc_iso8601()}\nlog: ${logmsg}\n"
     rev_sha_raw = svnae_rep_write_blob(repo, rev_body, string.length(rev_body))
     rev_sha = string.concat("", rev_sha_raw)
     ptr_body = "${rev_sha}\n"
