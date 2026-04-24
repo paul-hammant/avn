@@ -256,39 +256,18 @@ svnae_wc_nodelist_free(struct svnae_wc_nodelist *L)
     free(L);
 }
 
-/* --- info kv --------------------------------------------------------- */
+/* --- info kv --------------------------------------------------------- *
+ *
+ * set_info / get_info moved to ae/wc/db_nodes.ae. The C side keeps
+ * svnae_wc_info_dup + svnae_wc_info_free so existing callers that
+ * receive a malloc'd char* and later free() it continue to work: the
+ * Aether get_info delegates the malloc through dup to hand the caller
+ * a pointer detached from the sqlite statement lifetime. */
 
-int
-svnae_wc_db_set_info(sqlite3 *db, const char *key, const char *value)
-{
-    sqlite3_stmt *st = NULL;
-    const char *sql =
-        "INSERT INTO info (key, value) VALUES (?, ?) "
-        "ON CONFLICT(key) DO UPDATE SET value=excluded.value";
-    if (sqlite3_prepare_v2(db, sql, -1, &st, NULL) != SQLITE_OK) return -1;
-    sqlite3_bind_text(st, 1, key,   -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(st, 2, value, -1, SQLITE_TRANSIENT);
-    int rc = sqlite3_step(st);
-    sqlite3_finalize(st);
-    return rc == SQLITE_DONE ? 0 : -1;
-}
-
-/* get_info returns a malloc'd copy (caller frees with svnae_wc_info_free)
- * or NULL if missing. */
 char *
-svnae_wc_db_get_info(sqlite3 *db, const char *key)
+svnae_wc_info_dup(const char *s)
 {
-    sqlite3_stmt *st = NULL;
-    if (sqlite3_prepare_v2(db, "SELECT value FROM info WHERE key = ?",
-                           -1, &st, NULL) != SQLITE_OK) return NULL;
-    sqlite3_bind_text(st, 1, key, -1, SQLITE_TRANSIENT);
-    char *out = NULL;
-    if (sqlite3_step(st) == SQLITE_ROW) {
-        const char *s = (const char *)sqlite3_column_text(st, 0);
-        out = strdup(s ? s : "");
-    }
-    sqlite3_finalize(st);
-    return out;
+    return strdup(s ? s : "");
 }
 
 void svnae_wc_info_free(char *s) { free(s); }
