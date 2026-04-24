@@ -49,6 +49,11 @@ extern svnae_wc_nodelist_append(L: ptr, path: string, kind: int, base_rev: int, 
 // detached strdup that pairs with svnae_wc_info_free.
 extern svnae_wc_info_dup(s: string) -> ptr
 
+// Single-node allocator. Same layout as svnae_wc_nodelist_append
+// writes into, just for the one-row get_node path. The returned
+// ptr is freed by the existing svnae_wc_node_free in db_shim.c.
+extern svnae_wc_node_alloc(path: string, kind: int, base_rev: int, base_sha1: string, node_state: int, conflicted: int) -> ptr
+
 export svnae_wc_db_node_exists(db: ptr, path: string) -> int {
     stmt = svnae_sqlite_prepare(db, "SELECT 1 FROM nodes WHERE path = ?")
     if stmt == 0 { return 0 }
@@ -78,6 +83,47 @@ export svnae_wc_db_set_conflicted(db: ptr, path: string, conflicted: int) -> int
     svnae_sqlite_finalize(stmt)
     if rc == SQLITE_DONE { return 0 }
     return -1
+}
+
+// Insert or replace a node row. Returns 0 on success, non-zero on
+// failure. ON CONFLICT(path) updates every field except `conflicted`
+// — conflicted is maintained by svnae_wc_db_set_conflicted, so a
+// routine upsert must not clear it.
+export svnae_wc_db_upsert_node(db: ptr, path: string, kind: int, base_rev: int, base_sha1: string, node_state: int) -> int {
+    stmt = svnae_sqlite_prepare(db,
+        "INSERT INTO nodes (path, kind, base_rev, base_sha1, state) VALUES (?, ?, ?, ?, ?) ON CONFLICT(path) DO UPDATE SET kind=excluded.kind, base_rev=excluded.base_rev, base_sha1=excluded.base_sha1, state=excluded.state")
+    if stmt == 0 { return -1 }
+    svnae_sqlite_bind_text(stmt, 1, path)
+    svnae_sqlite_bind_int (stmt, 2, kind)
+    svnae_sqlite_bind_int (stmt, 3, base_rev)
+    svnae_sqlite_bind_text(stmt, 4, base_sha1)
+    svnae_sqlite_bind_int (stmt, 5, node_state)
+    rc = svnae_sqlite_step(stmt)
+    svnae_sqlite_finalize(stmt)
+    if rc == SQLITE_DONE { return 0 }
+    return -1
+}
+
+// Fetch one row by path. Returns a ptr the caller frees with
+// svnae_wc_node_free, or null when the row is missing.
+export svnae_wc_db_get_node(db: ptr, path: string) -> ptr {
+    stmt = svnae_sqlite_prepare(db,
+        "SELECT path, kind, base_rev, base_sha1, state, conflicted FROM nodes WHERE path = ?")
+    if stmt == 0 { return null }
+    svnae_sqlite_bind_text(stmt, 1, path)
+    rc = svnae_sqlite_step(stmt)
+    out = null
+    if rc == SQLITE_ROW {
+        p          = svnae_sqlite_column_text(stmt, 0)
+        kind       = svnae_sqlite_column_int (stmt, 1)
+        base_rev   = svnae_sqlite_column_int (stmt, 2)
+        base_sha1  = svnae_sqlite_column_text(stmt, 3)
+        node_state = svnae_sqlite_column_int (stmt, 4)
+        conflicted = svnae_sqlite_column_int (stmt, 5)
+        out = svnae_wc_node_alloc(p, kind, base_rev, base_sha1, node_state, conflicted)
+    }
+    svnae_sqlite_finalize(stmt)
+    return out
 }
 
 // Upsert key/value into the `info` table. Returns 0 on success,

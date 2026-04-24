@@ -104,38 +104,13 @@ svnae_wc_db_open(const char *wc_root)
 
 void svnae_wc_db_close(sqlite3 *db) { if (db) sqlite3_close(db); }
 
-/* --- node CRUD -------------------------------------------------------- */
-
-/* Insert or replace a node row. Returns 0 on success. */
-int
-svnae_wc_db_upsert_node(sqlite3 *db,
-                        const char *path, int kind, int base_rev,
-                        const char *base_sha1, int state)
-{
-    sqlite3_stmt *st = NULL;
-    const char *sql =
-        "INSERT INTO nodes (path, kind, base_rev, base_sha1, state) "
-        "VALUES (?, ?, ?, ?, ?) "
-        "ON CONFLICT(path) DO UPDATE SET "
-        "  kind=excluded.kind, base_rev=excluded.base_rev,"
-        "  base_sha1=excluded.base_sha1, state=excluded.state";
-    if (sqlite3_prepare_v2(db, sql, -1, &st, NULL) != SQLITE_OK) return -1;
-    sqlite3_bind_text(st, 1, path, -1, SQLITE_TRANSIENT);
-    sqlite3_bind_int (st, 2, kind);
-    sqlite3_bind_int (st, 3, base_rev);
-    sqlite3_bind_text(st, 4, base_sha1 ? base_sha1 : "", -1, SQLITE_TRANSIENT);
-    sqlite3_bind_int (st, 5, state);
-    int rc = sqlite3_step(st);
-    sqlite3_finalize(st);
-    return rc == SQLITE_DONE ? 0 : -1;
-}
-
-/* svnae_wc_db_delete_node / svnae_wc_db_node_exists moved to
- * ae/wc/db_nodes.ae. Same symbol names, same signatures — callers
- * (C and Aether) continue to reach them via the generated .c. */
-
-/* get_node returns a tiny struct as a ptr handle; Aether reads fields
- * through accessors. Returns NULL if no such row. */
+/* --- node CRUD -------------------------------------------------------- *
+ *
+ * svnae_wc_db_upsert_node and svnae_wc_db_get_node moved to
+ * ae/wc/db_nodes.ae in round 42. The C side keeps the struct layout,
+ * the six accessors, the free function, and one storage primitive —
+ * svnae_wc_node_alloc — that Aether's get_node calls with the six
+ * row fields it reads off the sqlite statement. */
 
 struct svnae_wc_node {
     char *path;
@@ -147,25 +122,17 @@ struct svnae_wc_node {
 };
 
 struct svnae_wc_node *
-svnae_wc_db_get_node(sqlite3 *db, const char *path)
+svnae_wc_node_alloc(const char *path, int kind, int base_rev,
+                     const char *base_sha1, int state, int conflicted)
 {
-    sqlite3_stmt *st = NULL;
-    const char *sql =
-        "SELECT path, kind, base_rev, base_sha1, state, conflicted"
-        "  FROM nodes WHERE path = ?";
-    if (sqlite3_prepare_v2(db, sql, -1, &st, NULL) != SQLITE_OK) return NULL;
-    sqlite3_bind_text(st, 1, path, -1, SQLITE_TRANSIENT);
-    if (sqlite3_step(st) != SQLITE_ROW) { sqlite3_finalize(st); return NULL; }
-
     struct svnae_wc_node *n = calloc(1, sizeof *n);
-    n->path      = strdup((const char *)sqlite3_column_text(st, 0));
-    n->kind      = sqlite3_column_int(st, 1);
-    n->base_rev  = sqlite3_column_int(st, 2);
-    const char *s = (const char *)sqlite3_column_text(st, 3);
-    n->base_sha1 = strdup(s ? s : "");
-    n->state     = sqlite3_column_int(st, 4);
-    n->conflicted = sqlite3_column_int(st, 5);
-    sqlite3_finalize(st);
+    if (!n) return NULL;
+    n->path       = strdup(path ? path : "");
+    n->kind       = kind;
+    n->base_rev   = base_rev;
+    n->base_sha1  = strdup(base_sha1 ? base_sha1 : "");
+    n->state      = state;
+    n->conflicted = conflicted;
     return n;
 }
 
