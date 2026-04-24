@@ -35,6 +35,14 @@ extern svnae_sqlite_finalize(stmt: ptr) -> int
 extern svnae_sqlite_step(stmt: ptr) -> int
 extern svnae_sqlite_bind_int(stmt: ptr, idx: int, v: int) -> int
 extern svnae_sqlite_bind_text(stmt: ptr, idx: int, text: string) -> int
+extern svnae_sqlite_column_int(stmt: ptr, col: int) -> int
+extern svnae_sqlite_column_text(stmt: ptr, col: int) -> string
+
+// Storage primitives for the nodelist that feeds status / diff /
+// commit / update. Struct layout + accessors stay in db_shim.c —
+// Aether just drives the SQL and calls append() per row.
+extern svnae_wc_nodelist_new() -> ptr
+extern svnae_wc_nodelist_append(L: ptr, path: string, kind: int, base_rev: int, base_sha1: string, node_state: int, conflicted: int) -> int
 
 export svnae_wc_db_node_exists(db: ptr, path: string) -> int {
     stmt = svnae_sqlite_prepare(db, "SELECT 1 FROM nodes WHERE path = ?")
@@ -65,6 +73,30 @@ export svnae_wc_db_set_conflicted(db: ptr, path: string, conflicted: int) -> int
     svnae_sqlite_finalize(stmt)
     if rc == SQLITE_DONE { return 0 }
     return -1
+}
+
+// Snapshot every row in `nodes` into a growable C-backed struct
+// array. Ordered by path for deterministic iteration. Returns a
+// ptr to the nodelist (caller frees with svnae_wc_nodelist_free)
+// or 0 on prepare failure.
+export svnae_wc_db_list_nodes(db: ptr) -> ptr {
+    stmt = svnae_sqlite_prepare(db,
+        "SELECT path, kind, base_rev, base_sha1, state, conflicted FROM nodes ORDER BY path")
+    if stmt == 0 { return 0 }
+    L = svnae_wc_nodelist_new()
+    rc = svnae_sqlite_step(stmt)
+    while rc == SQLITE_ROW {
+        path       = svnae_sqlite_column_text(stmt, 0)
+        kind       = svnae_sqlite_column_int (stmt, 1)
+        base_rev   = svnae_sqlite_column_int (stmt, 2)
+        base_sha1  = svnae_sqlite_column_text(stmt, 3)
+        node_state = svnae_sqlite_column_int (stmt, 4)
+        conflicted = svnae_sqlite_column_int (stmt, 5)
+        svnae_wc_nodelist_append(L, path, kind, base_rev, base_sha1, node_state, conflicted)
+        rc = svnae_sqlite_step(stmt)
+    }
+    svnae_sqlite_finalize(stmt)
+    return L
 }
 
 main() {

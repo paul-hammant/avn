@@ -198,42 +198,41 @@ svnae_wc_node_free(struct svnae_wc_node *n)
 struct svnae_wc_nodelist {
     struct svnae_wc_node *items;
     int n;
+    int cap;
 };
 
+/* Storage primitives used by ae/wc/db_nodes.ae's Aether-side
+ * svnae_wc_db_list_nodes. The Aether side drives the SQL loop and
+ * hands each row to append(); this file keeps the struct layout
+ * plus the fixed set of accessors read by every downstream caller. */
 struct svnae_wc_nodelist *
-svnae_wc_db_list_nodes(sqlite3 *db)
+svnae_wc_nodelist_new(void)
 {
-    sqlite3_stmt *st = NULL;
-    const char *count_sql = "SELECT COUNT(*) FROM nodes";
-    if (sqlite3_prepare_v2(db, count_sql, -1, &st, NULL) != SQLITE_OK) return NULL;
-    int n = 0;
-    if (sqlite3_step(st) == SQLITE_ROW) n = sqlite3_column_int(st, 0);
-    sqlite3_finalize(st);
+    return calloc(1, sizeof(struct svnae_wc_nodelist));
+}
 
-    struct svnae_wc_nodelist *L = calloc(1, sizeof *L);
-    L->n = n;
-    L->items = calloc((size_t)n, sizeof *L->items);
-
-    const char *sql =
-        "SELECT path, kind, base_rev, base_sha1, state, conflicted"
-        "  FROM nodes ORDER BY path";
-    if (sqlite3_prepare_v2(db, sql, -1, &st, NULL) != SQLITE_OK) {
-        free(L->items); free(L); return NULL;
+int
+svnae_wc_nodelist_append(struct svnae_wc_nodelist *L,
+                          const char *path, int kind, int base_rev,
+                          const char *base_sha1, int state, int conflicted)
+{
+    if (!L) return -1;
+    if (L->n == L->cap) {
+        int ncap = L->cap ? L->cap * 2 : 8;
+        struct svnae_wc_node *p = realloc(L->items, (size_t)ncap * sizeof *p);
+        if (!p) return -1;
+        L->items = p;
+        L->cap = ncap;
     }
-    int i = 0;
-    while (sqlite3_step(st) == SQLITE_ROW && i < n) {
-        L->items[i].path       = strdup((const char *)sqlite3_column_text(st, 0));
-        L->items[i].kind       = sqlite3_column_int(st, 1);
-        L->items[i].base_rev   = sqlite3_column_int(st, 2);
-        const char *s          = (const char *)sqlite3_column_text(st, 3);
-        L->items[i].base_sha1  = strdup(s ? s : "");
-        L->items[i].state      = sqlite3_column_int(st, 4);
-        L->items[i].conflicted = sqlite3_column_int(st, 5);
-        i++;
-    }
-    L->n = i;   /* in case count raced with stepping */
-    sqlite3_finalize(st);
-    return L;
+    struct svnae_wc_node *n = &L->items[L->n];
+    n->path       = strdup(path ? path : "");
+    n->kind       = kind;
+    n->base_rev   = base_rev;
+    n->base_sha1  = strdup(base_sha1 ? base_sha1 : "");
+    n->state      = state;
+    n->conflicted = conflicted;
+    L->n++;
+    return 0;
 }
 
 int svnae_wc_nodelist_count(const struct svnae_wc_nodelist *L) { return L ? L->n : 0; }
