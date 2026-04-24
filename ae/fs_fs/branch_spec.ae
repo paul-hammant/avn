@@ -42,6 +42,122 @@ export branch_spec_allows(repo: string, branch: string, path: string) -> int {
     return aether_spec_matches_any(path, buf)
 }
 
+// ---- branch head resolution -------------------------------------------
+//
+// Find the current rev of `base` branch, for svnae_branch_create's
+// "fork a new branch off <base>" step. Phase 8.1 introduced the
+// per-branch $repo/branches/<base>/head file; legacy repos seeded
+// before 8.1 still have $repo/head only and need a fallback.
+//
+// The fallback is only safe when `base == "main"` AND no other
+// branches exist — otherwise the legacy head file is the max rev
+// across all branches, not main's head specifically. On the
+// fallback path we also materialize $repo/branches/main/head so
+// subsequent branch-creates find the per-branch file even after
+// another branch bumps the legacy head.
+//
+// Returns the base rev on success, -1 on miss / malformed input.
+//
+// Ported from commit_shim.c's svnae_branch_create block.
+
+extern aether_io_listdir(path: string) -> ptr
+extern aether_io_listdir_count(h: ptr) -> int
+extern aether_io_listdir_name(h: ptr, i: int) -> string
+extern aether_io_listdir_free(h: ptr)
+extern aether_io_mkdir_p(path: string) -> int
+extern aether_io_write_atomic(path: string, data: string, length: int) -> int
+
+// Parse "rev=N" style per-branch head line. -1 on malformed input.
+parse_head_line(s: string) -> int {
+    n = string.length(s)
+    eq = string.index_of(s, "=")
+    if eq < 0 { return -1 }
+    i = eq + 1
+    val = 0
+    any = 0
+    while i < n {
+        ch = string.char_at(s, i)
+        if ch == 10 { break }           // '\n'
+        if ch < 48 { break }            // non-digit
+        if ch > 57 { break }
+        val = val * 10 + (ch - 48)
+        any = 1
+        i = i + 1
+    }
+    if any == 0 { return -1 }
+    return val
+}
+
+export branch_head_rev(repo: string, base: string) -> int {
+    return branch_head_rev_impl(repo, base)
+}
+
+branch_head_rev_impl(repo: string, base: string) -> int {
+    // Preferred path: $repo/branches/<base>/head, "rev=N".
+    base_head_path = string.concat(string.concat(string.concat(repo, "/branches/"), base), "/head")
+    sz = aether_io_file_size(base_head_path)
+    if sz >= 0 {
+        head_line = aether_io_read_file(base_head_path)
+        rev = parse_head_line(head_line)
+        if rev >= 0 { return rev }
+    }
+
+    // Legacy fallback: only if base == "main" AND there are no
+    // other branches (so the legacy $repo/head is still main's
+    // head rather than the cross-branch max).
+    if string.equals(base, "main") == 0 { return -1 }
+
+    branches_root = string.concat(repo, "/branches")
+    bd = aether_io_listdir(branches_root)
+    other_branches = 0
+    if bd != null {
+        n_br = aether_io_listdir_count(bd)
+        i = 0
+        while i < n_br {
+            nm = aether_io_listdir_name(bd, i)
+            if string.equals(nm, "main") == 1 {
+                i = i + 1
+                continue
+            }
+            other_branches = 1
+            break
+        }
+        aether_io_listdir_free(bd)
+    }
+    if other_branches == 1 { return -1 }
+
+    legacy = string.concat(repo, "/head")
+    if aether_io_file_size(legacy) < 0 { return -1 }
+    legacy_content = aether_io_read_file(legacy)
+    // Legacy head is a plain "<N>\n" (no "rev=" prefix). Parse
+    // the leading integer.
+    ln = string.length(legacy_content)
+    val = 0
+    any = 0
+    i = 0
+    while i < ln {
+        ch = string.char_at(legacy_content, i)
+        if ch < 48 { break }
+        if ch > 57 { break }
+        val = val * 10 + (ch - 48)
+        any = 1
+        i = i + 1
+    }
+    if any == 0 { return -1 }
+    base_rev = val
+
+    // Materialize $repo/branches/main/head so future lookups
+    // don't hit this fallback again (another branch commit would
+    // bump the legacy head above main's).
+    main_dir = string.concat(repo, "/branches/main")
+    aether_io_mkdir_p(main_dir)
+    main_head = string.concat(main_dir, "/head")
+    body = string.concat(string.concat("rev=", string.from_int(base_rev)), "\n")
+    aether_io_write_atomic(main_head, body, string.length(body))
+
+    return base_rev
+}
+
 main() {
     println("ae/fs_fs/branch_spec.ae is a library; not meant to run standalone")
 }

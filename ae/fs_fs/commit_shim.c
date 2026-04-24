@@ -364,66 +364,12 @@ svnae_branch_create(const char *repo, const char *name, const char *base,
     snprintf(br_dir, sizeof br_dir, "%s/branches/%s", repo, name);
     if (aether_io_exists(br_dir)) return -1;
 
-    /* Find base branch's head rev. Prefer the new per-branch head
-     * file; fall back to the legacy $repo/head when base == "main"
-     * and the per-branch file isn't there yet (e.g. for seeded repos
-     * whose first commit went through the Phase-8.1 machinery but
-     * whose seed didn't create the branches/main skeleton). */
-    char base_head_path[PATH_MAX];
-    snprintf(base_head_path, sizeof base_head_path, "%s/branches/%s/head", repo, base);
-    int base_rev = -1;
-    if (aether_io_file_size(base_head_path) >= 0) {
-        const char *head_line = aether_io_read_file(base_head_path);
-        const char *eq = strchr(head_line, '=');
-        if (eq) base_rev = atoi(eq + 1);
-    }
-    if (base_rev < 0 && strcmp(base, "main") == 0) {
-        /* Legacy repos (seeded before Phase 8.1) have no $repo/branches/main/
-         * skeleton. We *must* read main's head from $repo/head here, but only
-         * if no other branches exist yet — once another branch exists, the
-         * legacy head file is the max rev across all branches, not main's
-         * head specifically. Auto-materialize branches/main/head on success
-         * so subsequent branch-creates find the per-branch file. */
-        extern void *aether_io_listdir(const char *path);
-        extern int aether_io_listdir_count(void *h);
-        extern const char *aether_io_listdir_name(void *h, int i);
-        extern void aether_io_listdir_free(void *h);
-
-        char branches_root[PATH_MAX];
-        snprintf(branches_root, sizeof branches_root, "%s/branches", repo);
-        void *bd = aether_io_listdir(branches_root);
-        int other_branches = 0;
-        if (bd) {
-            int n_br = aether_io_listdir_count(bd);
-            for (int i = 0; i < n_br; i++) {
-                const char *nm = aether_io_listdir_name(bd, i);
-                if (strcmp(nm, "main") == 0) continue;
-                other_branches = 1;
-                break;
-            }
-            aether_io_listdir_free(bd);
-        }
-        if (!other_branches) {
-            char legacy[PATH_MAX];
-            snprintf(legacy, sizeof legacy, "%s/head", repo);
-            if (aether_io_file_size(legacy) >= 0) {
-                base_rev = atoi(aether_io_read_file(legacy));
-            }
-            if (base_rev >= 0) {
-                /* Materialize $repo/branches/main/head so future lookups
-                 * don't hit this fallback after another branch bumps the
-                 * legacy head. */
-                char main_dir[PATH_MAX];
-                snprintf(main_dir, sizeof main_dir, "%s/branches/main", repo);
-                (void)aether_io_mkdir_p(main_dir);
-                char main_head[PATH_MAX];
-                snprintf(main_head, sizeof main_head, "%s/head", main_dir);
-                char hb[32];
-                int hl = snprintf(hb, sizeof hb, "rev=%d\n", base_rev);
-                (void)write_atomic(main_head, hb, hl);
-            }
-        }
-    }
+    /* Find base branch's head rev. The Phase 8.1 new-layout probe,
+     * legacy-main fallback, and auto-materialize of
+     * $repo/branches/main/head are all ported to
+     * ae/fs_fs/branch_spec.ae::branch_head_rev. */
+    extern int aether_branch_head_rev(const char *repo, const char *base);
+    int base_rev = aether_branch_head_rev(repo, base);
     if (base_rev < 0) return -1;
 
     char *base_root = load_rev_root_sha1(repo, base_rev);
