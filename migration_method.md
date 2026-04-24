@@ -222,12 +222,21 @@ decl sweep and notice "this is only called from one place."
   linked into every binary that uses it. Makefile.regen per
   directory keeps the recipes local.
 
-- **The gcc link command has an argv length limit around 2.3 KB.**
-  We hit this when adding a new `ae/svnserver/blob_build_generated.c`
-  and saw `handler_commit_generated.c` get truncated to `han`. Two
-  workarounds: (a) inline the contents into an existing generated
-  file, or (b) consolidate small modules. We chose (a) for
-  commit_parse's blob builders.
+- **The gcc link command has an argv length limit around 2 KB.**
+  Not really gcc's limit — the aether build tool's own
+  `char toml_extra[2048]` assembly buffer silently truncates
+  `extra_sources` when their concatenated length exceeds 2 KiB,
+  which in turn hands gcc a mangled path like `handler_copy_generat`
+  instead of `handler_copy_generated.c`. We've hit this twice:
+  round 23 (commit_parse blob builders) and round 30 (fs_fs
+  rep_store port). Mitigations that actually work: (a) inline
+  the contents into an existing `_generated.c` path that's
+  already on the link line, or (b) consolidate two or more
+  small `.ae` modules into one. Filing as AETHER_ISSUES.md #17
+  — the parse-side buffer was bumped to 8 KiB in v0.85 but the
+  assembly-side buffer wasn't. Until that's fixed, new
+  `_generated.c` additions to svnserver in particular have a
+  real cost.
 
 - **`match`, `state`, `after`, `message`, `ptr` are reserved
   keywords.** Renaming pattern: `match_arr`, `st`, `tail`, `msg`.

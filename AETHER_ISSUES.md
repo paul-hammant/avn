@@ -167,6 +167,51 @@ behaviour is silent data loss.
 
 ---
 
+## #17 — `extra_sources` silently truncated at 2 KiB (ae 0.89.0)
+
+Hit during round 30 (fs_fs rep-store port attempt). Adding one more
+`_generated.c` to the `[[bin]] extra_sources` line for the
+aether-svnserver binary — total 2271 chars on one logical line —
+caused the link command to be cut mid-filename, with the linker
+reporting `cannot find ae/svnserver/handler_copy_generat: No such
+file or directory`. Subtracting 40 chars from the line brought the
+build back.
+
+**Where the limit lives:** `tools/ae.c` has
+
+```c
+char toml_extra[2048] = "";
+get_extra_sources_for_bin(file, toml_extra, sizeof(toml_extra));
+```
+
+at the `build_gcc_cmd` call site, with a 2 KiB buffer. The
+**parse-time** buffer was bumped to 8 KiB in v0.85 (changelog entry
+fixes `fgets` silently dropping lines past 1 KiB); the assembly-time
+`toml_extra[2048]` wasn't.
+
+**Failure mode:** *silent* — no warning at parse time; the linker
+error talks about a truncated filename (`handler_copy_generat`) that
+clearly used to be a real path, but nothing points at `extra_sources`
+as the culprit.
+
+**Severity:** medium. Every non-trivial project hits this the moment
+`extra_sources` spans enough shims. svnserver's line had 63 entries.
+
+**Request:** (a) bump the `toml_extra` buffer to match the parser's
+8 KiB (or better, make it grow dynamically), and (b) when
+`get_extra_sources_for_bin` truncates, emit a clear diagnostic
+(`aether.toml: extra_sources exceeds NNNN-byte assembly buffer —
+split the line or raise AETHER_TOML_EXTRA_BUF`) instead of letting
+the linker see a mangled command.
+
+**Workaround used in port:** inline the affected Aether module into
+a sibling that's already on the link list, so no new `_generated.c`
+path is added. Done previously for `ae/svnserver/blob_build.ae`
+(round 23) — the cost starts to hurt the "one Aether module per
+concern" design once it happens repeatedly.
+
+---
+
 ## Postscript — triage history
 
 First triage pass against v0.74.0 / v0.75.0, then again against v0.76.0

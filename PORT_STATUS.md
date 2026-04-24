@@ -44,7 +44,32 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
   `int_to_dec` + `digit_char` in favour of `std.string.from_int` now
   that it's available, and ported the WC pristine-store path builder
   to ae/wc/pristine_path.ae (handles the two-level XX/YY/ fanout).
-- **Round 29** (current): **36.28% C, 63.72% Aether.** Ported
+- **Round 30** (current — no-LOC round): **36.28% C,
+  63.72% Aether** (unchanged).
+
+  Attempted port of the fs_fs rep-store (sibling shape to round
+  29's wc pristine port — same hash + zlib + binary-file-write
+  pattern, using the now-ambient std.cryptography + std.zlib).
+  The Aether side (`ae/fs_fs/rep_store.ae`, 200 LOC) worked
+  end-to-end, but adding `ae/fs_fs/rep_store_generated.c` to
+  the svnserver binary's `extra_sources` pushed the line over
+  2 KiB, which silently truncated the gcc link command to
+  `handler_copy_generat` and failed to link. Rolled back.
+
+  Filed as AETHER_ISSUES.md #17 — the parse-side `extra_sources`
+  buffer was bumped to 8 KiB in aether v0.85, but the
+  assembly-side buffer (`char toml_extra[2048]` in
+  `build_gcc_cmd`) stayed at 2 KiB. Until that's fixed, new
+  `_generated.c` files on the svnserver link line cost more
+  than a clean commit — same gotcha we inlined blob_build.ae
+  around in round 23.
+
+  The lesson is captured in migration_method.md's tooling
+  section and feeds forward into round 31: once that buffer
+  is raised upstream, the rep-store port's green path
+  should drop in cleanly.
+
+- **Round 29**: **36.28% C, 63.72% Aether.** Ported
   the wc pristine store (sha + zlib + binary file I/O) now that
   std.cryptography (0.88) and std.zlib (0.90+) landed upstream.
   - ae/wc/pristine.ae owns: wc_hash_bytes (dispatches
