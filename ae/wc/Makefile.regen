@@ -7,7 +7,7 @@
 
 AETHERC ?= $(HOME)/scm/aether/build/aetherc
 
-GENERATED := mergeinfo_generated.c ignore_generated.c sidecar_generated.c status_code_generated.c pristine_path_generated.c pristine_generated.c update_apply_generated.c merge_apply_generated.c update_walk_generated.c merge_walk_generated.c update_props_generated.c db_schema_generated.c
+GENERATED := mergeinfo_generated.c ignore_generated.c sidecar_generated.c status_code_generated.c pristine_path_generated.c pristine_generated.c update_apply_generated.c merge_apply_generated.c update_walk_generated.c merge_walk_generated.c update_props_generated.c db_schema_generated.c db_nodes_generated.c
 
 all: $(GENERATED)
 
@@ -45,6 +45,9 @@ update_props_generated.c: update_props.ae
 	$(AETHERC) --emit=lib $< $@
 
 db_schema_generated.c: db_schema.ae
+	$(AETHERC) --emit=lib $< $@
+
+db_nodes_generated.c: db_nodes.ae
 	$(AETHERC) --emit=lib $< $@
 
 .PHONY: all

@@ -130,29 +130,9 @@ svnae_wc_db_upsert_node(sqlite3 *db,
     return rc == SQLITE_DONE ? 0 : -1;
 }
 
-int
-svnae_wc_db_delete_node(sqlite3 *db, const char *path)
-{
-    sqlite3_stmt *st = NULL;
-    if (sqlite3_prepare_v2(db, "DELETE FROM nodes WHERE path = ?",
-                           -1, &st, NULL) != SQLITE_OK) return -1;
-    sqlite3_bind_text(st, 1, path, -1, SQLITE_TRANSIENT);
-    int rc = sqlite3_step(st);
-    sqlite3_finalize(st);
-    return rc == SQLITE_DONE ? 0 : -1;
-}
-
-int
-svnae_wc_db_node_exists(sqlite3 *db, const char *path)
-{
-    sqlite3_stmt *st = NULL;
-    if (sqlite3_prepare_v2(db, "SELECT 1 FROM nodes WHERE path = ?",
-                           -1, &st, NULL) != SQLITE_OK) return 0;
-    sqlite3_bind_text(st, 1, path, -1, SQLITE_TRANSIENT);
-    int rc = sqlite3_step(st);
-    sqlite3_finalize(st);
-    return rc == SQLITE_ROW ? 1 : 0;
-}
+/* svnae_wc_db_delete_node / svnae_wc_db_node_exists moved to
+ * ae/wc/db_nodes.ae. Same symbol names, same signatures — callers
+ * (C and Aether) continue to reach them via the generated .c. */
 
 /* get_node returns a tiny struct as a ptr handle; Aether reads fields
  * through accessors. Returns NULL if no such row. */
@@ -211,20 +191,9 @@ svnae_wc_node_free(struct svnae_wc_node *n)
  * Ordered by path for deterministic iteration.
  */
 
-/* Set the conflicted flag on a node without touching other fields.
- * Returns 0 on success. */
-int
-svnae_wc_db_set_conflicted(sqlite3 *db, const char *path, int conflicted)
-{
-    sqlite3_stmt *st = NULL;
-    const char *sql = "UPDATE nodes SET conflicted = ? WHERE path = ?";
-    if (sqlite3_prepare_v2(db, sql, -1, &st, NULL) != SQLITE_OK) return -1;
-    sqlite3_bind_int (st, 1, conflicted);
-    sqlite3_bind_text(st, 2, path, -1, SQLITE_TRANSIENT);
-    int rc = sqlite3_step(st);
-    sqlite3_finalize(st);
-    return rc == SQLITE_DONE ? 0 : -1;
-}
+/* svnae_wc_db_set_conflicted moved to ae/wc/db_nodes.ae alongside
+ * delete/exists — all three are single-statement scalar ops that
+ * map cleanly to the subr.sqlite bindings. */
 
 struct svnae_wc_nodelist {
     struct svnae_wc_node *items;
