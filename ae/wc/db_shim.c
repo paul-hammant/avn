@@ -70,22 +70,23 @@
 /* Given a wc_root like "/home/me/proj", open (or create) .svn/wc.db and
  * install the schema if this is a fresh db. Returns the sqlite handle
  * (as ptr) or NULL. Also mkdir -p's .svn and .svn/pristine for the
- * caller's convenience. */
+ * caller's convenience.
+ *
+ * Schema install and the Phase 5.13 `conflicted` column migration
+ * live in ae/wc/db_schema.ae now; this function does the filesystem
+ * setup + sqlite_open and hands off. */
+extern int aether_wc_db_install_schema(sqlite3 *db);
+
 sqlite3 *
 svnae_wc_db_open(const char *wc_root)
 {
-    /* mkdir $wc_root/.svn/pristine (idempotent); path.ae's mkdir_p
-     * creates parents as needed, so wc_root itself gets materialized
-     * too if it's absent. */
     extern int aether_io_mkdir_p(const char *path);
     char pristine_dir[PATH_MAX];
     snprintf(pristine_dir, sizeof pristine_dir, "%s/.svn/pristine", wc_root);
     if (aether_io_mkdir_p(pristine_dir) != 0) return NULL;
-    char svn_dir[PATH_MAX];
-    snprintf(svn_dir, sizeof svn_dir, "%s/.svn", wc_root);
 
     char dbpath[PATH_MAX];
-    snprintf(dbpath, sizeof dbpath, "%s/wc.db", svn_dir);
+    snprintf(dbpath, sizeof dbpath, "%s/.svn/wc.db", wc_root);
 
     sqlite3 *db;
     if (sqlite3_open_v2(dbpath, &db,
@@ -94,41 +95,9 @@ svnae_wc_db_open(const char *wc_root)
         return NULL;
     }
 
-    /* Install schema if absent. CREATE TABLE IF NOT EXISTS keeps this
-     * idempotent across re-opens. */
-    const char *schema =
-        "CREATE TABLE IF NOT EXISTS nodes ("
-        "  path       TEXT PRIMARY KEY,"
-        "  kind       INT NOT NULL,"
-        "  base_rev   INT NOT NULL,"
-        "  base_sha1  TEXT NOT NULL,"
-        "  state      INT NOT NULL,"
-        "  conflicted INT NOT NULL DEFAULT 0"
-        ");"
-        "CREATE TABLE IF NOT EXISTS info ("
-        "  key   TEXT PRIMARY KEY,"
-        "  value TEXT NOT NULL"
-        ");";
-    if (sqlite3_exec(db, schema, NULL, NULL, NULL) != SQLITE_OK) {
+    if (aether_wc_db_install_schema(db) != 0) {
         sqlite3_close(db);
         return NULL;
-    }
-    /* Migration for wc.db files created before Phase 5.13: if the
-     * `conflicted` column is missing, add it with a default of 0.
-     * ALTER TABLE ADD COLUMN fails if the column already exists — we
-     * check pragma table_info rather than trusting the error. */
-    sqlite3_stmt *pc = NULL;
-    int has_conflicted = 0;
-    if (sqlite3_prepare_v2(db, "PRAGMA table_info(nodes)", -1, &pc, NULL) == SQLITE_OK) {
-        while (sqlite3_step(pc) == SQLITE_ROW) {
-            const unsigned char *nm = sqlite3_column_text(pc, 1);
-            if (nm && strcmp((const char *)nm, "conflicted") == 0) { has_conflicted = 1; break; }
-        }
-        sqlite3_finalize(pc);
-    }
-    if (!has_conflicted) {
-        sqlite3_exec(db, "ALTER TABLE nodes ADD COLUMN conflicted INT NOT NULL DEFAULT 0",
-                     NULL, NULL, NULL);
     }
     return db;
 }
