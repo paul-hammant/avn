@@ -19,19 +19,18 @@
  *
  * The pristine store (put / get / has / size / hash) is fully
  * ported to Aether now that std.cryptography (sha1/sha256) and
- * std.zlib (deflate/inflate) landed. What stays in C:
+ * std.zlib (deflate/inflate) landed, and Round 37 moved the
+ * wc.db info-table lookup for the configured hash algorithm to
+ * Aether as well. What remains here:
  *
- *   1. svnae_wc_hash_algo — sqlite lookup of the wc.db info table.
- *      Aether has no sqlite binding yet.
- *
- *   2. Three small byte-level helpers — pack_le32, binary-safe
+ *   1. Three small byte-level helpers — pack_le32, binary-safe
  *      concat, binary-safe slice — wrapping Aether's
  *      string_new_with_length / AetherString layout. std.string
  *      has no byte-construction primitive that doesn't intermediate
  *      through a NUL-terminated C-style string; doing these in C
  *      keeps the Aether implementation binary-safe.
  *
- *   3. Adapters for the public svnae_wc_* signatures — existing
+ *   2. Adapters for the public svnae_wc_* signatures — existing
  *      callers expect "out-param buffer with hex length", "NULL
  *      on miss", etc.; we marshal between those and the Aether
  *      wrappers' string returns.
@@ -41,36 +40,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sqlite3.h>
-
-/* --- hash_algo: the one sqlite touch, kept in C ---------------------- */
-
-extern sqlite3 *svnae_wc_db_open(const char *wc_root);
-extern void     svnae_wc_db_close(sqlite3 *db);
-extern char    *svnae_wc_db_get_info(sqlite3 *db, const char *key);
-extern void     svnae_wc_info_free(char *s);
-
-const char *
-svnae_wc_hash_algo(const char *wc_root)
-{
-    static __thread char cache[32];
-    cache[0] = '\0';
-    sqlite3 *db = svnae_wc_db_open(wc_root);
-    if (!db) { strcpy(cache, "sha1"); return cache; }
-    char *v = svnae_wc_db_get_info(db, "hash_algo");
-    svnae_wc_db_close(db);
-    if (!v || !*v) {
-        strcpy(cache, "sha1");
-        svnae_wc_info_free(v);
-        return cache;
-    }
-    size_t n = strlen(v);
-    if (n >= sizeof cache) n = sizeof cache - 1;
-    memcpy(cache, v, n);
-    cache[n] = '\0';
-    svnae_wc_info_free(v);
-    return cache;
-}
 
 /* --- byte-level helpers for the Aether side ------------------------- *
  *

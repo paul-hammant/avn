@@ -108,10 +108,12 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
     (hash+dedup+zlib.deflate+fs.write_binary), wc_pristine_get
     (fs.read_binary+zlib.inflate), wc_pristine_has,
     wc_pristine_size.
-  - C side keeps svnae_wc_hash_algo (sqlite — no binding yet)
-    and three small byte-level helpers (aether_pristine_pack_le32,
-    _concat_binary, _slice_binary) that std.string can't do
-    without a NUL-terminated intermediary.
+  - C side keeps three small byte-level helpers
+    (aether_pristine_pack_le32, _concat_binary, _slice_binary)
+    that std.string can't do without a NUL-terminated
+    intermediary. wc_hash_algo was moved to Aether in round 37
+    (reads .svn/wc.db info via the subr.sqlite bindings used
+    by fs_fs's rep-cache).
   - pristine_shim.c: 306 → 270 LOC. Dropped the direct zlib
     include, compress2 / uncompress calls, hex encoding, and
     the fs_try_read_binary TLS dance.

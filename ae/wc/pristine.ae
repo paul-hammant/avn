@@ -18,12 +18,13 @@
 // This file replaces the bulk of ae/wc/pristine_shim.c. SHA-1 /
 // SHA-256 come from std.cryptography (0.88), zlib deflate/inflate
 // from std.zlib (0.90+), binary-safe file I/O from std.fs
-// (read_binary 0.82, write_binary 0.86). The only thing that
-// stays in C is the wc.db sqlite read for the configured hash
-// algorithm (svnae_wc_hash_algo) plus three tiny byte-level
-// helpers — pack_le32, binary-safe concat, binary-safe slice —
-// since std.string has no byte-construction primitive that
-// doesn't run through an intermediate C-style string.
+// (read_binary 0.82, write_binary 0.86). The wc.db info-table
+// lookup for the configured hash algorithm (Round 37) reads via
+// the same subr.sqlite bindings the fs_fs rep-store uses. What
+// stays in C: three tiny byte-level helpers — pack_le32, binary-
+// safe concat, binary-safe slice — since std.string has no byte-
+// construction primitive that doesn't run through an intermediate
+// C-style string.
 //
 // On-disk format (identical to fs_fs rep-store, and unchanged from
 // the C implementation):
@@ -46,8 +47,40 @@ import std.fs
 import std.zlib
 import std.cryptography
 
-// Kept in C — sqlite lookup of wc.db info table, TLS-cached return.
-extern svnae_wc_hash_algo(wc_root: string) -> string
+// sqlite — to read wc.db's `info` table for the configured hash
+// algorithm. Same binding as ae/subr/sqlite.ae; re-declared locally
+// so pristine.ae builds as a stand-alone lib.
+const SQLITE_ROW = 100
+extern svnae_sqlite_open(path: string) -> ptr
+extern svnae_sqlite_close(db: ptr) -> int
+extern svnae_sqlite_prepare(db: ptr, sql: string) -> ptr
+extern svnae_sqlite_finalize(stmt: ptr) -> int
+extern svnae_sqlite_step(stmt: ptr) -> int
+extern svnae_sqlite_bind_text(stmt: ptr, idx: int, text: string) -> int
+extern svnae_sqlite_column_text(stmt: ptr, col: int) -> string
+
+// Read the wc's configured hash algorithm from .svn/wc.db's info
+// table. Returns "sha1" when the DB is missing, the info row is
+// absent, or the stored value is empty — mirrors the C wrapper's
+// fallback that every caller relied on. The concrete caller never
+// sees an empty string.
+wc_hash_algo(wc_root: string) -> string {
+    db = svnae_sqlite_open("${wc_root}/.svn/wc.db")
+    if db == 0 { return "sha1" }
+    stmt = svnae_sqlite_prepare(db, "SELECT value FROM info WHERE key = ?")
+    if stmt == 0 { svnae_sqlite_close(db); return "sha1" }
+    svnae_sqlite_bind_text(stmt, 1, "hash_algo")
+    rc = svnae_sqlite_step(stmt)
+    algo = ""
+    if rc == SQLITE_ROW {
+        raw = svnae_sqlite_column_text(stmt, 0)
+        algo = string.copy(raw)
+    }
+    svnae_sqlite_finalize(stmt)
+    svnae_sqlite_close(db)
+    if string.length(algo) == 0 { return "sha1" }
+    return algo
+}
 
 // Path builder already lives in ae/wc/pristine_path.ae.
 extern aether_pristine_path(wc_root: string, sha: string) -> string
@@ -72,15 +105,14 @@ export wc_hash_bytes(wc_root: string, data: string, length: int) -> string {
 }
 
 wc_hash_bytes_impl(wc_root: string, data: string, length: int) -> string {
-    algo = string.copy(svnae_wc_hash_algo(wc_root))    // TLS — snapshot
+    algo = wc_hash_algo(wc_root)
     if string.equals(algo, "sha256") == 1 {
         digest, err = cryptography.sha256_hex(data, length)
         if string.length(err) > 0 { return "" }
         return digest
     }
     // sha1 is the default for anything else (including "sha1" and
-    // legacy empty). Mirrors the C wrapper's fallback in
-    // svnae_wc_hash_algo.
+    // legacy empty).
     digest, err = cryptography.sha1_hex(data, length)
     if string.length(err) > 0 { return "" }
     return digest
