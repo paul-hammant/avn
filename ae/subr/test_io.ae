@@ -22,7 +22,7 @@
 import std.fs
 import std.string
 
-extern svnae_rename(from: string, to: string) -> int
+extern aether_io_rename(from: string, to: string) -> int
 extern svnae_write_and_fsync(path: string, data: string, len: int) -> int
 extern svnae_getpid() -> int
 extern svnae_is_regular_file(path: string) -> int
@@ -41,7 +41,7 @@ atomic_write(final_path: string, data: string, seq: int) {
         svnae_remove(tmp)
         return rc
     }
-    rc = svnae_rename(tmp, final_path)
+    rc = aether_io_rename(tmp, final_path)
     if rc != 0 {
         svnae_remove(tmp)
         return rc

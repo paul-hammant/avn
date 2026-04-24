@@ -33,13 +33,10 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-/* rename(2): returns 0 on success, -errno on failure. */
-int
-svnae_rename(const char *from, const char *to)
-{
-    if (rename(from, to) == 0) return 0;
-    return -errno;
-}
+/* rename moved to ae/subr/io.ae (std.fs.rename via io_rename).
+ * Callers reach it via aether_io_rename. The test_io/test_repo/
+ * test_revisions Aether callers switched over in round 43; there
+ * are no C-side callers of rename left. */
 
 /* Open `path` with O_WRONLY|O_CREAT|O_TRUNC, write all bytes, fsync, close.
  * Returns 0 on success, -errno on failure. The caller is expected to have

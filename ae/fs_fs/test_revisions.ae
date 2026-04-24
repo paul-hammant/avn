@@ -62,7 +62,7 @@ extern svnae_write_header_and_buf(path: string, header: string, buf: ptr) -> int
 
 extern svnae_write_and_fsync(path: string, data: string, len: int) -> int
 extern svnae_write_header_and_body(path: string, header: string, body: string, body_len: int) -> int
-extern svnae_rename(from: string, to: string) -> int
+extern aether_io_rename(from: string, to: string) -> int
 extern svnae_is_regular_file(path: string) -> int
 extern svnae_remove(path: string) -> int
 extern svnae_getpid() -> int
@@ -226,7 +226,7 @@ write_blob_text(repo: string, data: string) {
     }
     if comp != 0 { svnae_buf_free(comp) }
     if wrc != 0 { svnae_remove(tmp); return "" }
-    rc = svnae_rename(tmp, full)
+    rc = aether_io_rename(tmp, full)
     if rc != 0 { svnae_remove(tmp); return "" }
 
     rc = rep_cache_insert(repo, sha1_copy, rel, n, storage)

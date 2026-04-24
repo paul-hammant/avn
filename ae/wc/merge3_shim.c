@@ -59,6 +59,19 @@ extern int aether_io_write_atomic(const char *path, const char *data, int length
 extern const char *aether_io_read_file(const char *path);
 extern int aether_io_file_size(const char *path);
 
+/* AetherString layout — the std.fs.read_binary path returns a
+ * magic-tagged wrapper (aether ce5ef25 "header-leak fix"); treating
+ * the return as a plain char* reads into the header. Unwrap here
+ * the same way rep_store_shim.c does. */
+#define AETHER_STRING_MAGIC 0xAE57C0DE
+struct AetherString_local {
+    unsigned int magic;
+    int          ref_count;
+    size_t       length;
+    size_t       capacity;
+    char        *data;
+};
+
 static int
 write_tmp(const char *data, int len, char *out_path, size_t out_sz)
 {
@@ -75,11 +88,21 @@ slurp(const char *path, int *out_len)
     if (sz < 0) return NULL;
     const char *src = aether_io_read_file(path);
     if (!src) return NULL;
-    char *buf = malloc((size_t)sz + 1);
+
+    const struct AetherString_local *as =
+        (const struct AetherString_local *)src;
+    const char *data = src;
+    int len = sz;
+    if (as->magic == AETHER_STRING_MAGIC) {
+        data = as->data;
+        len  = (int)as->length;
+    }
+
+    char *buf = malloc((size_t)len + 1);
     if (!buf) return NULL;
-    if (sz > 0) memcpy(buf, src, (size_t)sz);
-    buf[sz] = '\0';
-    *out_len = sz;
+    if (len > 0) memcpy(buf, data, (size_t)len);
+    buf[len] = '\0';
+    *out_len = len;
     return buf;
 }
 
