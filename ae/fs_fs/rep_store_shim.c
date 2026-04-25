@@ -67,30 +67,13 @@ extern const char *aether_rep_write_encoded(const char *repo, const char *sha,
 extern const char *aether_rep_read_decoded(const char *repo, const char *sha,
                                             int uncompressed_size);
 
-/* AetherString layout (same as aether_string.h). Kept byte-for-byte
- * because round 29's first draft mis-sized length as int32_t and
- * spent an hour chasing a mis-read struct — size_t on 64-bit. */
-#define AETHER_STRING_MAGIC 0xAE57C0DE
-struct AetherString {
-    unsigned int magic;
-    int          ref_count;
-    size_t       length;
-    size_t       capacity;
-    char        *data;
-};
-static void
-unwrap_bytes(const void *s, const char **out_data, int *out_len)
-{
-    if (!s) { *out_data = ""; *out_len = 0; return; }
-    const struct AetherString *as = (const struct AetherString *)s;
-    if (as->magic == AETHER_STRING_MAGIC) {
-        *out_data = as->data;
-        *out_len = (int)as->length;
-        return;
-    }
-    *out_data = (const char *)s;
-    *out_len = (int)strlen((const char *)s);
-}
+/* aether_string_data / aether_string_length come from std/string/
+ * aether_string.h (added upstream in Aether 0.91 to replace the
+ * open-coded magic-header unwrap pattern that lived in this file
+ * since round 29). They accept either AetherString* or raw char*,
+ * are NULL-safe, and are length-aware (no strlen pitfall on payloads
+ * with embedded NULs). */
+#include "aether_string.h"
 
 /* Binary-safe concat / slice helpers — called from the Aether-
  * generated pristine_generated.c and rep_store_generated.c. Both
@@ -102,17 +85,19 @@ unwrap_bytes(const void *s, const char **out_data, int *out_len)
  *
  * Named aether_pristine_* for historical reasons (originated in
  * pristine_shim.c during round 29); worth a rename to
- * aether_bin_* if we ever touch every call site. */
-extern void *string_new_with_length(const char *data, int length);
+ * aether_bin_* if we ever touch every call site.
+ *
+ * string_new_with_length is declared in aether_string.h (already
+ * included above). */
 
 const char *
 aether_pristine_concat_binary(const char *prefix, const char *suf, int suf_len)
 {
-    const char *pdata; int plen;
-    unwrap_bytes(prefix, &pdata, &plen);
+    const char *pdata = aether_string_data(prefix);
+    int         plen  = (int)aether_string_length(prefix);
 
-    const char *sdata; int slen;
-    unwrap_bytes(suf, &sdata, &slen);
+    const char *sdata = aether_string_data(suf);
+    int         slen  = (int)aether_string_length(suf);
     if (slen < suf_len) suf_len = slen;
 
     int total = plen + suf_len;
@@ -129,8 +114,8 @@ aether_pristine_concat_binary(const char *prefix, const char *suf, int suf_len)
 const char *
 aether_pristine_slice_binary(const char *s, int start, int end)
 {
-    const char *data; int len;
-    unwrap_bytes(s, &data, &len);
+    const char *data = aether_string_data(s);
+    int         len  = (int)aether_string_length(s);
     if (start < 0) start = 0;
     if (end > len) end = len;
     if (end < start) end = start;
@@ -307,11 +292,7 @@ svnae_rep_write_blob(const char *repo, const char *data, int len)
     int use_zlib = aether_rep_encoded_use_zlib(encoded);
 
     const char *werr = aether_rep_write_encoded(repo, sha1_buf, encoded);
-    if (werr) {
-        const char *wdata; int wlen;
-        unwrap_bytes(werr, &wdata, &wlen);
-        if (wlen > 0) return NULL;
-    }
+    if (werr && aether_string_length(werr) > 0) return NULL;
 
     /* rel_path for the rep-cache.db row. */
     char rel_path[80];
@@ -362,8 +343,8 @@ svnae_rep_read_blob(const char *repo, const char *sha1_hex)
      * uncompressed_size comes from rep-cache.db. "" on miss /
      * corruption; length may contain embedded NULs otherwise. */
     const char *decoded = aether_rep_read_decoded(repo, sha1_hex, uncompressed);
-    const char *ddata; int dlen;
-    unwrap_bytes(decoded, &ddata, &dlen);
+    const char *ddata = aether_string_data(decoded);
+    int         dlen  = (int)aether_string_length(decoded);
     if (dlen == 0 && uncompressed == 0) {
         /* Empty blob is legitimate. */
         char *out = malloc(1);

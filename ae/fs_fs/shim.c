@@ -34,6 +34,7 @@
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
+#include "aether_string.h"   /* aether_string_data / aether_string_length */
 
 /* Same svnae_buf layout as everywhere else. */
 struct svnae_buf {
@@ -56,24 +57,9 @@ buf_from(const unsigned char *src, int n)
 
 /* Read the full file at `path` into a buf — ported to Aether
  * (ae/subr/io.ae). We check io_is_regular_file + io_file_size first
- * so missing/empty/not-a-file stays distinguishable.
- *
- * aether_io_read_file returns an AetherString* (opaque handle) via
- * std.fs.read_binary — NOT a plain char*. When the AetherString
- * wrapper landed upstream (aether ce5ef25, "write_atomic/write_binary
- * AetherString header-leak fix") the runtime began returning values
- * through string_new_with_length, which returns the magic-tagged
- * struct. Treating that as a plain char* reads 24 bytes of header
- * and mis-sizes the body. Unwrap explicitly instead. */
-#define AETHER_STRING_MAGIC 0xAE57C0DE
-struct AetherString_local {
-    unsigned int magic;
-    int          ref_count;
-    size_t       length;
-    size_t       capacity;
-    char        *data;
-};
-
+ * so missing/empty/not-a-file stays distinguishable. The Aether
+ * `string` return is an AetherString* (since aether ce5ef25); use
+ * the public aether_string_data/length helpers to unwrap. */
 extern int aether_io_is_regular_file(const char *path);
 extern int aether_io_file_size(const char *path);
 extern const char *aether_io_read_file(const char *path);
@@ -86,16 +72,8 @@ svnae_fsfs_read_small_file(const char *path)
     if (size < 0) return NULL;
     const char *src = aether_io_read_file(path);
     if (!src) return NULL;
-
-    const struct AetherString_local *as =
-        (const struct AetherString_local *)src;
-    const char *data = src;
-    int len = size;
-    if (as->magic == AETHER_STRING_MAGIC) {
-        data = as->data;
-        len  = (int)as->length;
-    }
-    return buf_from((const unsigned char *)data, len);
+    return buf_from((const unsigned char *)aether_string_data(src),
+                    (int)aether_string_length(src));
 }
 
 int         svnae_fsfs_buf_length(const struct svnae_buf *b) { return b ? b->length : 0; }

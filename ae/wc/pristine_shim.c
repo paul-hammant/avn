@@ -47,39 +47,7 @@
  * use it to construct binary payloads with embedded NULs.
  */
 
-extern void *string_new_with_length(const char *data, int length);
-
-/* Aether magic + header (std/string/aether_string.h). Kept in sync
- * with the runtime's struct layout — breaks if the ABI shifts, which
- * is exactly why these are a small localised piece rather than a
- * re-invention sprinkled through the codebase. Field types match
- * aether_string.h verbatim: magic is unsigned int, length/capacity
- * are size_t (8 bytes on 64-bit), data is char*. */
-#define AETHER_STRING_MAGIC 0xAE57C0DE
-struct AetherString {
-    unsigned int magic;
-    int          ref_count;
-    size_t       length;
-    size_t       capacity;
-    char        *data;
-};
-
-/* Return the raw payload + length of a string-like pointer, regardless
- * of whether it's an AetherString* or a plain NUL-terminated char*.
- * Inline so the pristine helpers can share. */
-static void
-unwrap_bytes(const void *s, const char **out_data, int *out_len)
-{
-    if (!s) { *out_data = ""; *out_len = 0; return; }
-    const struct AetherString *as = (const struct AetherString *)s;
-    if (as->magic == AETHER_STRING_MAGIC) {
-        *out_data = as->data;
-        *out_len = (int)as->length;
-        return;
-    }
-    *out_data = (const char *)s;
-    *out_len = (int)strlen((const char *)s);
-}
+#include "aether_string.h"   /* aether_string_data / aether_string_length / string_new_with_length */
 
 /* 4-byte little-endian packing of `v`. Returns an AetherString of
  * length 4. */
@@ -125,8 +93,8 @@ svnae_wc_hash_bytes(const char *wc_root, const char *data, int len, char *out)
 {
     const char *hex = aether_wc_hash_bytes(wc_root, data, len);
     if (!hex) { out[0] = '\0'; return 0; }
-    const char *hdata; int hlen;
-    unwrap_bytes(hex, &hdata, &hlen);
+    const char *hdata = aether_string_data(hex);
+    int         hlen  = (int)aether_string_length(hex);
     if (hlen >= 65) hlen = 64;
     memcpy(out, hdata, (size_t)hlen);
     out[hlen] = '\0';
@@ -138,8 +106,8 @@ svnae_wc_hash_file(const char *wc_root, const char *path, char *out)
 {
     const char *hex = aether_wc_hash_file(wc_root, path);
     if (!hex) { out[0] = '\0'; return -1; }
-    const char *hdata; int hlen;
-    unwrap_bytes(hex, &hdata, &hlen);
+    const char *hdata = aether_string_data(hex);
+    int         hlen  = (int)aether_string_length(hex);
     if (hlen == 0) { out[0] = '\0'; return -1; }
     if (hlen >= 65) hlen = 64;
     memcpy(out, hdata, (size_t)hlen);
@@ -159,8 +127,8 @@ svnae_wc_pristine_put(const char *wc_root, const char *data, int len)
     static __thread char sha[65];
     const char *r = aether_wc_pristine_put(wc_root, data, len);
     if (!r) return NULL;
-    const char *rdata; int rlen;
-    unwrap_bytes(r, &rdata, &rlen);
+    const char *rdata = aether_string_data(r);
+    int         rlen  = (int)aether_string_length(r);
     if (rlen == 0) return NULL;
     if (rlen >= 65) rlen = 64;
     memcpy(sha, rdata, (size_t)rlen);
@@ -177,8 +145,8 @@ svnae_wc_pristine_get(const char *wc_root, const char *sha)
 {
     const char *r = aether_wc_pristine_get(wc_root, sha);
     if (!r) return NULL;
-    const char *rdata; int rlen;
-    unwrap_bytes(r, &rdata, &rlen);
+    const char *rdata = aether_string_data(r);
+    int         rlen  = (int)aether_string_length(r);
     if (rlen == 0) {
         /* Empty payload is a miss — pristine entries are never empty:
          * every real blob has at least one byte in it. (Matches C
