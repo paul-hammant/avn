@@ -6,7 +6,7 @@
 # `*_generated.c`. CI could run this and fail if the checked-in C
 # diverges from a fresh regeneration.
 
-AETHERC ?= $(HOME)/scm/aether/build/aetherc
+AETHERC ?= $(abspath $(dir $(lastword $(MAKEFILE_LIST))))/../../.aether_binaries/build/aetherc
 
 GENERATED := spec_generated.c dirblob_generated.c format_line_generated.c pathutil_generated.c reppath_generated.c filter_generated.c rebuild_generated.c branch_spec_generated.c count_reps_generated.c rep_store_generated.c
 

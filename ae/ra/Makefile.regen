@@ -1,4 +1,4 @@
-AETHERC ?= $(HOME)/scm/aether/build/aetherc
+AETHERC ?= $(abspath $(dir $(lastword $(MAKEFILE_LIST))))/../../.aether_binaries/build/aetherc
 
 GENERATED := urls_generated.c parse_generated.c commit_build_generated.c packed_generated.c
 

@@ -5,7 +5,7 @@
 # calls this. Never hand-edit a *_generated.c; the next regen will
 # overwrite it.
 
-AETHERC ?= $(HOME)/scm/aether/build/aetherc
+AETHERC ?= $(abspath $(dir $(lastword $(MAKEFILE_LIST))))/../../.aether_binaries/build/aetherc
 
 GENERATED := mergeinfo_generated.c ignore_generated.c sidecar_generated.c status_code_generated.c pristine_path_generated.c pristine_generated.c update_apply_generated.c merge_apply_generated.c update_walk_generated.c merge_walk_generated.c update_props_generated.c db_schema_generated.c db_nodes_generated.c
 

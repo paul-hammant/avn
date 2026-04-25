@@ -6,7 +6,7 @@
 # primitives — the default --emit=lib build refuses std.fs imports
 # for the embedded-DSL safety posture.
 
-AETHERC ?= $(HOME)/scm/aether/build/aetherc
+AETHERC ?= $(abspath $(dir $(lastword $(MAKEFILE_LIST))))/../../.aether_binaries/build/aetherc
 
 GENERATED := io_generated.c
 

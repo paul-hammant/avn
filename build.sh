@@ -6,18 +6,25 @@
 # Usage:
 #   ./build.sh               # build every [[bin]]
 #   ./build.sh svn           # build one named binary (matches [[bin]].name)
-#   AETHERC=/path ./build.sh # override the aetherc location
 #
-# Env:
-#   AE       -- ae CLI (default: ~/scm/aether/build/ae)
-#   AETHERC  -- passed through to regen.sh (default: ~/scm/aether/build/aetherc)
+# Toolchain comes from .aether_binaries/build/{ae,aetherc}, populated
+# by ./sync-aether-deps.sh from $AETHER_HOME. Run that script if the
+# directory is missing or stale.
 
 set -e
 cd "$(dirname "$0")"
 
-AE="${AE:-$HOME/scm/aether/build/ae}"
+AE="$(pwd)/.aether_binaries/build/ae"
 if [ ! -x "$AE" ]; then
-    echo "build.sh: ae not found at $AE — set AE=/path/to/ae" >&2
+    cat >&2 <<'EOF'
+build.sh: .aether_binaries/build/ae not found.
+
+The Aether toolchain snapshot is missing. Populate it with:
+
+    AETHER_HOME=/path/to/aether/checkout ./sync-aether-deps.sh
+
+(See sync-aether-deps.sh for the source-tree shape it expects.)
+EOF
     exit 2
 fi
 
@@ -28,12 +35,12 @@ target="${1:-}"
 #   [[bin]]
 #   name = "svn"
 #   path = "ae/svn/main.ae"
-python3 - "$target" <<'PY'
+AE="$AE" python3 - "$target" <<'PY'
 import re, subprocess, sys, os
 target = sys.argv[1] if len(sys.argv) > 1 else ""
 with open("aether.toml") as f: toml = f.read()
 bins = re.findall(r'\[\[bin\]\]\s*\nname\s*=\s*"([^"]+)"\s*\npath\s*=\s*"([^"]+)"', toml)
-ae = os.environ.get("AE", os.path.expanduser("~/scm/aether/build/ae"))
+ae = os.environ["AE"]
 for name, path in bins:
     if target and name != target: continue
     out = f"/tmp/{name}"
