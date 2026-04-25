@@ -1,0 +1,109 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// permissions and limitations under the License.
+
+// ae/ra/http_client.ae — Aether-side HTTP plumbing for the RA shim.
+//
+// Replaces ~200 lines of libcurl in ae/ra/shim.c with std.http.client
+// v2 calls. The C side keeps its existing svnae_* / http_get* /
+// http_post_json signatures so every downstream caller (tens of call
+// sites across handler shims, log/paths/blame builders, commit + copy
+// + branch_create code paths) links unchanged. The C bodies become
+// thin wrappers that invoke our four exports here, then unpack the
+// returned packed-string envelope into the out-params those callers
+// already use.
+//
+// Auth state (X-Svnae-User, X-Svnae-Superuser tokens) lives in C —
+// it's set via svnae_ra_set_user / svnae_ra_set_superuser_token and
+// passed in to each of these calls.
+
+import std.string
+import std.http.client
+
+// ---- helpers ---------------------------------------------------------
+//
+// The Aether helper returns an opaque response handle (ptr). The C
+// wrapper then calls back into typed accessors to read fields. This
+// avoids the AetherString-concat trap where building a packed envelope
+// in Aether and slicing it in C ran into surprising interpolation
+// ordering issues with the response_body length (round 46 first
+// draft — fix preserved as a comment-only note in the journal).
+//
+// Auth state lives on the C side (set via svnae_ra_set_user etc.);
+// these getters bring it across to attach as request headers.
+
+extern aether_ra_get_user() -> string
+extern aether_ra_get_super_token() -> string
+
+// Build a request, attach auth headers, send it, return the
+// std.http.client response handle the C side reads through accessors.
+// On transport failure returns null — the C wrapper treats that as -1.
+send_with_auth(req: ptr) -> ptr {
+    user = aether_ra_get_user()
+    if string.length(user) > 0 {
+        client.set_header(req, "X-Svnae-User", user)
+    }
+    super_token = aether_ra_get_super_token()
+    if string.length(super_token) > 0 {
+        client.set_header(req, "X-Svnae-Superuser", super_token)
+    }
+    client.set_timeout(req, 30)
+
+    resp, err = client.send_request(req)
+    client.request_free(req)
+    if string.length(err) > 0 {
+        return null
+    }
+    return resp
+}
+
+// GET. Returns std.http.client response handle (ptr) or null on
+// transport failure. Caller owns the response — must call
+// aether_ra_http_response_free when done.
+export aether_ra_http_get(url: string) -> ptr {
+    req = client.request("GET", url)
+    return send_with_auth(req)
+}
+
+// POST application/json with the given body bytes. Same return shape.
+export aether_ra_http_post_json(url: string, body: string, body_len: int) -> ptr {
+    req = client.request("POST", url)
+    client.set_body(req, body, body_len, "application/json")
+    return send_with_auth(req)
+}
+
+// Typed accessors over a response handle. The C side uses these
+// instead of slicing a packed string — keeps the response_body call
+// cleanly isolated, which fixed an AetherString length-shadowing
+// issue we hit in the first draft.
+
+export aether_ra_http_response_status(resp: ptr) -> int {
+    return client.response_status(resp)
+}
+
+export aether_ra_http_response_body(resp: ptr) -> string {
+    return client.response_body(resp)
+}
+
+export aether_ra_http_response_header(resp: ptr, name: string) -> string {
+    return client.response_header(resp, name)
+}
+
+export aether_ra_http_response_free(resp: ptr) {
+    client.response_free(resp)
+}
+
+main() {
+    println("ae/ra/http_client.ae is a library; not meant to run standalone")
+}

@@ -23,21 +23,30 @@
  * that already know the repos query API can switch repository sources
  * without reshape.
  *
- * We do the HTTP work ourselves via libcurl rather than going through
- * std.http, because Aether can't model the function-pointer chains
- * cleanly and std.http's `get` wrapper is Aether-only. JSON parse+build
- * now lives entirely on the Aether side (ae/ra/parse.ae,
+ * Round 46 moved the HTTP plumbing to Aether (ae/ra/http_client.ae,
+ * which uses std.http.client v2 — request builders + headers + status
+ * + response-header lookup). The C side here keeps its existing
+ * http_get_ex / http_post_json signatures so every downstream caller
+ * (handler shims, log/paths/blame builders, commit/copy/branch_create)
+ * links unchanged. The bodies are now thin wrappers: build a packed-
+ * envelope through the Aether helper, slice status / node-hash / body
+ * out, hand them to the existing out-params.
+ *
+ * Auth state (X-Svnae-User, X-Svnae-Superuser tokens) lives in C —
+ * set via svnae_ra_set_user / svnae_ra_set_superuser_token, exposed
+ * to the Aether helper through aether_ra_get_user /
+ * aether_ra_get_super_token.
+ *
+ * JSON parse+build lives entirely on the Aether side (ae/ra/parse.ae,
  * ae/ra/commit_build.ae); nothing in this file touches std.json
  * directly.
- *
- * Dependency: libcurl. Installed via `apt install libcurl4-openssl-dev`.
  */
 
 #include "aether_json.h"    /* JsonValue / json_create_number used by the
                                svnae_ra_json_int helper the commit-build
                                Aether module calls back into. */
+#include "aether_string.h"  /* aether_string_data / aether_string_length */
 #include "../subr/pin_list.h"
-#include <curl/curl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -74,120 +83,93 @@ void svnae_ra_set_superuser_token(const char *token) {
     g_client_super_token = token && *token ? strdup(token) : NULL;
 }
 
+/* Auth getters called from ae/ra/http_client.ae's send_with_auth.
+ * Empty string when the corresponding state isn't set — the Aether
+ * side checks string.length() before adding the header. */
+const char *aether_ra_get_user(void) {
+    return g_client_user ? g_client_user : "";
+}
+const char *aether_ra_get_super_token(void) {
+    return g_client_super_token ? g_client_super_token : "";
+}
+
 /* Environment-variable accessor moved to std.os::getenv;
  * svnae_http_get_body lives below, after http_get is defined. */
 
-/* Build a curl header list containing whatever auth we have. Caller
- * frees with curl_slist_free_all. Always returns non-NULL (at least
- * a User-Agent-less empty list is fine with libcurl's default). */
-static struct curl_slist *
-build_auth_headers(struct curl_slist *base)
+/* The libcurl-using helpers (build_auth_headers, buf_write_cb,
+ * hdr_capture_cb, struct buf, struct hdr_capture) moved to
+ * ae/ra/http_client.ae in round 46. The Aether helper returns a
+ * std.http.client response handle (ptr) the C wrapper reads via
+ * typed accessors — status, body, header — and then frees. */
+
+extern const void *aether_ra_http_get(const char *url);
+extern const void *aether_ra_http_post_json(const char *url, const char *body, int body_len);
+extern int         aether_ra_http_response_status(const void *resp);
+extern const char *aether_ra_http_response_body  (const void *resp);
+extern const char *aether_ra_http_response_header(const void *resp, const char *name);
+extern void        aether_ra_http_response_free  (const void *resp);
+
+/* Copy an AetherString-backed body (length-aware, embedded-NUL safe)
+ * into a fresh malloc'd buffer that out-params expect. */
+static int
+take_body(const char *src, char **out_body, size_t *out_len)
 {
-    char buf[512];
-    if (g_client_user) {
-        snprintf(buf, sizeof buf, "X-Svnae-User: %s", g_client_user);
-        base = curl_slist_append(base, buf);
-    }
-    if (g_client_super_token) {
-        snprintf(buf, sizeof buf, "X-Svnae-Superuser: %s", g_client_super_token);
-        base = curl_slist_append(base, buf);
-    }
-    return base;
+    const char *data = aether_string_data(src);
+    int n = (int)aether_string_length(src);
+    char *b = malloc((size_t)n + 1);
+    if (!b) return -1;
+    if (n > 0) memcpy(b, data, (size_t)n);
+    b[n] = '\0';
+    *out_body = b;
+    *out_len = (size_t)n;
+    return 0;
 }
 
-struct buf { char *data; size_t len; size_t cap; };
-
-static size_t
-buf_write_cb(void *contents, size_t size, size_t nmemb, void *userp)
+/* Same for a header value — node-hash etc. Returns NULL when the
+ * source is empty (header was absent), matching the original libcurl
+ * shim's NULL-on-absent contract. */
+static char *
+take_header(const char *src)
 {
-    struct buf *b = userp;
-    size_t incoming = size * nmemb;
-    if (b->len + incoming + 1 > b->cap) {
-        size_t nc = b->cap ? b->cap * 2 : 4096;
-        while (nc < b->len + incoming + 1) nc *= 2;
-        b->data = realloc(b->data, nc);
-        b->cap = nc;
-    }
-    memcpy(b->data + b->len, contents, incoming);
-    b->len += incoming;
-    b->data[b->len] = '\0';
-    return incoming;
+    int n = (int)aether_string_length(src);
+    if (n == 0) return NULL;
+    const char *data = aether_string_data(src);
+    char *h = malloc((size_t)n + 1);
+    if (!h) return NULL;
+    memcpy(h, data, (size_t)n);
+    h[n] = '\0';
+    return h;
 }
 
-/* Capture a specific response header into a buf. Matches are case-
- * insensitive; the first matching header wins. */
-struct hdr_capture {
-    const char *want_name;   /* canonical lower-case name the caller asked for */
-    size_t      want_len;
-    char       *value;       /* malloc'd, NUL-terminated */
-};
-
-static size_t
-hdr_capture_cb(char *buffer, size_t size, size_t nitems, void *userdata)
-{
-    struct hdr_capture *c = userdata;
-    size_t len = size * nitems;
-    if (len < 2 || c->value) return len;  /* already captured or too short */
-    /* Header line format: "Name: value\r\n" */
-    const char *colon = memchr(buffer, ':', len);
-    if (!colon) return len;
-    size_t nlen = (size_t)(colon - buffer);
-    if (nlen != c->want_len) return len;
-    for (size_t i = 0; i < nlen; i++) {
-        char a = buffer[i];
-        if (a >= 'A' && a <= 'Z') a = (char)(a - 'A' + 'a');
-        if (a != c->want_name[i]) return len;
-    }
-    /* Skip the colon + any leading whitespace. */
-    const char *v = colon + 1;
-    size_t vlen = len - (size_t)(v - buffer);
-    while (vlen > 0 && (*v == ' ' || *v == '\t')) { v++; vlen--; }
-    while (vlen > 0 && (v[vlen-1] == '\r' || v[vlen-1] == '\n' || v[vlen-1] == ' '))
-        vlen--;
-    c->value = malloc(vlen + 1);
-    if (c->value) { memcpy(c->value, v, vlen); c->value[vlen] = '\0'; }
-    return len;
-}
-
-/* Perform GET. Returns (body, status). On success body is malloc'd NUL-
- * terminated; caller frees. On CURL-level failure body is NULL.
+/* Perform GET. Returns 0 on success, -1 on transport failure. On
+ * success body is malloc'd NUL-terminated; caller frees.
  * `out_node_hash` (nullable): if non-NULL, captures the
- * X-Svnae-Node-Hash response header, written to a new malloc'd string
- * the caller must free. Set to NULL when absent. */
-/* Non-static so ae/client/verify_shim.c can call it without adding a
+ * X-Svnae-Node-Hash response header as a new malloc'd string the
+ * caller must free. NULL when absent.
+ *
+ * Non-static so ae/client/verify_shim.c can call it without adding a
  * fourth RA accessor for every endpoint. */
 int
 http_get_ex(const char *url, char **out_body, size_t *out_len, int *out_status,
             char **out_node_hash)
 {
-    CURL *h = curl_easy_init();
-    if (!h) return -1;
-    struct buf b = {0};
-    curl_easy_setopt(h, CURLOPT_URL, url);
-    curl_easy_setopt(h, CURLOPT_WRITEFUNCTION, buf_write_cb);
-    curl_easy_setopt(h, CURLOPT_WRITEDATA, &b);
-    curl_easy_setopt(h, CURLOPT_TIMEOUT, 30L);
+    const void *resp = aether_ra_http_get(url);
+    if (!resp) return -1;
 
-    struct curl_slist *hdrs = build_auth_headers(NULL);
-    if (hdrs) curl_easy_setopt(h, CURLOPT_HTTPHEADER, hdrs);
+    *out_status = aether_ra_http_response_status(resp);
 
-    struct hdr_capture cap = { "x-svnae-node-hash", 17, NULL };
-    if (out_node_hash) {
-        curl_easy_setopt(h, CURLOPT_HEADERFUNCTION, hdr_capture_cb);
-        curl_easy_setopt(h, CURLOPT_HEADERDATA, &cap);
+    const char *body_str = aether_ra_http_response_body(resp);
+    if (take_body(body_str, out_body, out_len) != 0) {
+        aether_ra_http_response_free(resp);
+        return -1;
     }
 
-    CURLcode rc = curl_easy_perform(h);
-    long status = 0;
-    curl_easy_getinfo(h, CURLINFO_RESPONSE_CODE, &status);
-    if (hdrs) curl_slist_free_all(hdrs);
-    curl_easy_cleanup(h);
-    if (rc != CURLE_OK) { free(b.data); free(cap.value); return -1; }
+    if (out_node_hash) {
+        const char *hash_str = aether_ra_http_response_header(resp, "X-Svnae-Node-Hash");
+        *out_node_hash = take_header(hash_str);
+    }
 
-    *out_body = b.data;
-    *out_len = b.len;
-    *out_status = (int)status;
-    if (out_node_hash) *out_node_hash = cap.value;
+    aether_ra_http_response_free(resp);
     return 0;
 }
 
@@ -211,32 +193,15 @@ char *svnae_http_get_body(const char *url) {
 static int
 http_post_json(const char *url, const char *body, char **out_resp, size_t *out_len, int *out_status)
 {
-    CURL *h = curl_easy_init();
-    if (!h) return -1;
-    struct buf b = {0};
-    struct curl_slist *headers = NULL;
-    headers = curl_slist_append(headers, "Content-Type: application/json");
-    headers = build_auth_headers(headers);
-    curl_easy_setopt(h, CURLOPT_URL, url);
-    curl_easy_setopt(h, CURLOPT_POST, 1L);
-    curl_easy_setopt(h, CURLOPT_POSTFIELDS, body);
-    curl_easy_setopt(h, CURLOPT_POSTFIELDSIZE, (long)strlen(body));
-    curl_easy_setopt(h, CURLOPT_HTTPHEADER, headers);
-    curl_easy_setopt(h, CURLOPT_WRITEFUNCTION, buf_write_cb);
-    curl_easy_setopt(h, CURLOPT_WRITEDATA, &b);
-    curl_easy_setopt(h, CURLOPT_TIMEOUT, 30L);
+    const void *resp = aether_ra_http_post_json(url, body, (int)strlen(body));
+    if (!resp) return -1;
 
-    CURLcode rc = curl_easy_perform(h);
-    long status = 0;
-    curl_easy_getinfo(h, CURLINFO_RESPONSE_CODE, &status);
-    curl_slist_free_all(headers);
-    curl_easy_cleanup(h);
-    if (rc != CURLE_OK) { free(b.data); return -1; }
+    *out_status = aether_ra_http_response_status(resp);
 
-    *out_resp = b.data;
-    *out_len = b.len;
-    *out_status = (int)status;
-    return 0;
+    const char *body_str = aether_ra_http_response_body(resp);
+    int rc = take_body(body_str, out_resp, out_len);
+    aether_ra_http_response_free(resp);
+    return rc;
 }
 
 /* ---- public API ------------------------------------------------------ */
