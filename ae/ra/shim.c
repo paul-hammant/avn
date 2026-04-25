@@ -190,6 +190,22 @@ char *svnae_http_get_body(const char *url) {
     return body ? body : strdup("");
 }
 
+/* GET `url`, return malloc'd body iff transport succeeded AND status
+ * is 200. Returns NULL on transport failure or any non-200 status —
+ * the caller can't tell those apart, but every existing caller
+ * already collapsed both into "give up" anyway.
+ *
+ * `out_len` (nullable) receives the body byte count on success. */
+static char *
+http_get_200(const char *url, size_t *out_len)
+{
+    char *body = NULL; size_t len = 0; int status = 0;
+    if (http_get(url, &body, &len, &status) != 0) return NULL;
+    if (status != 200) { free(body); return NULL; }
+    if (out_len) *out_len = len;
+    return body;
+}
+
 static int
 http_post_json(const char *url, const char *body, char **out_resp, size_t *out_len, int *out_status)
 {
@@ -212,10 +228,8 @@ extern int aether_ra_parse_rev_response(const char *body);
 int
 svnae_ra_head_rev(const char *base_url, const char *repo_name)
 {
-    const char *url = aether_url_info(base_url, repo_name);
-    char *body = NULL; size_t len = 0; int status = 0;
-    if (http_get(url, &body, &len, &status) != 0) return -1;
-    if (status != 200) { free(body); return -1; }
+    char *body = http_get_200(aether_url_info(base_url, repo_name), NULL);
+    if (!body) return -1;
     /* JSON parse + head-field extraction ported to
      * ae/ra/parse.ae::ra_parse_head_rev. */
     int rev = aether_ra_parse_head_rev(body);
@@ -231,10 +245,8 @@ extern const char *aether_ra_parse_hash_algo(const char *body);
 char *
 svnae_ra_hash_algo(const char *base_url, const char *repo_name)
 {
-    const char *url = aether_url_info(base_url, repo_name);
-    char *body = NULL; size_t len = 0; int status = 0;
-    if (http_get(url, &body, &len, &status) != 0) return NULL;
-    if (status != 200) { free(body); return NULL; }
+    char *body = http_get_200(aether_url_info(base_url, repo_name), NULL);
+    if (!body) return NULL;
     /* JSON parse ported to ae/ra/parse.ae::ra_parse_hash_algo.
      * Parser returns "" only on parse failure; defaults to "sha1"
      * when the field is absent (pre-Phase-6.1 servers). */
@@ -281,9 +293,8 @@ typedef int         (*ra_count_fn)(const char *packed);
 static struct svnae_ra_handle *
 ra_handle_from_url(const char *url, ra_parse_fn parse, ra_count_fn count)
 {
-    char *body = NULL; size_t len = 0; int status = 0;
-    if (http_get(url, &body, &len, &status) != 0) return NULL;
-    if (status != 200) { free(body); return NULL; }
+    char *body = http_get_200(url, NULL);
+    if (!body) return NULL;
 
     const char *packed = parse(body);
     free(body);
@@ -473,10 +484,8 @@ extern const char *aether_ra_info_root(const char *packed);
 struct svnae_ra_info *
 svnae_ra_info_rev(const char *base_url, const char *repo_name, int rev)
 {
-    const char *url = aether_url_rev_info(base_url, repo_name, rev);
-    char *body = NULL; size_t len = 0; int status = 0;
-    if (http_get(url, &body, &len, &status) != 0) return NULL;
-    if (status != 200) { free(body); return NULL; }
+    char *body = http_get_200(aether_url_rev_info(base_url, repo_name, rev), NULL);
+    if (!body) return NULL;
 
     const char *packed = aether_ra_parse_info_rev(body);
     free(body);
@@ -530,11 +539,7 @@ svnae_ra_cat(const char *base_url, const char *repo_name, int rev, const char *p
 {
     /* Skip leading '/' in the user path so URLs look clean. */
     while (*path == '/') path++;
-    const char *url = aether_url_rev_cat(base_url, repo_name, rev, path);
-    char *body = NULL; size_t len = 0; int status = 0;
-    if (http_get(url, &body, &len, &status) != 0) return NULL;
-    if (status != 200) { free(body); return NULL; }
-    return body;  /* caller owns */
+    return http_get_200(aether_url_rev_cat(base_url, repo_name, rev, path), NULL);
 }
 
 void svnae_ra_free(char *p) { free(p); }
@@ -557,10 +562,9 @@ svnae_ra_get_props(const char *base_url, const char *repo_name,
                    int rev, const char *path)
 {
     while (*path == '/') path++;
-    const char *url = aether_url_rev_props(base_url, repo_name, rev, path);
-    char *body = NULL; size_t len = 0; int status = 0;
-    if (http_get(url, &body, &len, &status) != 0) return NULL;
-    if (status != 200) { free(body); return NULL; }
+    char *body = http_get_200(
+        aether_url_rev_props(base_url, repo_name, rev, path), NULL);
+    if (!body) return NULL;
 
     const char *packed = aether_ra_parse_props(body);
     free(body);
