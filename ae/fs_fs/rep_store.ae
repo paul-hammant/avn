@@ -51,19 +51,10 @@ extern aether_rep_dir(repo: string, sha: string) -> string
 extern aether_rep_rel_path(sha: string) -> string
 extern aether_io_mkdir_p(path: string) -> int
 
-// sqlite — for rep-cache.db index access. Same bindings as
-// ae/subr/sqlite.ae; re-declared here so rep_store.ae stays a
-// stand-alone lib.
-const SQLITE_OK  = 0
-const SQLITE_ROW = 100
-extern svnae_sqlite_open(path: string) -> ptr
-extern svnae_sqlite_close(db: ptr) -> int
-extern svnae_sqlite_prepare(db: ptr, sql: string) -> ptr
-extern svnae_sqlite_finalize(stmt: ptr) -> int
-extern svnae_sqlite_step(stmt: ptr) -> int
-extern svnae_sqlite_bind_int(stmt: ptr, idx: int, v: int) -> int
-extern svnae_sqlite_bind_text(stmt: ptr, idx: int, text: string) -> int
-extern svnae_sqlite_column_int(stmt: ptr, col: int) -> int
+// sqlite — for rep-cache.db index access. Goes through contrib.sqlite v2.
+import contrib.sqlite
+const SQLITE_ROW  = 100
+const SQLITE_DONE = 101
 
 // ---- encode ------------------------------------------------------------
 //
@@ -201,49 +192,48 @@ rep_read_decoded_impl(repo: string, sha: string, uncompressed_size: int) -> stri
 //     0 on success, non-zero on failure (propagates the sqlite rc).
 
 export rep_cache_has(repo: string, sha: string) -> int {
-    db = svnae_sqlite_open("${repo}/rep-cache.db")
-    if db == 0 { return 0 }
-    stmt = svnae_sqlite_prepare(db, "SELECT 1 FROM rep_cache WHERE hash = ?")
-    if stmt == 0 { svnae_sqlite_close(db); return 0 }
-    svnae_sqlite_bind_text(stmt, 1, sha)
-    rc = svnae_sqlite_step(stmt)
+    db, oerr = sqlite.open("${repo}/rep-cache.db")
+    if string.length(oerr) > 0 { return 0 }
+    stmt, perr = sqlite.prepare(db, "SELECT 1 FROM rep_cache WHERE hash = ?")
+    if string.length(perr) > 0 { sqlite.close(db); return 0 }
+    sqlite.bind_text(stmt, 1, sha)
+    rc, _ = sqlite.step(stmt, db)
     found = 0
     if rc == SQLITE_ROW { found = 1 }
-    svnae_sqlite_finalize(stmt)
-    svnae_sqlite_close(db)
+    sqlite.finalize(stmt)
+    sqlite.close(db)
     return found
 }
 
 export rep_cache_lookup_uncompressed(repo: string, sha: string) -> int {
-    db = svnae_sqlite_open("${repo}/rep-cache.db")
-    if db == 0 { return -1 }
-    stmt = svnae_sqlite_prepare(db, "SELECT uncompressed_size FROM rep_cache WHERE hash = ?")
-    if stmt == 0 { svnae_sqlite_close(db); return -1 }
-    svnae_sqlite_bind_text(stmt, 1, sha)
-    rc = svnae_sqlite_step(stmt)
+    db, oerr = sqlite.open("${repo}/rep-cache.db")
+    if string.length(oerr) > 0 { return -1 }
+    stmt, perr = sqlite.prepare(db, "SELECT uncompressed_size FROM rep_cache WHERE hash = ?")
+    if string.length(perr) > 0 { sqlite.close(db); return -1 }
+    sqlite.bind_text(stmt, 1, sha)
+    rc, _ = sqlite.step(stmt, db)
     out = -1
-    if rc == SQLITE_ROW { out = svnae_sqlite_column_int(stmt, 0) }
-    svnae_sqlite_finalize(stmt)
-    svnae_sqlite_close(db)
+    if rc == SQLITE_ROW { out = sqlite.column_int(stmt, 0) }
+    sqlite.finalize(stmt)
+    sqlite.close(db)
     return out
 }
 
 export rep_cache_insert(repo: string, sha: string, rel_path: string,
                          uncompressed: int, storage: int) -> int {
-    db = svnae_sqlite_open("${repo}/rep-cache.db")
-    if db == 0 { return 1 }
-    stmt = svnae_sqlite_prepare(db,
+    db, oerr = sqlite.open("${repo}/rep-cache.db")
+    if string.length(oerr) > 0 { return 1 }
+    stmt, perr = sqlite.prepare(db,
         "INSERT INTO rep_cache (hash, rel_path, uncompressed_size, storage) VALUES (?, ?, ?, ?)")
-    if stmt == 0 { svnae_sqlite_close(db); return 2 }
-    svnae_sqlite_bind_text(stmt, 1, sha)
-    svnae_sqlite_bind_text(stmt, 2, rel_path)
-    svnae_sqlite_bind_int (stmt, 3, uncompressed)
-    svnae_sqlite_bind_int (stmt, 4, storage)
-    rc = svnae_sqlite_step(stmt)
-    svnae_sqlite_finalize(stmt)
-    svnae_sqlite_close(db)
-    // SQLITE_DONE == 101 on success; map to 0.
-    if rc == 101 { return 0 }
+    if string.length(perr) > 0 { sqlite.close(db); return 2 }
+    sqlite.bind_text(stmt, 1, sha)
+    sqlite.bind_text(stmt, 2, rel_path)
+    sqlite.bind_int (stmt, 3, uncompressed)
+    sqlite.bind_int (stmt, 4, storage)
+    rc, _ = sqlite.step(stmt, db)
+    sqlite.finalize(stmt)
+    sqlite.close(db)
+    if rc == SQLITE_DONE { return 0 }
     return rc
 }
 

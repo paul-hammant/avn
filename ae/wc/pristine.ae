@@ -47,17 +47,9 @@ import std.fs
 import std.zlib
 import std.cryptography
 
-// sqlite — to read wc.db's `info` table for the configured hash
-// algorithm. Same binding as ae/subr/sqlite.ae; re-declared locally
-// so pristine.ae builds as a stand-alone lib.
+import contrib.sqlite
+
 const SQLITE_ROW = 100
-extern svnae_sqlite_open(path: string) -> ptr
-extern svnae_sqlite_close(db: ptr) -> int
-extern svnae_sqlite_prepare(db: ptr, sql: string) -> ptr
-extern svnae_sqlite_finalize(stmt: ptr) -> int
-extern svnae_sqlite_step(stmt: ptr) -> int
-extern svnae_sqlite_bind_text(stmt: ptr, idx: int, text: string) -> int
-extern svnae_sqlite_column_text(stmt: ptr, col: int) -> string
 
 // Read the wc's configured hash algorithm from .svn/wc.db's info
 // table. Returns "sha1" when the DB is missing, the info row is
@@ -65,19 +57,19 @@ extern svnae_sqlite_column_text(stmt: ptr, col: int) -> string
 // fallback that every caller relied on. The concrete caller never
 // sees an empty string.
 wc_hash_algo(wc_root: string) -> string {
-    db = svnae_sqlite_open("${wc_root}/.svn/wc.db")
-    if db == 0 { return "sha1" }
-    stmt = svnae_sqlite_prepare(db, "SELECT value FROM info WHERE key = ?")
-    if stmt == 0 { svnae_sqlite_close(db); return "sha1" }
-    svnae_sqlite_bind_text(stmt, 1, "hash_algo")
-    rc = svnae_sqlite_step(stmt)
+    db, oerr = sqlite.open("${wc_root}/.svn/wc.db")
+    if string.length(oerr) > 0 { return "sha1" }
+    stmt, perr = sqlite.prepare(db, "SELECT value FROM info WHERE key = ?")
+    if string.length(perr) > 0 { sqlite.close(db); return "sha1" }
+    sqlite.bind_text(stmt, 1, "hash_algo")
+    rc, _ = sqlite.step(stmt, db)
     algo = ""
     if rc == SQLITE_ROW {
-        raw = svnae_sqlite_column_text(stmt, 0)
+        raw = sqlite.column_text(stmt, 0)
         algo = string.copy(raw)
     }
-    svnae_sqlite_finalize(stmt)
-    svnae_sqlite_close(db)
+    sqlite.finalize(stmt)
+    sqlite.close(db)
     if string.length(algo) == 0 { return "sha1" }
     return algo
 }

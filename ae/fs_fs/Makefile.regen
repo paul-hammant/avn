@@ -39,7 +39,10 @@ branch_spec_generated.c: branch_spec.ae
 count_reps_generated.c: count_reps.ae
 	$(AETHERC) --emit=lib $< $@
 
+# rep_store.ae imports contrib.sqlite — invoke aetherc from the
+# project root so its module resolver finds contrib/sqlite/module.ae
+# (the contrib symlink is sibling to ae/, not to ae/fs_fs/).
 rep_store_generated.c: rep_store.ae
-	$(AETHERC) --emit=lib --with=fs $< $@
+	cd ../.. && $(AETHERC) --emit=lib --with=fs ae/fs_fs/rep_store.ae ae/fs_fs/rep_store_generated.c
 
 .PHONY: all

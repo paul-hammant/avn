@@ -26,15 +26,9 @@
 // predating it need the ALTER TABLE, hence the PRAGMA probe first.
 
 import std.string
+import contrib.sqlite
 
-const SQLITE_OK   = 0
-const SQLITE_ROW  = 100
-
-extern svnae_sqlite_exec(db: ptr, sql: string) -> int
-extern svnae_sqlite_prepare(db: ptr, sql: string) -> ptr
-extern svnae_sqlite_finalize(stmt: ptr) -> int
-extern svnae_sqlite_step(stmt: ptr) -> int
-extern svnae_sqlite_column_text(stmt: ptr, col: int) -> string
+const SQLITE_ROW = 100
 
 // Run the CREATE TABLE IF NOT EXISTS statements and, if this wc.db
 // predates the `conflicted` column on `nodes`, add it with a
@@ -45,28 +39,28 @@ export wc_db_install_schema(db: ptr) -> int {
 }
 
 wc_db_install_schema_impl(db: ptr) -> int {
-    rc = svnae_sqlite_exec(db,
+    err = sqlite.exec(db,
         "CREATE TABLE IF NOT EXISTS nodes (  path       TEXT PRIMARY KEY,  kind       INT NOT NULL,  base_rev   INT NOT NULL,  base_sha1  TEXT NOT NULL,  state      INT NOT NULL,  conflicted INT NOT NULL DEFAULT 0);CREATE TABLE IF NOT EXISTS info (  key   TEXT PRIMARY KEY,  value TEXT NOT NULL);")
-    if rc != SQLITE_OK { return rc }
+    if string.length(err) > 0 { return 1 }
 
     // Migration: add `conflicted` on older wc.db files that have
     // `nodes` without it. PRAGMA table_info row layout: (cid, name,
     // type, notnull, dflt_value, pk) — name is column 1.
-    stmt = svnae_sqlite_prepare(db, "PRAGMA table_info(nodes)")
-    if stmt == 0 { return 0 }
+    stmt, perr = sqlite.prepare(db, "PRAGMA table_info(nodes)")
+    if string.length(perr) > 0 { return 0 }
     has_conflicted = 0
-    step_rc = svnae_sqlite_step(stmt)
+    step_rc, _ = sqlite.step(stmt, db)
     while step_rc == SQLITE_ROW {
-        nm = svnae_sqlite_column_text(stmt, 1)
+        nm = sqlite.column_text(stmt, 1)
         if string.equals(nm, "conflicted") == 1 { has_conflicted = 1 }
-        step_rc = svnae_sqlite_step(stmt)
+        step_rc, _ = sqlite.step(stmt, db)
     }
-    svnae_sqlite_finalize(stmt)
+    sqlite.finalize(stmt)
     if has_conflicted == 0 {
-        // Ignore rc — ALTER TABLE racing against a concurrent add
+        // Ignore err — ALTER TABLE racing against a concurrent add
         // returns "duplicate column"; harmless, PRAGMA's truth
         // supersedes on the next open.
-        svnae_sqlite_exec(db,
+        sqlite.exec(db,
             "ALTER TABLE nodes ADD COLUMN conflicted INT NOT NULL DEFAULT 0")
     }
     return 0

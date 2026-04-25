@@ -26,8 +26,10 @@ status_code_generated.c: status_code.ae
 pristine_path_generated.c: pristine_path.ae
 	$(AETHERC) --emit=lib $< $@
 
+# pristine.ae imports contrib.sqlite — invoke from project root so
+# the resolver sees the contrib/ symlink.
 pristine_generated.c: pristine.ae
-	$(AETHERC) --emit=lib --with=fs $< $@
+	cd ../.. && $(AETHERC) --emit=lib --with=fs ae/wc/pristine.ae ae/wc/pristine_generated.c
 
 update_apply_generated.c: update_apply.ae
 	$(AETHERC) --emit=lib $< $@
@@ -44,10 +46,12 @@ merge_walk_generated.c: merge_walk.ae
 update_props_generated.c: update_props.ae
 	$(AETHERC) --emit=lib $< $@
 
+# db_schema.ae and db_nodes.ae import contrib.sqlite — invoke from
+# project root.
 db_schema_generated.c: db_schema.ae
-	$(AETHERC) --emit=lib $< $@
+	cd ../.. && $(AETHERC) --emit=lib ae/wc/db_schema.ae ae/wc/db_schema_generated.c
 
 db_nodes_generated.c: db_nodes.ae
-	$(AETHERC) --emit=lib $< $@
+	cd ../.. && $(AETHERC) --emit=lib ae/wc/db_nodes.ae ae/wc/db_nodes_generated.c
 
 .PHONY: all

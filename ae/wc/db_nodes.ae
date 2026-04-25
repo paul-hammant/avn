@@ -25,18 +25,10 @@
 // are needed.
 
 import std.string
+import contrib.sqlite
 
-const SQLITE_OK   = 0
 const SQLITE_ROW  = 100
 const SQLITE_DONE = 101
-
-extern svnae_sqlite_prepare(db: ptr, sql: string) -> ptr
-extern svnae_sqlite_finalize(stmt: ptr) -> int
-extern svnae_sqlite_step(stmt: ptr) -> int
-extern svnae_sqlite_bind_int(stmt: ptr, idx: int, v: int) -> int
-extern svnae_sqlite_bind_text(stmt: ptr, idx: int, text: string) -> int
-extern svnae_sqlite_column_int(stmt: ptr, col: int) -> int
-extern svnae_sqlite_column_text(stmt: ptr, col: int) -> string
 
 // Storage primitives for the nodelist that feeds status / diff /
 // commit / update. Struct layout + accessors stay in db_shim.c —
@@ -55,32 +47,32 @@ extern svnae_wc_info_dup(s: string) -> ptr
 extern svnae_wc_node_alloc(path: string, kind: int, base_rev: int, base_sha1: string, node_state: int, conflicted: int) -> ptr
 
 export svnae_wc_db_node_exists(db: ptr, path: string) -> int {
-    stmt = svnae_sqlite_prepare(db, "SELECT 1 FROM nodes WHERE path = ?")
-    if stmt == 0 { return 0 }
-    svnae_sqlite_bind_text(stmt, 1, path)
-    rc = svnae_sqlite_step(stmt)
-    svnae_sqlite_finalize(stmt)
+    stmt, perr = sqlite.prepare(db, "SELECT 1 FROM nodes WHERE path = ?")
+    if string.length(perr) > 0 { return 0 }
+    sqlite.bind_text(stmt, 1, path)
+    rc, _ = sqlite.step(stmt, db)
+    sqlite.finalize(stmt)
     if rc == SQLITE_ROW { return 1 }
     return 0
 }
 
 export svnae_wc_db_delete_node(db: ptr, path: string) -> int {
-    stmt = svnae_sqlite_prepare(db, "DELETE FROM nodes WHERE path = ?")
-    if stmt == 0 { return -1 }
-    svnae_sqlite_bind_text(stmt, 1, path)
-    rc = svnae_sqlite_step(stmt)
-    svnae_sqlite_finalize(stmt)
+    stmt, perr = sqlite.prepare(db, "DELETE FROM nodes WHERE path = ?")
+    if string.length(perr) > 0 { return -1 }
+    sqlite.bind_text(stmt, 1, path)
+    rc, _ = sqlite.step(stmt, db)
+    sqlite.finalize(stmt)
     if rc == SQLITE_DONE { return 0 }
     return -1
 }
 
 export svnae_wc_db_set_conflicted(db: ptr, path: string, conflicted: int) -> int {
-    stmt = svnae_sqlite_prepare(db, "UPDATE nodes SET conflicted = ? WHERE path = ?")
-    if stmt == 0 { return -1 }
-    svnae_sqlite_bind_int (stmt, 1, conflicted)
-    svnae_sqlite_bind_text(stmt, 2, path)
-    rc = svnae_sqlite_step(stmt)
-    svnae_sqlite_finalize(stmt)
+    stmt, perr = sqlite.prepare(db, "UPDATE nodes SET conflicted = ? WHERE path = ?")
+    if string.length(perr) > 0 { return -1 }
+    sqlite.bind_int (stmt, 1, conflicted)
+    sqlite.bind_text(stmt, 2, path)
+    rc, _ = sqlite.step(stmt, db)
+    sqlite.finalize(stmt)
     if rc == SQLITE_DONE { return 0 }
     return -1
 }
@@ -90,16 +82,16 @@ export svnae_wc_db_set_conflicted(db: ptr, path: string, conflicted: int) -> int
 // — conflicted is maintained by svnae_wc_db_set_conflicted, so a
 // routine upsert must not clear it.
 export svnae_wc_db_upsert_node(db: ptr, path: string, kind: int, base_rev: int, base_sha1: string, node_state: int) -> int {
-    stmt = svnae_sqlite_prepare(db,
+    stmt, perr = sqlite.prepare(db,
         "INSERT INTO nodes (path, kind, base_rev, base_sha1, state) VALUES (?, ?, ?, ?, ?) ON CONFLICT(path) DO UPDATE SET kind=excluded.kind, base_rev=excluded.base_rev, base_sha1=excluded.base_sha1, state=excluded.state")
-    if stmt == 0 { return -1 }
-    svnae_sqlite_bind_text(stmt, 1, path)
-    svnae_sqlite_bind_int (stmt, 2, kind)
-    svnae_sqlite_bind_int (stmt, 3, base_rev)
-    svnae_sqlite_bind_text(stmt, 4, base_sha1)
-    svnae_sqlite_bind_int (stmt, 5, node_state)
-    rc = svnae_sqlite_step(stmt)
-    svnae_sqlite_finalize(stmt)
+    if string.length(perr) > 0 { return -1 }
+    sqlite.bind_text(stmt, 1, path)
+    sqlite.bind_int (stmt, 2, kind)
+    sqlite.bind_int (stmt, 3, base_rev)
+    sqlite.bind_text(stmt, 4, base_sha1)
+    sqlite.bind_int (stmt, 5, node_state)
+    rc, _ = sqlite.step(stmt, db)
+    sqlite.finalize(stmt)
     if rc == SQLITE_DONE { return 0 }
     return -1
 }
@@ -107,35 +99,35 @@ export svnae_wc_db_upsert_node(db: ptr, path: string, kind: int, base_rev: int, 
 // Fetch one row by path. Returns a ptr the caller frees with
 // svnae_wc_node_free, or null when the row is missing.
 export svnae_wc_db_get_node(db: ptr, path: string) -> ptr {
-    stmt = svnae_sqlite_prepare(db,
+    stmt, perr = sqlite.prepare(db,
         "SELECT path, kind, base_rev, base_sha1, state, conflicted FROM nodes WHERE path = ?")
-    if stmt == 0 { return null }
-    svnae_sqlite_bind_text(stmt, 1, path)
-    rc = svnae_sqlite_step(stmt)
+    if string.length(perr) > 0 { return null }
+    sqlite.bind_text(stmt, 1, path)
+    rc, _ = sqlite.step(stmt, db)
     out = null
     if rc == SQLITE_ROW {
-        p          = svnae_sqlite_column_text(stmt, 0)
-        kind       = svnae_sqlite_column_int (stmt, 1)
-        base_rev   = svnae_sqlite_column_int (stmt, 2)
-        base_sha1  = svnae_sqlite_column_text(stmt, 3)
-        node_state = svnae_sqlite_column_int (stmt, 4)
-        conflicted = svnae_sqlite_column_int (stmt, 5)
+        p          = sqlite.column_text(stmt, 0)
+        kind       = sqlite.column_int (stmt, 1)
+        base_rev   = sqlite.column_int (stmt, 2)
+        base_sha1  = sqlite.column_text(stmt, 3)
+        node_state = sqlite.column_int (stmt, 4)
+        conflicted = sqlite.column_int (stmt, 5)
         out = svnae_wc_node_alloc(p, kind, base_rev, base_sha1, node_state, conflicted)
     }
-    svnae_sqlite_finalize(stmt)
+    sqlite.finalize(stmt)
     return out
 }
 
 // Upsert key/value into the `info` table. Returns 0 on success,
 // non-zero on failure.
 export svnae_wc_db_set_info(db: ptr, key: string, value: string) -> int {
-    stmt = svnae_sqlite_prepare(db,
+    stmt, perr = sqlite.prepare(db,
         "INSERT INTO info (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
-    if stmt == 0 { return -1 }
-    svnae_sqlite_bind_text(stmt, 1, key)
-    svnae_sqlite_bind_text(stmt, 2, value)
-    rc = svnae_sqlite_step(stmt)
-    svnae_sqlite_finalize(stmt)
+    if string.length(perr) > 0 { return -1 }
+    sqlite.bind_text(stmt, 1, key)
+    sqlite.bind_text(stmt, 2, value)
+    rc, _ = sqlite.step(stmt, db)
+    sqlite.finalize(stmt)
     if rc == SQLITE_DONE { return 0 }
     return -1
 }
@@ -146,40 +138,40 @@ export svnae_wc_db_set_info(db: ptr, key: string, value: string) -> int {
 // for-one — the sqlite column pointer is volatile after finalize,
 // so we detach through svnae_wc_info_dup before returning.
 export svnae_wc_db_get_info(db: ptr, key: string) -> ptr {
-    stmt = svnae_sqlite_prepare(db, "SELECT value FROM info WHERE key = ?")
-    if stmt == 0 { return null }
-    svnae_sqlite_bind_text(stmt, 1, key)
-    rc = svnae_sqlite_step(stmt)
+    stmt, perr = sqlite.prepare(db, "SELECT value FROM info WHERE key = ?")
+    if string.length(perr) > 0 { return null }
+    sqlite.bind_text(stmt, 1, key)
+    rc, _ = sqlite.step(stmt, db)
     out = null
     if rc == SQLITE_ROW {
-        s = svnae_sqlite_column_text(stmt, 0)
+        s = sqlite.column_text(stmt, 0)
         out = svnae_wc_info_dup(s)
     }
-    svnae_sqlite_finalize(stmt)
+    sqlite.finalize(stmt)
     return out
 }
 
 // Snapshot every row in `nodes` into a growable C-backed struct
 // array. Ordered by path for deterministic iteration. Returns a
 // ptr to the nodelist (caller frees with svnae_wc_nodelist_free)
-// or 0 on prepare failure.
+// or null on prepare failure.
 export svnae_wc_db_list_nodes(db: ptr) -> ptr {
-    stmt = svnae_sqlite_prepare(db,
+    stmt, perr = sqlite.prepare(db,
         "SELECT path, kind, base_rev, base_sha1, state, conflicted FROM nodes ORDER BY path")
-    if stmt == 0 { return 0 }
+    if string.length(perr) > 0 { return null }
     L = svnae_wc_nodelist_new()
-    rc = svnae_sqlite_step(stmt)
+    rc, _ = sqlite.step(stmt, db)
     while rc == SQLITE_ROW {
-        path       = svnae_sqlite_column_text(stmt, 0)
-        kind       = svnae_sqlite_column_int (stmt, 1)
-        base_rev   = svnae_sqlite_column_int (stmt, 2)
-        base_sha1  = svnae_sqlite_column_text(stmt, 3)
-        node_state = svnae_sqlite_column_int (stmt, 4)
-        conflicted = svnae_sqlite_column_int (stmt, 5)
+        path       = sqlite.column_text(stmt, 0)
+        kind       = sqlite.column_int (stmt, 1)
+        base_rev   = sqlite.column_int (stmt, 2)
+        base_sha1  = sqlite.column_text(stmt, 3)
+        node_state = sqlite.column_int (stmt, 4)
+        conflicted = sqlite.column_int (stmt, 5)
         svnae_wc_nodelist_append(L, path, kind, base_rev, base_sha1, node_state, conflicted)
-        rc = svnae_sqlite_step(stmt)
+        rc, _ = sqlite.step(stmt, db)
     }
-    svnae_sqlite_finalize(stmt)
+    sqlite.finalize(stmt)
     return L
 }
 

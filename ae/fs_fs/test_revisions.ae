@@ -95,19 +95,10 @@ extern svnae_fsfs_sb_data(sb: ptr) -> string
 extern svnae_fsfs_sb_length(sb: ptr) -> int
 extern svnae_fsfs_sb_free(sb: ptr)
 
-const SQLITE_OK   = 0
+import contrib.sqlite
+
 const SQLITE_ROW  = 100
 const SQLITE_DONE = 101
-
-extern svnae_sqlite_open(path: string) -> ptr
-extern svnae_sqlite_close(db: ptr) -> int
-extern svnae_sqlite_exec(db: ptr, sql: string) -> int
-extern svnae_sqlite_prepare(db: ptr, sql: string) -> ptr
-extern svnae_sqlite_finalize(stmt: ptr) -> int
-extern svnae_sqlite_step(stmt: ptr) -> int
-extern svnae_sqlite_bind_int(stmt: ptr, idx: int, v: int) -> int
-extern svnae_sqlite_bind_text(stmt: ptr, idx: int, text: string) -> int
-extern svnae_sqlite_column_int(stmt: ptr, col: int) -> int
 
 // --- rep-store from Phase 3.1 (inlined) ------------------------------------
 
@@ -129,58 +120,58 @@ ensure_fanout_dirs(repo: string, sha1: string) {
 }
 
 rep_cache_has(repo: string, sha1: string) {
-    db = svnae_sqlite_open("${repo}/rep-cache.db")
-    if db == 0 { return 0 }
-    stmt = svnae_sqlite_prepare(db, "SELECT 1 FROM rep_cache WHERE hash = ?")
-    if stmt == 0 { svnae_sqlite_close(db); return 0 }
-    svnae_sqlite_bind_text(stmt, 1, sha1)
-    rc = svnae_sqlite_step(stmt)
+    db, oerr = sqlite.open("${repo}/rep-cache.db")
+    if string.length(oerr) > 0 { return 0 }
+    stmt, perr = sqlite.prepare(db, "SELECT 1 FROM rep_cache WHERE hash = ?")
+    if string.length(perr) > 0 { sqlite.close(db); return 0 }
+    sqlite.bind_text(stmt, 1, sha1)
+    rc, _ = sqlite.step(stmt, db)
     found = 0
     if rc == SQLITE_ROW { found = 1 }
-    svnae_sqlite_finalize(stmt)
-    svnae_sqlite_close(db)
+    sqlite.finalize(stmt)
+    sqlite.close(db)
     return found
 }
 
 rep_cache_lookup_storage(repo: string, sha1: string) {
-    db = svnae_sqlite_open("${repo}/rep-cache.db")
-    if db == 0 { return 0 }
-    stmt = svnae_sqlite_prepare(db, "SELECT storage FROM rep_cache WHERE hash = ?")
-    svnae_sqlite_bind_text(stmt, 1, sha1)
-    rc = svnae_sqlite_step(stmt)
+    db, oerr = sqlite.open("${repo}/rep-cache.db")
+    if string.length(oerr) > 0 { return 0 }
+    stmt, _ = sqlite.prepare(db, "SELECT storage FROM rep_cache WHERE hash = ?")
+    sqlite.bind_text(stmt, 1, sha1)
+    rc, _ = sqlite.step(stmt, db)
     s = 0
-    if rc == SQLITE_ROW { s = svnae_sqlite_column_int(stmt, 0) }
-    svnae_sqlite_finalize(stmt)
-    svnae_sqlite_close(db)
+    if rc == SQLITE_ROW { s = sqlite.column_int(stmt, 0) }
+    sqlite.finalize(stmt)
+    sqlite.close(db)
     return s
 }
 
 rep_cache_lookup_uncompressed_size(repo: string, sha1: string) {
-    db = svnae_sqlite_open("${repo}/rep-cache.db")
-    if db == 0 { return 0 }
-    stmt = svnae_sqlite_prepare(db, "SELECT uncompressed_size FROM rep_cache WHERE hash = ?")
-    svnae_sqlite_bind_text(stmt, 1, sha1)
-    rc = svnae_sqlite_step(stmt)
+    db, oerr = sqlite.open("${repo}/rep-cache.db")
+    if string.length(oerr) > 0 { return 0 }
+    stmt, _ = sqlite.prepare(db, "SELECT uncompressed_size FROM rep_cache WHERE hash = ?")
+    sqlite.bind_text(stmt, 1, sha1)
+    rc, _ = sqlite.step(stmt, db)
     v = 0
-    if rc == SQLITE_ROW { v = svnae_sqlite_column_int(stmt, 0) }
-    svnae_sqlite_finalize(stmt)
-    svnae_sqlite_close(db)
+    if rc == SQLITE_ROW { v = sqlite.column_int(stmt, 0) }
+    sqlite.finalize(stmt)
+    sqlite.close(db)
     return v
 }
 
 rep_cache_insert(repo: string, sha1: string, rel_path: string,
                  uncompressed_size: int, storage: int) {
-    db = svnae_sqlite_open("${repo}/rep-cache.db")
-    if db == 0 { return 1 }
-    stmt = svnae_sqlite_prepare(db,
+    db, oerr = sqlite.open("${repo}/rep-cache.db")
+    if string.length(oerr) > 0 { return 1 }
+    stmt, _ = sqlite.prepare(db,
         "INSERT INTO rep_cache (hash, rel_path, uncompressed_size, storage) VALUES (?, ?, ?, ?)")
-    svnae_sqlite_bind_text(stmt, 1, sha1)
-    svnae_sqlite_bind_text(stmt, 2, rel_path)
-    svnae_sqlite_bind_int (stmt, 3, uncompressed_size)
-    svnae_sqlite_bind_int (stmt, 4, storage)
-    rc = svnae_sqlite_step(stmt)
-    svnae_sqlite_finalize(stmt)
-    svnae_sqlite_close(db)
+    sqlite.bind_text(stmt, 1, sha1)
+    sqlite.bind_text(stmt, 2, rel_path)
+    sqlite.bind_int (stmt, 3, uncompressed_size)
+    sqlite.bind_int (stmt, 4, storage)
+    rc, _ = sqlite.step(stmt, db)
+    sqlite.finalize(stmt)
+    sqlite.close(db)
     if rc != SQLITE_DONE { return 2 }
     return 0
 }
@@ -270,12 +261,12 @@ fsfs_init(path: string) {
     rc = svnae_write_and_fsync("${path}/format", "svnae-fsfs-1\n", 13)
     if rc != 0 { return rc }
 
-    db = svnae_sqlite_open("${path}/rep-cache.db")
-    if db == 0 { return 3 }
-    rc = svnae_sqlite_exec(db,
+    db, oerr = sqlite.open("${path}/rep-cache.db")
+    if string.length(oerr) > 0 { return 3 }
+    err = sqlite.exec(db,
         "CREATE TABLE rep_cache (hash TEXT PRIMARY KEY, rel_path TEXT NOT NULL, uncompressed_size INT NOT NULL, storage INT NOT NULL)")
-    svnae_sqlite_close(db)
-    if rc != SQLITE_OK { return 4 }
+    sqlite.close(db)
+    if string.length(err) > 0 { return 4 }
 
     // Seed revision 0: empty root directory + rev blob pointing at it.
     empty_dir_sha1 = write_blob_text(path, "")

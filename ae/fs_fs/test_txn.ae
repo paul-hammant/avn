@@ -59,10 +59,7 @@ extern svnae_fsfs_buf_length(b: ptr) -> int
 extern svnae_fsfs_buf_data(b: ptr) -> string
 extern svnae_fsfs_buf_free(b: ptr)
 
-const SQLITE_OK = 0
-extern svnae_sqlite_open(path: string) -> ptr
-extern svnae_sqlite_close(db: ptr) -> int
-extern svnae_sqlite_exec(db: ptr, sql: string) -> int
+import contrib.sqlite
 
 // --- init -----------------------------------------------------------------
 
@@ -76,12 +73,12 @@ fsfs_init(path: string) {
     if string.length(merr) != 0 { return 12 }
     rc = svnae_write_and_fsync("${path}/format", "svnae-fsfs-1\n", 13)
     if rc != 0 { return rc }
-    db = svnae_sqlite_open("${path}/rep-cache.db")
-    if db == 0 { return 3 }
-    rc = svnae_sqlite_exec(db,
+    db, oerr = sqlite.open("${path}/rep-cache.db")
+    if string.length(oerr) > 0 { return 3 }
+    err = sqlite.exec(db,
         "CREATE TABLE rep_cache (hash TEXT PRIMARY KEY, rel_path TEXT NOT NULL, uncompressed_size INT NOT NULL, storage INT NOT NULL)")
-    svnae_sqlite_close(db)
-    if rc != SQLITE_OK { return 4 }
+    sqlite.close(db)
+    if string.length(err) > 0 { return 4 }
 
     empty_sha = svnae_rep_write_blob(path, "", 0)
     empty_copy = string.concat("", empty_sha)
