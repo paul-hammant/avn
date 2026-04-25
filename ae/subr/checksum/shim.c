@@ -29,7 +29,6 @@ extern char *svnae_openssl_hash_hex(const char *algo, const char *data, int len)
 extern int   svnae_openssl_hash_hex_len(const char *algo);
 extern int   svnae_openssl_hash_supported(const char *algo);
 
-char *svnae_md5_hex(const char *data, int data_len)    { return svnae_openssl_hash_hex("md5",    data, data_len); }
 char *svnae_sha1_hex(const char *data, int data_len)   { return svnae_openssl_hash_hex("sha1",   data, data_len); }
 char *svnae_sha256_hex(const char *data, int data_len) { return svnae_openssl_hash_hex("sha256", data, data_len); }
 

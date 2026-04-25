@@ -43,7 +43,6 @@ evp_by_name(const char *name)
     if (!name) return NULL;
     if (strcmp(name, "sha1")   == 0) return EVP_sha1();
     if (strcmp(name, "sha256") == 0) return EVP_sha256();
-    if (strcmp(name, "md5")    == 0) return EVP_md5();
     return NULL;
 }
 
@@ -144,9 +143,8 @@ svnae_openssl_b64_decode(const char *src, int src_len,
 }
 
 /* Is `algo` allowed as a repo's *content-address* algorithm? 1 = yes,
- * 0 = no. Intentionally narrower than evp_by_name: sha1 + sha256 only.
- * md5 is supported by svnae_openssl_hash_hex for test-side use but
- * must never be installed as a primary/secondary on a real repo. */
+ * 0 = no. sha1 + sha256 only — the only two algorithms anything in
+ * the port has ever asked for. */
 int
 svnae_openssl_hash_supported(const char *algo)
 {
@@ -156,7 +154,7 @@ svnae_openssl_hash_supported(const char *algo)
     return 0;
 }
 
-/* Hex width produced by `algo`. 32 (md5), 40 (sha1), 64 (sha256); 0 for
+/* Hex width produced by `algo`. 40 (sha1), 64 (sha256); 0 for
  * unsupported. */
 int
 svnae_openssl_hash_hex_len(const char *algo)
@@ -164,6 +162,5 @@ svnae_openssl_hash_hex_len(const char *algo)
     if (!algo) return 0;
     if (strcmp(algo, "sha1")   == 0) return 40;
     if (strcmp(algo, "sha256") == 0) return 64;
-    if (strcmp(algo, "md5")    == 0) return 32;
     return 0;
 }

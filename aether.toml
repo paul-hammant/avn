@@ -2,7 +2,7 @@
 name = "svn-aether"
 
 [build]
-link_flags = "-lsqlite3 -lz -lutf8proc -lssl -lcrypto"
+link_flags = "-lsqlite3 -lz -lssl -lcrypto"
 
 [[bin]]
 name = "svn"
@@ -60,11 +60,6 @@ extra_sources = ["ae/ffi/zlib/shim.c"]
 name = "test_io"
 path = "ae/subr/test_io.ae"
 extra_sources = ["ae/subr/io/shim.c", "ae/subr/io_generated.c"]
-
-[[bin]]
-name = "test_utf8"
-path = "ae/subr/test_utf8.ae"
-extra_sources = ["ae/ffi/utf8proc/shim.c"]
 
 [[bin]]
 name = "test_svndiff"
