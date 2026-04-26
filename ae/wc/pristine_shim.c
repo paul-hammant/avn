@@ -17,35 +17,17 @@
 
 /* ae/wc/pristine_shim.c — thin adapter over ae/wc/pristine.ae.
  *
- * The pristine store (put / get / has / size / hash) is fully
- * ported to Aether now that std.cryptography (sha1/sha256) and
- * std.zlib (deflate/inflate) landed, and Round 37 moved the
- * wc.db info-table lookup for the configured hash algorithm to
- * Aether as well. What remains here:
- *
- *   1. Three small byte-level helpers — pack_le32, binary-safe
- *      concat, binary-safe slice — wrapping Aether's
- *      string_new_with_length / AetherString layout. std.string
- *      has no byte-construction primitive that doesn't intermediate
- *      through a NUL-terminated C-style string; doing these in C
- *      keeps the Aether implementation binary-safe.
- *
- *   2. Adapters for the public svnae_wc_* signatures — existing
- *      callers expect "out-param buffer with hex length", "NULL
- *      on miss", etc.; we marshal between those and the Aether
- *      wrappers' string returns.
- */
+ * Two responsibilities:
+ *  1. byte-level helpers (pack_le32; concat/slice live in
+ *     rep_store_shim.c which is always co-linked) wrapping
+ *     string_new_with_length so Aether can build binary payloads.
+ *  2. public svnae_wc_* signatures — out-param/length-aware C ABI —
+ *     adapting Aether's string returns. */
 
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-/* --- byte-level helpers for the Aether side ------------------------- *
- *
- * string_new_with_length takes a length-prefixed AetherString; we
- * use it to construct binary payloads with embedded NULs.
- */
 
 #include "aether_string.h"   /* aether_string_data / aether_string_length / string_new_with_length */
 
@@ -62,19 +44,9 @@ aether_pristine_pack_le32(int v)
     return (const char *)string_new_with_length(buf, 4);
 }
 
-/* aether_pristine_concat_binary / aether_pristine_slice_binary live
- * in ae/fs_fs/rep_store_shim.c now — the fs_fs rep-store port
- * (round 31) needed them too, and both shims are linked into every
- * binary that uses either pristine_generated.c or
- * rep_store_generated.c. Exporting once from rep_store_shim.c
- * avoids duplicate-symbol link errors. */
-
-/* --- public API — thin C adapters over the Aether wrappers --------- *
- *
- * The svnae_wc_* signatures are what existing callers (checkout,
- * update, merge, revert, status, verify) expect; we marshal to /
- * from the Aether-side string returns.
- */
+/* aether_pristine_concat_binary / _slice_binary live in
+ * fs_fs/rep_store_shim.c — both shims always co-link, so exporting
+ * once avoids duplicate-symbol errors. */
 
 extern const char *aether_wc_hash_bytes(const char *wc_root,
                                         const char *data, int length);
@@ -117,10 +89,6 @@ svnae_wc_hash_file(const char *wc_root, const char *path, char *out)
 
 /* Put. Returns the sha hex (TLS-cached; caller copies before next
  * call) or NULL on failure. */
-/* Ephemeral trace that exposed an OpenSSL stub path: when the build
- * didn't set -DAETHER_HAS_OPENSSL, std.cryptography returned NULL
- * digests and downstream code read past a NULL pointer. Kept as a
- * comment so I don't reach for the same trace a third time. */
 const char *
 svnae_wc_pristine_put(const char *wc_root, const char *data, int len)
 {

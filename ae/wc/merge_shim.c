@@ -17,20 +17,12 @@
 
 /* ae/wc/merge_shim.c — opaque rtree storage for svn merge.
  *
- * Round 70 (Gordian) ported svnae_wc_merge orchestration to
- * ae/wc/merge.ae. The recursive walker is in merge_walk.ae, the
- * deletion + add/mod two-pass apply is in merge_apply.ae, the
- * mergeinfo arithmetic is in mergeinfo.ae. What stays here is just
- * the rtree opaque struct + accessors that hold per-node binary
- * content (Aether strings can't safely carry blobs with embedded
- * NULs across FFI without going through length-aware primitives).
- *
- * The TLS wc_root pointer rt_add reads via sha1_of_bytes is shared
- * with update_shim.c — set via the same svnae_update_set_wc_root
- * helper. Round 70 arrived at exactly the same shape as Round 69
- * (update); this file is the merge-side equivalent of
- * update_shim.c's remote_tree post-Round-69.
- */
+ * Per-node binary content stored on the C side because Aether
+ * strings can't safely carry blobs with embedded NULs across FFI.
+ * Walker in merge_walk.ae, two-pass apply in merge_apply.ae,
+ * mergeinfo arithmetic in mergeinfo.ae, top-level orchestration
+ * in merge.ae. The TLS wc_root pointer is shared with
+ * update_shim.c (same set/get helpers). */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -38,9 +30,8 @@
 
 extern int svnae_wc_hash_bytes(const char *wc_root, const char *data, int len, char *out);
 
-/* TLS wc_root shared with update_shim.c. The sha1_of_bytes helper
- * uses it to fill in per-file hashes during the merge walk. The
- * setter lives in update_shim.c — both shims read the same TLS slot. */
+/* TLS wc_root pointer + setter live in update_shim.c; both files
+ * read the same TLS slot for sha1_of_bytes during their walks. */
 extern void svnae_update_set_wc_root(const char *wc_root);
 extern const char *svnae_update_get_wc_root(void);
 

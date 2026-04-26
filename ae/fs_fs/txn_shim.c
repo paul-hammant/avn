@@ -301,13 +301,8 @@ svnae_strset_free(struct svnae_strset *s)
     free(s);
 }
 
-/* ---- rebuild_dir now in Aether (ae/fs_fs/rebuild.ae) -------------------
- *
- * The recursive tree rebuilder moved to Aether once std.fs landed and
- * the reclist + sbuf + sort-and-emit machinery could be expressed as
- * string operations over the "K SHA NAME\n" dir-blob format. The
- * rep-store read/write stays in C; Aether calls through externs.
- */
+/* Recursive tree rebuilder lives in ae/fs_fs/rebuild.ae; rep-store
+ * read/write stays in C via the externs. */
 
 extern const char *aether_rebuild_dir(const char *repo,
                                       const char *base_dir_sha,

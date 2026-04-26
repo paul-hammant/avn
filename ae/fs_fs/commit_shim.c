@@ -15,36 +15,19 @@
  * permissions and limitations under the License.
  */
 
-/* fs_fs/commit_shim.c — leaf bindings for commit finalise.
- *
- * Round 64 (Gordian knot) ported the orchestration of
- * svnae_commit_finalise* and svnae_branch_create to
- * ae/fs_fs/commit_finalise.ae. What remains here:
- *
- *   - svnae_fnmatch_pathname  (fnmatch(3) FFI for ae/fs_fs/spec.ae)
- *   - svnae_branch_spec_allows (one-line trampoline for C callers
- *     that link without the Aether export wrapper — currently still
- *     called from ae/svnserver/shim.c).
- *
- * Every other function in this file pre-Round 64 was orchestration
- * (recursive tree-rebuild stays in txn_shim.c — it's the actual leaf
- * of the commit pipeline; everything else was just plumbing).
- */
+/* fs_fs/commit_shim.c — two leaf bindings:
+ *  - svnae_fnmatch_pathname: fnmatch(3) FFI for ae/fs_fs/spec.ae
+ *  - svnae_branch_spec_allows: thin null-guarded wrapper kept stable
+ *    for C callers that don't link the Aether export wrapper. */
 
 #include <fnmatch.h>
 
-/* FFI helper the Aether spec matcher (ae/fs_fs/spec.ae) calls. Keeps
- * fnmatch(3) on the C side since Aether has no binding for it. */
 int
 svnae_fnmatch_pathname(const char *glob, const char *path)
 {
     return fnmatch(glob, path, FNM_PATHNAME) == 0 ? 1 : 0;
 }
 
-/* Trampoline preserved for C callers (svnserver/shim.c reaches it
- * via a C-symbol declaration). The Aether export is named
- * aether_branch_spec_allows; this thin wrapper keeps the
- * svnae_branch_spec_allows symbol stable. */
 extern int aether_branch_spec_allows(const char *repo, const char *branch,
                                      const char *path);
 int
