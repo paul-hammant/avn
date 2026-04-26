@@ -17,13 +17,10 @@
 
 /* ae/wc/diff_shim.c — binary tmp-write adapter for svn diff.
  *
- * Round 80 (Gordian) ported svnae_wc_diff orchestration to
- * ae/wc/diff.ae. fork+execl /usr/bin/diff goes through std.os.os_run;
- * tmp-file staging via fs.write_atomic. What stays in C: the
- * pristine-bytes-to-tmp-file path, because svnae_wc_pristine_get
- * returns malloc'd `char *` that may contain embedded NULs (and
- * Aether's `string` ABI would truncate at the first one).
- */
+ * The diff orchestration lives in ae/wc/diff.ae; this file keeps the
+ * pristine-bytes-to-tmp-file path because svnae_wc_pristine_get returns
+ * malloc'd `char *` that may contain embedded NULs (Aether's `string`
+ * ABI would truncate at the first one). */
 
 #include <stdlib.h>
 #include <string.h>

@@ -9,12 +9,9 @@
  *     http://www.apache.org/licenses/LICENSE-2.0
  */
 
-/* ae/subr/packed_handle/shim.c — shared svnae_packed_handle storage.
- *
- * Round 56 extracted from ae/ra/shim.c (where it lived as
- * svnae_ra_handle, round 45) and ae/repos/shim.c (where it lived as
- * svnae_repos_handle, round 53). Same struct, same helpers, one
- * source. */
+/* ae/subr/packed_handle/shim.c — shared svnae_packed_handle storage,
+ * used by ra/shim.c, repos/shim.c, and any other shim that holds an
+ * Aether-parsed packed-record string with a per-handle pin_list. */
 
 #include <stdlib.h>
 #include <string.h>

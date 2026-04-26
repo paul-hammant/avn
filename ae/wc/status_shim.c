@@ -16,19 +16,11 @@
  */
 
 /* ae/wc/status_shim.c — statuslist storage primitive + accessors.
- *
- * Round 68 (Gordian knot) ported the recursive svnae_wc_status walk
- * to ae/wc/status.ae. The hand-rolled `strset` (linear-search string
- * set, ~25 lines) was retired in favour of a std.collections.map
- * tracked-set with O(1) membership probing. The svn:ignore prop
- * fetch + matching, the on-disk classification, and the recursive
- * unversioned walk all moved to Aether.
- *
- * What stays in C:
- *   - struct svnae_wc_statuslist + the (path, code) accessors
- *   - new() / append() / sort() the Aether walk calls per result row
- *   - svnae_fnmatch_plain  (POSIX fnmatch(3) FFI for ae/wc/ignore.ae)
- */
+ * The recursive walk + svn:ignore filtering live in ae/wc/status.ae;
+ * this file keeps:
+ *   - struct svnae_wc_statuslist + (path, code) accessors
+ *   - new()/append()/sort() the Aether walk calls per result row
+ *   - svnae_fnmatch_plain (POSIX fnmatch(3) FFI for ignore.ae) */
 
 #include <fnmatch.h>
 #include <stdint.h>

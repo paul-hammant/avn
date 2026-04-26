@@ -15,24 +15,13 @@
  * permissions and limitations under the License.
  */
 
-/* ae/wc/update_shim.c — remote_tree storage primitive for svn update.
+/* ae/wc/update_shim.c — remote_tree storage for svn update.
  *
- * Round 69 (Gordian) ported svnae_wc_update + svnae_wc_switch
- * orchestration to ae/wc/update.ae. The recursive remote walk is
- * already in update_walk.ae and the two-pass apply is in
- * update_apply.ae; what remains here is just the C-allocated
- * remote_tree opaque struct + accessors that hold the per-node
- * binary content (since Aether strings can't safely carry blobs
- * with embedded NULs across FFI without going through length-aware
- * primitives that the apply pass already does on the C side).
- *
- *   svnae_rtree_new / _free                  — lifecycle
- *   svnae_rtree_add_dir / svnae_rtree_add_file — populate from RA walk
- *   rtree_count / _path_at / _kind_at / _sha_at / _data_at
- *   _data_len_at / _find_by_path             — accessors for the
- *                                                Aether apply pass
- *   update_sha1_of_file                      — TLS-buffered hex digest
- */
+ * Per-node binary content stays here because Aether strings can't
+ * safely carry blobs with embedded NULs across FFI. Walker in
+ * update_walk.ae, two-pass apply in update_apply.ae, top-level
+ * orchestration in update.ae. The TLS wc_root pointer is shared
+ * with merge_shim.c (set/get helpers below). */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -41,11 +30,6 @@
 extern int svnae_wc_hash_bytes(const char *wc_root, const char *data, int len, char *out);
 extern int svnae_wc_hash_file (const char *wc_root, const char *path, char *out);
 
-/* The C side keeps wc_root in a TLS pointer so update_walk's
- * RA-cat-and-add-file path can compute the hex hash without threading
- * wc_root through every signature. The Aether-side update.ae sets it
- * via svnae_rtree_new wrapping; for now we accept "" and let the
- * apply pass compute hashes on demand. */
 static __thread const char *g_wc_root = NULL;
 
 void svnae_update_set_wc_root(const char *wc_root) { g_wc_root = wc_root; }

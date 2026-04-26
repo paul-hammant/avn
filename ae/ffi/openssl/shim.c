@@ -17,14 +17,11 @@
 
 /* ae/ffi/openssl/shim.c — thin glue to std.cryptography v2.
  *
- * Round 50 moved the EVP plumbing out of this file: the digest +
- * Base64 work now lives in ae/ffi/openssl/crypto_helpers.ae which
- * uses std.cryptography. The C functions below keep their existing
- * svnae_openssl_* signatures so every downstream caller (six
- * shims + the test harness) links unchanged — the bodies are now
- * thin wrappers that copy AetherString-backed results into the
- * malloc'd / stack-buffer shapes the C contract has always had.
- */
+ * Digest + Base64 work lives in ae/ffi/openssl/crypto_helpers.ae;
+ * the C functions below preserve the historical svnae_openssl_*
+ * signatures (six downstream shims + the test harness link
+ * against them), copying AetherString results into malloc'd /
+ * stack-buffer shapes the C contract expects. */
 
 #include <stdlib.h>
 #include <string.h>

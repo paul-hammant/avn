@@ -16,14 +16,10 @@
  */
 
 /* ae/wc/props_shim.c — proplist storage primitive + free helpers.
- *
- * Round 66 (Gordian knot) ported the SQL drive (propset / propget /
- * propdel / proplist SELECT loop / ensure_schema) to ae/wc/props.ae.
- * What remains here is the same shape as db_shim.c's nodelist:
- *   - struct svnae_wc_proplist + its (name, value) accessors
- *   - the new() / append() pair the Aether SELECT loop calls
- *   - the malloc-free trampoline for propget's returned string
- */
+ * Same shape as db_shim.c's nodelist:
+ *   - struct svnae_wc_proplist + (name, value) accessors
+ *   - new()/append() the Aether-side SELECT loop in props.ae calls
+ *   - malloc-free trampoline for propget's returned string */
 
 #include <stdlib.h>
 #include <string.h>
