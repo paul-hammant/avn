@@ -15,84 +15,41 @@
  * permissions and limitations under the License.
  */
 
-/* ae/wc/update_shim.c — svn update.
+/* ae/wc/update_shim.c — remote_tree storage primitive for svn update.
  *
- * Pulls remote state at target rev into a checked-out WC:
- *   svnae_wc_update(wc_root, target_rev)
- *     target_rev == -1 means "use server's current head".
- *   Returns target_rev on success, -1 on error, -2 on conflict.
+ * Round 69 (Gordian) ported svnae_wc_update + svnae_wc_switch
+ * orchestration to ae/wc/update.ae. The recursive remote walk is
+ * already in update_walk.ae and the two-pass apply is in
+ * update_apply.ae; what remains here is just the C-allocated
+ * remote_tree opaque struct + accessors that hold the per-node
+ * binary content (since Aether strings can't safely carry blobs
+ * with embedded NULs across FFI without going through length-aware
+ * primitives that the apply pass already does on the C side).
  *
- * Algorithm (non-incremental — we fetch the full tree listing):
- *   1. Pull the full remote tree listing recursively at target_rev.
- *      Yields a set of (path, kind, sha1 [for files]).
- *   2. For each local node:
- *        - if remote has it at same sha1 → just refresh base_rev
- *        - if remote has it at different sha1 AND local is clean → overwrite
- *        - if remote has it at different sha1 AND local is modified → CONFLICT
- *        - if remote doesn't have it:
- *            - local state=normal → delete it locally (remote deleted)
- *            - local state=added → keep (user's work in progress)
- *   3. For each remote node not locally tracked:
- *        - fetch via RA cat, write to disk, pristine, db row.
- *
- * We scan conflicts in a dry-run pass before applying any changes, so
- * a conflict leaves the WC unchanged.
+ *   svnae_rtree_new / _free                  — lifecycle
+ *   svnae_rtree_add_dir / svnae_rtree_add_file — populate from RA walk
+ *   rtree_count / _path_at / _kind_at / _sha_at / _data_at
+ *   _data_len_at / _find_by_path             — accessors for the
+ *                                                Aether apply pass
+ *   update_sha1_of_file                      — TLS-buffered hex digest
  */
 
-#include <dirent.h>
-#include <errno.h>
-#include <fcntl.h>
-#include <limits.h>
-#include <sqlite3.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
-#include <sys/types.h>
-#include <unistd.h>
-
-#ifndef PATH_MAX
-#define PATH_MAX 4096
-#endif
-
-/* Externs from neighbouring shims.
- * Pass A/B of the update (db mutations, pristine puts/gets, ra_cat,
- * ra_list walk, props ingest) all live in ae/wc/update_apply.ae now;
- * this shim only opens the db, reads static info fields, does the
- * initial head-rev probe via RA, and walks the wc_db nodelist so it
- * can hand the count to Aether. */
-sqlite3 *svnae_wc_db_open(const char *wc_root);
-void     svnae_wc_db_close(sqlite3 *db);
-int      svnae_wc_db_set_info(sqlite3 *db, const char *key, const char *value);
-
-struct svnae_wc_nodelist;
-struct svnae_wc_nodelist *svnae_wc_db_list_nodes(sqlite3 *db);
-int         svnae_wc_nodelist_count(const struct svnae_wc_nodelist *L);
-void        svnae_wc_nodelist_free(struct svnae_wc_nodelist *L);
-
-char *svnae_wc_db_get_info(sqlite3 *db, const char *key);
-void  svnae_wc_info_free(char *s);
-
-int   svnae_ra_head_rev(const char *base_url, const char *repo_name);
-
-/* --- hashing helpers ------------------------------------------------
- *
- * Phase 6.1: WC content addressing uses the configured algorithm, which
- * is read per-call from the WC's info table. We set `g_wc_root` at the
- * top of the public entry points so the helpers below can find it
- * without threading it through every internal signature. The algo
- * changes only at checkout time, so a thread-local pointer is safe. */
 
 extern int svnae_wc_hash_bytes(const char *wc_root, const char *data, int len, char *out);
 extern int svnae_wc_hash_file (const char *wc_root, const char *path, char *out);
 
+/* The C side keeps wc_root in a TLS pointer so update_walk's
+ * RA-cat-and-add-file path can compute the hex hash without threading
+ * wc_root through every signature. The Aether-side update.ae sets it
+ * via svnae_rtree_new wrapping; for now we accept "" and let the
+ * apply pass compute hashes on demand. */
 static __thread const char *g_wc_root = NULL;
 
-/* sha1_of_bytes is still used by walk_remote (populates the
- * remote_tree's per-file sha during RA fetch). The file-hashing
- * and atomic-write / mkdir-p helpers moved into the Aether apply
- * pass (ae/wc/update_apply.ae) so the C side no longer needs
- * them. */
+void svnae_update_set_wc_root(const char *wc_root) { g_wc_root = wc_root; }
+
 static void
 sha1_of_bytes(const char *data, int len, char out[65])
 {
@@ -100,19 +57,11 @@ sha1_of_bytes(const char *data, int len, char out[65])
     if (g_wc_root) svnae_wc_hash_bytes(g_wc_root, data, len, out);
 }
 
-/* --- remote tree map --------------------------------------------------- *
- *
- * We accumulate the remote tree into a small "remote node" list, keyed by
- * the repo-relative path. Files get their sha1 filled in from a ra_cat →
- * sha1_of_bytes; directories leave sha1 empty. We keep the fetched bytes
- * alongside so the apply pass can reuse them without re-fetching.
- */
-
 struct remote_node {
     char *path;
-    int   kind;    /* 0=file 1=dir */
-    char  sha1[65];   /* hex-encoded hash; sized for sha256 */
-    char *data;    /* malloc'd, only for files */
+    int   kind;       /* 0=file 1=dir */
+    char  sha1[65];
+    char *data;       /* malloc'd, files only */
     int   data_len;
 };
 
@@ -121,18 +70,24 @@ struct remote_tree {
     int n, cap;
 };
 
+void *
+svnae_rtree_new(void)
+{
+    return calloc(1, sizeof(struct remote_tree));
+}
+
 static void
-rtree_add(struct remote_tree *rt,
-          const char *path, int kind,
+rtree_add(struct remote_tree *rt, const char *path, int kind,
           const char *data, int data_len)
 {
+    if (!rt) return;
     if (rt->n == rt->cap) {
         int nc = rt->cap ? rt->cap * 2 : 16;
         rt->items = realloc(rt->items, (size_t)nc * sizeof *rt->items);
         rt->cap = nc;
     }
     struct remote_node *e = &rt->items[rt->n++];
-    e->path = strdup(path);
+    e->path = strdup(path ? path : "");
     e->kind = kind;
     e->sha1[0] = '\0';
     if (kind == 0 && data) {
@@ -147,54 +102,45 @@ rtree_add(struct remote_tree *rt,
     }
 }
 
-/* Aether-callable wrappers used by the ported walk_remote in
- * ae/wc/update_walk.ae. rtree is an opaque ptr on the Aether side. */
 void svnae_rtree_add_dir(void *rt, const char *path) {
     rtree_add((struct remote_tree *)rt, path, 1, NULL, 0);
 }
+
 void svnae_rtree_add_file(void *rt, const char *path,
-                           const char *data, int data_len) {
+                          const char *data, int data_len) {
     rtree_add((struct remote_tree *)rt, path, 0, data, data_len);
 }
 
-static void
-rtree_free(struct remote_tree *rt)
+void
+svnae_rtree_free(void *rtv)
 {
+    struct remote_tree *rt = (struct remote_tree *)rtv;
+    if (!rt) return;
     for (int i = 0; i < rt->n; i++) {
         free(rt->items[i].path);
         free(rt->items[i].data);
     }
     free(rt->items);
+    free(rt);
 }
 
-/* Accessors for the Aether apply-pass port. Indexed by position in
- * the remote_tree list (0..rtree_count-1). The data pointer+length
- * pair works like std.fs's TLS buffer: valid for the lifetime of
- * the remote_tree, safe to pass directly to rep-store writes. */
 int rtree_count(const struct remote_tree *rt) { return rt ? rt->n : 0; }
 const char *rtree_path_at(const struct remote_tree *rt, int i) {
-    if (!rt || i < 0 || i >= rt->n) return "";
-    return rt->items[i].path;
+    return (rt && i >= 0 && i < rt->n) ? rt->items[i].path : "";
 }
 int rtree_kind_at(const struct remote_tree *rt, int i) {
-    if (!rt || i < 0 || i >= rt->n) return -1;
-    return rt->items[i].kind;
+    return (rt && i >= 0 && i < rt->n) ? rt->items[i].kind : -1;
 }
 const char *rtree_sha_at(const struct remote_tree *rt, int i) {
-    if (!rt || i < 0 || i >= rt->n) return "";
-    return rt->items[i].sha1;
+    return (rt && i >= 0 && i < rt->n) ? rt->items[i].sha1 : "";
 }
 const char *rtree_data_at(const struct remote_tree *rt, int i) {
-    if (!rt || i < 0 || i >= rt->n) return "";
-    return rt->items[i].data ? rt->items[i].data : "";
+    return (rt && i >= 0 && i < rt->n && rt->items[i].data) ? rt->items[i].data : "";
 }
 int rtree_data_len_at(const struct remote_tree *rt, int i) {
-    if (!rt || i < 0 || i >= rt->n) return 0;
-    return rt->items[i].data_len;
+    return (rt && i >= 0 && i < rt->n) ? rt->items[i].data_len : 0;
 }
 
-/* Linear scan by path (Aether needs this to decide "skip if already
- * seen in pass A"). Returns the index or -1. */
 int rtree_find_by_path(const struct remote_tree *rt, const char *path) {
     if (!rt || !path) return -1;
     for (int i = 0; i < rt->n; i++) {
@@ -203,26 +149,9 @@ int rtree_find_by_path(const struct remote_tree *rt, const char *path) {
     return -1;
 }
 
-/* Recursive remote-tree walk ported to ae/wc/update_walk.ae. The
- * Aether side calls RA accessors + svnae_rtree_add_{dir,file}
- * wrappers on this C side. */
-extern int aether_update_walk_remote(const char *base_url, const char *repo,
-                                     int rev, const char *prefix, void *rt);
-
-/* Pull props for `rel` from the server at `rev`, overwriting any that
- * changed and removing any local props that the server no longer has.
- * Set of keys we're told about = "remote". We (a) propset each remote
- * key/value, then (b) propdel any local key not in the remote set.
- *
- * The WC proplist query is per-path; empty remote set means "server
- * has no props for this path", in which case every local prop on
- * this path gets deleted. */
-/* update_ingest_props trampoline removed — the Aether apply-pass
- * (ae/wc/update_apply.ae) binds to aether_ingest_props directly. */
-
-/* Aether-callable disk-file hash. Returns a TLS scratch string with
- * the 65-byte hex (empty on failure). Mirrors the `sha1_of_file`
- * helper that's now pass-A-only. */
+/* Aether-callable disk-file hash. Returns a TLS scratch buffer with
+ * the 65-byte hex digest (or "" on failure). The two-pass apply
+ * compares this against the remote node's sha1 to detect dirty WCs. */
 const char *
 update_sha1_of_file(const char *wc_root, const char *path)
 {
@@ -230,109 +159,4 @@ update_sha1_of_file(const char *wc_root, const char *path)
     buf[0] = '\0';
     if (svnae_wc_hash_file(wc_root, path, buf) != 0) buf[0] = '\0';
     return buf;
-}
-
-/* --- conflict detection + apply --------------------------------------- */
-
-int
-svnae_wc_update(const char *wc_root, int target_rev)
-{
-    g_wc_root = wc_root;
-    sqlite3 *db = svnae_wc_db_open(wc_root);
-    if (!db) return -1;
-
-    char *base_url = svnae_wc_db_get_info(db, "base_url");
-    char *repo     = svnae_wc_db_get_info(db, "repo");
-    if (!base_url || !repo) {
-        svnae_wc_db_close(db);
-        svnae_wc_info_free(base_url); svnae_wc_info_free(repo);
-        return -1;
-    }
-
-    if (target_rev < 0) {
-        target_rev = svnae_ra_head_rev(base_url, repo);
-        if (target_rev < 0) {
-            svnae_wc_info_free(base_url); svnae_wc_info_free(repo);
-            svnae_wc_db_close(db); return -1;
-        }
-    }
-
-    /* 1. Pull full remote tree at target_rev. */
-    struct remote_tree rt = {0};
-    if (aether_update_walk_remote(base_url, repo, target_rev, "", &rt) != 0) {
-        rtree_free(&rt);
-        svnae_wc_info_free(base_url); svnae_wc_info_free(repo);
-        svnae_wc_db_close(db);
-        return -1;
-    }
-
-    /* 2. Snapshot local nodes. */
-    struct svnae_wc_nodelist *L = svnae_wc_db_list_nodes(db);
-    int n_local = svnae_wc_nodelist_count(L);
-
-
-    /* 3. + 4. The two-pass apply (local → remote diff, then
-     * remote-only additions) is in Aether now
-     * (ae/wc/update_apply.ae). The C side keeps walk_remote, the
-     * remote_tree struct, the wc.db/nodelist handles, and the prop
-     * ingest helper — everything with opaque-handle or curl-bound
-     * state. */
-    extern int aether_update_apply_pass_a(const char *wc_root,
-                                          const char *base_url,
-                                          const char *repo, int target_rev,
-                                          const struct remote_tree *rt,
-                                          const struct svnae_wc_nodelist *L,
-                                          sqlite3 *db);
-    extern void aether_update_apply_pass_b(const char *wc_root,
-                                           const char *base_url,
-                                           const char *repo, int target_rev,
-                                           const struct remote_tree *rt,
-                                           const struct svnae_wc_nodelist *L,
-                                           sqlite3 *db);
-    int had_conflict = aether_update_apply_pass_a(wc_root, base_url, repo,
-                                                  target_rev, &rt, L, db);
-    aether_update_apply_pass_b(wc_root, base_url, repo, target_rev, &rt, L, db);
-
-    /* 5. Bump base_rev in info. */
-    char buf[16]; snprintf(buf, sizeof buf, "%d", target_rev);
-    svnae_wc_db_set_info(db, "base_rev", buf);
-
-    svnae_wc_nodelist_free(L);
-    rtree_free(&rt);
-    svnae_wc_info_free(base_url);
-    svnae_wc_info_free(repo);
-    svnae_wc_db_close(db);
-    /* Update applied (possibly with conflicts — the conflicted flag is
-     * set on each such node for status/commit). We return target_rev
-     * either way; callers can check status to see what needs resolving. */
-    (void)had_conflict;
-    return target_rev;
-}
-
-/* svn switch: relocate the WC to point at a different branch (or
- * different repo) at `target_rev` (−1 means the new location's head).
- * We rewrite the `url`/`base_url`/`repo` info rows first, then reuse
- * svnae_wc_update — the update algorithm is exactly what switch needs
- * (fetch remote tree, diff against local, apply with 3-way merge on
- * overlap). Nodes whose content sha1 matches the new tree get a free
- * ride; everything else goes through the merge / conflict pipeline. */
-int
-svnae_wc_switch(const char *wc_root,
-                const char *new_base_url, const char *new_repo,
-                int target_rev)
-{
-    g_wc_root = wc_root;
-    sqlite3 *db = svnae_wc_db_open(wc_root);
-    if (!db) return -1;
-
-    /* Rewrite info before handing off to update. full_url matches what
-     * checkout wrote originally: "<base>/<repo>". */
-    char full_url[2048];
-    snprintf(full_url, sizeof full_url, "%s/%s", new_base_url, new_repo);
-    svnae_wc_db_set_info(db, "url",      full_url);
-    svnae_wc_db_set_info(db, "base_url", new_base_url);
-    svnae_wc_db_set_info(db, "repo",     new_repo);
-    svnae_wc_db_close(db);
-
-    return svnae_wc_update(wc_root, target_rev);
 }

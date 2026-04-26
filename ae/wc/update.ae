@@ -1,0 +1,160 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// permissions and limitations under the License.
+
+// svn update — pull remote state at target rev into a checked-out
+// WC. Returns target_rev on success, -1 on error.
+//
+//   svnae_wc_update(wc_root, target_rev)
+//     target_rev == -1 means "use server's current head".
+//
+// Algorithm (non-incremental):
+//   1. Pull full remote tree listing recursively at target_rev
+//      (ae/wc/update_walk.ae fills the remote_tree opaque ptr).
+//   2. Snapshot local nodes from wc.db.
+//   3. Pass A: diff local against remote. Sha-of-disk vs remote-sha
+//      drives modify/conflict; missing-on-remote+state=normal drives
+//      delete; etc. (ae/wc/update_apply.ae).
+//   4. Pass B: remote-only entries get fetched-and-installed
+//      (ae/wc/update_apply.ae).
+//   5. Bump base_rev in info table.
+//
+// svn switch is the same algorithm with the wc.db url/base_url/repo
+// rows rewritten first; we reuse svnae_wc_update for the heavy lift.
+
+import std.string
+
+// wc.db lifecycle + info access.
+extern svnae_wc_db_open(wc_root: string) -> ptr
+extern svnae_wc_db_close(db: ptr)
+extern svnae_wc_db_get_info(db: ptr, key: string) -> string
+extern svnae_wc_db_set_info(db: ptr, key: string, value: string) -> int
+extern svnae_wc_info_free(s: string)
+
+// Nodelist (tracked WC nodes).
+extern svnae_wc_db_list_nodes(db: ptr) -> ptr
+extern svnae_wc_nodelist_count(L: ptr) -> int
+extern svnae_wc_nodelist_free(L: ptr)
+
+// RA: server's current head.
+extern svnae_ra_head_rev(base_url: string, repo_name: string) -> int
+
+// Remote-tree opaque storage primitive (C-side, update_shim.c). The
+// recursive RA walk in ae/wc/update_walk.ae populates it via
+// svnae_rtree_add_dir / svnae_rtree_add_file.
+extern svnae_rtree_new() -> ptr
+extern svnae_rtree_free(rt: ptr)
+
+// Set the TLS wc_root pointer rtree_add reads via sha1_of_bytes so
+// remote_tree files get their hash filled in at add-time. Called
+// before aether_update_walk_remote so the per-file callback has a
+// wc_root to hash under.
+extern svnae_update_set_wc_root(wc_root: string)
+
+// Pass A / Pass B of the update apply.
+extern aether_update_walk_remote(base_url: string, repo: string,
+                                  rev: int, prefix: string, rt: ptr) -> int
+extern aether_update_apply_pass_a(wc_root: string, base_url: string,
+                                   repo: string, target_rev: int,
+                                   rt: ptr, L: ptr, db: ptr) -> int
+extern aether_update_apply_pass_b(wc_root: string, base_url: string,
+                                   repo: string, target_rev: int,
+                                   rt: ptr, L: ptr, db: ptr)
+
+// Public entry point.
+//
+// target_rev == -1 means "use server head". Returns target_rev on
+// success, -1 on error. Conflicts mark the conflicted flag on
+// affected nodes — callers check status to see what needs resolving.
+export svnae_wc_update(wc_root: string, target_rev: int) -> int {
+    return svnae_wc_update_impl(wc_root, target_rev)
+}
+
+svnae_wc_update_impl(wc_root: string, target_rev: int) -> int {
+    db = svnae_wc_db_open(wc_root)
+    if db == null { return 0 - 1 }
+
+    base_url = svnae_wc_db_get_info(db, "base_url")
+    repo     = svnae_wc_db_get_info(db, "repo")
+    if string.length(base_url) == 0 {
+        svnae_wc_info_free(base_url)
+        svnae_wc_info_free(repo)
+        svnae_wc_db_close(db)
+        return 0 - 1
+    }
+    if string.length(repo) == 0 {
+        svnae_wc_info_free(base_url)
+        svnae_wc_info_free(repo)
+        svnae_wc_db_close(db)
+        return 0 - 1
+    }
+    base_url = string.copy(base_url)
+    repo     = string.copy(repo)
+
+    if target_rev < 0 {
+        target_rev = svnae_ra_head_rev(base_url, repo)
+        if target_rev < 0 {
+            svnae_wc_db_close(db)
+            return 0 - 1
+        }
+    }
+
+    // 1. Pull full remote tree at target_rev. Set the TLS wc_root
+    // first so rtree_add can compute per-file hashes during the walk.
+    svnae_update_set_wc_root(wc_root)
+    rt = svnae_rtree_new()
+    if aether_update_walk_remote(base_url, repo, target_rev, "", rt) != 0 {
+        svnae_rtree_free(rt)
+        svnae_wc_db_close(db)
+        return 0 - 1
+    }
+
+    // 2. Snapshot local nodes.
+    L = svnae_wc_db_list_nodes(db)
+
+    // 3. + 4. Two-pass apply (Aether-side).
+    aether_update_apply_pass_a(wc_root, base_url, repo, target_rev, rt, L, db)
+    aether_update_apply_pass_b(wc_root, base_url, repo, target_rev, rt, L, db)
+
+    // 5. Bump base_rev in info.
+    svnae_wc_db_set_info(db, "base_rev", "${target_rev}")
+
+    svnae_wc_nodelist_free(L)
+    svnae_rtree_free(rt)
+    svnae_wc_db_close(db)
+    return target_rev
+}
+
+// svn switch: relocate the WC to a different branch (or repo) at
+// target_rev. Rewrite the url/base_url/repo info rows then call
+// svnae_wc_update — the update algorithm is exactly what switch
+// needs (fetch remote, diff against local, 3-way merge on overlap).
+export svnae_wc_switch(wc_root: string,
+                        new_base_url: string, new_repo: string,
+                        target_rev: int) -> int {
+    db = svnae_wc_db_open(wc_root)
+    if db == null { return 0 - 1 }
+
+    full_url = "${new_base_url}/${new_repo}"
+    svnae_wc_db_set_info(db, "url",      full_url)
+    svnae_wc_db_set_info(db, "base_url", new_base_url)
+    svnae_wc_db_set_info(db, "repo",     new_repo)
+    svnae_wc_db_close(db)
+
+    return svnae_wc_update_impl(wc_root, target_rev)
+}
+
+main() {
+    println("ae/wc/update.ae is a library; not meant to run standalone")
+}
