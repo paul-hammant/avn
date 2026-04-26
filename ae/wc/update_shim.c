@@ -49,6 +49,7 @@ extern int svnae_wc_hash_file (const char *wc_root, const char *path, char *out)
 static __thread const char *g_wc_root = NULL;
 
 void svnae_update_set_wc_root(const char *wc_root) { g_wc_root = wc_root; }
+const char *svnae_update_get_wc_root(void) { return g_wc_root; }
 
 static void
 sha1_of_bytes(const char *data, int len, char out[65])
