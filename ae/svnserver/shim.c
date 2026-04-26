@@ -15,29 +15,14 @@
  * permissions and limitations under the License.
  */
 
-/* svnserver/shim.c — HTTP handlers for the svn-aether read-only server.
+/* svnserver/shim.c — C-side helpers for the svn-aether HTTP server.
  *
- * Routes (all GET):
- *   /repos/{r}/info                         -> {"head":N,"uuid":"..."}
- *   /repos/{r}/log                          -> {"entries":[{rev,author,date,msg},...]}
- *   /repos/{r}/rev/:rev/info                -> {"rev":N,"author":"...",...}
- *   /repos/{r}/rev/:rev/list/*path          -> {"entries":[{"name":"...","kind":"..."},...]}
- *   /repos/{r}/rev/:rev/cat/*path           -> raw bytes
- *
- * Single-repo mode for Phase 6: we map the one repo name in the URL to a
- * single on-disk path configured at startup. Multi-repo via a table comes
- * when we have config parsing.
- *
- * The JSON we produce is hand-rolled: we only need to serialise strings,
- * ints, and arrays of objects. Using std.json from C is awkward because
- * the stdlib's JSON builder allocates Aether-managed objects. We escape
- * strings ourselves (minimal: \" \\ \n \r \t \b \f and any other control
- * as \uXXXX).
- */
-
-/* JSON parse + build live entirely in Aether now
- * (ae/svnserver/branch_create_parse.ae, copy_parse.ae,
- * commit_parse.ae). No std.json is consumed by this file directly. */
+ * Routes, dispatch, JSON parse/build, and per-route handlers all live
+ * in ae/svnserver/{dispatch,handler_*,*_parse,*_json}.ae. What's
+ * here: TLS-buffered request peeks (header / branch / user / body),
+ * the superuser-token + repo-name registry, response wrappers bound
+ * to std.http types, and binary-body adapters that Aether's
+ * NUL-terminated `string` can't safely carry across FFI. */
 
 #include <dirent.h>
 #include <sys/stat.h>
@@ -253,32 +238,20 @@ const char *svnserver_build_secondary_pairs(const char *repo, const char *node_s
     return pairs;
 }
 
-/* URL parsing, dispatcher, route handlers, JSON body parsers,
- * load_rev_blob_field, and the props-handler building blocks all
- * moved to Aether — see ae/svnserver/{dispatch, handle_repo_rev,
- * handler_*, rev_load, acl_resolve, based_on_check, json}.ae. The
- * C-side trampolines that used to wrap them are gone. What remains
- * in this file: static C helpers that the Aether handlers reach via
- * extern (request header lookup, auth context, repo registry,
- * std.http response shaping, secondary-pairs builder, txn body-bytes
- * adapter). */
-
 extern int svnae_openssl_b64_decode(const char *src, int src_len,
                                     unsigned char **out, int *out_len);
 #define b64_decode svnae_openssl_b64_decode
 
-/* Aether-callable wrappers around the static request-inspection and
- * mutation-policy helpers above. Each returns "" for a NULL string so
- * Aether's string externs can distinguish "header absent" from
- * "header present + empty" by string.length == 0. */
+/* Header value or "" — Aether tests string.length == 0 to distinguish
+ * "header absent" from "header present + empty" since string externs
+ * can't return NULL. */
 const char *svnserver_request_header(HttpRequest *req, const char *name) {
     const char *v = req_header(req, name);
     return (v && *v) ? v : "";
 }
-/* Phase 8.2b: pick the caller's branch for a mutation. Clients pass
- * Svn-Branch: <name> when they're working against a non-main branch;
- * absent header defaults to "main" (which on seeded repos with no
- * spec means "allow everything", preserving legacy behaviour). */
+/* Branch this mutation targets. Clients pass Svn-Branch when working
+ * against a non-main branch; absent header → "main" (open by default
+ * on seeded repos with no spec). */
 const char *svnserver_request_branch(HttpRequest *req) {
     const char *b = req_header(req, "Svn-Branch");
     return (b && *b) ? b : "main";
@@ -288,14 +261,10 @@ int svnserver_spec_allows(const char *repo, const char *branch,
     if (is_super) return 1;
     return svnae_branch_spec_allows(repo, branch, path) == 1;
 }
-/* svnserver_based_on_check trampoline retired in Round 72. Aether
- * callers (handler_path_put / handler_path_delete) now call
- * aether_based_on_check directly. */
-
-/* Aether can't safely carry an arbitrary binary body (its `string` is
- * NUL-terminated), so the txn-add-file call that consumes req->body
- * stays on the C side. Aether calls this with a built txn; C pulls
- * body + length off the request directly. */
+/* Pull body bytes off req for an Aether-side handler. The txn-add-file
+ * variant consumes the request's binary body (which Aether's
+ * NUL-terminated `string` can't safely carry across FFI) and forwards
+ * to svnae_txn_add_file with explicit length. */
 int svnserver_txn_add_file_from_req(void *txn, const char *path,
                                      HttpRequest *req) {
     const char *body = req->body ? req->body : "";
@@ -303,9 +272,8 @@ int svnserver_txn_add_file_from_req(void *txn, const char *path,
     return svnae_txn_add_file((struct svnae_txn *)txn, path, body, blen);
 }
 
-/* Pull body bytes from req into an Aether-safe view. Returns "" if
- * the body is absent. For branch-create, the body is JSON (no embedded
- * NULs) so a NUL-terminated string round-trip is fine. */
+/* Body view for handlers that accept JSON (no embedded NULs). Returns
+ * "" when body is absent. */
 const char *svnserver_request_body(HttpRequest *req) {
     return req->body ? req->body : "";
 }
@@ -313,32 +281,8 @@ int svnserver_request_body_length(HttpRequest *req) {
     return req->body ? (int)req->body_length : 0;
 }
 
-/* Parse {base:"...", include:[...]} JSON body and perform the branch
- * create. Return value encodes the outcome for the Aether caller:
- *    >= 0 : new_rev on success
- *    -1   : malformed JSON
- *    -2   : missing/bad base/include fields
- *    -3   : include array empty
- *    -4   : svnae_branch_create rejected (exists, bad base, no globs)
- * The Aether handler maps each negative value to the appropriate HTTP
- * error response. Keeps the cJSON + glob-array bits on the C side
- * since Aether doesn't have array-of-string FFI. */
-/* --- Newline-joined wrappers around the array-taking blob builders.
- * Aether can't pass const char** directly, so we pass two parallel
- * \n-separated strings (same length in line count). These are used
- * by the Aether commit-body handler to build paths-props and
- * paths-acl blobs without an FFI array type. */
-
-/* Blob builders (props, acl, paths-props, paths-acl) ported to
- * ae/svnserver/blob_build.ae. Aether now emits the "key=value\n" /
- * "+user\n" / "<sha> <path>\n" bodies directly from its internal
- * representation and calls svnae_rep_write_blob; the round trip
- * through C-side split_joined + svnae_build_*_blob is gone. */
-
-/* base64 decode wrapper for Aether: decodes in-place-ish, calls
- * svnae_txn_add_file with the decoded bytes+length. Returns 0 on
- * success, -1 on base64 decode failure. Keeps the byte-length-
- * aware txn_add_file call in C. */
+/* base64 decode + svnae_txn_add_file with byte length. Returns 0 ok,
+ * -1 on decode failure. Kept on the C side for the binary boundary. */
 int svnserver_txn_add_b64(void *txn, const char *path, const char *b64) {
     if (!b64) return -1;
     unsigned char *raw = NULL;
@@ -348,15 +292,3 @@ int svnserver_txn_add_b64(void *txn, const char *path, const char *b64) {
     free(raw);
     return 0;
 }
-
-/* svnserver_branch_create_globs / _from_body, svnserver_commit_from_
- * body, svnserver_copy_from_body, svnae_svnserver_handler_dispatch
- * trampolines all removed in earlier rounds — Aether handlers now
- * dispatch directly via @c_callback annotations or are bound to
- * std.http routes by main.ae. The dispatcher itself
- * (ae/svnserver/dispatch.ae::svnserver_dispatch) is one such
- * @c_callback export. Auto-follow-copy-ACL similarly: copy_parse.ae
- * declares `extern auto_follow_copy_acl` and reaches the Aether
- * export in copy_acl.ae directly — the static C wrapper that used
- * to strdup-on-hit was redundant once the empty-string-on-miss
- * convention was adopted on the Aether side. */
