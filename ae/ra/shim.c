@@ -47,6 +47,7 @@
                                Aether module calls back into. */
 #include "aether_string.h"  /* aether_string_data / aether_string_length */
 #include "../subr/pin_list.h"
+#include "../subr/packed_handle/packed_handle.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -285,35 +286,24 @@ svnae_ra_hash_algo(const char *base_url, const char *repo_name)
  * thin per-domain wrappers preserving the public symbols.
  */
 
-struct svnae_ra_handle { char *packed; int n; struct pin_list pins; };
+/* The struct {packed, n, pins} + new/free moved to
+ * ae/subr/packed_handle in round 56 (shared with repos/shim.c).
+ * ra_handle_from_url is the URL-fetching builder layer over the
+ * shared svnae_packed_handle_new; per-domain wrappers below cast
+ * to/from the public per-domain types. */
 
 typedef const char *(*ra_parse_fn)(const char *body);
 typedef int         (*ra_count_fn)(const char *packed);
 
-static struct svnae_ra_handle *
+static struct svnae_packed_handle *
 ra_handle_from_url(const char *url, ra_parse_fn parse, ra_count_fn count)
 {
     char *body = http_get_200(url, NULL);
     if (!body) return NULL;
-
     const char *packed = parse(body);
+    struct svnae_packed_handle *h = svnae_packed_handle_new(packed, count);
     free(body);
-    if (!packed || !*packed) return NULL;
-
-    struct svnae_ra_handle *h = calloc(1, sizeof *h);
-    if (!h) return NULL;
-    h->packed = strdup(packed);
-    h->n = count ? count(h->packed) : 0;
     return h;
-}
-
-static void
-ra_handle_free(struct svnae_ra_handle *h)
-{
-    if (!h) return;
-    free(h->packed);
-    pin_list_free(&h->pins);
-    free(h);
 }
 
 /* ---- log handle ------------------------------------------------------ */
@@ -335,14 +325,14 @@ svnae_ra_log(const char *base_url, const char *repo_name)
 
 int svnae_ra_log_count(const struct svnae_ra_log *lg)
 {
-    const struct svnae_ra_handle *h = (const struct svnae_ra_handle *)lg;
+    const struct svnae_packed_handle *h = (const struct svnae_packed_handle *)lg;
     return h ? h->n : 0;
 }
 
 int
 svnae_ra_log_rev(const struct svnae_ra_log *lg, int i)
 {
-    const struct svnae_ra_handle *h = (const struct svnae_ra_handle *)lg;
+    const struct svnae_packed_handle *h = (const struct svnae_packed_handle *)lg;
     if (!h || i < 0 || i >= h->n) return -1;
     return aether_ra_log_rev(h->packed, i);
 }
@@ -350,7 +340,7 @@ svnae_ra_log_rev(const struct svnae_ra_log *lg, int i)
 const char *
 svnae_ra_log_author(struct svnae_ra_log *lg, int i)
 {
-    struct svnae_ra_handle *h = (struct svnae_ra_handle *)lg;
+    struct svnae_packed_handle *h = (struct svnae_packed_handle *)lg;
     if (!h || i < 0 || i >= h->n) return "";
     return pin_str(&h->pins, aether_ra_log_author(h->packed, i));
 }
@@ -358,7 +348,7 @@ svnae_ra_log_author(struct svnae_ra_log *lg, int i)
 const char *
 svnae_ra_log_date(struct svnae_ra_log *lg, int i)
 {
-    struct svnae_ra_handle *h = (struct svnae_ra_handle *)lg;
+    struct svnae_packed_handle *h = (struct svnae_packed_handle *)lg;
     if (!h || i < 0 || i >= h->n) return "";
     return pin_str(&h->pins, aether_ra_log_date(h->packed, i));
 }
@@ -366,14 +356,14 @@ svnae_ra_log_date(struct svnae_ra_log *lg, int i)
 const char *
 svnae_ra_log_msg(struct svnae_ra_log *lg, int i)
 {
-    struct svnae_ra_handle *h = (struct svnae_ra_handle *)lg;
+    struct svnae_packed_handle *h = (struct svnae_packed_handle *)lg;
     if (!h || i < 0 || i >= h->n) return "";
     return pin_str(&h->pins, aether_ra_log_msg(h->packed, i));
 }
 
 void svnae_ra_log_free(struct svnae_ra_log *lg)
 {
-    ra_handle_free((struct svnae_ra_handle *)lg);
+    svnae_packed_handle_free((struct svnae_packed_handle *)lg);
 }
 
 /* ---- paths-changed handle (for `svn log --verbose`) ----------------- */
@@ -393,14 +383,14 @@ svnae_ra_paths_changed(const char *base_url, const char *repo_name, int rev)
 
 int svnae_ra_paths_count(const struct svnae_ra_paths *P)
 {
-    const struct svnae_ra_handle *h = (const struct svnae_ra_handle *)P;
+    const struct svnae_packed_handle *h = (const struct svnae_packed_handle *)P;
     return h ? h->n : 0;
 }
 
 const char *
 svnae_ra_paths_action(struct svnae_ra_paths *P, int i)
 {
-    struct svnae_ra_handle *h = (struct svnae_ra_handle *)P;
+    struct svnae_packed_handle *h = (struct svnae_packed_handle *)P;
     if (!h || i < 0 || i >= h->n) return "";
     return pin_str(&h->pins, aether_ra_paths_action(h->packed, i));
 }
@@ -408,14 +398,14 @@ svnae_ra_paths_action(struct svnae_ra_paths *P, int i)
 const char *
 svnae_ra_paths_path(struct svnae_ra_paths *P, int i)
 {
-    struct svnae_ra_handle *h = (struct svnae_ra_handle *)P;
+    struct svnae_packed_handle *h = (struct svnae_packed_handle *)P;
     if (!h || i < 0 || i >= h->n) return "";
     return pin_str(&h->pins, aether_ra_paths_path(h->packed, i));
 }
 
 void svnae_ra_paths_free(struct svnae_ra_paths *P)
 {
-    ra_handle_free((struct svnae_ra_handle *)P);
+    svnae_packed_handle_free((struct svnae_packed_handle *)P);
 }
 
 /* ---- blame handle (Phase 7.6) --------------------------------------- */
@@ -437,14 +427,14 @@ svnae_ra_blame(const char *base_url, const char *repo_name,
 
 int svnae_ra_blame_count(const struct svnae_ra_blame *B)
 {
-    const struct svnae_ra_handle *h = (const struct svnae_ra_handle *)B;
+    const struct svnae_packed_handle *h = (const struct svnae_packed_handle *)B;
     return h ? h->n : 0;
 }
 
 int
 svnae_ra_blame_rev(const struct svnae_ra_blame *B, int i)
 {
-    const struct svnae_ra_handle *h = (const struct svnae_ra_handle *)B;
+    const struct svnae_packed_handle *h = (const struct svnae_packed_handle *)B;
     if (!h || i < 0 || i >= h->n) return -1;
     return aether_ra_blame_rev(h->packed, i);
 }
@@ -452,7 +442,7 @@ svnae_ra_blame_rev(const struct svnae_ra_blame *B, int i)
 const char *
 svnae_ra_blame_author(struct svnae_ra_blame *B, int i)
 {
-    struct svnae_ra_handle *h = (struct svnae_ra_handle *)B;
+    struct svnae_packed_handle *h = (struct svnae_packed_handle *)B;
     if (!h || i < 0 || i >= h->n) return "";
     return pin_str(&h->pins, aether_ra_blame_author(h->packed, i));
 }
@@ -460,14 +450,14 @@ svnae_ra_blame_author(struct svnae_ra_blame *B, int i)
 const char *
 svnae_ra_blame_text(struct svnae_ra_blame *B, int i)
 {
-    struct svnae_ra_handle *h = (struct svnae_ra_handle *)B;
+    struct svnae_packed_handle *h = (struct svnae_packed_handle *)B;
     if (!h || i < 0 || i >= h->n) return "";
     return pin_str(&h->pins, aether_ra_blame_text(h->packed, i));
 }
 
 void svnae_ra_blame_free(struct svnae_ra_blame *B)
 {
-    ra_handle_free((struct svnae_ra_handle *)B);
+    svnae_packed_handle_free((struct svnae_packed_handle *)B);
 }
 
 /* ---- info handle ----------------------------------------------------- */
@@ -683,14 +673,14 @@ svnae_ra_list(const char *base_url, const char *repo_name, int rev, const char *
 
 int svnae_ra_list_count(const struct svnae_ra_list *L)
 {
-    const struct svnae_ra_handle *h = (const struct svnae_ra_handle *)L;
+    const struct svnae_packed_handle *h = (const struct svnae_packed_handle *)L;
     return h ? h->n : 0;
 }
 
 const char *
 svnae_ra_list_name(struct svnae_ra_list *L, int i)
 {
-    struct svnae_ra_handle *h = (struct svnae_ra_handle *)L;
+    struct svnae_packed_handle *h = (struct svnae_packed_handle *)L;
     if (!h || i < 0 || i >= h->n) return "";
     return pin_str(&h->pins, aether_ra_list_name(h->packed, i));
 }
@@ -698,14 +688,14 @@ svnae_ra_list_name(struct svnae_ra_list *L, int i)
 const char *
 svnae_ra_list_kind(struct svnae_ra_list *L, int i)
 {
-    struct svnae_ra_handle *h = (struct svnae_ra_handle *)L;
+    struct svnae_packed_handle *h = (struct svnae_packed_handle *)L;
     if (!h || i < 0 || i >= h->n) return "";
     return pin_str(&h->pins, aether_ra_list_kind(h->packed, i));
 }
 
 void svnae_ra_list_free(struct svnae_ra_list *L)
 {
-    ra_handle_free((struct svnae_ra_handle *)L);
+    svnae_packed_handle_free((struct svnae_packed_handle *)L);
 }
 
 /* ---- commit ---------------------------------------------------------- *
