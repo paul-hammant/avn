@@ -216,70 +216,55 @@ svnae_repos_cat(const char *repo, int rev, const char *path)
     return data;
 }
 
-/* --- list ---------------------------------------------------------------
+/* --- list handle ----------------------------------------------------- *
  *
- * svnae_repos_list(repo, rev, path) → handle containing entries.
- * Each entry: name + kind ('f' or 'd'). We deliberately don't surface the
- * content sha1 — that's an fs_fs-internal concern clients shouldn't know
- * about.
- */
+ * svnae_repos_list(repo, rev, path) → handle of (name, kind) entries.
+ * We deliberately don't surface the content sha1 — that's an fs_fs-
+ * internal concern clients shouldn't know about.
+ *
+ * Round 54 folded this onto the shared svnae_repos_handle by adding
+ * an Aether-side aether_repos_list_packed helper (ae/repos/list_packed.ae)
+ * that emits the same packed shape ra_parse_list produces. The
+ * ra_list_count / ra_list_name / ra_list_kind accessors from
+ * ae/ra/packed.ae handle the walk verbatim. */
 
-struct list_entry { char *name; char kind; };
-struct svnae_list { struct list_entry *items; int n; };
+extern const char *aether_repos_list_packed(const char *repo, int rev, const char *path);
+extern int         aether_ra_list_count(const char *packed);
+extern const char *aether_ra_list_name (const char *packed, int i);
+extern const char *aether_ra_list_kind (const char *packed, int i);
 
 struct svnae_list *
 svnae_repos_list(const char *repo, int rev, const char *path)
 {
-    char *root = root_dir_sha1_for_rev(repo, rev);
-    if (!root) return NULL;
-    char kind = 0;
-    char *dir_sha1 = NULL;
-    int ok = resolve_path(repo, root, path, &kind, &dir_sha1);
-    free(root);
-    if (!ok || kind != 'd') { free(dir_sha1); return NULL; }
-
-    char *body = svnae_rep_read_blob(repo, dir_sha1);
-    free(dir_sha1);
-    if (!body) return NULL;
-
-    struct svnae_list *L = calloc(1, sizeof *L);
-    int n_entries = aether_dir_count_entries(body);
-    L->items = calloc((size_t)(n_entries > 0 ? n_entries : 1), sizeof *L->items);
-    for (int ei = 0; ei < n_entries; ei++) {
-        L->items[ei].kind = (char)aether_dir_entry_kind(body, ei);
-        L->items[ei].name = strdup(aether_dir_entry_name(body, ei));
-    }
-    L->n = n_entries;
-    svnae_rep_free(body);
-    return L;
+    return (struct svnae_list *)repos_handle_from_packed(
+        aether_repos_list_packed(repo, rev, path),
+        aether_ra_list_count);
 }
 
-int svnae_repos_list_count(const struct svnae_list *L) { return L ? L->n : 0; }
+int svnae_repos_list_count(const struct svnae_list *L) {
+    const struct svnae_repos_handle *h = (const struct svnae_repos_handle *)L;
+    return h ? h->n : 0;
+}
 
 const char *
 svnae_repos_list_name(const struct svnae_list *L, int i)
 {
-    if (!L || i < 0 || i >= L->n || !L->items[i].name) return "";
-    return L->items[i].name;
+    struct svnae_repos_handle *h = (struct svnae_repos_handle *)L;
+    if (!h || i < 0 || i >= h->n) return "";
+    return pin_str(&h->pins, aether_ra_list_name(h->packed, i));
 }
 
 const char *
 svnae_repos_list_kind(const struct svnae_list *L, int i)
 {
-    static const char f[] = "file";
-    static const char d[] = "dir";
-    static const char u[] = "";
-    if (!L || i < 0 || i >= L->n) return u;
-    return L->items[i].kind == 'f' ? f : (L->items[i].kind == 'd' ? d : u);
+    struct svnae_repos_handle *h = (struct svnae_repos_handle *)L;
+    if (!h || i < 0 || i >= h->n) return "";
+    return pin_str(&h->pins, aether_ra_list_kind(h->packed, i));
 }
 
-void
-svnae_repos_list_free(struct svnae_list *L)
+void svnae_repos_list_free(struct svnae_list *L)
 {
-    if (!L) return;
-    for (int i = 0; i < L->n; i++) free(L->items[i].name);
-    free(L->items);
-    free(L);
+    repos_handle_free((struct svnae_repos_handle *)L);
 }
 
 /* --- info (single-revision metadata) --------------------------------- *
