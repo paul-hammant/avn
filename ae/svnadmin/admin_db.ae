@@ -86,6 +86,82 @@ export admin_db_list_reps_packed(repo: string) -> string {
     return string.concat(head, body)
 }
 
+// ---- packed-string accessors over admin_db_list_reps_packed -------
+//
+// The packed shape is "<N>\x02<sha>\x01<size>\x02<sha>\x01<size>...".
+// Round 79 uses these to retire the C-side list_reps() parser that
+// was sliced into a struct just to drive the dump loop.
+
+// Skip the leading "<N>\x02" header. Returns the offset of the first
+// byte after the count separator, or -1 on malformed input.
+reps_body_start_(packed: string) -> int {
+    sep = string.index_of(packed, "\x02")
+    if sep < 0 { return 0 - 1 }
+    return sep + 1
+}
+
+// Number of records.
+export admin_reps_count(packed: string) -> int {
+    if string.length(packed) == 0 { return 0 }
+    sep = string.index_of(packed, "\x02")
+    if sep < 0 { return 0 }
+    n_str = string.substring(packed, 0, sep)
+    return string.get_int(n_str)
+}
+
+// Byte offset of the i-th record's start, or -1 if out of range.
+record_start_(packed: string, i: int) -> int {
+    pos = reps_body_start_(packed)
+    if pos < 0 { return 0 - 1 }
+    n = string.length(packed)
+    k = 0
+    while k < i {
+        if pos >= n { return 0 - 1 }
+        tail = string.substring(packed, pos, n)
+        rel = string.index_of(tail, "\x02")
+        if rel < 0 { return 0 - 1 }
+        pos = pos + rel + 1
+        k = k + 1
+    }
+    return pos
+}
+
+// Byte offset of the end of the i-th record (one past last byte).
+record_end_(packed: string, start: int) -> int {
+    if start < 0 { return 0 - 1 }
+    n = string.length(packed)
+    if start >= n { return n }
+    tail = string.substring(packed, start, n)
+    rel = string.index_of(tail, "\x02")
+    if rel < 0 { return n }
+    return start + rel
+}
+
+// SHA hex (field 0) of the i-th record, or "" if out of range.
+export admin_reps_sha_at(packed: string, i: int) -> string {
+    s = record_start_(packed, i)
+    if s < 0 { return "" }
+    e = record_end_(packed, s)
+    if e <= s { return "" }
+    rec = string.substring(packed, s, e)
+    sep = string.index_of(rec, "\x01")
+    if sep < 0 { return rec }
+    return string.substring(rec, 0, sep)
+}
+
+// uncompressed_size (field 1) of the i-th record, or 0 if out of range.
+export admin_reps_size_at(packed: string, i: int) -> int {
+    s = record_start_(packed, i)
+    if s < 0 { return 0 }
+    e = record_end_(packed, s)
+    if e <= s { return 0 }
+    rec = string.substring(packed, s, e)
+    sep = string.index_of(rec, "\x01")
+    if sep < 0 { return 0 }
+    size_s = string.substring(rec, sep + 1, string.length(rec))
+    return string.get_int(size_s)
+}
+
 main() {
     println("ae/svnadmin/admin_db.ae is a library; not meant to run standalone")
 }

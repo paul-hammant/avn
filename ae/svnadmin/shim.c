@@ -117,70 +117,13 @@ extern int svnae_svnadmin_create_bare(const char *repo, const char *algos_spec);
 
 /* ---- rep enumeration ------------------------------------------------ *
  *
- * admin_db_list_reps_packed (admin_db.ae) returns a "<N>\x02<sha>\x01
- * <size>\x02..." string; we slice it into svnae_rep_list for the
- * dump loop's index-based iteration. */
-
-struct svnae_rep_list {
-    char **sha1s;
-    int   *sizes;
-    int    n;
-};
-
-static struct svnae_rep_list *
-list_reps(const char *repo)
-{
-    const char *packed = admin_db_list_reps_packed(repo);
-    if (!packed) return NULL;
-    const char *data = aether_string_data(packed);
-    int total = (int)aether_string_length(packed);
-    if (total <= 0) return NULL;
-
-    /* Parse "<N>\x02..." — N is the row count. */
-    const char *sep = memchr(data, '\x02', (size_t)total);
-    if (!sep) return NULL;
-    char nbuf[16];
-    int nlen = (int)(sep - data);
-    if (nlen <= 0 || nlen >= (int)sizeof nbuf) return NULL;
-    memcpy(nbuf, data, (size_t)nlen);
-    nbuf[nlen] = '\0';
-    int n = atoi(nbuf);
-
-    struct svnae_rep_list *L = calloc(1, sizeof *L);
-    if (!L) return NULL;
-    L->sha1s = (n > 0) ? calloc((size_t)n, sizeof *L->sha1s) : NULL;
-    L->sizes = (n > 0) ? calloc((size_t)n, sizeof *L->sizes) : NULL;
-    L->n = n;
-
-    const char *p = sep + 1;
-    const char *end = data + total;
-    for (int i = 0; i < n && p < end; i++) {
-        const char *eor = memchr(p, '\x02', (size_t)(end - p));
-        if (!eor) eor = end;
-        const char *mid = memchr(p, '\x01', (size_t)(eor - p));
-        if (!mid) { L->n = i; break; }
-        size_t shalen = (size_t)(mid - p);
-        L->sha1s[i] = malloc(shalen + 1);
-        memcpy(L->sha1s[i], p, shalen);
-        L->sha1s[i][shalen] = '\0';
-        char szbuf[16];
-        size_t szlen = (size_t)(eor - (mid + 1));
-        if (szlen >= sizeof szbuf) szlen = sizeof szbuf - 1;
-        memcpy(szbuf, mid + 1, szlen);
-        szbuf[szlen] = '\0';
-        L->sizes[i] = atoi(szbuf);
-        p = (eor < end) ? eor + 1 : end;
-    }
-    return L;
-}
-
-static void
-free_rep_list(struct svnae_rep_list *L)
-{
-    if (!L) return;
-    for (int i = 0; i < L->n; i++) free(L->sha1s[i]);
-    free(L->sha1s); free(L->sizes); free(L);
-}
+ * Round 79: per-record accessors over admin_db_list_reps_packed live
+ * in admin_db.ae as admin_reps_count / _sha_at / _size_at; the dump
+ * loop reads off the packed string directly. The C-side rep_list
+ * struct + parser are gone. */
+extern int         aether_admin_reps_count(const char *packed);
+extern const char *aether_admin_reps_sha_at(const char *packed, int i);
+extern int         aether_admin_reps_size_at(const char *packed, int i);
 
 /* ---- dump ----------------------------------------------------------- */
 
@@ -203,36 +146,45 @@ svnae_svnadmin_dump(const char *repo, int out_fd)
     int head = svnae_repos_head_rev(repo);
     if (head < 0) return -1;
 
-    struct svnae_rep_list *reps = list_reps(repo);
-    if (!reps) return -1;
+    /* The Aether helper returns an Aether-managed string (refcount-
+     * stable through the dump loop). admin_reps_* accessors slice it
+     * by index. */
+    const char *reps_packed = admin_db_list_reps_packed(repo);
+    if (!reps_packed) return -1;
+    int n_reps = aether_admin_reps_count(reps_packed);
 
-    const char *prelude = aether_dump_prelude(head, head + 1, reps->n);
-    if (write_all(out_fd, prelude, (int)strlen(prelude)) != 0) { free_rep_list(reps); return -1; }
+    const char *prelude = aether_dump_prelude(head, head + 1, n_reps);
+    if (write_all(out_fd, prelude, (int)strlen(prelude)) != 0) return -1;
 
     /* Each rep block. */
-    for (int i = 0; i < reps->n; i++) {
-        char *bytes = svnae_rep_read_blob(repo, reps->sha1s[i]);
-        if (!bytes) { free_rep_list(reps); return -1; }
+    for (int i = 0; i < n_reps; i++) {
+        const char *sha_borrowed = aether_admin_reps_sha_at(reps_packed, i);
+        char sha[65];
+        size_t sl = strlen(sha_borrowed);
+        if (sl >= sizeof sha) return -1;
+        memcpy(sha, sha_borrowed, sl + 1);
+        int size = aether_admin_reps_size_at(reps_packed, i);
 
-        const char *rep_hdr = aether_rep_header(reps->sha1s[i], reps->sizes[i]);
-        if (write_all(out_fd, rep_hdr, (int)strlen(rep_hdr)) != 0) { svnae_rep_free(bytes); free_rep_list(reps); return -1; }
-        if (write_all(out_fd, bytes, reps->sizes[i]) != 0) { svnae_rep_free(bytes); free_rep_list(reps); return -1; }
-        if (write_all(out_fd, "\n", 1) != 0) { svnae_rep_free(bytes); free_rep_list(reps); return -1; }
+        char *bytes = svnae_rep_read_blob(repo, sha);
+        if (!bytes) return -1;
+
+        const char *rep_hdr = aether_rep_header(sha, size);
+        if (write_all(out_fd, rep_hdr, (int)strlen(rep_hdr)) != 0) { svnae_rep_free(bytes); return -1; }
+        if (write_all(out_fd, bytes, size) != 0) { svnae_rep_free(bytes); return -1; }
+        if (write_all(out_fd, "\n", 1) != 0) { svnae_rep_free(bytes); return -1; }
         svnae_rep_free(bytes);
     }
 
-    /* Rev pointers — trimmed read already handled by
-     * ae/repos/rev_io.ae::repos_rev_blob_sha. */
+    /* Rev pointers. */
     extern const char *aether_repos_rev_blob_sha(const char *repo, int rev);
     for (int r = 0; r <= head; r++) {
         const char *sha = aether_repos_rev_blob_sha(repo, r);
-        if (!sha || !*sha) { free_rep_list(reps); return -1; }
+        if (!sha || !*sha) return -1;
         const char *block = aether_rev_pointer_block(r, sha);
-        if (write_all(out_fd, block, (int)strlen(block)) != 0) { free_rep_list(reps); return -1; }
+        if (write_all(out_fd, block, (int)strlen(block)) != 0) return -1;
     }
 
-    if (write_all(out_fd, "END\n", 4) != 0) { free_rep_list(reps); return -1; }
-    free_rep_list(reps);
+    if (write_all(out_fd, "END\n", 4) != 0) return -1;
     return 0;
 }
 
