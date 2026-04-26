@@ -47,18 +47,15 @@ static char *g_client_user = NULL;
 static char *g_client_super_token = NULL;
 
 /* URL builders ported to Aether (ae/ra/urls.ae). */
+extern const char *aether_url_info(const char *base, const char *repo);
+extern const char *aether_url_log(const char *base, const char *repo);
+extern const char *aether_url_commit(const char *base, const char *repo);
 extern const char *aether_url_rev_info(const char *base, const char *repo, int rev);
 extern const char *aether_url_rev_paths(const char *base, const char *repo, int rev);
 extern const char *aether_url_rev_cat(const char *base, const char *repo, int rev, const char *path);
 extern const char *aether_url_rev_list(const char *base, const char *repo, int rev, const char *path);
 extern const char *aether_url_rev_props(const char *base, const char *repo, int rev, const char *path);
 extern const char *aether_url_rev_blame(const char *base, const char *repo, int rev, const char *path);
-extern const char *aether_url_branches_create(const char *base, const char *repo, const char *branch_name);
-extern const char *aether_url_info(const char *base, const char *repo);
-extern const char *aether_url_log(const char *base, const char *repo);
-extern const char *aether_url_commit(const char *base, const char *repo);
-extern const char *aether_url_copy(const char *base, const char *repo);
-extern const char *aether_url_rev_hashes(const char *base, const char *repo, int rev, const char *path);
 
 void svnae_ra_set_user(const char *user) {
     free(g_client_user);
