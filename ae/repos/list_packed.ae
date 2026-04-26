@@ -70,8 +70,8 @@ repos_list_packed_impl(repo: string, rev: int, path: string) -> string {
     i = 0
     while i < n {
         ki = aether_dir_entry_kind(body_owned, i)
-        kind_s = "file"
-        if ki == 100 { kind_s = "dir" }   // 'd'
+        kind_s = "f"
+        if ki == 100 { kind_s = "d" }   // 'd'
         nm = aether_dir_entry_name(body_owned, i)
         nm_owned = string.copy(nm)
         // "<name>\x01<kind>\x02"

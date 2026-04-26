@@ -302,11 +302,15 @@ main() {
     fails = fails + expect_str("list r1 /[2] kind", svnae_repos_list_kind(L, 2), "dir")
     svnae_repos_list_free(L)
 
-    // Root at r3: LICENSE removed → README, src.
+    // Root at r3: LICENSE removed → README, src. Cover both kinds so a
+    // dir/file mis-encoding in list_packed.ae trips two assertions, not
+    // just the one at r1 — caught a "dir"/"d" mismatch in round 60.
     L = svnae_repos_list(repo, 3, "/")
     fails = fails + expect_int("list r3 / count", svnae_repos_list_count(L), 2)
     fails = fails + expect_str("list r3 /[0] name", svnae_repos_list_name(L, 0), "README")
+    fails = fails + expect_str("list r3 /[0] kind", svnae_repos_list_kind(L, 0), "file")
     fails = fails + expect_str("list r3 /[1] name", svnae_repos_list_name(L, 1), "src")
+    fails = fails + expect_str("list r3 /[1] kind", svnae_repos_list_kind(L, 1), "dir")
     svnae_repos_list_free(L)
 
     // Subdir listing.
