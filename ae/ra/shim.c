@@ -157,33 +157,10 @@ http_post_json(const char *url, const char *body, char **out_resp, size_t *out_l
 
 /* ---- public API ------------------------------------------------------ */
 
-/* head_rev: returns the current revision number, or -1 on any failure. */
-extern int aether_ra_parse_head_rev(const char *body);
+/* svnae_ra_head_rev / svnae_ra_hash_algo moved to ae/ra/info.ae in
+ * Round 88. aether_ra_parse_rev_response stays referenced from
+ * copy_branch.ae's post helper. */
 extern int aether_ra_parse_rev_response(const char *body);
-int
-svnae_ra_head_rev(const char *base_url, const char *repo_name)
-{
-    char *body = http_get_200(aether_url_info(base_url, repo_name), NULL);
-    if (!body) return -1;
-    int rev = aether_ra_parse_head_rev(body);
-    free(body);
-    return rev;
-}
-
-/* Query the server's primary content-address algorithm. Returns a
- * malloc'd string (caller frees) or NULL on failure. Pre-Phase-6.1
- * servers omit the field; the Aether parser defaults to "sha1". */
-extern const char *aether_ra_parse_hash_algo(const char *body);
-char *
-svnae_ra_hash_algo(const char *base_url, const char *repo_name)
-{
-    char *body = http_get_200(aether_url_info(base_url, repo_name), NULL);
-    if (!body) return NULL;
-    const char *algo = aether_ra_parse_hash_algo(body);
-    free(body);
-    if (!algo || !*algo) return NULL;
-    return strdup(algo);
-}
 
 /* ---- packed-record handle internals ---------------------------------
  *
