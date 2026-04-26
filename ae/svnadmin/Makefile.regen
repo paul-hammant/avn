@@ -2,7 +2,7 @@
 
 AETHERC ?= $(abspath $(dir $(lastword $(MAKEFILE_LIST))))/../../.aether_binaries/build/aetherc
 
-GENERATED := dump_generated.c admin_db_generated.c create_generated.c
+GENERATED := dump_generated.c admin_db_generated.c create_generated.c dump_load_generated.c
 
 all: $(GENERATED)
 
@@ -16,6 +16,11 @@ admin_db_generated.c: admin_db.ae
 
 # create.ae is pure orchestration — no contrib.sqlite, no std.fs imports.
 create_generated.c: create.ae
+	$(AETHERC) --emit=lib $< $@
+
+# dump_load.ae is pure orchestration — fd I/O goes through the C-side
+# svnae_fd_* helpers, so no fresh capability deps.
+dump_load_generated.c: dump_load.ae
 	$(AETHERC) --emit=lib $< $@
 
 .PHONY: all
