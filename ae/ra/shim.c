@@ -394,68 +394,32 @@ const char *svnae_ra_props_name (struct svnae_ra_props *P, int i) { return svnae
 const char *svnae_ra_props_value(struct svnae_ra_props *P, int i) { return svnae_packed_pin_at(P, i, aether_ra_props_value); }
 void        svnae_ra_props_free (struct svnae_ra_props *P) { svnae_packed_handle_free((struct svnae_packed_handle *)P); }
 
-/* --- server-side copy ------------------------------------------------ *
- *
- * POST /repos/{r}/copy with { base_rev, from_path, to_path, author, log }.
- * Returns the new revision number, or -1.
- */
-extern const char *aether_ra_copy_build_body(int base_rev,
-                                              const char *from_path,
-                                              const char *to_path,
-                                              const char *author,
-                                              const char *logmsg);
-int
-svnae_ra_server_copy(const char *base_url, const char *repo_name,
-                     int base_rev,
-                     const char *from_path, const char *to_path,
-                     const char *author, const char *logmsg)
+/* svnae_ra_server_copy and svnae_ra_branch_create moved to
+ * ae/ra/copy_branch.ae in Round 78. Both go through the adapter
+ * below, which handles the std.http.client response object on this
+ * side and returns a "<status>\x01<body>" packed string the Aether
+ * caller splits. */
+const char *
+svnae_ra_http_post_status_body(const char *url, const char *body)
 {
-    /* Body serialisation ported to ae/ra/commit_build.ae::ra_copy_build_body. */
-    const char *json = aether_ra_copy_build_body(base_rev, from_path, to_path,
-                                                 author, logmsg);
-    const char *url = aether_url_copy(base_url, repo_name);
+    static __thread char *last = NULL;
+    free(last); last = NULL;
+
     char *resp = NULL; size_t len = 0; int status = 0;
-    int rc = http_post_json(url, json, &resp, &len, &status);
+    int rc = http_post_json(url, body, &resp, &len, &status);
     (void)len;
 
-    int new_rev = -1;
-    if (rc == 0 && status == 200 && resp) {
-        new_rev = aether_ra_parse_rev_response(resp);
+    if (rc != 0) {
+        last = strdup("0\x01");
+        return last ? last : "";
     }
+    const char *body_str = resp ? resp : "";
+    int n = (int)snprintf(NULL, 0, "%d", status) + 1 + (int)strlen(body_str) + 1;
+    last = malloc((size_t)n);
+    if (!last) { free(resp); return ""; }
+    snprintf(last, (size_t)n, "%d\x01%s", status, body_str);
     free(resp);
-    return new_rev;
-}
-
-/* ---- branch create (Phase 8.2a) ------------------------------------- *
- *
- * POST /repos/{r}/branches/<NAME>/create with JSON
- *   { "base": "main", "include": ["src/**", "README.md"] }
- * Super-user only. Returns the new rev number, or -1 on failure.
- *
- * `includes_joined` is a single newline-separated string for ergonomic
- * passage from Aether (Aether ptr-array types are awkward). We split
- * here and pass as a JSON array. */
-extern const char *aether_ra_branch_create_build_body(const char *base,
-                                                       const char *includes_joined);
-int
-svnae_ra_branch_create(const char *base_url, const char *repo_name,
-                      const char *name, const char *base,
-                      const char *includes_joined)
-{
-    /* Body serialisation ported to
-     * ae/ra/commit_build.ae::ra_branch_create_build_body. */
-    const char *json = aether_ra_branch_create_build_body(base, includes_joined ? includes_joined : "");
-    const char *url = aether_url_branches_create(base_url, repo_name, name);
-    char *resp = NULL; size_t len = 0; int status = 0;
-    int rc = http_post_json(url, json, &resp, &len, &status);
-    (void)len;
-
-    int new_rev = -1;
-    if (rc == 0 && status == 201 && resp) {
-        new_rev = aether_ra_parse_rev_response(resp);
-    }
-    free(resp);
-    return new_rev;
+    return last;
 }
 
 /* ---- list ------------------------------------------------------------ */

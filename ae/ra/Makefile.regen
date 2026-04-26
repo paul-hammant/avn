@@ -1,6 +1,6 @@
 AETHERC ?= $(abspath $(dir $(lastword $(MAKEFILE_LIST))))/../../.aether_binaries/build/aetherc
 
-GENERATED := urls_generated.c parse_generated.c commit_build_generated.c packed_generated.c http_client_generated.c verify_generated.c
+GENERATED := urls_generated.c parse_generated.c commit_build_generated.c packed_generated.c http_client_generated.c verify_generated.c copy_branch_generated.c
 
 all: $(GENERATED)
 
@@ -25,6 +25,11 @@ http_client_generated.c: http_client.ae
 # (which themselves cover the network capability — verify itself
 # never imports std.http.client directly).
 verify_generated.c: verify.ae
+	$(AETHERC) --emit=lib $< $@
+
+# copy_branch.ae is pure orchestration over commit_build + urls + a
+# C-side post adapter — no fresh capability deps.
+copy_branch_generated.c: copy_branch.ae
 	$(AETHERC) --emit=lib $< $@
 
 .PHONY: all
