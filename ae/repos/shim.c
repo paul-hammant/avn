@@ -44,16 +44,9 @@
 #include "../subr/pin_list.h"
 #include "../subr/packed_handle/packed_handle.h"
 
-/* We piggyback on the rep-store shim for blob reads and on the fs_fs shim
- * for small-file reads. Declarations here; definitions link in from the
- * other shims (see aether.toml extra_sources for the test binary). */
-
+/* Definitions link in from neighbouring shims (rep-store shim for blob
+ * reads, fs_fs shim for small-file reads). */
 char *svnae_rep_read_blob(const char *repo, const char *sha1_hex);
-
-/* Dir-blob line parser in ae/fs_fs/dirblob.ae. */
-extern int         aether_dir_count_entries(const char *body);
-extern int         aether_dir_entry_kind(const char *body, int i);
-extern const char *aether_dir_entry_name(const char *body, int i);
 void  svnae_rep_free(char *p);
 
 extern int aether_repos_head_rev(const char *repo);
