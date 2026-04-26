@@ -63,19 +63,45 @@ void  svnae_rep_free(char *p);
  * was a pure rename. */
 extern int aether_repos_head_rev(const char *repo);
 
-/* --- log ---------------------------------------------------------------
+/* ---- shared packed-string handle internals --------------------------
  *
- * Build-and-query: Aether's ae/repos/log.ae reads every rev blob and
- * emits a packed "<N>\x02<rev>\x01<author>\x01<date>\x01<msg>\x02..."
- * string in the same shape ae/ra/parse.ae::ra_parse_log produces on
- * the client side. We reuse the `ra_log_*` accessors from
- * ae/ra/packed.ae to walk it — same record shape, same semantics,
- * and zero additional C-side tokeniser. A per-handle pin list keeps
- * strdup'd copies alive across recursive / interleaved calls, the
- * same stable-pointer contract this API has always had. */
+ * Five accessor families (log / list / info / paths / blame) all
+ * share the same shape: own one packed-string payload (parsed
+ * Aether-side), remember the row count, and pin per-accessor
+ * strdup'd copies so callers can hold pointers across calls. Same
+ * pattern ra/shim.c uses (round 45) — independent here so each shim
+ * can ship without a shared header.
+ *
+ * The packed-string parsers (aether_ra_log_*, aether_ra_paths_*,
+ * etc.) live in ae/ra/packed.ae and are reused verbatim — the wire
+ * record shape ae/repos/log.ae produces is identical to what
+ * ae/ra/parse.ae produces, by design. */
 
+struct svnae_repos_handle { char *packed; int n; struct pin_list pins; };
 
-struct svnae_log { char *packed; int n; struct pin_list pins; };
+typedef int (*repos_count_fn)(const char *packed);
+
+static struct svnae_repos_handle *
+repos_handle_from_packed(const char *packed, repos_count_fn count)
+{
+    if (!packed || !*packed) return NULL;
+    struct svnae_repos_handle *h = calloc(1, sizeof *h);
+    if (!h) return NULL;
+    h->packed = strdup(packed);
+    h->n = count ? count(h->packed) : 0;
+    return h;
+}
+
+static void
+repos_handle_free(struct svnae_repos_handle *h)
+{
+    if (!h) return;
+    free(h->packed);
+    pin_list_free(&h->pins);
+    free(h);
+}
+
+/* --- log handle ------------------------------------------------------ */
 
 extern const char *aether_repos_log_packed(const char *repo);
 extern int         aether_ra_log_count(const char *packed);
@@ -87,52 +113,51 @@ extern const char *aether_ra_log_msg(const char *packed, int i);
 struct svnae_log *
 svnae_repos_log(const char *repo)
 {
-    const char *packed = aether_repos_log_packed(repo);
-    if (!packed || !*packed) return NULL;
-
-    struct svnae_log *lg = calloc(1, sizeof *lg);
-    lg->packed = strdup(packed);
-    lg->n = aether_ra_log_count(lg->packed);
-    return lg;
+    return (struct svnae_log *)repos_handle_from_packed(
+        aether_repos_log_packed(repo), aether_ra_log_count);
 }
 
-int svnae_repos_log_count(const struct svnae_log *lg) { return lg ? lg->n : 0; }
+int svnae_repos_log_count(const struct svnae_log *lg)
+{
+    const struct svnae_repos_handle *h = (const struct svnae_repos_handle *)lg;
+    return h ? h->n : 0;
+}
 
 int
 svnae_repos_log_rev(const struct svnae_log *lg, int i)
 {
-    if (!lg || i < 0 || i >= lg->n) return -1;
-    return aether_ra_log_rev(lg->packed, i);
+    const struct svnae_repos_handle *h = (const struct svnae_repos_handle *)lg;
+    if (!h || i < 0 || i >= h->n) return -1;
+    return aether_ra_log_rev(h->packed, i);
 }
 
 const char *
 svnae_repos_log_author(struct svnae_log *lg, int i)
 {
-    if (!lg || i < 0 || i >= lg->n) return "";
-    return pin_str(&lg->pins, aether_ra_log_author(lg->packed, i));
+    struct svnae_repos_handle *h = (struct svnae_repos_handle *)lg;
+    if (!h || i < 0 || i >= h->n) return "";
+    return pin_str(&h->pins, aether_ra_log_author(h->packed, i));
 }
 
 const char *
 svnae_repos_log_date(struct svnae_log *lg, int i)
 {
-    if (!lg || i < 0 || i >= lg->n) return "";
-    return pin_str(&lg->pins, aether_ra_log_date(lg->packed, i));
+    struct svnae_repos_handle *h = (struct svnae_repos_handle *)lg;
+    if (!h || i < 0 || i >= h->n) return "";
+    return pin_str(&h->pins, aether_ra_log_date(h->packed, i));
 }
 
 const char *
 svnae_repos_log_msg(struct svnae_log *lg, int i)
 {
-    if (!lg || i < 0 || i >= lg->n) return "";
-    return pin_str(&lg->pins, aether_ra_log_msg(lg->packed, i));
+    struct svnae_repos_handle *h = (struct svnae_repos_handle *)lg;
+    if (!h || i < 0 || i >= h->n) return "";
+    return pin_str(&h->pins, aether_ra_log_msg(h->packed, i));
 }
 
-void
-svnae_repos_log_free(struct svnae_log *lg)
+void svnae_repos_log_free(struct svnae_log *lg)
 {
-    if (!lg) return;
-    free(lg->packed);
-    pin_list_free(&lg->pins);
-    free(lg);
+    repos_handle_free((struct svnae_repos_handle *)lg);
 }
 
 /* --- cat / list: tree walk ---------------------------------------------
@@ -265,8 +290,6 @@ svnae_repos_list_free(struct svnae_list *L)
  * Accessor shape matches the ra_info_* family, and we reuse those
  * accessors (ae/ra/packed.ae) verbatim. */
 
-struct svnae_info { char *packed; struct pin_list pins; };
-
 extern const char *aether_repos_info_packed(const char *repo, int rev);
 extern int         aether_ra_info_rev(const char *packed);
 extern const char *aether_ra_info_author(const char *packed);
@@ -276,36 +299,34 @@ extern const char *aether_ra_info_msg(const char *packed);
 struct svnae_info *
 svnae_repos_info_rev(const char *repo, int rev)
 {
-    const char *packed = aether_repos_info_packed(repo, rev);
-    if (!packed || !*packed) return NULL;
-    struct svnae_info *I = calloc(1, sizeof *I);
-    I->packed = strdup(packed);
-    return I;
+    /* info is a single record — count_fn is NULL so n stays 0. */
+    return (struct svnae_info *)repos_handle_from_packed(
+        aether_repos_info_packed(repo, rev), NULL);
 }
 
-int         svnae_repos_info_rev_num(const struct svnae_info *I) {
-    return I ? aether_ra_info_rev(I->packed) : -1;
+int svnae_repos_info_rev_num(const struct svnae_info *I) {
+    const struct svnae_repos_handle *h = (const struct svnae_repos_handle *)I;
+    return h ? aether_ra_info_rev(h->packed) : -1;
 }
-const char *svnae_repos_info_author (struct svnae_info *I) {
-    if (!I) return "";
-    return pin_str(&I->pins, aether_ra_info_author(I->packed));
+const char *svnae_repos_info_author(struct svnae_info *I) {
+    struct svnae_repos_handle *h = (struct svnae_repos_handle *)I;
+    if (!h) return "";
+    return pin_str(&h->pins, aether_ra_info_author(h->packed));
 }
-const char *svnae_repos_info_date   (struct svnae_info *I) {
-    if (!I) return "";
-    return pin_str(&I->pins, aether_ra_info_date(I->packed));
+const char *svnae_repos_info_date(struct svnae_info *I) {
+    struct svnae_repos_handle *h = (struct svnae_repos_handle *)I;
+    if (!h) return "";
+    return pin_str(&h->pins, aether_ra_info_date(h->packed));
 }
-const char *svnae_repos_info_msg    (struct svnae_info *I) {
-    if (!I) return "";
-    return pin_str(&I->pins, aether_ra_info_msg(I->packed));
+const char *svnae_repos_info_msg(struct svnae_info *I) {
+    struct svnae_repos_handle *h = (struct svnae_repos_handle *)I;
+    if (!h) return "";
+    return pin_str(&h->pins, aether_ra_info_msg(h->packed));
 }
 
-void
-svnae_repos_info_free(struct svnae_info *I)
+void svnae_repos_info_free(struct svnae_info *I)
 {
-    if (!I) return;
-    free(I->packed);
-    pin_list_free(&I->pins);
-    free(I);
+    repos_handle_free((struct svnae_repos_handle *)I);
 }
 
 int svnae_repos_head_rev(const char *repo) { return aether_repos_head_rev(repo); }
@@ -330,8 +351,6 @@ int svnae_repos_head_rev(const char *repo) { return aether_repos_head_rev(repo);
 /* flat_tree + flatten_tree + flat_add + flat_free + flat_cmp all
  * ported to Aether (ae/repos/paths_changed.ae). */
 
-struct svnae_paths { char *packed; int n; struct pin_list pins; };
-
 /* Paths-changed diff ported to Aether (ae/repos/paths_changed.ae).
  * paths_changed_packed does the whole tree flatten + merge + diff +
  * pack in one call; we reuse the ra_paths_* accessors from
@@ -346,38 +365,34 @@ struct svnae_paths *
 svnae_repos_paths_changed(const char *repo, int rev)
 {
     if (rev < 0) return NULL;
-    const char *packed = aether_paths_changed_packed(repo, rev);
-    if (!packed || !*packed) return NULL;
-
-    struct svnae_paths *P = calloc(1, sizeof *P);
-    P->packed = strdup(packed);
-    P->n = aether_ra_paths_count(P->packed);
-    return P;
+    return (struct svnae_paths *)repos_handle_from_packed(
+        aether_paths_changed_packed(repo, rev), aether_ra_paths_count);
 }
 
-int svnae_repos_paths_count(const struct svnae_paths *P) { return P ? P->n : 0; }
+int svnae_repos_paths_count(const struct svnae_paths *P) {
+    const struct svnae_repos_handle *h = (const struct svnae_repos_handle *)P;
+    return h ? h->n : 0;
+}
 
 const char *
 svnae_repos_paths_path(struct svnae_paths *P, int i)
 {
-    if (!P || i < 0 || i >= P->n) return "";
-    return pin_str(&P->pins, aether_ra_paths_path(P->packed, i));
+    struct svnae_repos_handle *h = (struct svnae_repos_handle *)P;
+    if (!h || i < 0 || i >= h->n) return "";
+    return pin_str(&h->pins, aether_ra_paths_path(h->packed, i));
 }
 
 const char *
 svnae_repos_paths_action(struct svnae_paths *P, int i)
 {
-    if (!P || i < 0 || i >= P->n) return "";
-    return pin_str(&P->pins, aether_ra_paths_action(P->packed, i));
+    struct svnae_repos_handle *h = (struct svnae_repos_handle *)P;
+    if (!h || i < 0 || i >= h->n) return "";
+    return pin_str(&h->pins, aether_ra_paths_action(h->packed, i));
 }
 
-void
-svnae_repos_paths_free(struct svnae_paths *P)
+void svnae_repos_paths_free(struct svnae_paths *P)
 {
-    if (!P) return;
-    free(P->packed);
-    pin_list_free(&P->pins);
-    free(P);
+    repos_handle_free((struct svnae_repos_handle *)P);
 }
 
 /* Public shim for server-side copy: resolve (rev, path) to its sha1 +
@@ -430,8 +445,6 @@ svnae_repos_resolve_sha(const char *repo, int rev, const char *path)
  * produces on the client side, so we reuse the ra_blame_*
  * accessors from ae/ra/packed.ae for the per-entry getters. */
 
-struct svnae_blame { char *packed; int n; struct pin_list pins; };
-
 extern const char *aether_repos_blame_packed(const char *repo, int target_rev, const char *path);
 extern int         aether_ra_blame_count(const char *packed);
 extern int         aether_ra_blame_rev(const char *packed, int i);
@@ -441,42 +454,41 @@ extern const char *aether_ra_blame_text(const char *packed, int i);
 struct svnae_blame *
 svnae_repos_blame(const char *repo, int target_rev, const char *path)
 {
-    const char *packed = aether_repos_blame_packed(repo, target_rev, path);
-    if (!packed || !*packed) return NULL;
-    struct svnae_blame *B = calloc(1, sizeof *B);
-    B->packed = strdup(packed);
-    B->n = aether_ra_blame_count(B->packed);
-    return B;
+    return (struct svnae_blame *)repos_handle_from_packed(
+        aether_repos_blame_packed(repo, target_rev, path),
+        aether_ra_blame_count);
 }
 
-int svnae_blame_count(const struct svnae_blame *B) { return B ? B->n : 0; }
+int svnae_blame_count(const struct svnae_blame *B) {
+    const struct svnae_repos_handle *h = (const struct svnae_repos_handle *)B;
+    return h ? h->n : 0;
+}
 
 int
 svnae_blame_rev(const struct svnae_blame *B, int i)
 {
-    if (!B || i < 0 || i >= B->n) return -1;
-    return aether_ra_blame_rev(B->packed, i);
+    const struct svnae_repos_handle *h = (const struct svnae_repos_handle *)B;
+    if (!h || i < 0 || i >= h->n) return -1;
+    return aether_ra_blame_rev(h->packed, i);
 }
 
 const char *
 svnae_blame_author(struct svnae_blame *B, int i)
 {
-    if (!B || i < 0 || i >= B->n) return "";
-    return pin_str(&B->pins, aether_ra_blame_author(B->packed, i));
+    struct svnae_repos_handle *h = (struct svnae_repos_handle *)B;
+    if (!h || i < 0 || i >= h->n) return "";
+    return pin_str(&h->pins, aether_ra_blame_author(h->packed, i));
 }
 
 const char *
 svnae_blame_text(struct svnae_blame *B, int i)
 {
-    if (!B || i < 0 || i >= B->n) return "";
-    return pin_str(&B->pins, aether_ra_blame_text(B->packed, i));
+    struct svnae_repos_handle *h = (struct svnae_repos_handle *)B;
+    if (!h || i < 0 || i >= h->n) return "";
+    return pin_str(&h->pins, aether_ra_blame_text(h->packed, i));
 }
 
-void
-svnae_blame_free(struct svnae_blame *B)
+void svnae_blame_free(struct svnae_blame *B)
 {
-    if (!B) return;
-    free(B->packed);
-    pin_list_free(&B->pins);
-    free(B);
+    repos_handle_free((struct svnae_repos_handle *)B);
 }
