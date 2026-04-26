@@ -1,0 +1,77 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// permissions and limitations under the License.
+
+// Aether-side wrappers over std.cryptography v2 that the thin C
+// shim in ae/ffi/openssl/shim.c calls back into. The C side keeps
+// its existing svnae_openssl_* signatures so every downstream
+// caller (ra/svnserver/svnadmin/fs_fs/checksum) links unchanged;
+// the bodies become 1-2 line wrappers that defer the EVP work to
+// std.cryptography.
+
+import std.string
+import std.cryptography
+
+// Return the lowercase-hex digest of data[0..length] using algo,
+// or "" on any failure (unknown algo, openssl unavailable, hash
+// failed). The C side checks for empty.
+export svnae_crypto_hash_hex(algo: string, data: string, length: int) -> string {
+    digest, err = cryptography.hash_hex(algo, data, length)
+    if string.length(err) > 0 { return "" }
+    return digest
+}
+
+// Probe whether `algo` is a recognised hash name. 1/0.
+export svnae_crypto_hash_supported(algo: string) -> int {
+    return cryptography.hash_supported(algo)
+}
+
+// Base64-encode data[0..length]. Returns "" on failure.
+// std.cryptography emits unpadded output per RFC 4648 §4; the
+// downstream svnae_openssl_b64_encode contract was padded output,
+// so the C side appends '=' as needed.
+export svnae_crypto_b64_encode(data: string, length: int) -> string {
+    out, err = cryptography.base64_encode(data, length)
+    if string.length(err) > 0 { return "" }
+    return out
+}
+
+// Base64-decode b64. Returns the decoded string and its byte length
+// (binary-safe via AetherString — embedded NULs survive). The C
+// caller uses string length + the bytes pointer to copy out into a
+// malloc'd buffer.
+//
+// Aether tuple-returns work fine when the C extern picks up only
+// the first slot; the length comes back via a sibling extern that
+// re-runs decode. To avoid doing the work twice, we stash both
+// outputs in a per-call TLS pair on the C side and expose two
+// accessors: svnae_crypto_b64_decode (which captures + returns the
+// bytes) and svnae_crypto_b64_decode_len (returns the length the
+// previous decode captured). Pattern matches std.fs.read_binary's
+// fs_get_read_binary / fs_get_read_binary_length split.
+export svnae_crypto_b64_decode_capture(b64: string) -> string {
+    out, n, err = cryptography.base64_decode(b64)
+    if string.length(err) > 0 {
+        svnae_crypto_b64_decode_set_len(0)
+        return ""
+    }
+    svnae_crypto_b64_decode_set_len(n)
+    return out
+}
+
+extern svnae_crypto_b64_decode_set_len(n: int)
+
+main() {
+    println("ae/ffi/openssl/crypto_helpers.ae is a library; not meant to run standalone")
+}

@@ -32,6 +32,10 @@ fi
 FORCE=""
 if [ "${1:-}" = "--force" ]; then FORCE="-B"; fi
 
-for mk in ae/*/Makefile.regen; do
+# Recursive glob — there's a Makefile.regen at every directory that
+# has .ae files needing codegen, including ae/ffi/openssl/ which is
+# two levels deep.
+for mk in ae/*/Makefile.regen ae/*/*/Makefile.regen; do
+    [ -f "$mk" ] || continue
     make -C "$(dirname "$mk")" -f Makefile.regen AETHERC="$AETHERC" $FORCE
 done

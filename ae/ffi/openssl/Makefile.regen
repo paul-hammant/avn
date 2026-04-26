@@ -1,0 +1,16 @@
+# Regen recipe for ae/ffi/openssl/crypto_helpers.ae.
+#
+# crypto_helpers.ae imports std.cryptography (Aether 0.91+ with the
+# Base64 + hash_hex / hash_supported additions). Compiled with
+# --emit=lib via aetherc.
+
+AETHERC ?= $(abspath $(dir $(lastword $(MAKEFILE_LIST))))/../../../.aether_binaries/build/aetherc
+
+GENERATED := crypto_helpers_generated.c
+
+all: $(GENERATED)
+
+crypto_helpers_generated.c: crypto_helpers.ae
+	$(AETHERC) --emit=lib $< $@
+
+.PHONY: all

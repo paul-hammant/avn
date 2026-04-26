@@ -15,49 +15,32 @@
  * permissions and limitations under the License.
  */
 
-/* ae/ffi/openssl/shim.c — consolidated EVP digest + base64 wrappers.
+/* ae/ffi/openssl/shim.c — thin glue to std.cryptography v2.
  *
- * Before this file existed, the EVP-Init/Update/Final + hex-encode
- * sequence was duplicated in six places (checksum, rep_store, pristine
- * x2, svnserver x2, ra). All duplicates now call through to the three
- * entries declared here.
- *
- * Golden list for svn-aether: sha1, sha256. Everything else returns
- * NULL / 0. Adding another algorithm here is the only code change
- * required to extend the server's --algos support.
- *
- * This file is the landing zone for future openssl FFI — TLS support
- * (Phase 0 item 5) and password-hashing (when auth lands) will grow
- * here next, sharing the same link line (-lssl -lcrypto).
+ * Round 50 moved the EVP plumbing out of this file: the digest +
+ * Base64 work now lives in ae/ffi/openssl/crypto_helpers.ae which
+ * uses std.cryptography. The C functions below keep their existing
+ * svnae_openssl_* signatures so every downstream caller (six
+ * shims + the test harness) links unchanged — the bodies are now
+ * thin wrappers that copy AetherString-backed results into the
+ * malloc'd / stack-buffer shapes the C contract has always had.
  */
 
 #include <stdlib.h>
 #include <string.h>
-#include <openssl/evp.h>
+#include "aether_string.h"   /* aether_string_data / aether_string_length */
 
-/* --- internal helpers ------------------------------------------------- */
+extern const char *svnae_crypto_hash_hex(const char *algo, const char *data, int length);
+extern int         svnae_crypto_hash_supported(const char *algo);
+extern const char *svnae_crypto_b64_encode(const char *data, int length);
+extern const char *svnae_crypto_b64_decode_capture(const char *b64);
 
-static const EVP_MD *
-evp_by_name(const char *name)
-{
-    if (!name) return NULL;
-    if (strcmp(name, "sha1")   == 0) return EVP_sha1();
-    if (strcmp(name, "sha256") == 0) return EVP_sha256();
-    return NULL;
-}
+/* TLS slot the Aether-side b64 decoder writes into so the second
+ * accessor (length) can read back what the first accessor produced.
+ * Same split-accessor shape std.fs.read_binary uses. */
+static __thread int s_b64_decode_len = 0;
 
-static int
-hex_encode_into(const unsigned char *bytes, unsigned int n, char *out, size_t out_sz)
-{
-    if ((size_t)n * 2 + 1 > out_sz) return -1;
-    static const char hex[] = "0123456789abcdef";
-    for (unsigned int i = 0; i < n; i++) {
-        out[i * 2]     = hex[bytes[i] >> 4];
-        out[i * 2 + 1] = hex[bytes[i] & 0x0f];
-    }
-    out[n * 2] = '\0';
-    return (int)n * 2;
-}
+void svnae_crypto_b64_decode_set_len(int n) { s_b64_decode_len = n; }
 
 /* --- public API ------------------------------------------------------- */
 
@@ -71,18 +54,14 @@ hex_encode_into(const unsigned char *bytes, unsigned int n, char *out, size_t ou
 int
 svnae_openssl_hash_hex_into(const char *algo, const char *data, int len, char *out)
 {
-    const EVP_MD *md = evp_by_name(algo);
-    if (!md) return 0;
-    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
-    if (!ctx) return 0;
-    unsigned char dig[EVP_MAX_MD_SIZE];
-    unsigned int dlen = 0;
-    int ok = (EVP_DigestInit_ex(ctx, md, NULL) == 1
-              && EVP_DigestUpdate(ctx, data, (size_t)len) == 1
-              && EVP_DigestFinal_ex(ctx, dig, &dlen) == 1);
-    EVP_MD_CTX_free(ctx);
-    if (!ok) return 0;
-    return hex_encode_into(dig, dlen, out, 65);
+    const char *hex = svnae_crypto_hash_hex(algo, data, len);
+    if (!hex) { out[0] = '\0'; return 0; }
+    int hlen = (int)aether_string_length(hex);
+    if (hlen == 0 || hlen >= 65) { out[0] = '\0'; return 0; }
+    const char *hdata = aether_string_data(hex);
+    memcpy(out, hdata, (size_t)hlen);
+    out[hlen] = '\0';
+    return hlen;
 }
 
 /* Compute the named hash, return a malloc'd lowercase-hex string.
@@ -103,39 +82,56 @@ svnae_openssl_hash_hex(const char *algo, const char *data, int len)
 }
 
 /* Base64-encode `src[0..len]` into a malloc'd NUL-terminated string.
- * Caller frees. Padded output — the exact byte count EVP_EncodeBlock
- * returns is 4*((len+2)/3). */
+ * Caller frees. Padded output — std.cryptography emits unpadded so
+ * we append '=' as needed to make the length a multiple of 4. */
 char *
 svnae_openssl_b64_encode(const unsigned char *src, int len)
 {
-    int out_cap = 4 * ((len + 2) / 3) + 1;
-    char *out = malloc((size_t)out_cap);
+    const char *enc = svnae_crypto_b64_encode((const char *)src, len);
+    if (!enc) return NULL;
+    int n = (int)aether_string_length(enc);
+    /* Pad to a multiple of 4 with '='. The downstream svn shims
+     * expected padded output (matches reference RFC 4648 §4 and
+     * the libcurl/openssl convention). */
+    int pad = (4 - (n & 3)) & 3;
+    char *out = malloc((size_t)n + (size_t)pad + 1);
     if (!out) return NULL;
-    int n = EVP_EncodeBlock((unsigned char *)out, src, len);
-    if (n < 0) { free(out); return NULL; }
-    out[n] = '\0';
+    memcpy(out, aether_string_data(enc), (size_t)n);
+    for (int i = 0; i < pad; i++) out[n + i] = '=';
+    out[n + pad] = '\0';
     return out;
 }
 
 /* Base64-decode `src[0..src_len]` into a malloc'd buffer. Returns 0 on
  * success with `*out` / `*out_len` set; caller frees with free().
- * Returns -1 on OOM or decode failure. OpenSSL's EVP_DecodeBlock is
- * padding-aware enough that we strip trailing '=' and compute the
- * true length ourselves. */
+ * Returns -1 on OOM or decode failure. */
 int
 svnae_openssl_b64_decode(const char *src, int src_len,
                         unsigned char **out, int *out_len)
 {
-    int raw_len = src_len;
-    int pad = 0;
-    while (raw_len > 0 && src[raw_len - 1] == '=') { raw_len--; pad++; }
-    int expected = (src_len / 4) * 3 - pad;
-    unsigned char *buf = malloc((size_t)expected + 1);
+    /* std.cryptography.base64_decode takes a NUL-terminated string,
+     * not (ptr, len). If src isn't already NUL-terminated at src_len
+     * we need to copy it. Cheap path: most callers pass strlen-sized
+     * src, so check first. */
+    char *tmp = NULL;
+    const char *b64 = src;
+    if (src_len < 0) return -1;
+    if (src[src_len] != '\0') {
+        tmp = malloc((size_t)src_len + 1);
+        if (!tmp) return -1;
+        memcpy(tmp, src, (size_t)src_len);
+        tmp[src_len] = '\0';
+        b64 = tmp;
+    }
+    s_b64_decode_len = 0;
+    const char *bytes = svnae_crypto_b64_decode_capture(b64);
+    if (tmp) free(tmp);
+    if (!bytes) return -1;
+    int n = s_b64_decode_len;
+    if (n < 0) return -1;
+    unsigned char *buf = malloc((size_t)n + 1);
     if (!buf) return -1;
-    int n = EVP_DecodeBlock(buf, (const unsigned char *)src, src_len);
-    if (n < 0) { free(buf); return -1; }
-    n -= pad;
-    if (n < 0) n = 0;
+    if (n > 0) memcpy(buf, aether_string_data(bytes), (size_t)n);
     buf[n] = '\0';
     *out = buf;
     *out_len = n;
@@ -144,7 +140,10 @@ svnae_openssl_b64_decode(const char *src, int src_len,
 
 /* Is `algo` allowed as a repo's *content-address* algorithm? 1 = yes,
  * 0 = no. sha1 + sha256 only — the only two algorithms anything in
- * the port has ever asked for. */
+ * the port has ever asked for. std.cryptography.hash_supported
+ * accepts any name OpenSSL recognises (sha384/sha512/sha3-*); we
+ * narrow to our golden list here so admin commands can't install
+ * anything else as primary/secondary on a real repo. */
 int
 svnae_openssl_hash_supported(const char *algo)
 {
