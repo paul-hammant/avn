@@ -541,34 +541,68 @@ void svnae_ra_list_free(struct svnae_ra_list *L) { svnae_packed_handle_free((str
  *
  * The builder accumulates edits in-memory and only serialises + POSTs
  * at finish time.
- */
-
-struct commit_edit { int op; char *path; unsigned char *content; int content_len; };
-/* op: 1=add-file, 2=mkdir, 3=delete. Matches txn_shim.c's edit kinds. */
-
-/* Per-path props collected for commit. Parallel arrays keyed by
- * composite "path\0key" — we flatten for simplicity. When commit_finish
- * serialises, we group by path into nested objects. */
-struct commit_prop { char *path; char *key; char *value; };
-
-/* Per-path ACL rules collected for commit. Flat list of (path, rule)
- * like "+alice" / "-eve"; commit_finish groups into array-per-path. */
-struct commit_acl { char *path; char *rule; };
+ *
+ * Round 62 (Gordian knot): collapsed three parallel struct-arrays
+ * (commit_edit / commit_prop / commit_acl) and 14 typed accessors onto
+ * three packed-string buffers in the same "<count>\x02<rec>\x02..."
+ * shape ae/ra/parse.ae produces on the read side. The Aether-side
+ * commit_build.ae walks each buffer once via std.string.split rather
+ * than calling 14 cross-FFI accessors. b64-encoding moves to add-file
+ * time so the buffer carries text only — mkdir/delete records have an
+ * empty b64 field. */
 
 struct svnae_ra_commit {
     int   base_rev;
     char *author;
     char *logmsg;
-    struct commit_edit *edits;
-    int   n;
-    int   cap;
-    struct commit_prop *props;
+    char *edits_packed;   /* "<n>\x02<op>\x01<path>\x01<b64>\x02..."   */
+    int   n_edits;
+    char *props_packed;   /* "<n>\x02<path>\x01<key>\x01<value>\x02..." */
     int   n_props;
-    int   cap_props;
-    struct commit_acl *acls;
+    char *acls_packed;    /* "<n>\x02<path>\x01<rule>\x02..."          */
     int   n_acls;
-    int   cap_acls;
 };
+
+/* Append `record` (a "\x01"-joined field string) as one entry in `*buf`.
+ * Updates `*count`. Buffer grows to "<count>\x02<rec0>\x02<rec1>\x02..."
+ * Initial empty buffer becomes "1\x02<rec0>\x02"; subsequent appends
+ * rewrite the leading count and tack the new record + trailing \x02. */
+static int
+pack_append(char **buf, int *count, const char *record)
+{
+    if (!record) record = "";
+    int new_count = *count + 1;
+    char header[16];
+    int hlen = snprintf(header, sizeof header, "%d", new_count);
+    int rlen = (int)strlen(record);
+
+    /* New size: header + \x02 + every existing record (between the
+     * leading "<old_count>\x02" and trailing \x02) + record + \x02 + NUL. */
+    const char *existing_body = "";
+    int body_len = 0;
+    if (*buf) {
+        const char *first_sep = strchr(*buf, '\x02');
+        if (first_sep) {
+            existing_body = first_sep + 1;
+            body_len = (int)strlen(existing_body);
+        }
+    }
+
+    int total = hlen + 1 + body_len + rlen + 1 + 1;
+    char *out = malloc((size_t)total);
+    if (!out) return -1;
+    memcpy(out, header, (size_t)hlen);
+    out[hlen] = '\x02';
+    memcpy(out + hlen + 1, existing_body, (size_t)body_len);
+    memcpy(out + hlen + 1 + body_len, record, (size_t)rlen);
+    out[hlen + 1 + body_len + rlen] = '\x02';
+    out[hlen + 1 + body_len + rlen + 1] = '\0';
+
+    free(*buf);
+    *buf = out;
+    *count = new_count;
+    return 0;
+}
 
 struct svnae_ra_commit *
 svnae_ra_commit_begin(int base_rev, const char *author, const char *logmsg)
@@ -581,122 +615,86 @@ svnae_ra_commit_begin(int base_rev, const char *author, const char *logmsg)
     return cb;
 }
 
-static int
-cb_push(struct svnae_ra_commit *cb)
-{
-    if (cb->n == cb->cap) {
-        int nc = cb->cap ? cb->cap * 2 : 8;
-        struct commit_edit *p = realloc(cb->edits, (size_t)nc * sizeof *p);
-        if (!p) return -1;
-        cb->edits = p;
-        cb->cap = nc;
-    }
-    return cb->n++;
-}
+/* Consolidated in ae/ffi/openssl/shim.c. */
+extern char *svnae_openssl_b64_encode(const unsigned char *src, int len);
 
 int
 svnae_ra_commit_add_file(struct svnae_ra_commit *cb, const char *path,
                          const char *content, int len)
 {
     if (!cb) return -1;
-    int i = cb_push(cb);
-    if (i < 0) return -1;
-    cb->edits[i].op = 1;
-    cb->edits[i].path = strdup(path);
-    if (len > 0 && content) {
-        cb->edits[i].content = malloc((size_t)len);
-        memcpy(cb->edits[i].content, content, (size_t)len);
-        cb->edits[i].content_len = len;
-    } else {
-        cb->edits[i].content = NULL;
-        cb->edits[i].content_len = 0;
-    }
-    return 0;
+    char *b64 = (len > 0 && content)
+        ? svnae_openssl_b64_encode((const unsigned char *)content, len)
+        : strdup("");
+    if (!b64) return -1;
+    int rlen = (int)strlen(path) + 1 + 1 + 1 + (int)strlen(b64) + 1;
+    char *rec = malloc((size_t)rlen);
+    if (!rec) { free(b64); return -1; }
+    snprintf(rec, (size_t)rlen, "1\x01%s\x01%s", path, b64);
+    int rc = pack_append(&cb->edits_packed, &cb->n_edits, rec);
+    free(rec); free(b64);
+    return rc;
 }
 
 int
 svnae_ra_commit_mkdir(struct svnae_ra_commit *cb, const char *path)
 {
     if (!cb) return -1;
-    int i = cb_push(cb);
-    if (i < 0) return -1;
-    cb->edits[i].op = 2;
-    cb->edits[i].path = strdup(path);
-    cb->edits[i].content = NULL;
-    cb->edits[i].content_len = 0;
-    return 0;
+    int rlen = (int)strlen(path) + 1 + 1 + 1 + 1;
+    char *rec = malloc((size_t)rlen);
+    if (!rec) return -1;
+    snprintf(rec, (size_t)rlen, "2\x01%s\x01", path);
+    int rc = pack_append(&cb->edits_packed, &cb->n_edits, rec);
+    free(rec);
+    return rc;
 }
 
 int
 svnae_ra_commit_delete(struct svnae_ra_commit *cb, const char *path)
 {
     if (!cb) return -1;
-    int i = cb_push(cb);
-    if (i < 0) return -1;
-    cb->edits[i].op = 3;
-    cb->edits[i].path = strdup(path);
-    cb->edits[i].content = NULL;
-    cb->edits[i].content_len = 0;
-    return 0;
+    int rlen = (int)strlen(path) + 1 + 1 + 1 + 1;
+    char *rec = malloc((size_t)rlen);
+    if (!rec) return -1;
+    snprintf(rec, (size_t)rlen, "3\x01%s\x01", path);
+    int rc = pack_append(&cb->edits_packed, &cb->n_edits, rec);
+    free(rec);
+    return rc;
 }
 
-/* Record an ACL rule for `path` on the pending commit. Multiple calls
- * with the same path accumulate into an ACL array on the wire. Clearing
- * a path's ACL is done by calling svnae_ra_commit_acl_clear, which
- * sends an empty array. */
 int
 svnae_ra_commit_acl_add(struct svnae_ra_commit *cb,
                         const char *path, const char *rule)
 {
     if (!cb) return -1;
-    if (cb->n_acls == cb->cap_acls) {
-        int nc = cb->cap_acls ? cb->cap_acls * 2 : 8;
-        struct commit_acl *p = realloc(cb->acls, (size_t)nc * sizeof *p);
-        if (!p) return -1;
-        cb->acls = p;
-        cb->cap_acls = nc;
-    }
-    cb->acls[cb->n_acls].path = strdup(path);
-    cb->acls[cb->n_acls].rule = strdup(rule);
-    cb->n_acls++;
-    return 0;
+    int rlen = (int)strlen(path) + 1 + (int)strlen(rule) + 1;
+    char *rec = malloc((size_t)rlen);
+    if (!rec) return -1;
+    snprintf(rec, (size_t)rlen, "%s\x01%s", path, rule);
+    int rc = pack_append(&cb->acls_packed, &cb->n_acls, rec);
+    free(rec);
+    return rc;
 }
 
-/* Record a property to persist on the next commit. The commit payload
- * carries ALL properties for each path the client wants to persist —
- * unmentioned paths inherit the previous revision's props. Call once
- * per (path, key, value). */
 int
 svnae_ra_commit_set_prop(struct svnae_ra_commit *cb,
                          const char *path, const char *key, const char *value)
 {
     if (!cb) return -1;
-    if (cb->n_props == cb->cap_props) {
-        int nc = cb->cap_props ? cb->cap_props * 2 : 8;
-        struct commit_prop *p = realloc(cb->props, (size_t)nc * sizeof *p);
-        if (!p) return -1;
-        cb->props = p;
-        cb->cap_props = nc;
-    }
-    cb->props[cb->n_props].path  = strdup(path);
-    cb->props[cb->n_props].key   = strdup(key);
-    cb->props[cb->n_props].value = strdup(value);
-    cb->n_props++;
-    return 0;
+    int rlen = (int)strlen(path) + 1 + (int)strlen(key) + 1
+             + (int)strlen(value) + 1;
+    char *rec = malloc((size_t)rlen);
+    if (!rec) return -1;
+    snprintf(rec, (size_t)rlen, "%s\x01%s\x01%s", path, key, value);
+    int rc = pack_append(&cb->props_packed, &cb->n_props, rec);
+    free(rec);
+    return rc;
 }
 
-/* Consolidated in ae/ffi/openssl/shim.c. */
-extern char *svnae_openssl_b64_encode(const unsigned char *src, int len);
-#define b64_encode svnae_openssl_b64_encode
-
-/* Commit: serialise edits into JSON body, POST to the server, parse the
- * response. Returns the new revision number or -1 on any failure. Frees
- * the builder on the way out. */
-/* --- Aether-callable accessors for struct svnae_ra_commit ---------- *
+/* --- Aether-callable accessors -------------------------------------- *
  *
- * The JSON body serialisation happens in Aether (ae/ra/commit_build.ae)
- * via std.json; these accessors let it walk the in-memory builder
- * without duplicating the struct layout across the boundary. */
+ * 14 typed getters collapsed to 6 packed-string + 3 count fields.
+ * commit_build.ae walks each packed buffer with std.string.split. */
 int         svnae_ra_cb_base_rev(const struct svnae_ra_commit *cb) {
     return cb ? cb->base_rev : 0;
 }
@@ -706,45 +704,14 @@ const char *svnae_ra_cb_author(const struct svnae_ra_commit *cb) {
 const char *svnae_ra_cb_logmsg(const struct svnae_ra_commit *cb) {
     return (cb && cb->logmsg) ? cb->logmsg : "";
 }
-int         svnae_ra_cb_edit_count(const struct svnae_ra_commit *cb) {
-    return cb ? cb->n : 0;
+const char *svnae_ra_cb_edits_packed(const struct svnae_ra_commit *cb) {
+    return (cb && cb->edits_packed) ? cb->edits_packed : "";
 }
-int         svnae_ra_cb_edit_op(const struct svnae_ra_commit *cb, int i) {
-    return (cb && i >= 0 && i < cb->n) ? cb->edits[i].op : 0;
+const char *svnae_ra_cb_props_packed(const struct svnae_ra_commit *cb) {
+    return (cb && cb->props_packed) ? cb->props_packed : "";
 }
-const char *svnae_ra_cb_edit_path(const struct svnae_ra_commit *cb, int i) {
-    return (cb && i >= 0 && i < cb->n && cb->edits[i].path) ? cb->edits[i].path : "";
-}
-/* For add-file edits: base64-encode the content bytes into a TLS
- * buffer and return. Aether doesn't safely carry binary bytes across
- * FFI, so encoding stays on the C side. */
-const char *svnae_ra_cb_edit_content_b64(const struct svnae_ra_commit *cb, int i) {
-    static __thread char *last = NULL;
-    free(last); last = NULL;
-    if (!cb || i < 0 || i >= cb->n || cb->edits[i].op != 1) return "";
-    last = b64_encode(cb->edits[i].content, cb->edits[i].content_len);
-    return last ? last : "";
-}
-int         svnae_ra_cb_prop_count(const struct svnae_ra_commit *cb) {
-    return cb ? cb->n_props : 0;
-}
-const char *svnae_ra_cb_prop_path(const struct svnae_ra_commit *cb, int i) {
-    return (cb && i >= 0 && i < cb->n_props && cb->props[i].path) ? cb->props[i].path : "";
-}
-const char *svnae_ra_cb_prop_key(const struct svnae_ra_commit *cb, int i) {
-    return (cb && i >= 0 && i < cb->n_props && cb->props[i].key) ? cb->props[i].key : "";
-}
-const char *svnae_ra_cb_prop_value(const struct svnae_ra_commit *cb, int i) {
-    return (cb && i >= 0 && i < cb->n_props && cb->props[i].value) ? cb->props[i].value : "";
-}
-int         svnae_ra_cb_acl_count(const struct svnae_ra_commit *cb) {
-    return cb ? cb->n_acls : 0;
-}
-const char *svnae_ra_cb_acl_path(const struct svnae_ra_commit *cb, int i) {
-    return (cb && i >= 0 && i < cb->n_acls && cb->acls[i].path) ? cb->acls[i].path : "";
-}
-const char *svnae_ra_cb_acl_rule(const struct svnae_ra_commit *cb, int i) {
-    return (cb && i >= 0 && i < cb->n_acls && cb->acls[i].rule) ? cb->acls[i].rule : "";
+const char *svnae_ra_cb_acls_packed(const struct svnae_ra_commit *cb) {
+    return (cb && cb->acls_packed) ? cb->acls_packed : "";
 }
 
 /* Aether's std.json.create_number takes a float; this tiny shim
@@ -777,25 +744,11 @@ svnae_ra_commit_finish(struct svnae_ra_commit *cb,
     }
     free(resp);
 
-    /* Free the builder's contents. */
     free(cb->author);
     free(cb->logmsg);
-    for (int i = 0; i < cb->n; i++) {
-        free(cb->edits[i].path);
-        free(cb->edits[i].content);
-    }
-    for (int i = 0; i < cb->n_props; i++) {
-        free(cb->props[i].path);
-        free(cb->props[i].key);
-        free(cb->props[i].value);
-    }
-    for (int i = 0; i < cb->n_acls; i++) {
-        free(cb->acls[i].path);
-        free(cb->acls[i].rule);
-    }
-    free(cb->edits);
-    free(cb->props);
-    free(cb->acls);
+    free(cb->edits_packed);
+    free(cb->props_packed);
+    free(cb->acls_packed);
     free(cb);
 
     return new_rev;

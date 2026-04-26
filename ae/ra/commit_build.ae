@@ -33,17 +33,38 @@ extern svnae_ra_json_int(v: int) -> ptr
 extern svnae_ra_cb_base_rev(cb: ptr) -> int
 extern svnae_ra_cb_author(cb: ptr) -> string
 extern svnae_ra_cb_logmsg(cb: ptr) -> string
-extern svnae_ra_cb_edit_count(cb: ptr) -> int
-extern svnae_ra_cb_edit_op(cb: ptr, i: int) -> int
-extern svnae_ra_cb_edit_path(cb: ptr, i: int) -> string
-extern svnae_ra_cb_edit_content_b64(cb: ptr, i: int) -> string
-extern svnae_ra_cb_prop_count(cb: ptr) -> int
-extern svnae_ra_cb_prop_path(cb: ptr, i: int) -> string
-extern svnae_ra_cb_prop_key(cb: ptr, i: int) -> string
-extern svnae_ra_cb_prop_value(cb: ptr, i: int) -> string
-extern svnae_ra_cb_acl_count(cb: ptr) -> int
-extern svnae_ra_cb_acl_path(cb: ptr, i: int) -> string
-extern svnae_ra_cb_acl_rule(cb: ptr, i: int) -> string
+extern svnae_ra_cb_edits_packed(cb: ptr) -> string
+extern svnae_ra_cb_props_packed(cb: ptr) -> string
+extern svnae_ra_cb_acls_packed(cb: ptr) -> string
+
+// Round 62: the C builder accumulates each collection (edits / props /
+// acls) as a single packed string in the same shape ae/ra/parse.ae
+// produces on the read side:
+//   "<count>\x02<rec0>\x02<rec1>\x02..."   with records joined by \x01
+// Walking the buffer with split is one pass per buffer instead of 5
+// cross-FFI accessor calls per record.
+
+// Drop the leading "<count>\x02" header and the trailing "\x02"
+// sentinel, then split on \x02 to get record strings. Returns a ptr
+// to a string-array (caller frees via string.array_free, and reads
+// the count via string.array_size). Empty / malformed input yields
+// an empty array.
+records_(packed: string) -> ptr {
+    n = string.length(packed)
+    if n == 0 { return string.split("", "\x02") }
+    sep = string.index_of(packed, "\x02")
+    if sep < 0 { return string.split("", "\x02") }
+    body = string.substring(packed, sep + 1, n)
+    blen = string.length(body)
+    if blen > 0 {
+        last = string.char_at(body, blen - 1)
+        if last == 2 {
+            body = string.substring(body, 0, blen - 1)
+        }
+    }
+    if string.length(body) == 0 { return string.split("", "\x02") }
+    return string.split(body, "\x02")
+}
 
 export ra_commit_build_body(cb: ptr) -> string {
     return ra_commit_build_body_impl(cb)
@@ -55,20 +76,26 @@ ra_commit_build_body_impl(cb: ptr) -> string {
     json.object_set(body, "author", json_create_string(svnae_ra_cb_author(cb)))
     json.object_set(body, "log", json_create_string(svnae_ra_cb_logmsg(cb)))
 
-    // edits: array of {op, path, [content]}.
+    // edits: array of {op, path, [content]}. Records: "<op>\x01<path>\x01<b64>".
     edits = json_create_array()
-    n = svnae_ra_cb_edit_count(cb)
+    epacked = svnae_ra_cb_edits_packed(cb)
+    earr = records_(epacked)
+    en = 0
+    if string.length(epacked) > 0 { en = string.array_size(earr) }
     i = 0
-    while i < n {
-        op = svnae_ra_cb_edit_op(cb, i)
-        path = svnae_ra_cb_edit_path(cb, i)
+    while i < en {
+        rec = string.array_get(earr, i)
+        fields = string.split(rec, "\x01")
+        op_s = string.array_get(fields, 0)
+        op   = string.get_int(op_s)
+        path = string.array_get(fields, 1)
         path = string.copy(path)
 
         e = json_create_object()
         if op == 1 {
             json.object_set(e, "op", json_create_string("add-file"))
             json.object_set(e, "path", json_create_string(path))
-            b64 = svnae_ra_cb_edit_content_b64(cb, i)
+            b64 = string.array_get(fields, 2)
             b64 = string.copy(b64)
             json.object_set(e, "content", json_create_string(b64))
         }
@@ -81,37 +108,43 @@ ra_commit_build_body_impl(cb: ptr) -> string {
             json.object_set(e, "path", json_create_string(path))
         }
         json.array_add(edits, e)
+        string.array_free(fields)
         i = i + 1
     }
+    string.array_free(earr)
     json.object_set(body, "edits", edits)
 
-    // props: { path: {k:v, ...} } — group by path. std.json's
-    // object_set deep-copies the attached child into the parent
-    // arena and frees the original, so we build a complete per-path
-    // object per unique path in one pass by scanning for matching
-    // entries rather than mutating an already-attached child.
-    np = svnae_ra_cb_prop_count(cb)
-    if np > 0 {
+    // props: { path: {k:v, ...} } — group by path. Records:
+    //   "<path>\x01<key>\x01<value>"
+    ppacked = svnae_ra_cb_props_packed(cb)
+    parr = records_(ppacked)
+    pn = 0
+    if string.length(ppacked) > 0 { pn = string.array_size(parr) }
+    if pn > 0 {
         jp = json_create_object()
         pi = 0
-        while pi < np {
-            this_path = svnae_ra_cb_prop_path(cb, pi)
+        while pi < pn {
+            rec = string.array_get(parr, pi)
+            f = string.split(rec, "\x01")
+            this_path = string.array_get(f, 0)
             this_path = string.copy(this_path)
-            // Skip if we've already emitted for this path.
+            string.array_free(f)
             already = json.object_has(jp, this_path)
             if already == 0 {
                 per = json_create_object()
-                // Collect every prop entry with the same path.
                 k = pi
-                while k < np {
-                    kpath = svnae_ra_cb_prop_path(cb, k)
+                while k < pn {
+                    rk = string.array_get(parr, k)
+                    fk = string.split(rk, "\x01")
+                    kpath = string.array_get(fk, 0)
                     if string.equals(kpath, this_path) == 1 {
-                        key = svnae_ra_cb_prop_key(cb, k)
+                        key = string.array_get(fk, 1)
                         key = string.copy(key)
-                        val = svnae_ra_cb_prop_value(cb, k)
+                        val = string.array_get(fk, 2)
                         val = string.copy(val)
                         json.object_set(per, key, json_create_string(val))
                     }
+                    string.array_free(fk)
                     k = k + 1
                 }
                 json.object_set(jp, this_path, per)
@@ -120,27 +153,36 @@ ra_commit_build_body_impl(cb: ptr) -> string {
         }
         json.object_set(body, "props", jp)
     }
+    string.array_free(parr)
 
-    // acl: { path: ["+alice","-eve"] } — same group-by-path pattern,
-    // value is an array of rule strings.
-    na = svnae_ra_cb_acl_count(cb)
-    if na > 0 {
+    // acl: { path: ["+alice","-eve"] }. Records: "<path>\x01<rule>".
+    apacked = svnae_ra_cb_acls_packed(cb)
+    aarr = records_(apacked)
+    an = 0
+    if string.length(apacked) > 0 { an = string.array_size(aarr) }
+    if an > 0 {
         ja = json_create_object()
         ai = 0
-        while ai < na {
-            this_path = svnae_ra_cb_acl_path(cb, ai)
+        while ai < an {
+            rec = string.array_get(aarr, ai)
+            f = string.split(rec, "\x01")
+            this_path = string.array_get(f, 0)
             this_path = string.copy(this_path)
+            string.array_free(f)
             already = json.object_has(ja, this_path)
             if already == 0 {
                 arr = json_create_array()
                 k = ai
-                while k < na {
-                    kpath = svnae_ra_cb_acl_path(cb, k)
+                while k < an {
+                    rk = string.array_get(aarr, k)
+                    fk = string.split(rk, "\x01")
+                    kpath = string.array_get(fk, 0)
                     if string.equals(kpath, this_path) == 1 {
-                        rule = svnae_ra_cb_acl_rule(cb, k)
+                        rule = string.array_get(fk, 1)
                         rule = string.copy(rule)
                         json.array_add(arr, json_create_string(rule))
                     }
+                    string.array_free(fk)
                     k = k + 1
                 }
                 json.object_set(ja, this_path, arr)
@@ -149,6 +191,7 @@ ra_commit_build_body_impl(cb: ptr) -> string {
         }
         json.object_set(body, "acl", ja)
     }
+    string.array_free(aarr)
 
     out, _ = json.stringify(body)
     json.free(body)
