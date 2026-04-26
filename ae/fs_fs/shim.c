@@ -15,16 +15,14 @@
  * permissions and limitations under the License.
  */
 
-/* fs_fs/shim.c — helpers for Phase 3.2 that don't belong in subr shims:
- * rev-file ops, sorted directory serialization, and a small list builder
- * so Aether can assemble a tree without juggling C arrays.
- *
- * Everything else (read/write blobs, rep-sharing, zlib) is already in
- * ae/fs_fs/test_repo.ae's inlined logic + ae/subr shims. We keep the
- * shim narrow: write a short file with fsync + rename, read the same
- * back, atomically bump $repo/head, and provide the tree-builder
- * scaffolding.
- */
+/* fs_fs/shim.c — small storage primitives the rest of fs_fs and the
+ * test suites reach via FFI:
+ *   svnae_buf:           binary-safe (data, length) holder + accessors
+ *   svnae_fsfs_read_small_file:  binary slurp returning svnae_buf
+ *   svnae_fsfs_now_iso8601:      TLS-cached UTC timestamp string
+ *   svnae_tree_builder:  (path, kind, content) tuple list for tests
+ *   svnae_sbuilder:      growable string buffer
+ * Everything else in fs_fs is in *.ae now. */
 
 #include <errno.h>
 #include <fcntl.h>
@@ -55,11 +53,8 @@ buf_from(const unsigned char *src, int n)
     return b;
 }
 
-/* Read the full file at `path` into a buf — ported to Aether
- * (ae/subr/io.ae). We check io_is_regular_file + io_file_size first
- * so missing/empty/not-a-file stays distinguishable. The Aether
- * `string` return is an AetherString* (since aether ce5ef25); use
- * the public aether_string_data/length helpers to unwrap. */
+/* Binary-safe slurp via std.fs (subr/io.ae). is_regular_file +
+ * file_size pre-checks distinguish miss / empty / not-a-file. */
 extern int aether_io_is_regular_file(const char *path);
 extern int aether_io_file_size(const char *path);
 extern const char *aether_io_read_file(const char *path);
@@ -109,20 +104,10 @@ svnae_fsfs_now_iso8601(void)
 
 /* ---- tree builder ----------------------------------------------------- *
  *
- * Aether callers accumulate (path, kind, content) triples into a builder.
- * Kind: 0 = file (content is raw bytes), 1 = directory (content ignored).
- * After adding all entries, the Aether side walks the builder to group
- * children by parent and serialise directory blobs bottom-up.
- *
- * Strings are strdup'd so the caller can free its buffers immediately.
- * Directories need not be listed explicitly — they're inferred from the
- * path components of any files added. If you want an empty directory
- * you do need to add it with kind=1, though.
- *
- * We keep this tiny and naive for Phase 3.2: O(n^2) scans, no hashing,
- * because repos under test have tens of entries not millions. A real
- * commit path will use svn's skel/index infrastructure later.
- */
+ * (path, kind, content) tuple list. kind 0 = file (content kept), 1 =
+ * dir (content ignored). Strings are strdup'd at add-time so callers
+ * can free their buffers immediately. Used by the test suite — Aether
+ * walks the builder to group by parent and emit dir blobs bottom-up. */
 
 struct tree_entry {
     char *path;      /* "a/b/c.txt" — no leading slash, '/' separator */
@@ -214,12 +199,11 @@ svnae_fsfs_tree_builder_free(struct svnae_tree_builder *tb)
     free(tb);
 }
 
-/* ---- string-list helper (for line-by-line building) ------------------- *
+/* ---- sbuilder: growable C-side string buffer ---------------------------
  *
- * When building a directory-blob body line-by-line, we need to hand a
- * grown-up string back to Aether. Rather than repeatedly concatenating
- * in Aether (each concat allocates), provide a growable C buffer we push
- * to one line at a time. */
+ * Aether's string.concat allocates on every call; for line-by-line
+ * directory-blob bodies that's quadratic. Push lines into one of these
+ * instead and read the result with sb_data once at the end. */
 
 struct svnae_sbuilder {
     char *data;
