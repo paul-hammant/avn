@@ -7,7 +7,7 @@
 
 AETHERC ?= $(abspath $(dir $(lastword $(MAKEFILE_LIST))))/../../.aether_binaries/build/aetherc
 
-GENERATED := mergeinfo_generated.c ignore_generated.c sidecar_generated.c status_code_generated.c pristine_path_generated.c pristine_generated.c update_apply_generated.c merge_apply_generated.c update_walk_generated.c merge_walk_generated.c update_props_generated.c db_schema_generated.c db_nodes_generated.c mutate_generated.c checkout_generated.c resolve_generated.c props_generated.c revert_generated.c
+GENERATED := mergeinfo_generated.c ignore_generated.c sidecar_generated.c status_code_generated.c pristine_path_generated.c pristine_generated.c update_apply_generated.c merge_apply_generated.c update_walk_generated.c merge_walk_generated.c update_props_generated.c db_schema_generated.c db_nodes_generated.c mutate_generated.c checkout_generated.c resolve_generated.c props_generated.c revert_generated.c status_generated.c
 
 all: $(GENERATED)
 
@@ -76,6 +76,11 @@ props_generated.c: props.ae
 # revert.ae is pure orchestration over already-Aether-side helpers
 # (no contrib.sqlite, no std.fs imports of its own).
 revert_generated.c: revert.ae
+	$(AETHERC) --emit=lib $< $@
+
+# status.ae imports std.collections (HashMap-backed tracked-set for
+# the recursive unversioned walk).
+status_generated.c: status.ae
 	$(AETHERC) --emit=lib $< $@
 
 .PHONY: all
