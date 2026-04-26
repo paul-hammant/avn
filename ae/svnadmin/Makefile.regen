@@ -2,11 +2,16 @@
 
 AETHERC ?= $(abspath $(dir $(lastword $(MAKEFILE_LIST))))/../../.aether_binaries/build/aetherc
 
-GENERATED := dump_generated.c
+GENERATED := dump_generated.c admin_db_generated.c
 
 all: $(GENERATED)
 
 dump_generated.c: dump.ae
 	$(AETHERC) --emit=lib $< $@
+
+# admin_db.ae imports contrib.sqlite — invoke from project root so
+# the resolver finds the contrib symlink.
+admin_db_generated.c: admin_db.ae
+	cd ../.. && $(AETHERC) --emit=lib ae/svnadmin/admin_db.ae ae/svnadmin/admin_db_generated.c
 
 .PHONY: all

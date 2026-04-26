@@ -58,7 +58,6 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
-#include <sqlite3.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -87,6 +86,15 @@ extern int         aether_line_starts_with_tag(const char *line, const char *pre
 extern int         aether_parse_tagged_int(const char *line, const char *prefix, int fallback);
 extern const char *aether_tagged_rest(const char *line, const char *prefix);
 const char *svnae_fsfs_now_iso8601(void);
+
+/* Aether-side rep-cache.db helpers (ae/svnadmin/admin_db.ae).
+ * Schema setup + rep enumeration moved out of this file in round 55;
+ * it now goes through contrib.sqlite v2 like every other DB-touching
+ * Aether path. */
+extern const char *admin_db_init_schema(const char *repo);
+extern const char *admin_db_list_reps_packed(const char *repo);
+extern const char *aether_string_data(const void *s);
+extern long        aether_string_length(const void *s);
 
 /* ---- tiny helpers --------------------------------------------------- */
 
@@ -140,22 +148,9 @@ create_bare(const char *repo, const char *algos_spec)
     int flen = snprintf(fmt_line, sizeof fmt_line, "svnae-fsfs-1 %s\n", spec);
     if (aether_io_write_atomic(path, fmt_line, flen) != 0) return -1;
 
-    snprintf(path, sizeof path, "%s/rep-cache.db", repo);
-    sqlite3 *db;
-    if (sqlite3_open_v2(path, &db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
-                        NULL) != SQLITE_OK) {
-        if (db) sqlite3_close(db);
-        return -1;
-    }
-    const char *schema =
-        "CREATE TABLE IF NOT EXISTS rep_cache ("
-        "  hash TEXT PRIMARY KEY,"
-        "  rel_path TEXT NOT NULL,"
-        "  uncompressed_size INT NOT NULL,"
-        "  storage INT NOT NULL)";
-    int rc = sqlite3_exec(db, schema, NULL, NULL, NULL);
-    sqlite3_close(db);
-    if (rc != SQLITE_OK) return -1;
+    /* rep_cache + path_rev schema installed Aether-side via contrib.sqlite. */
+    const char *err = admin_db_init_schema(repo);
+    if (err && *err) return -1;
     return 0;
 }
 
@@ -198,24 +193,9 @@ svnae_svnadmin_create_with_algos(const char *repo, const char *algos_spec)
     snprintf(p, sizeof p, "%s/branches/main/spec", repo);
     if (aether_io_write_atomic(p, "", 0) != 0) return -1;
 
-    /* Path-rev secondary index for O(touched-revs) blame/log-of-path.
-     * Populated on every commit (see fs_fs/commit_shim.c Phase 8.1). */
-    {
-        char db_path[PATH_MAX];
-        snprintf(db_path, sizeof db_path, "%s/rep-cache.db", repo);
-        sqlite3 *db;
-        if (sqlite3_open_v2(db_path, &db, SQLITE_OPEN_READWRITE, NULL) == SQLITE_OK) {
-            sqlite3_exec(db,
-                "CREATE TABLE IF NOT EXISTS path_rev ("
-                "  branch TEXT NOT NULL,"
-                "  path   TEXT NOT NULL,"
-                "  rev    INTEGER NOT NULL,"
-                "  PRIMARY KEY (branch, path, rev));"
-                "CREATE INDEX IF NOT EXISTS path_rev_lookup ON path_rev (branch, path);",
-                NULL, NULL, NULL);
-            sqlite3_close(db);
-        }
-    }
+    /* Path-rev table is installed by admin_db_init_schema above
+     * (now part of the rep-cache.db schema rather than a follow-up
+     * sqlite block here). */
 
     /* Seed rev 0: empty root dir + rev blob pointing at it. Use the
      * shared Aether rev-blob builder so the format stays in one place. */
@@ -266,46 +246,63 @@ svnae_svnadmin_create_with_algos(const char *repo, const char *algos_spec)
 
 /* ---- rep enumeration ------------------------------------------------ *
  *
- * Walk rep-cache.db to get every (sha1, uncompressed_size) we've stored.
- * Caller iterates by index. */
+ * Walk rep-cache.db to get every (sha1, uncompressed_size) we've
+ * stored. The SQL drive moved to ae/svnadmin/admin_db.ae in round 55
+ * (admin_db_list_reps_packed) — it returns a packed
+ *   "<N>\x02<sha>\x01<size>\x02..."
+ * string we slice into a local struct here for the dump loop's
+ * existing index-based iteration. */
 
 struct svnae_rep_list {
     char **sha1s;
     int   *sizes;
-    int    n, cap;
+    int    n;
 };
 
 static struct svnae_rep_list *
 list_reps(const char *repo)
 {
-    char path[PATH_MAX];
-    snprintf(path, sizeof path, "%s/rep-cache.db", repo);
-    sqlite3 *db;
-    if (sqlite3_open_v2(path, &db, SQLITE_OPEN_READONLY, NULL) != SQLITE_OK) {
-        if (db) sqlite3_close(db);
-        return NULL;
-    }
-    sqlite3_stmt *st;
-    if (sqlite3_prepare_v2(db,
-            "SELECT hash, uncompressed_size FROM rep_cache ORDER BY hash",
-            -1, &st, NULL) != SQLITE_OK) {
-        sqlite3_close(db);
-        return NULL;
-    }
+    const char *packed = admin_db_list_reps_packed(repo);
+    if (!packed) return NULL;
+    const char *data = aether_string_data(packed);
+    int total = (int)aether_string_length(packed);
+    if (total <= 0) return NULL;
+
+    /* Parse "<N>\x02..." — N is the row count. */
+    const char *sep = memchr(data, '\x02', (size_t)total);
+    if (!sep) return NULL;
+    char nbuf[16];
+    int nlen = (int)(sep - data);
+    if (nlen <= 0 || nlen >= (int)sizeof nbuf) return NULL;
+    memcpy(nbuf, data, (size_t)nlen);
+    nbuf[nlen] = '\0';
+    int n = atoi(nbuf);
+
     struct svnae_rep_list *L = calloc(1, sizeof *L);
-    while (sqlite3_step(st) == SQLITE_ROW) {
-        if (L->n == L->cap) {
-            int nc = L->cap ? L->cap * 2 : 32;
-            L->sha1s = realloc(L->sha1s, (size_t)nc * sizeof *L->sha1s);
-            L->sizes = realloc(L->sizes, (size_t)nc * sizeof *L->sizes);
-            L->cap = nc;
-        }
-        L->sha1s[L->n] = strdup((const char *)sqlite3_column_text(st, 0));
-        L->sizes[L->n] = sqlite3_column_int(st, 1);
-        L->n++;
+    if (!L) return NULL;
+    L->sha1s = (n > 0) ? calloc((size_t)n, sizeof *L->sha1s) : NULL;
+    L->sizes = (n > 0) ? calloc((size_t)n, sizeof *L->sizes) : NULL;
+    L->n = n;
+
+    const char *p = sep + 1;
+    const char *end = data + total;
+    for (int i = 0; i < n && p < end; i++) {
+        const char *eor = memchr(p, '\x02', (size_t)(end - p));
+        if (!eor) eor = end;
+        const char *mid = memchr(p, '\x01', (size_t)(eor - p));
+        if (!mid) { L->n = i; break; }
+        size_t shalen = (size_t)(mid - p);
+        L->sha1s[i] = malloc(shalen + 1);
+        memcpy(L->sha1s[i], p, shalen);
+        L->sha1s[i][shalen] = '\0';
+        char szbuf[16];
+        size_t szlen = (size_t)(eor - (mid + 1));
+        if (szlen >= sizeof szbuf) szlen = sizeof szbuf - 1;
+        memcpy(szbuf, mid + 1, szlen);
+        szbuf[szlen] = '\0';
+        L->sizes[i] = atoi(szbuf);
+        p = (eor < end) ? eor + 1 : end;
     }
-    sqlite3_finalize(st);
-    sqlite3_close(db);
     return L;
 }
 

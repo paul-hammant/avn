@@ -1,0 +1,91 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// permissions and limitations under the License.
+
+// Aether-side rep-cache.db helpers for svnadmin.
+//
+// Two operations:
+//
+//   admin_db_init_schema(repo)
+//     Open (creating if needed) $repo/rep-cache.db, install the
+//     rep_cache + path_rev tables. Idempotent (CREATE TABLE IF NOT
+//     EXISTS). Returns "" on success, error string on failure.
+//
+//   admin_db_list_reps_packed(repo)
+//     Walk rep_cache and return all (sha1, uncompressed_size) rows
+//     as a packed string in the same shape ra_parse_log etc. use:
+//       "<N>\x02<sha>\x01<size>\x02<sha>\x01<size>\x02..."
+//     The C side parses this into its existing svnae_rep_list shape
+//     for the dump walker. Empty result is "0\x02".
+
+import std.string
+import contrib.sqlite
+
+const SQLITE_ROW = 100
+
+// Install the rep_cache table + the Phase 8.1 path_rev secondary
+// index. Either CREATE call is idempotent (IF NOT EXISTS) so this
+// is safe to call from both `create` (fresh repo) and any future
+// path that retrofits the schema onto an older repo.
+export admin_db_init_schema(repo: string) -> string {
+    db, oerr = sqlite.open("${repo}/rep-cache.db")
+    if string.length(oerr) > 0 { return "open failed" }
+
+    err = sqlite.exec(db,
+        "CREATE TABLE IF NOT EXISTS rep_cache (  hash TEXT PRIMARY KEY,  rel_path TEXT NOT NULL,  uncompressed_size INT NOT NULL,  storage INT NOT NULL);CREATE TABLE IF NOT EXISTS path_rev (  branch TEXT NOT NULL,  path   TEXT NOT NULL,  rev    INTEGER NOT NULL,  PRIMARY KEY (branch, path, rev));CREATE INDEX IF NOT EXISTS path_rev_lookup ON path_rev (branch, path);")
+    sqlite.close(db)
+    if string.length(err) > 0 { return err }
+    return ""
+}
+
+// Walk the rep_cache table, return packed
+//   "<N>\x02<sha>\x01<size>\x02..."
+// Returns "" on any sqlite failure (caller treats as "no reps to
+// dump"). Empty rep_cache returns "0\x02".
+export admin_db_list_reps_packed(repo: string) -> string {
+    db, oerr = sqlite.open("${repo}/rep-cache.db")
+    if string.length(oerr) > 0 { return "" }
+
+    stmt, perr = sqlite.prepare(db,
+        "SELECT hash, uncompressed_size FROM rep_cache ORDER BY hash")
+    if string.length(perr) > 0 { sqlite.close(db); return "" }
+
+    // First pass: count rows so the count goes at the head of the
+    // packed string. Second pass: emit. SQLite has no rowcount
+    // up-front for arbitrary queries; we accumulate into an Aether
+    // string and prepend the count at the end.
+    n = 0
+    body = ""
+    rc, _ = sqlite.step(stmt, db)
+    while rc == SQLITE_ROW {
+        sha  = sqlite.column_text(stmt, 0)
+        size = sqlite.column_int (stmt, 1)
+        sha_owned = string.copy(sha)
+        body = string.concat(body, sha_owned)
+        body = string.concat(body, "\x01")
+        body = string.concat(body, "${size}")
+        body = string.concat(body, "\x02")
+        n = n + 1
+        rc, _ = sqlite.step(stmt, db)
+    }
+    sqlite.finalize(stmt)
+    sqlite.close(db)
+
+    head = "${n}\x02"
+    return string.concat(head, body)
+}
+
+main() {
+    println("ae/svnadmin/admin_db.ae is a library; not meant to run standalone")
+}
