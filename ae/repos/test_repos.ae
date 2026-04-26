@@ -37,7 +37,7 @@ extern svnae_txn_delete(t: ptr, path: string) -> int
 extern svnae_txn_free(t: ptr)
 extern svnae_txn_rebuild_root(repo: string, base_root_sha1: string, t: ptr) -> string
 
-extern svnae_write_and_fsync(path: string, data: string, len: int) -> int
+extern aether_io_write_atomic(path: string, data: string, length: int) -> int
 extern svnae_getpid() -> int
 extern dir_exists(path: string) -> int
 
@@ -85,7 +85,7 @@ fsfs_init(path: string) {
     if string.length(merr) != 0 { return 11 }
     merr = fs.mkdir_p("${path}/revs")
     if string.length(merr) != 0 { return 12 }
-    rc = svnae_write_and_fsync("${path}/format", "svnae-fsfs-1\n", 13)
+    rc = aether_io_write_atomic("${path}/format", "svnae-fsfs-1\n", 13)
     if rc != 0 { return rc }
     db, oerr = sqlite.open("${path}/rep-cache.db")
     if string.length(oerr) > 0 { return 3 }
@@ -99,9 +99,9 @@ fsfs_init(path: string) {
     rev0 = "root: ${empty_copy}\nprev: 0\nauthor: (init)\ndate: ${os.now_utc_iso8601()}\nlog: initial empty revision\n"
     rev0_sha = svnae_rep_write_blob(path, rev0, string.length(rev0))
     rev0_copy = string.concat("", rev0_sha)
-    rc = svnae_write_and_fsync("${path}/revs/000000", "${rev0_copy}\n", string.length(rev0_copy) + 1)
+    rc = aether_io_write_atomic("${path}/revs/000000", "${rev0_copy}\n", string.length(rev0_copy) + 1)
     if rc != 0 { return rc }
-    rc = svnae_write_and_fsync("${path}/head", "0\n", 2)
+    rc = aether_io_write_atomic("${path}/head", "0\n", 2)
     if rc != 0 { return rc }
     return 0
 }
@@ -178,9 +178,9 @@ commit_txn(repo: string, txn: ptr, author: string, logmsg: string) {
     rev_sha_raw = svnae_rep_write_blob(repo, rev_body, string.length(rev_body))
     rev_sha = string.concat("", rev_sha_raw)
     ptr_body = "${rev_sha}\n"
-    rc = svnae_write_and_fsync(rev_file_path(repo, next), ptr_body, string.length(ptr_body))
+    rc = aether_io_write_atomic(rev_file_path(repo, next), ptr_body, string.length(ptr_body))
     if rc != 0 { return -1 }
-    rc = svnae_write_and_fsync("${repo}/head", "${next}\n", string.length("${next}\n"))
+    rc = aether_io_write_atomic("${repo}/head", "${next}\n", string.length("${next}\n"))
     if rc != 0 { return -1 }
     return next
 }

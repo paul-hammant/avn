@@ -26,7 +26,7 @@ const SQLITE_ROW  = 100
 const SQLITE_DONE = 101
 
 extern svnae_getpid() -> int
-extern svnae_remove(path: string) -> int
+extern aether_io_remove(path: string) -> int
 
 expect_int(label: string, got: int, want: int) {
     if got == want { return 0 }
@@ -46,7 +46,7 @@ main() {
     fails = 0
     pid = svnae_getpid()
     dbpath = "/tmp/svnae_test_sqlite_${pid}.db"
-    svnae_remove(dbpath)
+    aether_io_remove(dbpath)
 
     db, oerr = sqlite.open(dbpath)
     if string.length(oerr) > 0 {
@@ -111,7 +111,7 @@ main() {
     sqlite.finalize(sel)
 
     sqlite.close(db)
-    svnae_remove(dbpath)
+    aether_io_remove(dbpath)
 
     if fails > 0 {
         println("")

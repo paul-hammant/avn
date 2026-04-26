@@ -125,6 +125,18 @@ export io_unlink(path: string) -> int {
     return 0
 }
 
+// Idempotent unlink: missing file is success. Used by svn's "delete tmp
+// if present" cleanup paths, where a stale tmp may or may not exist.
+// Returns 0 on success or already-absent, 1 if the file exists but
+// can't be deleted.
+export io_remove(path: string) -> int {
+    _k, _s, _m, stat_err = fs.file_stat(path)
+    if string.length(stat_err) > 0 { return 0 }
+    err = fs.delete(path)
+    if string.length(err) > 0 { return 1 }
+    return 0
+}
+
 // Remove an empty directory. Returns 0 on success, 1 on failure
 // (includes "directory not empty").
 export io_rmdir(path: string) -> int {

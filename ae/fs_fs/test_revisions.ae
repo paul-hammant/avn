@@ -60,11 +60,11 @@ extern svnae_buf_data(b: ptr) -> string
 extern svnae_buf_free(b: ptr)
 extern svnae_write_header_and_buf(path: string, header: string, buf: ptr) -> int
 
-extern svnae_write_and_fsync(path: string, data: string, len: int) -> int
+extern aether_io_write_atomic(path: string, data: string, length: int) -> int
 extern svnae_write_header_and_body(path: string, header: string, body: string, body_len: int) -> int
 extern aether_io_rename(from: string, to: string) -> int
-extern svnae_is_regular_file(path: string) -> int
-extern svnae_remove(path: string) -> int
+extern aether_io_is_regular_file(path: string) -> int
+extern aether_io_remove(path: string) -> int
 extern svnae_getpid() -> int
 extern svnae_read_file(path: string, out_len: ptr) -> ptr
 extern svnae_read_file_length(b: ptr) -> int
@@ -216,9 +216,9 @@ write_blob_text(repo: string, data: string) {
         wrc = svnae_write_header_and_body(tmp, storage_hdr, data, n)
     }
     if comp != 0 { svnae_buf_free(comp) }
-    if wrc != 0 { svnae_remove(tmp); return "" }
+    if wrc != 0 { aether_io_remove(tmp); return "" }
     rc = aether_io_rename(tmp, full)
-    if rc != 0 { svnae_remove(tmp); return "" }
+    if rc != 0 { aether_io_remove(tmp); return "" }
 
     rc = rep_cache_insert(repo, sha1_copy, rel, n, storage)
     if rc != 0 { return "" }
@@ -258,7 +258,7 @@ fsfs_init(path: string) {
     merr = fs.mkdir_p("${path}/revs")
     if string.length(merr) != 0 { return 12 }
 
-    rc = svnae_write_and_fsync("${path}/format", "svnae-fsfs-1\n", 13)
+    rc = aether_io_write_atomic("${path}/format", "svnae-fsfs-1\n", 13)
     if rc != 0 { return rc }
 
     db, oerr = sqlite.open("${path}/rep-cache.db")
@@ -273,9 +273,9 @@ fsfs_init(path: string) {
     rev0_body = "root: ${empty_dir_sha1}\nprev: 0\nauthor: (init)\ndate: ${os.now_utc_iso8601()}\nlog: initial empty revision\n"
     rev0_sha1 = write_blob_text(path, rev0_body)
 
-    rc = svnae_write_and_fsync("${path}/revs/000000", "${rev0_sha1}\n", string.length(rev0_sha1) + 1)
+    rc = aether_io_write_atomic("${path}/revs/000000", "${rev0_sha1}\n", string.length(rev0_sha1) + 1)
     if rc != 0 { return rc }
-    rc = svnae_write_and_fsync("${path}/head", "0\n", 2)
+    rc = aether_io_write_atomic("${path}/head", "0\n", 2)
     if rc != 0 { return rc }
     return 0
 }
@@ -575,11 +575,11 @@ fsfs_commit_flat(repo: string, tb: ptr, author: string, logmsg: string) {
     // Persist revs/<N> pointing at rev_sha1 and bump head.
     rev_path = rev_file_path(repo, next)
     ptr_body = "${rev_sha1}\n"
-    rc = svnae_write_and_fsync(rev_path, ptr_body, string.length(ptr_body))
+    rc = aether_io_write_atomic(rev_path, ptr_body, string.length(ptr_body))
     if rc != 0 { return -1 }
 
     head_body = "${next}\n"
-    rc = svnae_write_and_fsync("${repo}/head", head_body, string.length(head_body))
+    rc = aether_io_write_atomic("${repo}/head", head_body, string.length(head_body))
     if rc != 0 { return -1 }
 
     return next

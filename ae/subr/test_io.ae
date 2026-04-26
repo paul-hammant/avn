@@ -22,31 +22,13 @@
 import std.fs
 import std.string
 
-extern aether_io_rename(from: string, to: string) -> int
-extern svnae_write_and_fsync(path: string, data: string, len: int) -> int
+extern aether_io_write_atomic(path: string, data: string, length: int) -> int
 extern svnae_getpid() -> int
-extern svnae_is_regular_file(path: string) -> int
-extern svnae_remove(path: string) -> int
+extern aether_io_is_regular_file(path: string) -> int
+extern aether_io_remove(path: string) -> int
 
-tmp_path_for(final_path: string, seq: int) {
-    pid = svnae_getpid()
-    return "${final_path}.tmp.${pid}.${seq}"
-}
-
-atomic_write(final_path: string, data: string, seq: int) {
-    tmp = tmp_path_for(final_path, seq)
-    n = string.length(data)
-    rc = svnae_write_and_fsync(tmp, data, n)
-    if rc != 0 {
-        svnae_remove(tmp)
-        return rc
-    }
-    rc = aether_io_rename(tmp, final_path)
-    if rc != 0 {
-        svnae_remove(tmp)
-        return rc
-    }
-    return 0
+atomic_write(final_path: string, data: string) {
+    return aether_io_write_atomic(final_path, data, string.length(data))
 }
 
 expect_int(label: string, got: int, want: int) {
@@ -75,13 +57,13 @@ main() {
     path = "/tmp/svnae_test_io_${pid}.dat"
 
     // Make sure the file doesn't exist from a prior run.
-    svnae_remove(path)
+    aether_io_remove(path)
 
     // First write.
     content1 = "Hello from Aether! This file was written atomically.\n"
-    rc = atomic_write(path, content1, 0)
+    rc = atomic_write(path, content1)
     fails = fails + expect_int("atomic_write 1 rc", rc, 0)
-    fails = fails + expect_int("file exists after write 1", svnae_is_regular_file(path), 1)
+    fails = fails + expect_int("file exists after write 1", aether_io_is_regular_file(path), 1)
 
     // Read back. fs.read returns (content, err).
     got1, err1 = fs.read(path)
@@ -90,7 +72,7 @@ main() {
 
     // Second write overwrites.
     content2 = "Different content the second time around.\n"
-    rc = atomic_write(path, content2, 1)
+    rc = atomic_write(path, content2)
     fails = fails + expect_int("atomic_write 2 rc", rc, 0)
 
     got2, err2 = fs.read(path)
@@ -98,11 +80,11 @@ main() {
     fails = fails + expect_str("content 2 matches", got2, content2)
 
     // Cleanup.
-    svnae_remove(path)
-    fails = fails + expect_int("file gone after remove", svnae_is_regular_file(path), 0)
+    aether_io_remove(path)
+    fails = fails + expect_int("file gone after remove", aether_io_is_regular_file(path), 0)
 
     // remove() on a non-existent file is idempotent.
-    rc = svnae_remove(path)
+    rc = aether_io_remove(path)
     fails = fails + expect_int("remove absent file is ok", rc, 0)
 
     if fails > 0 {

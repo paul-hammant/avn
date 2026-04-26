@@ -38,37 +38,10 @@
  * test_revisions Aether callers switched over in round 43; there
  * are no C-side callers of rename left. */
 
-/* Open `path` with O_WRONLY|O_CREAT|O_TRUNC, write all bytes, fsync, close.
- * Returns 0 on success, -errno on failure. The caller is expected to have
- * constructed a safe (in-directory) path. */
-int
-svnae_write_and_fsync(const char *path, const char *data, int len)
-{
-    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    if (fd < 0) return -errno;
-
-    const char *p = data;
-    int remaining = len;
-    while (remaining > 0) {
-        ssize_t w = write(fd, p, (size_t)remaining);
-        if (w < 0) {
-            if (errno == EINTR) continue;
-            int rc = -errno;
-            close(fd);
-            return rc;
-        }
-        p += w;
-        remaining -= (int)w;
-    }
-
-    if (fsync(fd) != 0) {
-        int rc = -errno;
-        close(fd);
-        return rc;
-    }
-    if (close(fd) != 0) return -errno;
-    return 0;
-}
+/* svnae_write_and_fsync moved to ae/subr/io.ae (aether_io_write_atomic
+ * via std.fs.write_atomic). Round 61: all .ae callers switched over;
+ * std.fs's atomic-write is even more durable (stage + fsync + rename
+ * vs the previous direct write + fsync). No C-side callers remain. */
 
 /* Return the current PID (for building unique tmp filenames). */
 int svnae_getpid(void) { return (int)getpid(); }
@@ -144,14 +117,9 @@ svnae_write_header_and_body(const char *path, const char *header,
     return 0;
 }
 
-/* Does the file exist as a regular file? */
-int
-svnae_is_regular_file(const char *path)
-{
-    struct stat st;
-    if (stat(path, &st) != 0) return 0;
-    return S_ISREG(st.st_mode) ? 1 : 0;
-}
+/* svnae_is_regular_file moved to ae/subr/io.ae (aether_io_is_regular_file
+ * via std.fs.file_stat with kind==1). Round 61: all .ae callers
+ * switched over; no C-side callers remain. */
 
 /* Read the entire file into an svnae_buf. Binary-safe (embedded NULs OK).
  * Returns NULL on any failure. The returned buf is owned by the caller;
@@ -213,13 +181,6 @@ void        svnae_read_file_free  (struct svnae_buf_local *b)
     free(b);
 }
 
-/* Remove a file (not a directory). Returns 0 on success, -errno on failure.
- * Returns 0 if the file did not exist (ENOENT) — idempotent, like svn's
- * "remove if present" semantics for tmp cleanup paths. */
-int
-svnae_remove(const char *path)
-{
-    if (unlink(path) == 0) return 0;
-    if (errno == ENOENT) return 0;
-    return -errno;
-}
+/* svnae_remove moved to ae/subr/io.ae (aether_io_remove: idempotent
+ * unlink — missing-file is success, matching the previous C behaviour).
+ * Round 61: all .ae callers switched over; no C-side callers remain. */
