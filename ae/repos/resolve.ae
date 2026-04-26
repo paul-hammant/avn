@@ -153,6 +153,30 @@ export resolve_sha(repo: string, root_sha: string, path: string) -> string {
     return parse_sha(resolve_pair(repo, root_sha, path))
 }
 
+// (rev, path) → kind / sha. Convenience for callers that don't already
+// have the rev's root_sha looked up (svnserver handlers, copy_parse,
+// acl_subtree). Round 76 retired the C-side svnae_repos_resolve in
+// favour of these two exports — same name, same shape.
+extern aether_repos_load_rev_blob_field(repo: string, rev: int, key: string) -> string
+
+resolve_root_for_rev_(repo: string, rev: int) -> string {
+    v = aether_repos_load_rev_blob_field(repo, rev, "root")
+    if string.length(v) == 0 { return "" }
+    return string.copy(v)
+}
+
+export svnae_repos_resolve_kind(repo: string, rev: int, path: string) -> int {
+    root = resolve_root_for_rev_(repo, rev)
+    if string.length(root) == 0 { return 0 }
+    return parse_kind(resolve_pair(repo, root, path))
+}
+
+export svnae_repos_resolve_sha(repo: string, rev: int, path: string) -> string {
+    root = resolve_root_for_rev_(repo, rev)
+    if string.length(root) == 0 { return "" }
+    return parse_sha(resolve_pair(repo, root, path))
+}
+
 main() {
     println("ae/repos/resolve.ae is a library; not meant to run standalone")
 }

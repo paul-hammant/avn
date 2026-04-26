@@ -105,49 +105,30 @@ void svnae_repos_log_free(struct svnae_log *lg) { svnae_packed_handle_free((stru
 
 extern const char *aether_repos_load_rev_blob_field(const char *repo, int rev,
                                                     const char *key);
-
-static char *
-root_dir_sha1_for_rev(const char *repo, int rev)
-{
-    const char *v = aether_repos_load_rev_blob_field(repo, rev, "root");
-    if (!v || !*v) return NULL;
-    return strdup(v);
-}
-
-/* resolve_path in ae/repos/resolve.ae. Split-accessor shape replaces
- * the C out-param pair; both calls re-walk but path lengths are tiny. */
 extern int         aether_resolve_kind(const char *repo, const char *root_sha, const char *path);
 extern const char *aether_resolve_sha (const char *repo, const char *root_sha, const char *path);
 
-static int
-resolve_path(const char *repo, const char *root_sha1, const char *path,
-             char *out_kind, char **out_sha1)
-{
-    *out_kind = 0;
-    *out_sha1 = NULL;
-    int k = aether_resolve_kind(repo, root_sha1, path);
-    if (k == 0) return 0;
-    *out_kind = (char)k;
-    const char *sha = aether_resolve_sha(repo, root_sha1, path);
-    *out_sha1 = strdup(sha ? sha : "");
-    return 1;
-}
-
-/* Read file content at (rev, path). Returns malloc'd bytes or NULL.
- * Caller frees with svnae_rep_free. */
+/* Read file content at (rev, path). Returns malloc'd bytes or NULL —
+ * caller frees via svnae_rep_free. Stays on the C side because the
+ * payload may contain embedded NULs and Aether's `string` ABI would
+ * truncate at the first one on the FFI boundary. */
 char *
 svnae_repos_cat(const char *repo, int rev, const char *path)
 {
-    char *root = root_dir_sha1_for_rev(repo, rev);
-    if (!root) return NULL;
-    char kind = 0;
-    char *sha1 = NULL;
-    int ok = resolve_path(repo, root, path, &kind, &sha1);
-    free(root);
-    if (!ok || kind != 'f') { free(sha1); return NULL; }
-    char *data = svnae_rep_read_blob(repo, sha1);
-    free(sha1);
-    return data;
+    const char *root = aether_repos_load_rev_blob_field(repo, rev, "root");
+    if (!root || !*root) return NULL;
+    /* Take a copy now — the Aether helper hands back a pointer the
+     * runtime is free to reuse on the next call. */
+    char root_buf[65];
+    size_t rlen = strlen(root);
+    if (rlen >= sizeof root_buf) return NULL;
+    memcpy(root_buf, root, rlen + 1);
+
+    int k = aether_resolve_kind(repo, root_buf, path);
+    if (k != 'f') return NULL;
+    const char *sha = aether_resolve_sha(repo, root_buf, path);
+    if (!sha || !*sha) return NULL;
+    return svnae_rep_read_blob(repo, sha);
 }
 
 /* --- list handle ----------------------------------------------------- *
@@ -243,46 +224,9 @@ const char *svnae_repos_paths_path(struct svnae_paths *P, int i)   { return svna
 const char *svnae_repos_paths_action(struct svnae_paths *P, int i) { return svnae_packed_pin_at((void *)P, i, aether_ra_paths_action); }
 void svnae_repos_paths_free(struct svnae_paths *P) { svnae_packed_handle_free((struct svnae_packed_handle *)P); }
 
-/* Public shim for server-side copy: resolve (rev, path) to its sha1 +
- * kind char. Returns 1 on success, 0 on miss. */
-int
-svnae_repos_resolve(const char *repo, int rev, const char *path,
-                    char *out_sha1, char *out_kind)
-{
-    char *root = root_dir_sha1_for_rev(repo, rev);
-    if (!root) return 0;
-    char kind = 0;
-    char *sha1 = NULL;
-    int ok = resolve_path(repo, root, path, &kind, &sha1);
-    free(root);
-    if (!ok) { free(sha1); return 0; }
-    size_t sl = strlen(sha1);
-    /* out_sha1 must be big enough — callers now pass char[65]. */
-    memcpy(out_sha1, sha1, sl + 1);
-    *out_kind = kind;
-    free(sha1);
-    return 1;
-}
-
-/* Aether-callable split-accessor form. Returns 0 on miss instead of
- * an out-param pair. kind is 'f'(102), 'd'(100), or 0. */
-int
-svnae_repos_resolve_kind(const char *repo, int rev, const char *path)
-{
-    char sha[65]; char kind = 0;
-    if (!svnae_repos_resolve(repo, rev, path, sha, &kind)) return 0;
-    return (int)(unsigned char)kind;
-}
-
-const char *
-svnae_repos_resolve_sha(const char *repo, int rev, const char *path)
-{
-    static __thread char buf[65];
-    buf[0] = '\0';
-    char kind = 0;
-    svnae_repos_resolve(repo, rev, path, buf, &kind);
-    return buf;
-}
+/* svnae_repos_resolve / _kind / _sha moved to ae/repos/resolve.ae
+ * in Round 76 — both kind and sha now go through the Aether-side
+ * exports of the same name. */
 
 /* --- blame -----------------------------------------------------------
  *
