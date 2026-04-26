@@ -105,59 +105,17 @@ take_body(const char *src, char **out_body, size_t *out_len)
     return 0;
 }
 
-/* Same for a header value — node-hash etc. Returns NULL when the
- * source is empty (header was absent), matching the original libcurl
- * shim's NULL-on-absent contract. */
-static char *
-take_header(const char *src)
-{
-    int n = (int)aether_string_length(src);
-    if (n == 0) return NULL;
-    const char *data = aether_string_data(src);
-    char *h = malloc((size_t)n + 1);
-    if (!h) return NULL;
-    memcpy(h, data, (size_t)n);
-    h[n] = '\0';
-    return h;
-}
-
-/* Perform GET. Returns 0 on success, -1 on transport failure. On
- * success body is malloc'd NUL-terminated; caller frees.
- * `out_node_hash` (nullable): if non-NULL, captures the
- * X-Svnae-Node-Hash response header as a new malloc'd string the
- * caller must free. NULL when absent.
- *
- * Non-static so ae/client/verify_shim.c can call it without adding a
- * fourth RA accessor for every endpoint. */
-int
-http_get_ex(const char *url, char **out_body, size_t *out_len, int *out_status,
-            char **out_node_hash)
-{
-    const void *resp = aether_ra_http_get(url);
-    if (!resp) return -1;
-
-    *out_status = aether_ra_http_response_status(resp);
-
-    const char *body_str = aether_ra_http_response_body(resp);
-    if (take_body(body_str, out_body, out_len) != 0) {
-        aether_ra_http_response_free(resp);
-        return -1;
-    }
-
-    if (out_node_hash) {
-        const char *hash_str = aether_ra_http_response_header(resp, "X-Svnae-Node-Hash");
-        *out_node_hash = take_header(hash_str);
-    }
-
-    aether_ra_http_response_free(resp);
-    return 0;
-}
-
-/* Back-compat thin wrapper. */
+/* GET `url`. Returns 0 on success (body malloc'd, caller frees),
+ * -1 on transport failure. */
 static int
 http_get(const char *url, char **out_body, size_t *out_len, int *out_status)
 {
-    return http_get_ex(url, out_body, out_len, out_status, NULL);
+    const void *resp = aether_ra_http_get(url);
+    if (!resp) return -1;
+    *out_status = aether_ra_http_response_status(resp);
+    int rc = take_body(aether_ra_http_response_body(resp), out_body, out_len);
+    aether_ra_http_response_free(resp);
+    return rc;
 }
 
 /* Simple "fetch URL and return the body as a malloc'd string" used by
@@ -445,24 +403,11 @@ void svnae_ra_list_free(struct svnae_ra_list *L) { svnae_packed_handle_free((str
 
 /* ---- commit ---------------------------------------------------------- *
  *
- * Aether can't build arrays across FFI easily, so we expose a builder:
- *   cb = ra_commit_begin(base_rev, author, log)
- *   ra_commit_add_file(cb, path, content, len)
- *   ra_commit_mkdir(cb, path)
- *   ra_commit_delete(cb, path)
- *   new_rev = ra_commit_finish(cb, base_url, repo_name)
- *
- * The builder accumulates edits in-memory and only serialises + POSTs
- * at finish time.
- *
- * Round 62 (Gordian knot): collapsed three parallel struct-arrays
- * (commit_edit / commit_prop / commit_acl) and 14 typed accessors onto
- * three packed-string buffers in the same "<count>\x02<rec>\x02..."
- * shape ae/ra/parse.ae produces on the read side. The Aether-side
- * commit_build.ae walks each buffer once via std.string.split rather
- * than calling 14 cross-FFI accessors. b64-encoding moves to add-file
- * time so the buffer carries text only — mkdir/delete records have an
- * empty b64 field. */
+ * Builder pattern: begin → add_file/mkdir/delete/set_prop/acl_add →
+ * finish (which serialises + POSTs). Three packed-string buffers
+ * (edits/props/acls) parallel ra/parse.ae's "<count>\x02<rec>\x02..."
+ * shape so commit_build.ae walks each once via string.split. b64-
+ * encoding happens at add-file time so the buffer carries text only. */
 
 struct svnae_ra_commit {
     int   base_rev;
