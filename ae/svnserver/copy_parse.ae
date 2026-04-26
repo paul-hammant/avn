@@ -39,8 +39,7 @@ extern svnserver_request_branch(req: ptr) -> string
 
 extern aether_acl_user_has_rw_subtree(repo: string, rev: int,
                                        user: string, path: string) -> int
-extern svnserver_acl_allows_mode(repo: string, rev: int, user: string,
-                                  path: string, want_write: int) -> int
+extern aether_acl_allows_mode(repo: string, rev: int, user: string, target_path: string, want_write: int) -> int
 extern svnserver_spec_allows(repo: string, branch: string,
                               path: string, is_super: int) -> int
 extern svnae_repos_resolve_kind(repo: string, rev: int, path: string) -> int
@@ -114,7 +113,7 @@ copy_from_body_impl(req: ptr, repo: string) -> int {
         if aether_acl_user_has_rw_subtree(repo, base_rev, user, from_path) == 0 {
             return -4
         }
-        if svnserver_acl_allows_mode(repo, base_rev, user, to_path, 1) == 0 {
+        if aether_acl_allows_mode(repo, base_rev, user, to_path, 1) == 0 {
             return -4
         }
     }

@@ -23,7 +23,7 @@
 
 import std.string
 
-extern svnserver_acl_allows(repo: string, rev: int, user: string, path: string) -> int
+extern aether_acl_allows_mode(repo: string, rev: int, user: string, target_path: string, want_write: int) -> int
 extern svnae_repos_blame(repo: string, rev: int, target: string) -> ptr
 extern svnae_blame_free(b: ptr)
 extern aether_blame_json(blame: ptr) -> string
@@ -39,7 +39,7 @@ export blame_handle(req: ptr, res: ptr, repo: string, rev: int,
 blame_handle_impl(req: ptr, res: ptr, repo: string, rev: int,
                   target: string, user: string, is_super: int) {
     if is_super == 0 {
-        if svnserver_acl_allows(repo, rev, user, target) == 0 {
+        if aether_acl_allows_mode(repo, rev, user, target, 0) == 0 {
             svnserver_respond_error(res, 404, "not found")
             return
         }

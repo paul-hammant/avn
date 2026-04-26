@@ -25,7 +25,7 @@
 
 import std.string
 
-extern svnserver_acl_allows(repo: string, rev: int, user: string, path: string) -> int
+extern aether_acl_allows_mode(repo: string, rev: int, user: string, target_path: string, want_write: int) -> int
 extern svnae_repo_primary_hash(repo: string) -> string
 extern aether_props_resolve(repo: string, rev: int, target: string) -> string
 
@@ -40,7 +40,7 @@ export props_handle(req: ptr, res: ptr, repo: string, rev: int,
 props_handle_impl(req: ptr, res: ptr, repo: string, rev: int,
                   target: string, user: string, is_super: int) {
     if is_super == 0 {
-        if svnserver_acl_allows(repo, rev, user, target) == 0 {
+        if aether_acl_allows_mode(repo, rev, user, target, 0) == 0 {
             svnserver_respond_json_ok(res, "{}")
             return
         }

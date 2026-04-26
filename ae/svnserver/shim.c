@@ -153,13 +153,9 @@ extern int aether_acl_allows_mode(const char *repo, int rev,
 
 extern int svnae_openssl_hash_hex_into(const char *algo, const char *data, int len, char *out);
 
-/* Read-check wrapper — used by list/cat/props/log/paths via the
- * Aether redact walker (ae/svnserver/redact.ae). Thin front for the
- * ported acl_allows_mode (want_write=0). */
-int svnserver_acl_allows(const char *repo, int rev, const char *user,
-                         const char *path) {
-    return aether_acl_allows_mode(repo, rev, user, path, 0);
-}
+/* svnserver_acl_allows / _write / _mode trampolines retired in
+ * Round 72. Aether callers (~14 .ae files) now call aether_acl_allows_
+ * mode directly, passing 0 (read) / 1 (write) for want_write. */
 
 const char *svnserver_hash_hex(const char *repo, const char *data, int length) {
     static __thread char buf[65];
@@ -398,30 +394,14 @@ const char *svnserver_request_branch(HttpRequest *req) {
     const char *b = req_header(req, "Svn-Branch");
     return (b && *b) ? b : "main";
 }
-int svnserver_acl_allows_write(const char *repo, int rev,
-                                const char *user, const char *path) {
-    return aether_acl_allows_mode(repo, rev, user, path, 1);
-}
-/* Both-mode wrapper. Aether's acl_subtree walker needs to check
- * RO and RW separately on the same path, so it's cleaner to take
- * `want_write` as an argument than to expose two wrappers. */
-int svnserver_acl_allows_mode(const char *repo, int rev,
-                               const char *user, const char *path,
-                               int want_write) {
-    return aether_acl_allows_mode(repo, rev, user, path, want_write);
-}
 int svnserver_spec_allows(const char *repo, const char *branch,
                            const char *path, int is_super) {
     if (is_super) return 1;
     return svnae_branch_spec_allows(repo, branch, path) == 1;
 }
-int svnserver_based_on_check(HttpRequest *req, HttpServerResponse *res,
-                              const char *repo, int head_rev,
-                              const char *path,
-                              int allow_missing_as_create) {
-    return aether_based_on_check(req, res, repo, head_rev, path,
-                                 allow_missing_as_create);
-}
+/* svnserver_based_on_check trampoline retired in Round 72. Aether
+ * callers (handler_path_put / handler_path_delete) now call
+ * aether_based_on_check directly. */
 
 /* Aether can't safely carry an arbitrary binary body (its `string` is
  * NUL-terminated), so the txn-add-file call that consumes req->body

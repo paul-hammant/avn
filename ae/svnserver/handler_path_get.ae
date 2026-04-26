@@ -30,7 +30,7 @@ extern svnserver_request_user(req: ptr) -> string
 extern svnserver_request_is_super(req: ptr) -> int
 
 extern svnae_repos_head_rev(repo: string) -> int
-extern svnserver_acl_allows(repo: string, rev: int, user: string, path: string) -> int
+extern aether_acl_allows_mode(repo: string, rev: int, user: string, target_path: string, want_write: int) -> int
 extern svnae_repos_cat(repo: string, rev: int, path: string) -> string
 extern svnae_rep_free(p: string)
 extern svnae_repos_resolve_kind(repo: string, rev: int, path: string) -> int
@@ -84,7 +84,7 @@ handler_path_get_impl(req: ptr, res: ptr) {
     user = svnserver_request_user(req)
     is_super = svnserver_request_is_super(req)
     if is_super == 0 {
-        if svnserver_acl_allows(repo, rev, user, file_path) == 0 {
+        if aether_acl_allows_mode(repo, rev, user, file_path, 0) == 0 {
             svnserver_respond_error(res, 404, "not found")
             return
         }

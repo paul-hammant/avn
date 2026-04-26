@@ -38,7 +38,7 @@ extern aether_list_entry_hidden_json(sha: string) -> string
 extern aether_redact_line_visible(kind: int, sha: string, name: string) -> string
 extern aether_redact_line_hidden(sha: string) -> string
 
-extern svnserver_acl_allows(repo: string, rev: int, user: string, path: string) -> int
+extern aether_acl_allows_mode(repo: string, rev: int, user: string, target_path: string, want_write: int) -> int
 
 // TLS-backed pair via a pack encoding. We concat body + "\x01" +
 // redact and parse back on the C side. \x01 is a single control byte
@@ -66,7 +66,7 @@ list_build_impl(repo: string, rev: int, user: string, is_super: int,
 
         allowed = is_super
         if allowed == 0 {
-            allowed = svnserver_acl_allows(repo, rev, user, child_path)
+            allowed = aether_acl_allows_mode(repo, rev, user, child_path, 0)
         }
 
         if any == 1 { body = string.concat(body, ",") }

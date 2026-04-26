@@ -23,8 +23,7 @@
 
 import std.string
 
-extern svnserver_acl_allows_mode(repo: string, rev: int, user: string,
-                                  path: string, want_write: int) -> int
+extern aether_acl_allows_mode(repo: string, rev: int, user: string, target_path: string, want_write: int) -> int
 extern svnae_repos_resolve_kind(repo: string, rev: int, path: string) -> int
 
 extern svnae_repos_list(repo: string, rev: int, path: string) -> ptr
@@ -39,8 +38,8 @@ export acl_user_has_rw_subtree(repo: string, rev: int, user: string,
 
 acl_user_has_rw_subtree_impl(repo: string, rev: int, user: string,
                               path: string) -> int {
-    if svnserver_acl_allows_mode(repo, rev, user, path, 0) == 0 { return 0 }
-    if svnserver_acl_allows_mode(repo, rev, user, path, 1) == 0 { return 0 }
+    if aether_acl_allows_mode(repo, rev, user, path, 0) == 0 { return 0 }
+    if aether_acl_allows_mode(repo, rev, user, path, 1) == 0 { return 0 }
 
     // Only dirs have descendants.
     kind = svnae_repos_resolve_kind(repo, rev, path)

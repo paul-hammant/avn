@@ -46,8 +46,7 @@ extern svnserver_request_user(req: ptr) -> string
 extern svnserver_request_is_super(req: ptr) -> int
 extern svnserver_request_branch(req: ptr) -> string
 
-extern svnserver_acl_allows_mode(repo: string, rev: int, user: string,
-                                  path: string, want_write: int) -> int
+extern aether_acl_allows_mode(repo: string, rev: int, user: string, target_path: string, want_write: int) -> int
 extern svnserver_spec_allows(repo: string, branch: string,
                               path: string, is_super: int) -> int
 
@@ -138,7 +137,7 @@ commit_from_body_impl(req: ptr, res: ptr, repo: string) -> int {
                     ps, pse = json.get_string(jp)
                     if string.length(pse) == 0 {
                         if is_super == 0 {
-                            if svnserver_acl_allows_mode(repo, base_rev, user, ps, 1) == 0 {
+                            if aether_acl_allows_mode(repo, base_rev, user, ps, 1) == 0 {
                                 json.free(root)
                                 return -4
                             }
@@ -163,7 +162,7 @@ commit_from_body_impl(req: ptr, res: ptr, repo: string) -> int {
                 pi = 0
                 while pi < pre_n {
                     apath, _apv, _aperr = json.object_entry(jacl_pre, pi)
-                    if svnserver_acl_allows_mode(repo, base_rev, user, apath, 1) == 0 {
+                    if aether_acl_allows_mode(repo, base_rev, user, apath, 1) == 0 {
                         json.free(root)
                         return -4
                     }

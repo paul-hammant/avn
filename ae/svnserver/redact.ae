@@ -39,7 +39,7 @@ extern aether_dir_entry_line(kind: int, sha: string, name: string) -> string
 extern aether_path_join_rel(prefix: string, name: string) -> string
 
 // C-side ACL decision + hash wrappers.
-extern svnserver_acl_allows(repo: string, rev: int, user: string, path: string) -> int
+extern aether_acl_allows_mode(repo: string, rev: int, user: string, target_path: string, want_write: int) -> int
 extern svnserver_hash_hex(repo: string, data: string, length: int) -> string
 
 // Recursive entry. Returns the hex digest of the redacted dir body,
@@ -65,7 +65,7 @@ redacted_dir_sha_impl(repo: string, rev: int, user: string,
         name = string.copy(name)
         child_path = aether_path_join_rel(prefix, name)
 
-        allowed = svnserver_acl_allows(repo, rev, user, child_path)
+        allowed = aether_acl_allows_mode(repo, rev, user, child_path, 0)
         if allowed == 1 {
             if kind == 100 {          // 'd'
                 sub = redacted_dir_sha_impl(repo, rev, user, sha, child_path)
