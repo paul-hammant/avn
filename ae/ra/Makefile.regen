@@ -1,6 +1,6 @@
 AETHERC ?= $(abspath $(dir $(lastword $(MAKEFILE_LIST))))/../../.aether_binaries/build/aetherc
 
-GENERATED := urls_generated.c parse_generated.c commit_build_generated.c packed_generated.c http_client_generated.c
+GENERATED := urls_generated.c parse_generated.c commit_build_generated.c packed_generated.c http_client_generated.c verify_generated.c
 
 all: $(GENERATED)
 
@@ -20,5 +20,11 @@ packed_generated.c: packed.ae
 # stdlib path. --with=net opts in.
 http_client_generated.c: http_client.ae
 	$(AETHERC) --emit=lib --with=net $< $@
+
+# verify.ae uses std.cryptography and the http_client.ae helpers
+# (which themselves cover the network capability — verify itself
+# never imports std.http.client directly).
+verify_generated.c: verify.ae
+	$(AETHERC) --emit=lib $< $@
 
 .PHONY: all

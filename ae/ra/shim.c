@@ -978,409 +978,110 @@ svnae_ra_commit_finish(struct svnae_ra_commit *cb,
 
     return new_rev;
 }
-/* ae/client/verify_shim.c — Merkle verification of a remote repository.
+
+/* ---- verify glue (round 51) -----------------------------------------
  *
- * svnae_client_verify(base_url, repo, rev) walks the tree at `rev`
- * top-down, re-hashes every file content and dir blob locally using
- * the server's advertised algorithm, and confirms:
+ * The Merkle-verify walk used to live in ~410 lines of C below this
+ * point: verify_file / verify_dir / verify_secondaries_in_dir + their
+ * recursion plumbing. The walk is now in ae/ra/verify.ae using
+ * std.cryptography v2 + std.http.client v2 + the existing Aether-side
+ * URL/list/secondaries parsers. The two public symbols
+ * (svnae_client_verify, svnae_client_verify_full) are now Aether
+ * exports.
  *
- *   1. Each file/dir node's locally-computed content hash matches
- *      the X-Svnae-Node-Hash header the server returned.
- *   2. For each directory, the re-assembled blob (lines
- *      "<kind> <child-sha> <name>\n", sorted) hashes to the same
- *      sha that the parent dir pointed at.
- *   3. The root-dir sha equals the rev blob's "root" field
- *      (served via /info).
+ * The C side keeps two small struct allocators the Aether walk calls
+ * back into:
+ *   - svnae_verify_counter:  (files, secondaries) accumulator passed
+ *     through the recursive secondaries pass.
+ *   - svnae_verify_entries:  (name, kind_c, sha) tuples for one dir,
+ *     sortable by name. Aether-side dir verification builds one,
+ *     populates it during the recursive descent, sorts, then re-emits
+ *     the canonical "<kind> <sha> <name>\n" lines for re-hashing.
  *
- * The interesting move is step 2: the server gives us a JSON listing
- * of a directory's entries (name + kind), but to re-hash a dir we
- * need to reconstruct its *blob*, which has the wire format
- *   <kind-char> <child-sha> <name>\n
- * We obtain each child's sha by fetching that child (cat for files,
- * list for dirs) and reading the X-Svnae-Node-Hash header. Recurse.
- *
- * The walk is depth-first from the root. We bail on the first
- * mismatch and return a negative code; callers print a diagnostic.
- *
- * Returns:
- *    0 on full verification success
- *   -1 on I/O / protocol error
- *   -2 on hash mismatch (message printed to stderr with path + details)
+ * Storage in C because Aether can't allocate a struct-of-arrays with
+ * ergonomic field access from FFI. Both helpers are tiny: ~70 lines
+ * total. Same shape as svnae_wc_nodelist (round 40).
  */
 
-#include <ctype.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+struct svnae_verify_counter { int files; int secondaries; };
 
-#ifndef PATH_MAX
-#define PATH_MAX 4096
-#endif
+void *svnae_verify_counter_new(void) {
+    struct svnae_verify_counter *c = calloc(1, sizeof *c);
+    return c;
+}
+int  svnae_verify_counter_files(const void *p) {
+    return p ? ((const struct svnae_verify_counter *)p)->files : 0;
+}
+int  svnae_verify_counter_secondaries(const void *p) {
+    return p ? ((const struct svnae_verify_counter *)p)->secondaries : 0;
+}
+void svnae_verify_counter_inc_files(void *p) {
+    if (p) ((struct svnae_verify_counter *)p)->files++;
+}
+void svnae_verify_counter_inc_secondaries(void *p) {
+    if (p) ((struct svnae_verify_counter *)p)->secondaries++;
+}
+void svnae_verify_counter_free(void *p) { free(p); }
 
-/* ---- forward decls from the RA shim -------------------------------- */
+struct ventry { char *name; int kind_c; char *sha; };
+struct svnae_verify_entries { struct ventry *items; int n; int cap; };
 
-struct svnae_ra_info;
-struct svnae_ra_info *svnae_ra_info_rev(const char *base_url, const char *repo,
-                                        int rev);
-int         svnae_ra_info_rev_num(const struct svnae_ra_info *I);
-const char *svnae_ra_info_root   (struct svnae_ra_info *I);
-void        svnae_ra_info_free   (struct svnae_ra_info *I);
+void *svnae_verify_entries_new(void) {
+    return calloc(1, sizeof(struct svnae_verify_entries));
+}
+void svnae_verify_entries_add(void *p, const char *name, int kind_c) {
+    struct svnae_verify_entries *e = p;
+    if (!e) return;
+    if (e->n == e->cap) {
+        int nc = e->cap ? e->cap * 2 : 8;
+        struct ventry *q = realloc(e->items, (size_t)nc * sizeof *q);
+        if (!q) return;
+        e->items = q; e->cap = nc;
+    }
+    e->items[e->n].name   = strdup(name ? name : "");
+    e->items[e->n].kind_c = kind_c;
+    e->items[e->n].sha    = NULL;
+    e->n++;
+}
+void svnae_verify_entries_set_sha(void *p, int i, const char *sha) {
+    struct svnae_verify_entries *e = p;
+    if (!e || i < 0 || i >= e->n) return;
+    free(e->items[i].sha);
+    e->items[i].sha = strdup(sha ? sha : "");
+}
+int svnae_verify_entries_count(const void *p) {
+    const struct svnae_verify_entries *e = p;
+    return e ? e->n : 0;
+}
+const char *svnae_verify_entries_name(const void *p, int i) {
+    const struct svnae_verify_entries *e = p;
+    return (e && i >= 0 && i < e->n && e->items[i].name) ? e->items[i].name : "";
+}
+int svnae_verify_entries_kind(const void *p, int i) {
+    const struct svnae_verify_entries *e = p;
+    return (e && i >= 0 && i < e->n) ? e->items[i].kind_c : 102;
+}
+const char *svnae_verify_entries_sha(const void *p, int i) {
+    const struct svnae_verify_entries *e = p;
+    return (e && i >= 0 && i < e->n && e->items[i].sha) ? e->items[i].sha : "";
+}
 
-char *svnae_ra_hash_algo(const char *base_url, const char *repo);
-
-/* We need to fetch a node's raw bytes + its Merkle header.  The existing
- * RA accessors (svnae_ra_cat, svnae_ra_list) don't surface the header.
- * Rather than add a third variant to each, the verify pass speaks HTTP
- * directly via the RA shim's already-exposed http_get_ex (declared
- * here; defined in ra/shim.c). */
-extern int http_get_ex(const char *url, char **out_body, size_t *out_len,
-                       int *out_status, char **out_node_hash);
-
-/* Hashing consolidated in ae/ffi/openssl/shim.c. */
-extern char *svnae_openssl_hash_hex(const char *algo, const char *data, int len);
-#define hash_hex svnae_openssl_hash_hex
-
-/* Sort helper for dir entries so the re-assembled blob matches the
- * server's canonical line order. */
-struct entry { char kind_c; char *name; char *sha; };
-
-static int
-entry_cmp(const void *a, const void *b)
-{
-    const struct entry *ea = a, *eb = b;
+static int ventry_cmp(const void *a, const void *b) {
+    const struct ventry *ea = a, *eb = b;
     return strcmp(ea->name, eb->name);
 }
-
-/* Fetch and verify a single file at `rel`. Returns 0 on match, -1 on
- * I/O error, -2 on hash mismatch. Out: `*out_sha` gets a malloc'd
- * copy of the computed sha (for the parent to thread into its own
- * blob). */
-static int
-verify_file(const char *base_url, const char *repo, int rev,
-            const char *algo, const char *rel, char **out_sha)
-{
-    const char *url = aether_url_rev_cat(base_url, repo, rev, rel);
-    char *body = NULL; size_t len = 0; int status = 0; char *hdr = NULL;
-    if (http_get_ex(url, &body, &len, &status, &hdr) != 0 || status != 200) {
-        free(body); free(hdr);
-        fprintf(stderr, "verify: GET failed for %s (status %d)\n", rel, status);
-        return -1;
-    }
-    /* Compute the file's content hash locally. Note: the server
-     * currently sends NUL-terminated text and we strlen it; same
-     * convention as `svnae_ra_cat`. When binary flows we'll switch
-     * to len-aware. */
-    int clen = (int)strlen(body);
-    char *local = hash_hex(algo, body, clen);
-    free(body);
-    if (!local) { free(hdr); return -1; }
-
-    if (!hdr || strcmp(local, hdr) != 0) {
-        fprintf(stderr, "verify: hash mismatch at /%s\n", rel);
-        fprintf(stderr, "  server: %s\n", hdr ? hdr : "(missing)");
-        fprintf(stderr, "  local:  %s\n", local);
-        free(hdr); free(local);
-        return -2;
-    }
-    free(hdr);
-    *out_sha = local;
-    return 0;
+void svnae_verify_entries_sort(void *p) {
+    struct svnae_verify_entries *e = p;
+    if (!e || e->n < 2) return;
+    qsort(e->items, (size_t)e->n, sizeof *e->items, ventry_cmp);
 }
-
-/* Recursive dir verify. `rel` is the repo-relative path of the
- * directory being verified ("" for the root). The caller already
- * knows the sha the parent attributed to this dir; we compare it
- * against the dir's recomputed sha after recursion. */
-static int
-verify_dir(const char *base_url, const char *repo, int rev,
-           const char *algo, const char *rel, char **out_sha)
-{
-    /* GET /rev/N/list/<path> — listing tells us the immediate children
-     * (names + kinds). The response header carries the server's view
-     * of *this* dir's blob sha. */
-    const char *url = aether_url_rev_list(base_url, repo, rev, rel);
-
-    char *body = NULL; size_t len = 0; int status = 0; char *dir_hdr = NULL;
-    if (http_get_ex(url, &body, &len, &status, &dir_hdr) != 0 || status != 200) {
-        free(body); free(dir_hdr);
-        fprintf(stderr, "verify: GET /list failed for /%s (status %d)\n",
-                rel, status);
-        return -1;
+void svnae_verify_entries_free(void *p) {
+    struct svnae_verify_entries *e = p;
+    if (!e) return;
+    for (int i = 0; i < e->n; i++) {
+        free(e->items[i].name);
+        free(e->items[i].sha);
     }
-
-    /* Use the same packed-string accessors from ae/ra/packed.ae that
-     * the public svnae_ra_list handle does — ra_list_kind returns
-     * "dir"/"file" so we compare against that instead of a kind char. */
-    extern const char *aether_ra_parse_list(const char *body);
-    extern int         aether_ra_list_count(const char *packed);
-    extern const char *aether_ra_list_name(const char *packed, int i);
-    extern const char *aether_ra_list_kind(const char *packed, int i);
-
-    const char *packed = aether_ra_parse_list(body);
-    free(body);
-    if (!packed || !*packed) { free(dir_hdr); return -1; }
-    /* Stable copy — the Aether return lifetime ends at the next
-     * string-producing call; the recursion below hits many. */
-    char *packed_owned = strdup(packed);
-    if (!packed_owned) { free(dir_hdr); return -1; }
-
-    int n = aether_ra_list_count(packed_owned);
-    struct entry *entries = calloc((size_t)(n > 0 ? n : 1), sizeof *entries);
-    for (int i = 0; i < n; i++) {
-        const char *nm = aether_ra_list_name(packed_owned, i);
-        const char *kd = aether_ra_list_kind(packed_owned, i);
-        entries[i].name   = strdup(nm ? nm : "");
-        entries[i].kind_c = (kd && strcmp(kd, "dir") == 0) ? 'd' : 'f';
-        entries[i].sha    = NULL;
-    }
-    free(packed_owned);
-
-    /* Recurse into every child to compute its sha. */
-    extern const char *aether_path_join_rel(const char *prefix, const char *name);
-    for (int i = 0; i < n; i++) {
-        const char *child_rel = aether_path_join_rel(rel, entries[i].name);
-
-        int rc;
-        if (entries[i].kind_c == 'd') {
-            rc = verify_dir (base_url, repo, rev, algo, child_rel, &entries[i].sha);
-        } else {
-            rc = verify_file(base_url, repo, rev, algo, child_rel, &entries[i].sha);
-        }
-        if (rc != 0) {
-            for (int j = 0; j <= i; j++) { free(entries[j].name); free(entries[j].sha); }
-            for (int j = i + 1; j < n; j++) { free(entries[j].name); }
-            free(entries);
-            free(dir_hdr);
-            return rc;
-        }
-    }
-
-    /* Rebuild the dir blob (sorted by name) and hash it. Line format:
-     *   <kind> <sha> <name>\n
-     * matching fs_fs/txn_shim.c:rebuild_dir_c's serialiser. */
-    qsort(entries, (size_t)n, sizeof *entries, entry_cmp);
-    size_t buf_cap = 1024, buf_len = 0;
-    char *buf = malloc(buf_cap);
-    buf[0] = '\0';
-    for (int i = 0; i < n; i++) {
-        size_t need = 2 + strlen(entries[i].sha) + 1 + strlen(entries[i].name) + 2;
-        if (buf_len + need + 1 >= buf_cap) {
-            buf_cap = (buf_len + need + 1) * 2;
-            buf = realloc(buf, buf_cap);
-        }
-        buf_len += (size_t)snprintf(buf + buf_len, buf_cap - buf_len,
-                                    "%c %s %s\n",
-                                    entries[i].kind_c, entries[i].sha, entries[i].name);
-    }
-
-    char *local = hash_hex(algo, buf, (int)buf_len);
-    free(buf);
-
-    /* Compare the re-hashed blob against the dir header the server
-     * advertised for *this* dir. */
-    int ok = (local && dir_hdr && strcmp(local, dir_hdr) == 0);
-    if (!ok) {
-        fprintf(stderr, "verify: dir hash mismatch at /%s\n", *rel ? rel : "");
-        fprintf(stderr, "  server: %s\n", dir_hdr ? dir_hdr : "(missing)");
-        fprintf(stderr, "  local:  %s\n", local ? local : "(null)");
-    }
-    free(dir_hdr);
-
-    for (int i = 0; i < n; i++) { free(entries[i].name); free(entries[i].sha); }
-    free(entries);
-
-    if (!ok) { free(local); return -2; }
-    *out_sha = local;
-    return 0;
-}
-
-/* Crawl the tree rooted at `rel` and, for every file, fetch its
- * /hashes endpoint. For each secondary algo the server stores,
- * re-hash the content locally and compare. Returns 0 match, -1 I/O,
- * -2 mismatch. Emits a per-file OK summary to stdout with the
- * secondary-hash count when the caller asked for verbose output. */
-static int
-verify_secondaries_in_dir(const char *base_url, const char *repo, int rev,
-                          const char *rel, int *out_files_checked,
-                          int *out_secondary_count)
-{
-    const char *url = aether_url_rev_list(base_url, repo, rev, rel);
-    char *body = NULL; size_t len = 0; int status = 0;
-    if (http_get_ex(url, &body, &len, &status, NULL) != 0 || status != 200) {
-        free(body);
-        return -1;
-    }
-    /* Parse entries via the already-ported ra_parse_list — same
-     * "N\x02<name>\x01<kind-char>\x02..." shape verify_dir uses. */
-    extern const char *aether_ra_parse_list(const char *body);
-    const char *packed = aether_ra_parse_list(body);
-    free(body);
-    if (!packed || !*packed) return -1;
-
-    const char *p = packed;
-    const char *sep = strchr(p, 2);
-    if (!sep) return -1;
-    char nbuf[32];
-    size_t nlen = (size_t)(sep - p);
-    if (nlen >= sizeof nbuf) nlen = sizeof nbuf - 1;
-    memcpy(nbuf, p, nlen); nbuf[nlen] = '\0';
-    int n = (int)strtol(nbuf, NULL, 10);
-    p = sep + 1;
-
-    struct entry { char kind_c; char *name; };
-    struct entry *ents = calloc((size_t)(n > 0 ? n : 1), sizeof *ents);
-    for (int i = 0; i < n; i++) {
-        const char *entry_end = strchr(p, 2);
-        if (!entry_end) entry_end = p + strlen(p);
-        const char *mid = memchr(p, 1, (size_t)(entry_end - p));
-        ents[i].name   = mid ? strndup(p, (size_t)(mid - p)) : strdup("");
-        ents[i].kind_c = (mid && mid + 1 < entry_end) ? *(mid + 1) : 'f';
-        p = *entry_end == 2 ? entry_end + 1 : entry_end;
-    }
-
-    int overall = 0;
-    extern const char *aether_path_join_rel(const char *prefix, const char *name);
-    extern const char *aether_ra_parse_hashes_secondaries(const char *body);
-    for (int i = 0; i < n; i++) {
-        const char *child_rel = aether_path_join_rel(rel, ents[i].name);
-
-        if (ents[i].kind_c == 'd') {
-            int rc = verify_secondaries_in_dir(base_url, repo, rev, child_rel,
-                                               out_files_checked, out_secondary_count);
-            if (rc != 0 && overall == 0) overall = rc;
-        } else {
-            /* Fetch /cat and /hashes; re-hash for each declared secondary. */
-            const char *cat_url = aether_url_rev_cat(base_url, repo, rev, child_rel);
-            char *cbody = NULL; size_t clen = 0; int cstatus = 0;
-            if (http_get_ex(cat_url, &cbody, &clen, &cstatus, NULL) != 0
-                || cstatus != 200) {
-                if (overall == 0) overall = -1;
-                free(cbody); continue;
-            }
-            int body_len = (int)strlen(cbody);
-
-            const char *h_url = aether_url_rev_hashes(base_url, repo, rev, child_rel);
-            char *hbody = NULL; size_t hlen = 0; int hstatus = 0;
-            if (http_get_ex(h_url, &hbody, &hlen, &hstatus, NULL) != 0
-                || hstatus != 200) {
-                free(cbody); free(hbody);
-                if (overall == 0) overall = -1;
-                continue;
-            }
-
-            /* Parse the secondaries list ported to Aether —
-             * "N\x02<algo>\x01<hash>\x02..." */
-            const char *sec_packed = aether_ra_parse_hashes_secondaries(hbody);
-            if (sec_packed && *sec_packed) {
-                const char *sp = sec_packed;
-                const char *ssep = strchr(sp, 2);
-                if (ssep) {
-                    char snbuf[16];
-                    size_t snlen = (size_t)(ssep - sp);
-                    if (snlen >= sizeof snbuf) snlen = sizeof snbuf - 1;
-                    memcpy(snbuf, sp, snlen); snbuf[snlen] = '\0';
-                    int sec_n = (int)strtol(snbuf, NULL, 10);
-                    sp = ssep + 1;
-                    for (int si = 0; si < sec_n; si++) {
-                        const char *entry_end = strchr(sp, 2);
-                        if (!entry_end) entry_end = sp + strlen(sp);
-                        const char *mid = memchr(sp, 1, (size_t)(entry_end - sp));
-                        if (mid) {
-                            char algo_buf[32];
-                            size_t al = (size_t)(mid - sp);
-                            if (al >= sizeof algo_buf) al = sizeof algo_buf - 1;
-                            memcpy(algo_buf, sp, al); algo_buf[al] = '\0';
-                            size_t hl = (size_t)(entry_end - (mid + 1));
-                            char *server_hex = strndup(mid + 1, hl);
-                            char *local = hash_hex(algo_buf, cbody, body_len);
-                            if (local && strcmp(local, server_hex) == 0) {
-                                (*out_secondary_count)++;
-                            } else {
-                                fprintf(stderr,
-                                        "verify: secondary %s mismatch at /%s\n"
-                                        "  server: %s\n  local:  %s\n",
-                                        algo_buf, child_rel,
-                                        server_hex, local ? local : "(null)");
-                                if (overall == 0) overall = -2;
-                            }
-                            free(local); free(server_hex);
-                        }
-                        sp = *entry_end == 2 ? entry_end + 1 : entry_end;
-                    }
-                }
-            }
-            free(cbody); free(hbody);
-            (*out_files_checked)++;
-        }
-    }
-    for (int i = 0; i < n; i++) free(ents[i].name);
-    free(ents);
-    return overall;
-}
-
-/* Public entry point. Prints a short summary on success. Returns
- * 0 on match, -1 on protocol/IO error, -2 on Merkle mismatch.
- *
- * When `with_secondaries` is 1, after the primary Merkle walk passes
- * the tree is re-walked to verify every file's stored secondary
- * hashes. Mismatch in a secondary fails the whole verify. */
-int
-svnae_client_verify_full(const char *base_url, const char *repo, int rev,
-                        int with_secondaries)
-{
-    char *algo = svnae_ra_hash_algo(base_url, repo);
-    if (!algo || !*algo) { free(algo); fprintf(stderr, "verify: server info unavailable\n"); return -1; }
-
-    struct svnae_ra_info *I = svnae_ra_info_rev(base_url, repo, rev);
-    if (!I) { free(algo); fprintf(stderr, "verify: rev %d info unavailable\n", rev); return -1; }
-    const char *claimed_root = svnae_ra_info_root(I);
-    if (!*claimed_root) {
-        svnae_ra_info_free(I); free(algo);
-        fprintf(stderr, "verify: rev %d has no root sha in /info\n", rev);
-        return -1;
-    }
-    char *claimed_root_copy = strdup(claimed_root);
-    svnae_ra_info_free(I);
-
-    char *root_sha = NULL;
-    int rc = verify_dir(base_url, repo, rev, algo, "", &root_sha);
-    if (rc != 0) {
-        free(algo); free(root_sha); free(claimed_root_copy);
-        return rc;
-    }
-
-    if (!root_sha || strcmp(root_sha, claimed_root_copy) != 0) {
-        fprintf(stderr, "verify: root sha mismatch\n");
-        fprintf(stderr, "  rev-blob root: %s\n", claimed_root_copy);
-        fprintf(stderr, "  recomputed:    %s\n", root_sha ? root_sha : "(null)");
-        free(algo); free(root_sha); free(claimed_root_copy);
-        return -2;
-    }
-
-    int sec_rc = 0;
-    int files = 0, sec_count = 0;
-    if (with_secondaries) {
-        sec_rc = verify_secondaries_in_dir(base_url, repo, rev, "", &files, &sec_count);
-    }
-
-    if (sec_rc != 0) {
-        fprintf(stderr, "verify: secondary check failed (rc=%d)\n", sec_rc);
-        free(algo); free(root_sha); free(claimed_root_copy);
-        return sec_rc;
-    }
-
-    if (with_secondaries) {
-        fprintf(stdout, "verify: OK (algo=%s, root=%s, %d file(s), %d secondary hash(es) verified)\n",
-                algo, root_sha, files, sec_count);
-    } else {
-        fprintf(stdout, "verify: OK (algo=%s, root=%s)\n", algo, root_sha);
-    }
-    free(algo); free(root_sha); free(claimed_root_copy);
-    return 0;
-}
-
-int
-svnae_client_verify(const char *base_url, const char *repo, int rev)
-{
-    return svnae_client_verify_full(base_url, repo, rev, 0);
+    free(e->items);
+    free(e);
 }

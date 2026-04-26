@@ -1,0 +1,419 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// permissions and limitations under the License.
+
+// Recursive Merkle-tree verification of a remote rev.
+//
+// `svnae_client_verify_full(base, repo, rev, with_secondaries)` walks
+// the tree at `rev` top-down, re-hashes every file content and dir
+// blob locally using the server's advertised algorithm, and confirms:
+//
+//   1. Each file/dir node's locally-computed content hash matches
+//      the X-Svnae-Node-Hash header the server returned.
+//   2. For each directory, the re-assembled blob (lines
+//      "<kind> <child-sha> <name>\n", sorted) hashes to the same
+//      sha that the parent dir pointed at.
+//   3. The root-dir sha equals the rev blob's "root" field.
+//
+// When with_secondaries=1, the tree is re-walked after the primary
+// pass and every file's secondary-hash entries are re-verified.
+//
+// Returns:
+//    0  full verification success
+//   -1  I/O / protocol error (diagnostic on stderr)
+//   -2  hash mismatch (diagnostic on stderr)
+//
+// Round 51 ported this from ~410 lines of C in ae/ra/shim.c.
+
+import std.string
+import std.cryptography
+
+// URL builders (Aether-side already).
+extern aether_url_rev_cat(base: string, repo: string, rev: int, path: string) -> string
+extern aether_url_rev_list(base: string, repo: string, rev: int, path: string) -> string
+extern aether_url_rev_hashes(base: string, repo: string, rev: int, path: string) -> string
+
+// HTTP via std.http.client (the round-46 helper). Returns std.http.client
+// response handle; call accessors then free.
+extern aether_ra_http_get(url: string) -> ptr
+extern aether_ra_http_response_status(resp: ptr) -> int
+extern aether_ra_http_response_body(resp: ptr) -> string
+extern aether_ra_http_response_header(resp: ptr, name: string) -> string
+extern aether_ra_http_response_free(resp: ptr)
+
+// Server-info accessors (still C-side handle for now).
+extern svnae_ra_hash_algo(base_url: string, repo_name: string) -> string
+extern svnae_ra_info_rev(base_url: string, repo_name: string, rev: int) -> ptr
+extern svnae_ra_info_root(I: ptr) -> string
+extern svnae_ra_info_free(I: ptr)
+extern svnae_ra_free(p: string)
+
+// Path joiner: append `name` to `prefix` with a `/`, dropping the
+// separator when prefix is empty (so root-relative paths stay clean).
+extern aether_path_join_rel(prefix: string, name: string) -> string
+
+// List parser already lives in ae/ra/parse.ae + ae/ra/packed.ae.
+extern aether_ra_parse_list(body: string) -> string
+extern aether_ra_list_count(packed: string) -> int
+extern aether_ra_list_name(packed: string, i: int) -> string
+extern aether_ra_list_kind(packed: string, i: int) -> string
+
+// Secondary-hashes parser. Returns a packed
+// "N\x02<algo>\x01<hex>\x02..." string that the C helpers below
+// walk; we re-use them so the secondary parser doesn't need its own
+// per-field accessors.
+extern aether_ra_parse_hashes_secondaries(body: string) -> string
+
+// stderr writer for diagnostics. Plain wrapper around write(2,…).
+extern svnae_stderr_puts(s: string) -> int
+
+// Counter helpers: 2-int accumulator for files_checked + secondary_count.
+extern svnae_verify_counter_new() -> ptr
+extern svnae_verify_counter_files(c: ptr) -> int
+extern svnae_verify_counter_secondaries(c: ptr) -> int
+extern svnae_verify_counter_inc_files(c: ptr)
+extern svnae_verify_counter_inc_secondaries(c: ptr)
+extern svnae_verify_counter_free(c: ptr)
+
+// Entry-list builder used by verify_dir. Keeps name/kind/sha triples
+// for one directory, sorts them by name, then exposes back to Aether.
+extern svnae_verify_entries_new() -> ptr
+extern svnae_verify_entries_add(e: ptr, name: string, kind_c: int)
+extern svnae_verify_entries_set_sha(e: ptr, i: int, sha: string)
+extern svnae_verify_entries_count(e: ptr) -> int
+extern svnae_verify_entries_name(e: ptr, i: int) -> string
+extern svnae_verify_entries_kind(e: ptr, i: int) -> int
+extern svnae_verify_entries_sha(e: ptr, i: int) -> string
+extern svnae_verify_entries_sort(e: ptr)
+extern svnae_verify_entries_free(e: ptr)
+
+// ---- helpers ---------------------------------------------------------
+
+// Hash with the algo and return ("", err) on failure.
+local_hash(algo: string, data: string, length: int) -> string {
+    digest, err = cryptography.hash_hex(algo, data, length)
+    if string.length(err) > 0 { return "" }
+    return digest
+}
+
+// One GET that returns (body, status, node_hash, ok-flag). Frees the
+// response handle on the way out.
+do_get(url: string) -> ptr {
+    return aether_ra_http_get(url)
+}
+
+// Verify a single file. Returns the locally-computed sha on success,
+// "" on I/O failure or hash mismatch (with diagnostics on stderr).
+verify_file(base: string, repo: string, rev: int, algo: string, rel: string) -> string {
+    url = aether_url_rev_cat(base, repo, rev, rel)
+    resp = do_get(url)
+    if resp == null {
+        svnae_stderr_puts("verify: GET failed for ${rel}\n")
+        return ""
+    }
+    status = aether_ra_http_response_status(resp)
+    if status != 200 {
+        svnae_stderr_puts("verify: GET failed for ${rel} (status ${status})\n")
+        aether_ra_http_response_free(resp)
+        return ""
+    }
+    body = aether_ra_http_response_body(resp)
+    body_owned = string.copy(body)
+    server_hash = aether_ra_http_response_header(resp, "X-Svnae-Node-Hash")
+    server_hash_owned = string.copy(server_hash)
+    aether_ra_http_response_free(resp)
+
+    clen = string.length(body_owned)
+    local = local_hash(algo, body_owned, clen)
+    if string.length(local) == 0 { return "" }
+
+    if string.equals(local, server_hash_owned) == 0 {
+        svnae_stderr_puts("verify: hash mismatch at /${rel}\n")
+        svnae_stderr_puts("  server: ${server_hash_owned}\n")
+        svnae_stderr_puts("  local:  ${local}\n")
+        return ""
+    }
+    return local
+}
+
+// Verify a directory recursively. Returns its locally-recomputed sha
+// on success, "" on any failure (which includes any descendant
+// failure — diagnostic already printed by the leaf).
+verify_dir(base: string, repo: string, rev: int, algo: string, rel: string) -> string {
+    url = aether_url_rev_list(base, repo, rev, rel)
+    resp = do_get(url)
+    if resp == null {
+        svnae_stderr_puts("verify: GET /list failed for /${rel}\n")
+        return ""
+    }
+    status = aether_ra_http_response_status(resp)
+    if status != 200 {
+        svnae_stderr_puts("verify: GET /list failed for /${rel} (status ${status})\n")
+        aether_ra_http_response_free(resp)
+        return ""
+    }
+    body = aether_ra_http_response_body(resp)
+    body_owned = string.copy(body)
+    dir_hdr = aether_ra_http_response_header(resp, "X-Svnae-Node-Hash")
+    dir_hdr_owned = string.copy(dir_hdr)
+    aether_ra_http_response_free(resp)
+
+    packed = aether_ra_parse_list(body_owned)
+    if string.length(packed) == 0 { return "" }
+    packed_owned = string.copy(packed)
+
+    n = aether_ra_list_count(packed_owned)
+    entries = svnae_verify_entries_new()
+    i = 0
+    while i < n {
+        nm = aether_ra_list_name(packed_owned, i)
+        kd = aether_ra_list_kind(packed_owned, i)
+        kind_c = 102   // 'f'
+        if string.equals(kd, "dir") == 1 { kind_c = 100 }   // 'd'
+        svnae_verify_entries_add(entries, string.copy(nm), kind_c)
+        i = i + 1
+    }
+
+    // Recurse into every child to compute its sha.
+    i = 0
+    while i < n {
+        name = svnae_verify_entries_name(entries, i)
+        kind_c = svnae_verify_entries_kind(entries, i)
+        child_rel = aether_path_join_rel(rel, name)
+        child_sha = ""
+        if kind_c == 100 {
+            child_sha = verify_dir(base, repo, rev, algo, child_rel)
+        } else {
+            child_sha = verify_file(base, repo, rev, algo, child_rel)
+        }
+        if string.length(child_sha) == 0 {
+            svnae_verify_entries_free(entries)
+            return ""
+        }
+        svnae_verify_entries_set_sha(entries, i, child_sha)
+        i = i + 1
+    }
+
+    // Rebuild the dir blob (sorted by name) and hash it. Line format:
+    //   "<kind> <sha> <name>\n"
+    // Aether-side string concatenation — total dir-blob size is small
+    // (one line per child, ~70 bytes/line) so the O(n) repeated-concat
+    // cost is fine.
+    svnae_verify_entries_sort(entries)
+    blob = ""
+    i = 0
+    while i < n {
+        name = svnae_verify_entries_name(entries, i)
+        sha  = svnae_verify_entries_sha (entries, i)
+        kind_c = svnae_verify_entries_kind(entries, i)
+        kind_s = "f"
+        if kind_c == 100 { kind_s = "d" }
+        line = "${kind_s} ${sha} ${name}\n"
+        blob = string.concat(blob, line)
+        i = i + 1
+    }
+    blob_len = string.length(blob)
+    local = local_hash(algo, blob, blob_len)
+    svnae_verify_entries_free(entries)
+
+    if string.length(local) == 0 { return "" }
+    if string.equals(local, dir_hdr_owned) == 0 {
+        rel_disp = rel
+        if string.length(rel_disp) == 0 { rel_disp = "" }
+        svnae_stderr_puts("verify: dir hash mismatch at /${rel_disp}\n")
+        svnae_stderr_puts("  server: ${dir_hdr_owned}\n")
+        svnae_stderr_puts("  local:  ${local}\n")
+        return ""
+    }
+    return local
+}
+
+// Walk the tree at `rel` and re-verify every file's secondary
+// hashes. Returns 0 match, -1 I/O error, -2 mismatch.
+verify_secondaries_in_dir(base: string, repo: string, rev: int,
+                           rel: string, counter: ptr) -> int {
+    url = aether_url_rev_list(base, repo, rev, rel)
+    resp = do_get(url)
+    if resp == null { return -1 }
+    status = aether_ra_http_response_status(resp)
+    if status != 200 { aether_ra_http_response_free(resp); return -1 }
+    body = aether_ra_http_response_body(resp)
+    body_owned = string.copy(body)
+    aether_ra_http_response_free(resp)
+
+    packed = aether_ra_parse_list(body_owned)
+    if string.length(packed) == 0 { return -1 }
+    packed_owned = string.copy(packed)
+    n = aether_ra_list_count(packed_owned)
+
+    overall = 0
+    i = 0
+    while i < n {
+        name = aether_ra_list_name(packed_owned, i)
+        kd   = aether_ra_list_kind(packed_owned, i)
+        name_owned = string.copy(name)
+        child_rel = aether_path_join_rel(rel, name_owned)
+
+        if string.equals(kd, "dir") == 1 {
+            rc = verify_secondaries_in_dir(base, repo, rev, child_rel, counter)
+            if rc != 0 {
+                if overall == 0 { overall = rc }
+            }
+        } else {
+            rc = verify_one_file_secondaries(base, repo, rev, child_rel, counter)
+            if rc != 0 {
+                if overall == 0 { overall = rc }
+            }
+            svnae_verify_counter_inc_files(counter)
+        }
+        i = i + 1
+    }
+    return overall
+}
+
+// Fetch /cat + /hashes for one file, re-hash for every declared
+// secondary, compare. Returns 0 match, -1 I/O, -2 mismatch.
+verify_one_file_secondaries(base: string, repo: string, rev: int,
+                             rel: string, counter: ptr) -> int {
+    cat_url = aether_url_rev_cat(base, repo, rev, rel)
+    cresp = do_get(cat_url)
+    if cresp == null { return -1 }
+    if aether_ra_http_response_status(cresp) != 200 {
+        aether_ra_http_response_free(cresp)
+        return -1
+    }
+    cbody = aether_ra_http_response_body(cresp)
+    cbody_owned = string.copy(cbody)
+    aether_ra_http_response_free(cresp)
+    body_len = string.length(cbody_owned)
+
+    h_url = aether_url_rev_hashes(base, repo, rev, rel)
+    hresp = do_get(h_url)
+    if hresp == null { return -1 }
+    if aether_ra_http_response_status(hresp) != 200 {
+        aether_ra_http_response_free(hresp)
+        return -1
+    }
+    hbody = aether_ra_http_response_body(hresp)
+    hbody_owned = string.copy(hbody)
+    aether_ra_http_response_free(hresp)
+
+    sec_packed = aether_ra_parse_hashes_secondaries(hbody_owned)
+    if string.length(sec_packed) == 0 { return 0 }   // no secondaries
+    sec_owned = string.copy(sec_packed)
+
+    // Walk the packed string: "<n>\x02<algo>\x01<hex>\x02..."
+    // Use string.index_of_from to step through.
+    n_end = string.index_of(sec_owned, "\x02")
+    if n_end < 0 { return -1 }
+    n_str = string.substring(sec_owned, 0, n_end)
+    if string.try_int(n_str) == 0 { return -1 }
+    sec_n = string.get_int(n_str)
+    pos = n_end + 1
+
+    overall = 0
+    si = 0
+    while si < sec_n {
+        entry_end = string.index_of_from(sec_owned, "\x02", pos)
+        if entry_end < 0 { entry_end = string.length(sec_owned) }
+        mid = string.index_of_from(sec_owned, "\x01", pos)
+        if mid < 0 { return -1 }
+        if mid >= entry_end { return -1 }
+        algo_s = string.substring(sec_owned, pos, mid)
+        server_hex = string.substring(sec_owned, mid + 1, entry_end)
+        local = local_hash(algo_s, cbody_owned, body_len)
+        if string.equals(local, server_hex) == 1 {
+            svnae_verify_counter_inc_secondaries(counter)
+        } else {
+            svnae_stderr_puts("verify: secondary ${algo_s} mismatch at /${rel}\n")
+            svnae_stderr_puts("  server: ${server_hex}\n")
+            svnae_stderr_puts("  local:  ${local}\n")
+            if overall == 0 { overall = -2 }
+        }
+        pos = entry_end + 1
+        si = si + 1
+    }
+    return overall
+}
+
+// Public entry. Prints a one-line summary on success.
+// Internal impl; the export below forwards to it so a sibling
+// export (svnae_client_verify) can call it without the export-call
+// gate Aether enforces.
+verify_full_impl(base_url: string, repo_name: string, rev: int, with_secondaries: int) -> int {
+    algo_raw = svnae_ra_hash_algo(base_url, repo_name)
+    if algo_raw == null {
+        svnae_stderr_puts("verify: server info unavailable\n")
+        return -1
+    }
+    algo = string.copy(algo_raw)
+    svnae_ra_free(algo_raw)
+    if string.length(algo) == 0 {
+        svnae_stderr_puts("verify: server info unavailable\n")
+        return -1
+    }
+
+    info = svnae_ra_info_rev(base_url, repo_name, rev)
+    if info == null {
+        svnae_stderr_puts("verify: rev ${rev} info unavailable\n")
+        return -1
+    }
+    claimed_root = svnae_ra_info_root(info)
+    claimed_root_owned = string.copy(claimed_root)
+    svnae_ra_info_free(info)
+    if string.length(claimed_root_owned) == 0 {
+        svnae_stderr_puts("verify: rev ${rev} has no root sha in /info\n")
+        return -1
+    }
+
+    root_sha = verify_dir(base_url, repo_name, rev, algo, "")
+    if string.length(root_sha) == 0 { return -2 }
+
+    if string.equals(root_sha, claimed_root_owned) == 0 {
+        svnae_stderr_puts("verify: root sha mismatch\n")
+        svnae_stderr_puts("  rev-blob root: ${claimed_root_owned}\n")
+        svnae_stderr_puts("  recomputed:    ${root_sha}\n")
+        return -2
+    }
+
+    files = 0
+    sec_count = 0
+    if with_secondaries == 1 {
+        counter = svnae_verify_counter_new()
+        sec_rc = verify_secondaries_in_dir(base_url, repo_name, rev, "", counter)
+        files = svnae_verify_counter_files(counter)
+        sec_count = svnae_verify_counter_secondaries(counter)
+        svnae_verify_counter_free(counter)
+        if sec_rc != 0 {
+            svnae_stderr_puts("verify: secondary check failed (rc=${sec_rc})\n")
+            return sec_rc
+        }
+        println("verify: OK (algo=${algo}, root=${root_sha}, ${files} file(s), ${sec_count} secondary hash(es) verified)")
+    } else {
+        println("verify: OK (algo=${algo}, root=${root_sha})")
+    }
+    return 0
+}
+
+export svnae_client_verify_full(base_url: string, repo_name: string, rev: int, with_secondaries: int) -> int {
+    return verify_full_impl(base_url, repo_name, rev, with_secondaries)
+}
+
+export svnae_client_verify(base_url: string, repo_name: string, rev: int) -> int {
+    return verify_full_impl(base_url, repo_name, rev, 0)
+}
+
+main() {
+    println("ae/ra/verify.ae is a library; not meant to run standalone")
+}
