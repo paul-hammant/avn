@@ -110,132 +110,10 @@ extern int aether_io_write_atomic(const char *path, const char *data, int length
 extern int svnae_openssl_hash_supported(const char *algo);
 #define svnae_hash_supported svnae_openssl_hash_supported
 
-/* Create the empty on-disk layout: dirs, format file, rep-cache schema.
- * No rev 0, no head. `algos_spec` is the comma-separated hash list
- * written into the format file (first entry = primary). Pass NULL or
- * "" to default to "sha1" for backward-compatible repos.
- * Shared by `create` (which goes on to seed rev 0) and `load` (which
- * replays revs from a dump). */
-static int
-create_bare(const char *repo, const char *algos_spec)
-{
-    if (aether_io_mkdir_p(repo) != 0) return -1;
-
-    char path[PATH_MAX];
-    snprintf(path, sizeof path, "%s/reps", repo);
-    if (aether_io_mkdir_p(path) != 0) return -1;
-    snprintf(path, sizeof path, "%s/revs", repo);
-    if (aether_io_mkdir_p(path) != 0) return -1;
-
-    /* Validate each algorithm against the golden list before writing. */
-    const char *spec = (algos_spec && *algos_spec) ? algos_spec : "sha1";
-    {
-        int n = aether_algos_count(spec);
-        for (int i = 0; i < n; i++) {
-            if (!svnae_hash_supported(aether_algos_token(spec, i))) return -1;
-        }
-    }
-
-    snprintf(path, sizeof path, "%s/format", repo);
-    char fmt_line[128];
-    int flen = snprintf(fmt_line, sizeof fmt_line, "svnae-fsfs-1 %s\n", spec);
-    if (aether_io_write_atomic(path, fmt_line, flen) != 0) return -1;
-
-    /* rep_cache + path_rev schema installed Aether-side via contrib.sqlite. */
-    const char *err = admin_db_init_schema(repo);
-    if (err && *err) return -1;
-    return 0;
-}
-
-int
-svnae_svnadmin_create(const char *repo)
-{
-    return svnae_svnadmin_create_with_algos(repo, NULL);
-}
-
-int
-svnae_svnadmin_create_with_algos(const char *repo, const char *algos_spec)
-{
-    if (create_bare(repo, algos_spec) != 0) return -1;
-
-    /* Phase 8.1: create the per-branch head layout alongside the
-     * legacy $repo/head + $repo/revs/NNNNNN. Existing code paths
-     * (commit finalise, server dispatch) still read the old layout
-     * today; the new layout is written in parallel so branch-aware
-     * code can come online incrementally.
-     *
-     * New layout:
-     *   $repo/branches/main/head         ← one line: "rev=0"
-     *   $repo/branches/main/revs/00/00/000000  ← rev pointer with fanout
-     *   $repo/branches/main/spec          ← empty (include-all)
-     *
-     * The path_rev index table lives in rep-cache.db and is created
-     * here so commit finalise can always INSERT without schema
-     * concerns. */
-    char p[PATH_MAX];
-    snprintf(p, sizeof p, "%s/branches", repo);
-    if (aether_io_mkdir_p(p) != 0) return -1;
-    snprintf(p, sizeof p, "%s/branches/main", repo);
-    if (aether_io_mkdir_p(p) != 0) return -1;
-    snprintf(p, sizeof p, "%s/branches/main/revs", repo);
-    if (aether_io_mkdir_p(p) != 0) return -1;
-    snprintf(p, sizeof p, "%s/branches/main/revs/00/00", repo);
-    if (aether_io_mkdir_p(p) != 0) return -1;
-    /* Empty spec file — means "include everything from parent," but
-     * for main (which has no parent) it means "full tree." */
-    snprintf(p, sizeof p, "%s/branches/main/spec", repo);
-    if (aether_io_write_atomic(p, "", 0) != 0) return -1;
-
-    /* Path-rev table is installed by admin_db_init_schema above
-     * (now part of the rep-cache.db schema rather than a follow-up
-     * sqlite block here). */
-
-    /* Seed rev 0: empty root dir + rev blob pointing at it. Use the
-     * shared Aether rev-blob builder so the format stays in one place. */
-    const char *empty_sha = svnae_rep_write_blob(repo, "", 0);
-    if (!empty_sha) return -1;
-    char empty_copy[65];
-    size_t n = strlen(empty_sha);
-    if (n >= sizeof empty_copy) return -1;
-    memcpy(empty_copy, empty_sha, n + 1);
-
-    extern const char *aether_rev_blob_body(const char *root, const char *branch,
-                                            const char *props, const char *acl,
-                                            int prev, const char *author,
-                                            const char *date, const char *log);
-    const char *rev0 = aether_rev_blob_body(empty_copy, "main", "", "", 0,
-                                            "(init)", svnae_fsfs_now_iso8601(),
-                                            "initial empty revision");
-    const char *rev0_sha = svnae_rep_write_blob(repo, rev0, (int)strlen(rev0));
-    if (!rev0_sha) return -1;
-
-    char ptr_body[128];   /* sha256 = 64 hex + \n + NUL */
-    int plen = snprintf(ptr_body, sizeof ptr_body, "%s\n", rev0_sha);
-    char path[PATH_MAX];
-
-    /* Legacy rev pointer — kept for Phase 8.1 so unmodified readers
-     * continue to work. Phase 8.2+ will drop this once every reader
-     * has moved to the per-branch layout. */
-    snprintf(path, sizeof path, "%s/revs/000000", repo);
-    if (aether_io_write_atomic(path, ptr_body, plen) != 0) return -1;
-
-    /* New per-branch rev pointer. Two-level fanout: aa/bb/NNNNNN
-     * where aa = rev/65536, bb = (rev/256)%256. At rev 0 that's
-     * 00/00/000000. */
-    snprintf(path, sizeof path, "%s/branches/main/revs/00/00/000000", repo);
-    if (aether_io_write_atomic(path, ptr_body, plen) != 0) return -1;
-
-    /* Legacy head file. */
-    snprintf(path, sizeof path, "%s/head", repo);
-    if (aether_io_write_atomic(path, "0\n", 2) != 0) return -1;
-
-    /* New per-branch head file. Format: "rev=N\n". Richer than the
-     * legacy one-int form — leaves room for tree-sha / spec-sha
-     * caching in 8.2 without another format change. */
-    snprintf(path, sizeof path, "%s/branches/main/head", repo);
-    if (aether_io_write_atomic(path, "rev=0\n", 6) != 0) return -1;
-    return 0;
-}
+/* svnae_svnadmin_create / _with_algos / the bare bootstrap helper all
+ * moved to ae/svnadmin/create.ae in Round 77. The Aether-side
+ * svnae_svnadmin_create_bare is exported for `svnadmin load` below. */
+extern int svnae_svnadmin_create_bare(const char *repo, const char *algos_spec);
 
 /* ---- rep enumeration ------------------------------------------------ *
  *
@@ -419,7 +297,7 @@ svnae_svnadmin_load(const char *repo, int in_fd)
      * will replay its own rev 0 below). Dumps currently always carry
      * sha1 blobs, so we create the target as sha1. If we later add
      * an ALGOS header to the dump format, pass it through here. */
-    if (create_bare(repo, "sha1") != 0) return -1;
+    if (svnae_svnadmin_create_bare(repo, "sha1") != 0) return -1;
 
     /* REP-COUNT blocks. Hash may be sha1 (40 hex) or sha256 (64 hex);
      * the REP line gives us the full hex and the Aether helper returns

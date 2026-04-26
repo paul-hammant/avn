@@ -2,7 +2,7 @@
 
 AETHERC ?= $(abspath $(dir $(lastword $(MAKEFILE_LIST))))/../../.aether_binaries/build/aetherc
 
-GENERATED := dump_generated.c admin_db_generated.c
+GENERATED := dump_generated.c admin_db_generated.c create_generated.c
 
 all: $(GENERATED)
 
@@ -13,5 +13,9 @@ dump_generated.c: dump.ae
 # the resolver finds the contrib symlink.
 admin_db_generated.c: admin_db.ae
 	cd ../.. && $(AETHERC) --emit=lib ae/svnadmin/admin_db.ae ae/svnadmin/admin_db_generated.c
+
+# create.ae is pure orchestration — no contrib.sqlite, no std.fs imports.
+create_generated.c: create.ae
+	$(AETHERC) --emit=lib $< $@
 
 .PHONY: all
