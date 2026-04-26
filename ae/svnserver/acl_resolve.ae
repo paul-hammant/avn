@@ -26,7 +26,11 @@ import std.string
 extern svnae_rep_read_blob(repo: string, sha: string) -> string
 extern svnae_rep_free(body: string)
 
-extern svnserver_load_rev_acl_root(repo: string, rev: int) -> string
+// Round 57: load_rev_blob_field is the Aether-side helper from
+// rev_load.ae — round-tripping via the C shim's three
+// svnserver_load_rev_{acl_root,props_sha,root_sha} wrappers was
+// pure boilerplate.
+extern aether_load_rev_blob_field(repo: string, rev: int, key: string) -> string
 extern aether_paths_index_ancestor_nearest(body: string, target: string) -> string
 extern aether_acl_response_json(rules_body: string, effective_from: string) -> string
 
@@ -35,7 +39,7 @@ export acl_resolve_json(repo: string, rev: int, target: string) -> string {
 }
 
 acl_resolve_json_impl(repo: string, rev: int, target: string) -> string {
-    acl_root = svnserver_load_rev_acl_root(repo, rev)
+    acl_root = aether_load_rev_blob_field(repo, rev, "acl")
     if string.length(acl_root) == 0 {
         return "{\"rules\":[],\"effective_from\":\"\"}"
     }
@@ -76,7 +80,6 @@ acl_resolve_json_impl(repo: string, rev: int, target: string) -> string {
 // on \x01, sets the Merkle header from the sha half, and emits the
 // body half.
 
-extern svnserver_load_rev_props_sha(repo: string, rev: int) -> string
 extern aether_paths_index_lookup(body: string, path: string) -> string
 extern aether_props_blob_to_json(body: string) -> string
 
@@ -85,7 +88,7 @@ export props_resolve(repo: string, rev: int, target: string) -> string {
 }
 
 props_resolve_impl(repo: string, rev: int, target: string) -> string {
-    props_sha = svnserver_load_rev_props_sha(repo, rev)
+    props_sha = aether_load_rev_blob_field(repo, rev, "props")
     if string.length(props_sha) == 0 { return "\x01{}" }
 
     paths_body = svnae_rep_read_blob(repo, props_sha)

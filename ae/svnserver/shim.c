@@ -174,41 +174,12 @@ const char *svnserver_hash_hex(const char *repo, const char *data, int length) {
  * acl_resolve port. */
 static char *load_rev_blob_field(const char *repo, int rev, const char *key);
 
-const char *svnserver_load_rev_acl_root(const char *repo, int rev) {
-    static __thread char buf[65];
-    buf[0] = '\0';
-    char *sha = load_rev_blob_field(repo, rev, "acl");
-    if (sha) {
-        size_t n = strlen(sha);
-        if (n < sizeof buf) { memcpy(buf, sha, n + 1); }
-        free(sha);
-    }
-    return buf;
-}
-
-const char *svnserver_load_rev_props_sha(const char *repo, int rev) {
-    static __thread char buf[65];
-    buf[0] = '\0';
-    char *sha = load_rev_blob_field(repo, rev, "props");
-    if (sha) {
-        size_t n = strlen(sha);
-        if (n < sizeof buf) { memcpy(buf, sha, n + 1); }
-        free(sha);
-    }
-    return buf;
-}
-
-const char *svnserver_load_rev_root_sha(const char *repo, int rev) {
-    static __thread char buf[65];
-    buf[0] = '\0';
-    char *sha = load_rev_blob_field(repo, rev, "root");
-    if (sha) {
-        size_t n = strlen(sha);
-        if (n < sizeof buf) { memcpy(buf, sha, n + 1); }
-        free(sha);
-    }
-    return buf;
-}
+/* svnserver_load_rev_{acl_root,props_sha,root_sha}: three near-
+ * identical TLS-buffer wrappers around load_rev_blob_field deleted
+ * in round 57. Aether callers (acl_resolve.ae, handler_rev_info.ae)
+ * now reach aether_load_rev_blob_field (ae/svnserver/rev_load.ae)
+ * directly; the C-side TLS-buffer round-trip was unnecessary
+ * boilerplate. */
 
 /* Figure out the effective auth context for this request. Returns
  * 1 if super-user (bypass ACL), 0 otherwise. Writes the effective

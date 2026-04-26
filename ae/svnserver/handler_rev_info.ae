@@ -31,7 +31,7 @@ extern svnae_repos_info_author(i: ptr) -> string
 extern svnae_repos_info_date(i: ptr) -> string
 extern svnae_repos_info_msg(i: ptr) -> string
 extern svnae_repos_info_free(i: ptr)
-extern svnserver_load_rev_root_sha(repo: string, rev: int) -> string
+extern aether_load_rev_blob_field(repo: string, rev: int, key: string) -> string
 extern aether_redacted_dir_sha(repo: string, rev: int, user: string,
                                dir_sha: string, prefix: string) -> string
 extern aether_rev_info_json(rev: int, author: string, date: string,
@@ -65,7 +65,7 @@ rev_info_json_full_impl(repo: string, rev: int, user: string, is_super: int) -> 
     info = svnae_repos_info_rev(repo, rev)
     if info == null { return "" }
 
-    root_sha = svnserver_load_rev_root_sha(repo, rev)
+    root_sha = aether_load_rev_blob_field(repo, rev, "root")
     reported_root = root_sha
     if is_super == 0 {
         if string.length(root_sha) > 0 {
