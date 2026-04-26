@@ -15,14 +15,13 @@
  * permissions and limitations under the License.
  */
 
-/* io/shim.c — file operations that std.fs doesn't cover.
- *
- * svn writes a lot of data to disk safely: revisions, working-copy pristines,
- * rep-cache blobs. The pattern is always the same — write to a temp path in
- * the same directory, fsync, rename over the target. std.fs has open/read/
- * write but no rename, no fsync, and no way to ask for the process PID (we
- * use that to build unique tmp names). This shim fills those gaps.
- */
+/* io/shim.c — fd-level file operations that std.fs doesn't expose:
+ * direct open() returning a fd (for svnadmin dump/load), unbuffered
+ * writes to stdout/stderr (escape hatch for test traces around
+ * std.println's buffering), getpid (for tmp-filename construction),
+ * and svnae_write_header_and_body (header byte + binary body in one
+ * fsync'd write). Pure file I/O — atomic-write, mkdir-p, rename,
+ * unlink, etc. — lives in subr/io.ae via std.fs. */
 
 #include <errno.h>
 #include <fcntl.h>
@@ -32,16 +31,6 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
-
-/* rename moved to ae/subr/io.ae (std.fs.rename via io_rename).
- * Callers reach it via aether_io_rename. The test_io/test_repo/
- * test_revisions Aether callers switched over in round 43; there
- * are no C-side callers of rename left. */
-
-/* svnae_write_and_fsync moved to ae/subr/io.ae (aether_io_write_atomic
- * via std.fs.write_atomic). Round 61: all .ae callers switched over;
- * std.fs's atomic-write is even more durable (stage + fsync + rename
- * vs the previous direct write + fsync). No C-side callers remain. */
 
 /* Return the current PID (for building unique tmp filenames). */
 int svnae_getpid(void) { return (int)getpid(); }
@@ -79,15 +68,9 @@ int close_fd(int fd) {
     return close(fd);
 }
 
-/* svnae_stderr_write_int and svnae_debug_dump were debug helpers
- * for chasing concrete bugs during the early port phases. Both
- * survived past their use and got deleted in round 52. Reach for
- * svnae_stderr_puts + ${} interpolation when you next need a trace. */
-
-/* Write `header` (a NUL-terminated Aether string) immediately followed by
- * `body_len` bytes at `body` (which may contain embedded NULs).
- * header is treated as a single 1-byte prefix here — we only need the
- * first byte in practice, and taking strlen of a known "R"/"Z" is safe. */
+/* Write `header` (NUL-terminated Aether string, in practice "R"/"Z")
+ * immediately followed by `body_len` bytes at `body` (which may contain
+ * embedded NULs). One fsync at the end. */
 int
 svnae_write_header_and_body(const char *path, const char *header,
                             const char *body, int body_len)
@@ -117,16 +100,10 @@ svnae_write_header_and_body(const char *path, const char *header,
     return 0;
 }
 
-/* svnae_is_regular_file moved to ae/subr/io.ae (aether_io_is_regular_file
- * via std.fs.file_stat with kind==1). Round 61: all .ae callers
- * switched over; no C-side callers remain. */
-
-/* Read the entire file into an svnae_buf. Binary-safe (embedded NULs OK).
- * Returns NULL on any failure. The returned buf is owned by the caller;
- * free with svnae_buf_free (from compress/shim — same struct layout).
- *
- * We don't depend on compress/shim.c being linked: define our own local
- * svnae_buf type here with identical layout. Aether sees it as `ptr`. */
+/* Read the entire file into an svnae_buf_local (binary-safe). Returns
+ * NULL on any failure. The struct layout matches svnae_buf elsewhere
+ * but is private here so this shim doesn't depend on compress/shim.c
+ * being linked. Aether sees it as `ptr`. */
 struct svnae_buf_local {
     char *data;
     int   length;
@@ -180,7 +157,3 @@ void        svnae_read_file_free  (struct svnae_buf_local *b)
     free(b->data);
     free(b);
 }
-
-/* svnae_remove moved to ae/subr/io.ae (aether_io_remove: idempotent
- * unlink — missing-file is success, matching the previous C behaviour).
- * Round 61: all .ae callers switched over; no C-side callers remain. */
