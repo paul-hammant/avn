@@ -17,30 +17,15 @@
 
 /* ra/shim.c — libsvn_ra: REST client to aether-svnserver.
  *
- * Mirrors repos/shim.c's query shape, but over HTTP + JSON. The handles
- * returned here (svnae_ra_log, svnae_ra_list, svnae_ra_info) look and
- * behave the same as their server-side counterparts so Aether callers
- * that already know the repos query API can switch repository sources
- * without reshape.
+ * Mirrors repos/shim.c's query shape but over HTTP + JSON. Handles
+ * returned here (svnae_ra_log, svnae_ra_list, svnae_ra_info) match
+ * the server-side equivalents so callers can switch repository
+ * sources without reshape.
  *
- * Round 46 moved the HTTP plumbing to Aether (ae/ra/http_client.ae,
- * which uses std.http.client v2 — request builders + headers + status
- * + response-header lookup). The C side here keeps its existing
- * http_get_ex / http_post_json signatures so every downstream caller
- * (handler shims, log/paths/blame builders, commit/copy/branch_create)
- * links unchanged. The bodies are now thin wrappers: build a packed-
- * envelope through the Aether helper, slice status / node-hash / body
- * out, hand them to the existing out-params.
- *
- * Auth state (X-Svnae-User, X-Svnae-Superuser tokens) lives in C —
- * set via svnae_ra_set_user / svnae_ra_set_superuser_token, exposed
- * to the Aether helper through aether_ra_get_user /
- * aether_ra_get_super_token.
- *
- * JSON parse+build lives entirely on the Aether side (ae/ra/parse.ae,
- * ae/ra/commit_build.ae); nothing in this file touches std.json
- * directly.
- */
+ * HTTP plumbing lives in ae/ra/http_client.ae (std.http.client v2);
+ * URL builders in urls.ae; JSON parse/build in parse.ae and
+ * commit_build.ae. The C side keeps the public ABI and the auth-
+ * state TLS pointers (X-Svnae-User / X-Svnae-Superuser tokens). */
 
 #include "aether_json.h"    /* JsonValue / json_create_number used by the
                                svnae_ra_json_int helper the commit-build
@@ -94,15 +79,9 @@ const char *aether_ra_get_super_token(void) {
     return g_client_super_token ? g_client_super_token : "";
 }
 
-/* Environment-variable accessor moved to std.os::getenv;
- * svnae_http_get_body lives below, after http_get is defined. */
-
-/* The libcurl-using helpers (build_auth_headers, buf_write_cb,
- * hdr_capture_cb, struct buf, struct hdr_capture) moved to
- * ae/ra/http_client.ae in round 46. The Aether helper returns a
- * std.http.client response handle (ptr) the C wrapper reads via
- * typed accessors — status, body, header — and then frees. */
-
+/* The libcurl-using helpers moved to ae/ra/http_client.ae. The Aether
+ * helper returns a std.http.client response handle (ptr) we read via
+ * typed accessors — status, body, header — and then free. */
 extern const void *aether_ra_http_get(const char *url);
 extern const void *aether_ra_http_post_json(const char *url, const char *body, int body_len);
 extern int         aether_ra_http_response_status(const void *resp);
@@ -231,66 +210,36 @@ svnae_ra_head_rev(const char *base_url, const char *repo_name)
 {
     char *body = http_get_200(aether_url_info(base_url, repo_name), NULL);
     if (!body) return -1;
-    /* JSON parse + head-field extraction ported to
-     * ae/ra/parse.ae::ra_parse_head_rev. */
     int rev = aether_ra_parse_head_rev(body);
     free(body);
     return rev;
 }
 
 /* Query the server's primary content-address algorithm. Returns a
- * malloc'd string (caller frees via free()) or NULL on failure. If
- * the server predates Phase 6.1 and omits the field, returns "sha1"
- * so callers can safely default. */
+ * malloc'd string (caller frees) or NULL on failure. Pre-Phase-6.1
+ * servers omit the field; the Aether parser defaults to "sha1". */
 extern const char *aether_ra_parse_hash_algo(const char *body);
 char *
 svnae_ra_hash_algo(const char *base_url, const char *repo_name)
 {
     char *body = http_get_200(aether_url_info(base_url, repo_name), NULL);
     if (!body) return NULL;
-    /* JSON parse ported to ae/ra/parse.ae::ra_parse_hash_algo.
-     * Parser returns "" only on parse failure; defaults to "sha1"
-     * when the field is absent (pre-Phase-6.1 servers). */
     const char *algo = aether_ra_parse_hash_algo(body);
     free(body);
     if (!algo || !*algo) return NULL;
     return strdup(algo);
 }
 
-/* ---- packed-record accessor glue ------------------------------------ *
+/* ---- packed-record handle internals ---------------------------------
  *
- * ae/ra/parse.ae produces packed "<N>\x02<entry>\x02<entry>..." strings
- * where each entry is a "<f0>\x01<f1>\x01..." record. The per-field
- * accessors (log/paths/blame/list) used to re-parse that packed form
- * in C, rebuilding a struct-of-arrays. ae/ra/packed.ae now exposes
- * typed accessors over the packed string directly, so each handle
- * here just owns the packed payload plus a per-handle "pin list"
- * that keeps returned string copies alive until the handle is freed.
- *
- * The pin list exists because callers routinely hold one accessor's
- * return value across another accessor call (or across a recursive
- * call that hits the same accessor). A per-accessor TLS slot would
- * clobber them; strdup-and-pin-to-handle gives the stable-pointer
- * contract the C API has always had. */
-
-
-/* ---- shared list-handle internals -----------------------------------
- *
- * The log / paths / blame / list handles all share the exact same
- * shape: own one packed-string payload (parsed Aether-side), remember
- * the row count, and pin per-accessor strdup'd copies so callers can
- * hold pointers across calls.
- *
- * Round 45 collapsed four ~60-line builder/getter blocks into one
- * shared internal struct + ra_handle_from_url + ra_handle_free, with
- * thin per-domain wrappers preserving the public symbols.
- */
-
-/* The struct {packed, n, pins} + new/free moved to
- * ae/subr/packed_handle in round 56 (shared with repos/shim.c).
- * ra_handle_from_url is the URL-fetching builder layer over the
- * shared svnae_packed_handle_new; per-domain wrappers below cast
- * to/from the public per-domain types. */
+ * ae/ra/parse.ae produces packed "<N>\x02<entry>\x02..." payloads;
+ * ae/ra/packed.ae exposes typed accessors over each entry's
+ * "<f0>\x01<f1>\x01..." record. Per-domain handles (log/paths/
+ * blame/list) all share the same struct {packed, n, pins} shape
+ * — defined in ae/subr/packed_handle, shared with repos/shim.c.
+ * ra_handle_from_url is the URL-fetch + parse + handle-construct
+ * layer over svnae_packed_handle_new; per-domain wrappers below
+ * cast to/from the public per-domain types. */
 
 typedef const char *(*ra_parse_fn)(const char *body);
 typedef int         (*ra_count_fn)(const char *packed);
@@ -754,29 +703,14 @@ svnae_ra_commit_finish(struct svnae_ra_commit *cb,
     return new_rev;
 }
 
-/* ---- verify glue (round 51) -----------------------------------------
+/* ---- verify glue ----------------------------------------------------
  *
- * The Merkle-verify walk used to live in ~410 lines of C below this
- * point: verify_file / verify_dir / verify_secondaries_in_dir + their
- * recursion plumbing. The walk is now in ae/ra/verify.ae using
- * std.cryptography v2 + std.http.client v2 + the existing Aether-side
- * URL/list/secondaries parsers. The two public symbols
- * (svnae_client_verify, svnae_client_verify_full) are now Aether
- * exports.
- *
- * The C side keeps two small struct allocators the Aether walk calls
- * back into:
- *   - svnae_verify_counter:  (files, secondaries) accumulator passed
- *     through the recursive secondaries pass.
- *   - svnae_verify_entries:  (name, kind_c, sha) tuples for one dir,
- *     sortable by name. Aether-side dir verification builds one,
- *     populates it during the recursive descent, sorts, then re-emits
- *     the canonical "<kind> <sha> <name>\n" lines for re-hashing.
- *
- * Storage in C because Aether can't allocate a struct-of-arrays with
- * ergonomic field access from FFI. Both helpers are tiny: ~70 lines
- * total. Same shape as svnae_wc_nodelist (round 40).
- */
+ * The Merkle-verify walk lives in ae/ra/verify.ae. The two C-side
+ * struct allocators below back it:
+ *   svnae_verify_counter:  (files, secondaries) accumulator
+ *   svnae_verify_entries:  (name, kind_c, sha) tuples sortable by name
+ * Storage in C since Aether can't allocate struct-of-arrays with
+ * ergonomic field access from FFI. */
 
 struct svnae_verify_counter { int files; int secondaries; };
 

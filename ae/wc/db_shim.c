@@ -106,11 +106,9 @@ void svnae_wc_db_close(sqlite3 *db) { if (db) sqlite3_close(db); }
 
 /* --- node CRUD -------------------------------------------------------- *
  *
- * svnae_wc_db_upsert_node and svnae_wc_db_get_node moved to
- * ae/wc/db_nodes.ae in round 42. The C side keeps the struct layout,
- * the six accessors, the free function, and one storage primitive —
- * svnae_wc_node_alloc — that Aether's get_node calls with the six
- * row fields it reads off the sqlite statement. */
+ * Node CRUD lives in ae/wc/db_nodes.ae. The C side keeps the struct
+ * layout, six accessors, free, and svnae_wc_node_alloc — the storage
+ * primitive Aether's get_node calls with the six row fields. */
 
 struct svnae_wc_node {
     char *path;
@@ -158,20 +156,14 @@ svnae_wc_node_free(struct svnae_wc_node *n)
  * Ordered by path for deterministic iteration.
  */
 
-/* svnae_wc_db_set_conflicted moved to ae/wc/db_nodes.ae alongside
- * delete/exists — all three are single-statement scalar ops that
- * map cleanly to the subr.sqlite bindings. */
-
 struct svnae_wc_nodelist {
     struct svnae_wc_node *items;
     int n;
     int cap;
 };
 
-/* Storage primitives used by ae/wc/db_nodes.ae's Aether-side
- * svnae_wc_db_list_nodes. The Aether side drives the SQL loop and
- * hands each row to append(); this file keeps the struct layout
- * plus the fixed set of accessors read by every downstream caller. */
+/* Storage primitives for db_nodes.ae's svnae_wc_db_list_nodes. The
+ * Aether side drives the SQL loop and hands each row to append(). */
 struct svnae_wc_nodelist *
 svnae_wc_nodelist_new(void)
 {
@@ -225,11 +217,8 @@ svnae_wc_nodelist_free(struct svnae_wc_nodelist *L)
 
 /* --- info kv --------------------------------------------------------- *
  *
- * set_info / get_info moved to ae/wc/db_nodes.ae. The C side keeps
- * svnae_wc_info_dup + svnae_wc_info_free so existing callers that
- * receive a malloc'd char* and later free() it continue to work: the
- * Aether get_info delegates the malloc through dup to hand the caller
- * a pointer detached from the sqlite statement lifetime. */
+ * Lookup/store live in db_nodes.ae. svnae_wc_info_dup detaches the
+ * sqlite-statement-owned column pointer for caller-malloc'd ABI. */
 
 char *
 svnae_wc_info_dup(const char *s)

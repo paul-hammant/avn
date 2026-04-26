@@ -50,39 +50,21 @@
 
 char *svnae_rep_read_blob(const char *repo, const char *sha1_hex);
 
-/* Dir-blob line parser ported to Aether (ae/fs_fs/dirblob.ae). */
+/* Dir-blob line parser in ae/fs_fs/dirblob.ae. */
 extern int         aether_dir_count_entries(const char *body);
 extern int         aether_dir_entry_kind(const char *body, int i);
 extern const char *aether_dir_entry_name(const char *body, int i);
 void  svnae_rep_free(char *p);
 
-/* --- helpers --------------------------------------------------------- */
-
-/* head_rev + rev_blob_sha ported to ae/repos/rev_io.ae. Direct calls
- * to aether_repos_head_rev at the remaining two call sites (blame
- * and the public svnae_repos_head_rev wrapper) — the static trampoline
- * was a pure rename. */
 extern int aether_repos_head_rev(const char *repo);
 
 /* ---- shared packed-string handle internals --------------------------
  *
- * Five accessor families (log / list / info / paths / blame) all
- * share the same shape: own one packed-string payload (parsed
- * Aether-side), remember the row count, and pin per-accessor
- * strdup'd copies so callers can hold pointers across calls. Same
- * pattern ra/shim.c uses (round 45) — independent here so each shim
- * can ship without a shared header.
- *
- * The packed-string parsers (aether_ra_log_*, aether_ra_paths_*,
- * etc.) live in ae/ra/packed.ae and are reused verbatim — the wire
- * record shape ae/repos/log.ae produces is identical to what
- * ae/ra/parse.ae produces, by design. */
-
-/* The struct {packed, n, pins} + new/free moved to
- * ae/subr/packed_handle in round 56 (shared with ra/shim.c).
- * repos_handle_from_packed is now a one-line forward to
- * svnae_packed_handle_new — keep the local alias for readability
- * at the per-domain call sites. */
+ * Five accessor families (log / list / info / paths / blame) share
+ * the {packed, n, pins} struct from ae/subr/packed_handle (also used
+ * by ra/shim.c). The packed-string parsers live in ae/ra/packed.ae —
+ * record shape from ae/repos/log.ae matches ae/ra/parse.ae's by
+ * design, so the same accessors decode both. */
 typedef int (*repos_count_fn)(const char *packed);
 
 static struct svnae_packed_handle *
@@ -132,10 +114,8 @@ root_dir_sha1_for_rev(const char *repo, int rev)
     return strdup(v);
 }
 
-/* resolve_path ported to Aether (ae/repos/resolve.ae). The split-
- * accessor shape (resolve_kind first, resolve_sha second) replaces
- * the pair of out-params. Both calls walk the path again, but at
- * these path lengths (typically 2-4 segments) that's negligible. */
+/* resolve_path in ae/repos/resolve.ae. Split-accessor shape replaces
+ * the C out-param pair; both calls re-walk but path lengths are tiny. */
 extern int         aether_resolve_kind(const char *repo, const char *root_sha, const char *path);
 extern const char *aether_resolve_sha (const char *repo, const char *root_sha, const char *path);
 
@@ -174,13 +154,8 @@ svnae_repos_cat(const char *repo, int rev, const char *path)
  *
  * svnae_repos_list(repo, rev, path) → handle of (name, kind) entries.
  * We deliberately don't surface the content sha1 — that's an fs_fs-
- * internal concern clients shouldn't know about.
- *
- * Round 54 folded this onto the shared svnae_repos_handle by adding
- * an Aether-side aether_repos_list_packed helper (ae/repos/list_packed.ae)
- * that emits the same packed shape ra_parse_list produces. The
- * ra_list_count / ra_list_name / ra_list_kind accessors from
- * ae/ra/packed.ae handle the walk verbatim. */
+ * internal concern. Backed by ae/repos/list_packed.ae; ra_list_*
+ * accessors decode the entries. */
 
 extern const char *aether_repos_list_packed(const char *repo, int rev, const char *path);
 extern int         aether_ra_list_count(const char *packed);
@@ -247,14 +222,9 @@ int svnae_repos_head_rev(const char *repo) { return aether_repos_head_rev(repo);
  * same across revs hash identically and get skipped. That's a happy
  * rep-sharing side effect. */
 
-/* flat_tree + flatten_tree + flat_add + flat_free + flat_cmp all
- * ported to Aether (ae/repos/paths_changed.ae). */
-
-/* Paths-changed diff ported to Aether (ae/repos/paths_changed.ae).
- * paths_changed_packed does the whole tree flatten + merge + diff +
- * pack in one call; we reuse the ra_paths_* accessors from
- * ae/ra/packed.ae since the "<N>\x02<action>\x01<path>\x02..." shape
- * is identical to what the RA client side serves up. */
+/* The full paths-changed diff (flatten + merge + pack) lives in
+ * ae/repos/paths_changed.ae; we reuse the ra_paths_* accessors
+ * since the wire shape matches. */
 extern const char *aether_paths_changed_packed(const char *repo, int rev);
 extern int         aether_ra_paths_count(const char *packed);
 extern const char *aether_ra_paths_action(const char *packed, int i);
@@ -316,12 +286,9 @@ svnae_repos_resolve_sha(const char *repo, int rev, const char *path)
 
 /* --- blame -----------------------------------------------------------
  *
- * Per-line attribution. The whole thing — paths_changed walk, LCS diff
- * against each prior version, annotation carry-forward — is ported to
- * ae/repos/log.ae::repos_blame_packed. That returns the same
- * "N\x02<rev>\x01<author>\x01<text>\x02..." shape ra_parse_blame
- * produces on the client side, so we reuse the ra_blame_*
- * accessors from ae/ra/packed.ae for the per-entry getters. */
+ * Per-line attribution. paths_changed walk + LCS diff + annotation
+ * carry-forward live in ae/repos/log.ae::repos_blame_packed. Same
+ * record shape as ra_parse_blame; ra_blame_* accessors decode it. */
 
 extern const char *aether_repos_blame_packed(const char *repo, int target_rev, const char *path);
 extern int         aether_ra_blame_count(const char *packed);

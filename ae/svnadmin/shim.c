@@ -87,10 +87,7 @@ extern int         aether_parse_tagged_int(const char *line, const char *prefix,
 extern const char *aether_tagged_rest(const char *line, const char *prefix);
 const char *svnae_fsfs_now_iso8601(void);
 
-/* Aether-side rep-cache.db helpers (ae/svnadmin/admin_db.ae).
- * Schema setup + rep enumeration moved out of this file in round 55;
- * it now goes through contrib.sqlite v2 like every other DB-touching
- * Aether path. */
+/* rep-cache.db helpers in ae/svnadmin/admin_db.ae (contrib.sqlite). */
 extern const char *admin_db_init_schema(const char *repo);
 extern const char *admin_db_list_reps_packed(const char *repo);
 extern const char *aether_string_data(const void *s);
@@ -98,15 +95,11 @@ extern long        aether_string_length(const void *s);
 
 /* ---- tiny helpers --------------------------------------------------- */
 
-/* mkdir -p and atomic write ported to Aether (ae/subr/io.ae,
- * --emit=lib --with=fs). The zero-on-success / non-zero-on-failure
- * convention of the Aether wrappers matches the old signatures close
- * enough that callers don't care. */
 extern int aether_io_mkdir_p(const char *path);
 extern int aether_io_write_atomic(const char *path, const char *data, int length);
 
-/* slurp_small / parse_int previously lived here; both unused after
- * the dump-body read moved to aether_repos_rev_blob_sha and the load
+/* slurp_small / parse_int previously lived here; unused after the
+ * dump-body read moved to aether_repos_rev_blob_sha and the load
  * parser moved to ae/svnadmin/dump.ae::parse_tagged_int. */
 
 /* ---- create --------------------------------------------------------- */
@@ -246,12 +239,9 @@ svnae_svnadmin_create_with_algos(const char *repo, const char *algos_spec)
 
 /* ---- rep enumeration ------------------------------------------------ *
  *
- * Walk rep-cache.db to get every (sha1, uncompressed_size) we've
- * stored. The SQL drive moved to ae/svnadmin/admin_db.ae in round 55
- * (admin_db_list_reps_packed) — it returns a packed
- *   "<N>\x02<sha>\x01<size>\x02..."
- * string we slice into a local struct here for the dump loop's
- * existing index-based iteration. */
+ * admin_db_list_reps_packed (admin_db.ae) returns a "<N>\x02<sha>\x01
+ * <size>\x02..." string; we slice it into svnae_rep_list for the
+ * dump loop's index-based iteration. */
 
 struct svnae_rep_list {
     char **sha1s;
@@ -328,8 +318,6 @@ write_all(int fd, const char *data, int len)
     }
     return 0;
 }
-
-/* Dump header builders ported to Aether — externs declared at top. */
 
 int
 svnae_svnadmin_dump(const char *repo, int out_fd)

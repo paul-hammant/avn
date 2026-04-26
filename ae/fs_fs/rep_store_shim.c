@@ -53,12 +53,8 @@
 
 /* --- Aether bridge ---------------------------------------------------- */
 
-/* Blob encode/write/read ported to ae/fs_fs/rep_store.ae using
- * std.zlib + std.fs. Encoded envelope from rep_encode_blob is
- * "<use_zlib>\x01<bytes>" where use_zlib is '0' or '1' — the
- * helpers below read the flag + slice the body, then we pass the
- * body to rep_write_encoded (which atomically writes via
- * fs.write_binary). */
+/* Blob encode/write/read live in ae/fs_fs/rep_store.ae (std.zlib +
+ * std.fs). Encoded envelope is "<use_zlib>\x01<bytes>". */
 extern const char *aether_rep_encode_blob(const char *data, int length);
 extern int         aether_rep_encoded_use_zlib(const char *encoded);
 extern const char *aether_rep_write_encoded(const char *repo, const char *sha,
@@ -66,28 +62,13 @@ extern const char *aether_rep_write_encoded(const char *repo, const char *sha,
 extern const char *aether_rep_read_decoded(const char *repo, const char *sha,
                                             int uncompressed_size);
 
-/* aether_string_data / aether_string_length come from std/string/
- * aether_string.h (added upstream in Aether 0.91 to replace the
- * open-coded magic-header unwrap pattern that lived in this file
- * since round 29). They accept either AetherString* or raw char*,
- * are NULL-safe, and are length-aware (no strlen pitfall on payloads
- * with embedded NULs). */
 #include "aether_string.h"
 
-/* Binary-safe concat / slice helpers — called from the Aether-
- * generated pristine_generated.c and rep_store_generated.c. Both
- * shim files are linked into every binary that uses either
- * generated.c, so the `aether_pristine_*` names resolve uniquely
- * from rep_store_shim.c. std.string has no byte-construction
- * primitive that doesn't route through a NUL-terminated C-style
- * string; these do.
- *
- * Named aether_pristine_* for historical reasons (originated in
- * pristine_shim.c during round 29); worth a rename to
- * aether_bin_* if we ever touch every call site.
- *
- * string_new_with_length is declared in aether_string.h (already
- * included above). */
+/* Binary-safe concat + slice for pristine_generated.c and
+ * rep_store_generated.c. std.string has no byte-construction
+ * primitive that handles embedded NULs; these route through
+ * string_new_with_length (length-aware). Named aether_pristine_*
+ * for historical reasons; pristine_shim.c was the original site. */
 
 const char *
 aether_pristine_concat_binary(const char *prefix, const char *suf, int suf_len)
@@ -122,14 +103,8 @@ aether_pristine_slice_binary(const char *s, int start, int end)
 }
 
 
-/* Format-line parsing initially ported to ae/fs_fs/format_line.ae,
- * then superseded by ae/repos/rev_io.ae's repo_primary_hash /
- * repo_secondary_hashes_joined which do the full file read + parse
- * in one call. No C caller of the line-level parsers remains.
- *
- * Ported to ae/repos/rev_io.ae::repo_primary_hash. Still returns a
- * TLS-cached string so call sites that hold the pointer across a
- * subsequent call don't trample it. */
+/* Backed by ae/repos/rev_io.ae::repo_primary_hash. TLS-cached so
+ * callers can hold the pointer across subsequent calls. */
 extern const char *aether_repo_primary_hash(const char *repo);
 
 const char *
@@ -145,9 +120,8 @@ svnae_repo_primary_hash(const char *repo)
     return cache;
 }
 
-/* Parse ported to ae/repos/rev_io.ae::repo_secondary_hashes_joined
- * (returns \n-separated names); splitter stays here because Aether
- * can't hand C a fixed char[4][32] array directly. */
+/* Splitter for ae/repos/rev_io.ae's \n-separated names — kept here
+ * because Aether can't hand C a fixed char[4][32] array directly. */
 extern const char *aether_repo_secondary_hashes_joined(const char *repo);
 
 int
@@ -193,10 +167,8 @@ repo_hash_of(const char *repo, const char *data, int len, char out[65])
 
 /* --- rep-cache access ---------------------------------------------- *
  *
- * Primary rep_cache lookup/insert moved to ae/fs_fs/rep_store.ae in
- * round 36; secondary-hash table operations followed in round 59
- * (ae/fs_fs/rep_store_sec.ae). All sqlite3-direct calls are gone
- * from this file; #include <sqlite3.h> followed. */
+ * Primary lookup/insert in rep_store.ae; secondary-hash table ops in
+ * rep_store_sec.ae. Both go through contrib.sqlite. */
 
 extern int aether_rep_cache_has(const char *repo, const char *sha);
 extern int aether_rep_cache_lookup_uncompressed(const char *repo, const char *sha);
