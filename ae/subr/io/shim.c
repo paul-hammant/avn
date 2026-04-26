@@ -106,30 +106,10 @@ int close_fd(int fd) {
     return close(fd);
 }
 
-int svnae_stderr_write_int(int v) {
-    char buf[32];
-    int n = snprintf(buf, sizeof buf, "%d\n", v);
-    (void)write(2, buf, (size_t)n);
-    return 0;
-}
-
-/* Debug: write strlen(p) and first 30 bytes (hex) of p to stderr. */
-int svnae_debug_dump(const char *label, const void *p) {
-    char buf[256];
-    int n = snprintf(buf, sizeof buf, "DEBUG %s: ptr=%p strlen=%zu\n", label, p, strlen((const char*)p));
-    (void)write(2, buf, (size_t)n);
-    n = snprintf(buf, sizeof buf, "  last-30-bytes: ");
-    (void)write(2, buf, (size_t)n);
-    const char *cp = (const char*)p;
-    size_t sl = strlen(cp);
-    const char *start = (sl > 30) ? cp + sl - 30 : cp;
-    for (const char *q = start; q < cp + sl; q++) {
-        n = snprintf(buf, sizeof buf, "%02x ", (unsigned char)*q);
-        (void)write(2, buf, (size_t)n);
-    }
-    (void)write(2, "\n", 1);
-    return 0;
-}
+/* svnae_stderr_write_int and svnae_debug_dump were debug helpers
+ * for chasing concrete bugs during the early port phases. Both
+ * survived past their use and got deleted in round 52. Reach for
+ * svnae_stderr_puts + ${} interpolation when you next need a trace. */
 
 /* Write `header` (a NUL-terminated Aether string) immediately followed by
  * `body_len` bytes at `body` (which may contain embedded NULs).
