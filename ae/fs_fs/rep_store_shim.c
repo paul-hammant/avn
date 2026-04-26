@@ -37,7 +37,6 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
-#include <sqlite3.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -194,78 +193,41 @@ repo_hash_of(const char *repo, const char *data, int len, char out[65])
 
 /* --- rep-cache access ---------------------------------------------- *
  *
- * Primary rep_cache lookup/insert moved to ae/fs_fs/rep_store.ae
- * (rep_cache_has / rep_cache_lookup_uncompressed / rep_cache_insert).
- * The secondary-hash table remains here for now: svnae_rep_lookup_secondary
- * has a caller in svnserver/shim.c and the write path is driven from
- * this file's already-open sqlite handle when secondary hashes are
- * configured. */
+ * Primary rep_cache lookup/insert moved to ae/fs_fs/rep_store.ae in
+ * round 36; secondary-hash table operations followed in round 59
+ * (ae/fs_fs/rep_store_sec.ae). All sqlite3-direct calls are gone
+ * from this file; #include <sqlite3.h> followed. */
 
 extern int aether_rep_cache_has(const char *repo, const char *sha);
 extern int aether_rep_cache_lookup_uncompressed(const char *repo, const char *sha);
 extern int aether_rep_cache_insert(const char *repo, const char *sha,
                                     const char *rel_path,
                                     int uncompressed, int storage);
+extern const char *aether_rep_cache_sec_ensure(const char *repo);
+extern const char *aether_rep_cache_sec_insert(const char *repo,
+                                                const char *primary,
+                                                const char *algo,
+                                                const char *secondary);
+extern const char *aether_rep_cache_sec_lookup(const char *repo,
+                                                const char *primary,
+                                                const char *algo);
 
-/* Ensure the secondary-hash table exists. Created lazily on the first
- * secondary-hash write so repos that never grew secondaries don't
- * carry the schema. Not an error if it already exists. */
-static void
-rep_cache_sec_ensure(sqlite3 *db)
-{
-    sqlite3_exec(db,
-        "CREATE TABLE IF NOT EXISTS rep_cache_sec ("
-        "  primary_hash TEXT NOT NULL,"
-        "  algo         TEXT NOT NULL,"
-        "  secondary_hash TEXT NOT NULL,"
-        "  PRIMARY KEY (primary_hash, algo))",
-        NULL, NULL, NULL);
-}
-
-static int
-rep_cache_sec_insert(sqlite3 *db, const char *primary_hex,
-                     const char *algo, const char *secondary_hex)
-{
-    sqlite3_stmt *st = NULL;
-    if (sqlite3_prepare_v2(db,
-            "INSERT OR IGNORE INTO rep_cache_sec (primary_hash, algo, secondary_hash) VALUES (?,?,?)",
-            -1, &st, NULL) != SQLITE_OK) return -1;
-    sqlite3_bind_text(st, 1, primary_hex,   -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(st, 2, algo,          -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(st, 3, secondary_hex, -1, SQLITE_TRANSIENT);
-    int rc = sqlite3_step(st);
-    sqlite3_finalize(st);
-    return rc == SQLITE_DONE ? 0 : -1;
-}
-
-/* Lookup: returns malloc'd hex or NULL. Caller frees. */
+/* Lookup: returns malloc'd hex or NULL. Caller frees. The Aether
+ * helper returns "" on miss; we adapt at the boundary so existing
+ * `if (shex)` callers keep working. */
 char *
 svnae_rep_lookup_secondary(const char *repo, const char *primary_hex,
                           const char *algo)
 {
-    char cache_path[PATH_MAX];
-    snprintf(cache_path, sizeof cache_path, "%s/rep-cache.db", repo);
-    sqlite3 *db;
-    if (sqlite3_open_v2(cache_path, &db, SQLITE_OPEN_READONLY, NULL) != SQLITE_OK) {
-        if (db) sqlite3_close(db);
-        return NULL;
-    }
-    sqlite3_stmt *st = NULL;
-    if (sqlite3_prepare_v2(db,
-            "SELECT secondary_hash FROM rep_cache_sec WHERE primary_hash = ? AND algo = ?",
-            -1, &st, NULL) != SQLITE_OK) {
-        sqlite3_close(db);
-        return NULL;
-    }
-    sqlite3_bind_text(st, 1, primary_hex, -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(st, 2, algo,        -1, SQLITE_TRANSIENT);
-    char *out = NULL;
-    if (sqlite3_step(st) == SQLITE_ROW) {
-        const char *s = (const char *)sqlite3_column_text(st, 0);
-        if (s) out = strdup(s);
-    }
-    sqlite3_finalize(st);
-    sqlite3_close(db);
+    const char *v = aether_rep_cache_sec_lookup(repo, primary_hex, algo);
+    if (!v) return NULL;
+    int n = (int)aether_string_length(v);
+    if (n == 0) return NULL;
+    const char *data = aether_string_data(v);
+    char *out = malloc((size_t)n + 1);
+    if (!out) return NULL;
+    memcpy(out, data, (size_t)n);
+    out[n] = '\0';
     return out;
 }
 
@@ -309,22 +271,19 @@ svnae_rep_write_blob(const char *repo, const char *data, int len)
     }
 
     /* Phase 7.5: compute and persist secondary hashes (if any). The
-     * table is created on demand so legacy repos pay no cost. */
+     * table is created on demand so legacy repos pay no cost. The
+     * sqlite3 driving moved to Aether (rep_cache_sec_ensure + _insert
+     * via contrib.sqlite); we still compute the hash on the C side
+     * because the data buffer lives here. */
     char sec[4][32];
     int sec_n = svnae_repo_secondary_hashes(repo, sec);
     if (sec_n > 0) {
-        char cache_path[PATH_MAX];
-        snprintf(cache_path, sizeof cache_path, "%s/rep-cache.db", repo);
-        sqlite3 *db = NULL;
-        if (sqlite3_open_v2(cache_path, &db, SQLITE_OPEN_READWRITE, NULL) == SQLITE_OK) {
-            rep_cache_sec_ensure(db);
-            for (int i = 0; i < sec_n; i++) {
-                char shex[65];
-                if (hex_of_algo(sec[i], data, len, shex)) {
-                    rep_cache_sec_insert(db, sha1_buf, sec[i], shex);
-                }
+        aether_rep_cache_sec_ensure(repo);
+        for (int i = 0; i < sec_n; i++) {
+            char shex[65];
+            if (hex_of_algo(sec[i], data, len, shex)) {
+                aether_rep_cache_sec_insert(repo, sha1_buf, sec[i], shex);
             }
-            sqlite3_close(db);
         }
     }
     return sha1_buf;

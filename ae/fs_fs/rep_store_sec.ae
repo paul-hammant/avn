@@ -1,0 +1,86 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// permissions and limitations under the License.
+
+// Secondary-hash table operations on rep-cache.db.
+//
+// rep_cache_sec is a side table: every blob in rep_cache may have
+// zero or more secondary hashes (e.g. sha256 alongside the primary
+// sha1) for verification. Created on demand the first time a secondary
+// hash is written so legacy repos pay no schema cost.
+//
+// Round 59 moved these out of ae/fs_fs/rep_store_shim.c; the C side
+// no longer carries any direct sqlite3 calls. Same shape as round 48
+// (rep_cache primary table) and round 55 (svnadmin's path_rev table).
+
+import std.string
+import contrib.sqlite
+
+const SQLITE_ROW  = 100
+const SQLITE_DONE = 101
+
+// Ensure the rep_cache_sec table exists. Idempotent (CREATE TABLE
+// IF NOT EXISTS). Returns "" on success, error string on failure.
+export rep_cache_sec_ensure(repo: string) -> string {
+    db, oerr = sqlite.open("${repo}/rep-cache.db")
+    if string.length(oerr) > 0 { return "open failed" }
+    err = sqlite.exec(db,
+        "CREATE TABLE IF NOT EXISTS rep_cache_sec (  primary_hash TEXT NOT NULL,  algo         TEXT NOT NULL,  secondary_hash TEXT NOT NULL,  PRIMARY KEY (primary_hash, algo))")
+    sqlite.close(db)
+    return err
+}
+
+// Insert a (primary, algo, secondary) triple. INSERT OR IGNORE so
+// re-runs are harmless. Returns "" on success, error string on
+// failure.
+export rep_cache_sec_insert(repo: string, primary: string, algo: string, secondary: string) -> string {
+    db, oerr = sqlite.open("${repo}/rep-cache.db")
+    if string.length(oerr) > 0 { return "open failed" }
+    stmt, perr = sqlite.prepare(db,
+        "INSERT OR IGNORE INTO rep_cache_sec (primary_hash, algo, secondary_hash) VALUES (?, ?, ?)")
+    if string.length(perr) > 0 { sqlite.close(db); return perr }
+    sqlite.bind_text(stmt, 1, primary)
+    sqlite.bind_text(stmt, 2, algo)
+    sqlite.bind_text(stmt, 3, secondary)
+    rc, _ = sqlite.step(stmt, db)
+    sqlite.finalize(stmt)
+    sqlite.close(db)
+    if rc == SQLITE_DONE { return "" }
+    return "insert failed"
+}
+
+// Look up the secondary hash for (primary, algo). Returns the hex
+// digest on hit, "" on miss / DB-open failure / no-such-row.
+export rep_cache_sec_lookup(repo: string, primary: string, algo: string) -> string {
+    db, oerr = sqlite.open("${repo}/rep-cache.db")
+    if string.length(oerr) > 0 { return "" }
+    stmt, perr = sqlite.prepare(db,
+        "SELECT secondary_hash FROM rep_cache_sec WHERE primary_hash = ? AND algo = ?")
+    if string.length(perr) > 0 { sqlite.close(db); return "" }
+    sqlite.bind_text(stmt, 1, primary)
+    sqlite.bind_text(stmt, 2, algo)
+    rc, _ = sqlite.step(stmt, db)
+    out = ""
+    if rc == SQLITE_ROW {
+        raw = sqlite.column_text(stmt, 0)
+        out = string.copy(raw)
+    }
+    sqlite.finalize(stmt)
+    sqlite.close(db)
+    return out
+}
+
+main() {
+    println("ae/fs_fs/rep_store_sec.ae is a library; not meant to run standalone")
+}

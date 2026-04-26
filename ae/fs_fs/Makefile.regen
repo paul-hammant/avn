@@ -8,7 +8,7 @@
 
 AETHERC ?= $(abspath $(dir $(lastword $(MAKEFILE_LIST))))/../../.aether_binaries/build/aetherc
 
-GENERATED := spec_generated.c dirblob_generated.c format_line_generated.c pathutil_generated.c reppath_generated.c filter_generated.c rebuild_generated.c branch_spec_generated.c count_reps_generated.c rep_store_generated.c
+GENERATED := spec_generated.c dirblob_generated.c format_line_generated.c pathutil_generated.c reppath_generated.c filter_generated.c rebuild_generated.c branch_spec_generated.c count_reps_generated.c rep_store_generated.c rep_store_sec_generated.c
 
 all: $(GENERATED)
 
@@ -44,5 +44,10 @@ count_reps_generated.c: count_reps.ae
 # (the contrib symlink is sibling to ae/, not to ae/fs_fs/).
 rep_store_generated.c: rep_store.ae
 	cd ../.. && $(AETHERC) --emit=lib --with=fs ae/fs_fs/rep_store.ae ae/fs_fs/rep_store_generated.c
+
+# rep_store_sec.ae also imports contrib.sqlite — same cd-to-root
+# requirement. No --with=fs because it doesn't touch std.fs.
+rep_store_sec_generated.c: rep_store_sec.ae
+	cd ../.. && $(AETHERC) --emit=lib ae/fs_fs/rep_store_sec.ae ae/fs_fs/rep_store_sec_generated.c
 
 .PHONY: all
