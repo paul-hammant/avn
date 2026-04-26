@@ -602,12 +602,11 @@ auto_follow_copy_acl(const char *repo, int base_rev,
  * no longer needs to split it out. The dispatcher binds the Aether
  * handler directly. */
 
-/* svnae_svnserver_handler_{info,log,rev} used to expose C-side
- * function pointers to an earlier Aether orchestration pass. Both
- * the trampolines and their exporters have been dead since the
- * full dispatcher moved to Aether; dropped. svnae_svnserver_handler_dispatch
- * is the only survivor — it hands std.http's route registration a
- * pointer at the Aether dispatch entry. */
-extern void aether_svnserver_dispatch(void *req, void *res, void *user_data);
-
-void *svnae_svnserver_handler_dispatch(void) { return (void *)aether_svnserver_dispatch; }
+/* svnae_svnserver_handler_dispatch C trampoline removed in round 58.
+ * The Aether dispatcher (ae/svnserver/dispatch.ae::svnserver_dispatch)
+ * carries an @c_callback("svnserver_dispatch") annotation that
+ * exports it under a stable external C symbol; main.ae declares an
+ * `extern svnserver_dispatch(...)` and passes the function name
+ * directly to std.http's route-registration helpers. The two earlier
+ * survivors of an older orchestration pass (svnae_svnserver_handler_
+ * info/log/rev) were dead and removed in earlier rounds. */

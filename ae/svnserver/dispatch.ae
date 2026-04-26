@@ -45,7 +45,13 @@ extern aether_handler_commit(req: ptr, res: ptr)
 extern aether_handler_copy(req: ptr, res: ptr)
 extern aether_handler_branch_create(req: ptr, res: ptr)
 
-export svnserver_dispatch(req: ptr, res: ptr, _user_data: ptr) {
+// @c_callback exports this Aether function under a stable C symbol
+// so std.http's route registration can take its address directly —
+// no C trampoline required. The bound name matches the Aether-side
+// name (svnserver_dispatch); the linker sees a non-static
+// external-visibility symbol.
+@c_callback("svnserver_dispatch")
+svnserver_dispatch(req: ptr, res: ptr, _user_data: ptr) {
     svnserver_dispatch_impl(req, res)
 }
 

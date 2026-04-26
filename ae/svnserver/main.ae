@@ -30,8 +30,14 @@ extern aether_args_get(index: int) -> string
 // --- repos shim externs our handler code calls back into ------------------
 
 extern svnae_svnserver_register_repo(name: string, path: string)
-extern svnae_svnserver_handler_dispatch() -> ptr
 extern svnae_svnserver_set_superuser_token(token: string)
+
+// The Aether dispatcher is exported under a stable C symbol via
+// @c_callback in dispatch.ae; we declare it here as a plain extern
+// so std.http's route registration can take its address. Round 58
+// retired the svnae_svnserver_handler_dispatch C trampoline that
+// previously wrapped this.
+extern svnserver_dispatch(req: ptr, res: ptr, user_data: ptr)
 
 // Aether stdlib externs the nice wrappers don't cover.
 extern http_server_create(port: int) -> ptr
@@ -79,10 +85,10 @@ main() {
     // distinguish /repos/*/info from /repos/*/log at the route layer.
     // Single catch-all route for GET, another for POST → C-side
     // dispatcher looks at method + tail.
-    http_server_get   (server, "/repos/*", svnae_svnserver_handler_dispatch(), 0)
-    http_server_post  (server, "/repos/*", svnae_svnserver_handler_dispatch(), 0)
-    http_server_put   (server, "/repos/*", svnae_svnserver_handler_dispatch(), 0)
-    http_server_delete(server, "/repos/*", svnae_svnserver_handler_dispatch(), 0)
+    http_server_get   (server, "/repos/*", svnserver_dispatch, 0)
+    http_server_post  (server, "/repos/*", svnserver_dispatch, 0)
+    http_server_put   (server, "/repos/*", svnserver_dispatch, 0)
+    http_server_delete(server, "/repos/*", svnserver_dispatch, 0)
 
     // http_server_start_raw calls bind_raw itself in fallback mode, so
     // skipping the explicit server_bind here. The stdlib's `server_start`
