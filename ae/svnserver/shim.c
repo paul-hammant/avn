@@ -99,8 +99,6 @@ void http_response_set_header(HttpServerResponse *res, const char *k, const char
 void http_response_set_body(HttpServerResponse *res, const char *body);
 void http_response_json(HttpServerResponse *res, const char *json);
 
-static char *load_rev_blob_field(const char *repo, int rev, const char *key);
-
 /* --- authorization (Phase 7.1) --------------------------------------
  *
  * Rules live in the rev blob as an `acl: <paths-acl-sha>` field. The
@@ -127,35 +125,17 @@ svnae_svnserver_set_superuser_token(const char *token)
 extern const char *http_get_header(HttpRequest *req, const char *name);
 #define req_header http_get_header
 
-/* Parse a per-path ACL blob body and decide whether `user` is allowed
- * in mode `want_write` (0 = read, 1 = write).
- *
- * Rule syntax:
- *   +alice          allow read+write
- *   +alice:r        allow read only
- *   +alice:w        allow write only
- *   +alice:rw       allow read+write (explicit)
- *   -alice          deny both (modes on deny are ignored — deny is absolute)
- *   +* / -*         wildcard, same grammar
- *
- * Returns 1 allow, 0 deny, -1 no-match. Precedence: explicit user
- * rule beats wildcard; deny beats allow at the same precedence level.
- */
-/* ACL rule evaluation + paths-index ancestor walk both ported; the
- * sole remaining user was acl_allows_mode above, which now calls
- * ae/svnserver/acl_mode.ae directly. */
-
-/* Ancestry-walking ACL mode check ported to
- * ae/svnserver/acl_mode.ae::acl_allows_mode. */
+/* ACL rule evaluation + ancestry-walking mode check live in
+ * ae/svnserver/acl_mode.ae and acl_resolve.ae. Rule syntax:
+ *   +alice / +alice:r / +alice:w / +alice:rw / +*
+ *   -alice (deny is absolute regardless of mode) / -*
+ * 1 allow, 0 deny, -1 no-match. Explicit user beats wildcard;
+ * deny beats allow at the same precedence. */
 extern int aether_acl_allows_mode(const char *repo, int rev,
                                   const char *user, const char *target_path,
                                   int want_write);
 
 extern int svnae_openssl_hash_hex_into(const char *algo, const char *data, int len, char *out);
-
-/* svnserver_acl_allows / _write / _mode trampolines retired in
- * Round 72. Aether callers (~14 .ae files) now call aether_acl_allows_
- * mode directly, passing 0 (read) / 1 (write) for want_write. */
 
 const char *svnserver_hash_hex(const char *repo, const char *data, int length) {
     static __thread char buf[65];
@@ -165,58 +145,26 @@ const char *svnserver_hash_hex(const char *repo, const char *data, int length) {
     return buf;
 }
 
-/* load_rev_blob_field is a file-scope static defined further down.
- * Forward-declare + re-export via a stable wrapper for the Aether
- * acl_resolve port. */
-static char *load_rev_blob_field(const char *repo, int rev, const char *key);
-
-/* svnserver_load_rev_{acl_root,props_sha,root_sha}: three near-
- * identical TLS-buffer wrappers around load_rev_blob_field deleted
- * in round 57. Aether callers (acl_resolve.ae, handler_rev_info.ae)
- * now reach aether_load_rev_blob_field (ae/svnserver/rev_load.ae)
- * directly; the C-side TLS-buffer round-trip was unnecessary
- * boilerplate. */
-
-/* Figure out the effective auth context for this request. Returns
- * 1 if super-user (bypass ACL), 0 otherwise. Writes the effective
- * username (possibly "") into `*out_user` as a static-thread-local. */
-static int
-auth_context(HttpRequest *req, const char **out_user)
-{
-    static __thread char user_cache[128];
-    const char *hdr_user  = req_header(req, "X-Svnae-User");
-    const char *hdr_super = req_header(req, "X-Svnae-Superuser");
-    if (hdr_user) {
-        size_t n = strlen(hdr_user);
-        if (n >= sizeof user_cache) n = sizeof user_cache - 1;
-        memcpy(user_cache, hdr_user, n);
-        user_cache[n] = '\0';
-    } else {
-        user_cache[0] = '\0';   /* anonymous */
-    }
-    *out_user = user_cache;
-    if (hdr_super && g_superuser_token && strcmp(hdr_super, g_superuser_token) == 0) {
-        return 1;
-    }
-    return 0;
-}
-
-/* Aether-callable split of auth_context. The Aether port can't
- * handle out-params across FFI gracefully, so we expose two probes. */
+/* Effective username for this request (X-Svnae-User header verbatim;
+ * empty string for anonymous). Cached in a TLS buffer so the returned
+ * pointer is stable until the next call on this thread. */
 const char *svnserver_request_user(HttpRequest *req) {
-    const char *user = NULL;
-    (void)auth_context(req, &user);
-    return user ? user : "";
+    static __thread char user_cache[128];
+    const char *hdr = req_header(req, "X-Svnae-User");
+    if (!hdr) { user_cache[0] = '\0'; return user_cache; }
+    size_t n = strlen(hdr);
+    if (n >= sizeof user_cache) n = sizeof user_cache - 1;
+    memcpy(user_cache, hdr, n);
+    user_cache[n] = '\0';
+    return user_cache;
 }
 
+/* 1 if this request carries a valid X-Svnae-Superuser token, 0 otherwise. */
 int svnserver_request_is_super(HttpRequest *req) {
-    const char *user = NULL;
-    return auth_context(req, &user);
+    const char *hdr = req_header(req, "X-Svnae-Superuser");
+    if (!hdr || !g_superuser_token) return 0;
+    return strcmp(hdr, g_superuser_token) == 0 ? 1 : 0;
 }
-
-/* sb_* JSON-string-builder helpers previously lived here; all call
- * sites have moved to Aether-side builders in ae/svnserver/json.ae
- * and friends. Dead code removed. */
 
 /* --- repo path registry ------------------------------------------------ *
  *
@@ -236,18 +184,10 @@ svnae_svnserver_register_repo(const char *name, const char *path)
     g_repo_path = strdup(path);
 }
 
-static const char *
-find_repo_path(const char *name)
-{
-    if (!g_repo_name || !g_repo_path) return NULL;
-    return strcmp(name, g_repo_name) == 0 ? g_repo_path : NULL;
-}
-
-/* Aether-callable wrapper. Returns "" for missing (Aether can't
- * return NULL from a string extern). */
+/* Returns "" for missing (Aether can't return NULL from a string extern). */
 const char *svnserver_find_repo_path(const char *name) {
-    const char *p = find_repo_path(name);
-    return p ? p : "";
+    if (!g_repo_name || !g_repo_path) return "";
+    return strcmp(name, g_repo_name) == 0 ? g_repo_path : "";
 }
 
 /* Response-emitting helpers for Aether. Each binds against std.http
@@ -313,75 +253,24 @@ const char *svnserver_build_secondary_pairs(const char *repo, const char *node_s
     return pairs;
 }
 
-/* URL parsing, the dispatcher, and individual route handlers all
- * moved to Aether (dispatch.ae, handle_repo_rev.ae, handler_*.ae);
- * the C-side trampolines have been removed.
- *
- * What remains in this file: small wrappers that expose static C
- * helpers to Aether (request header lookup, auth context), the
- * repo-name map, respond_* utilities bound to std.http, and the
- * three cJSON-heavy body-action wrappers for branch_create / copy /
- * commit. Everything else in svnserver/ is Aether-side. */
+/* URL parsing, dispatcher, route handlers, JSON body parsers,
+ * load_rev_blob_field, and the props-handler building blocks all
+ * moved to Aether — see ae/svnserver/{dispatch, handle_repo_rev,
+ * handler_*, rev_load, acl_resolve, based_on_check, json}.ae. The
+ * C-side trampolines that used to wrap them are gone. What remains
+ * in this file: static C helpers that the Aether handlers reach via
+ * extern (request header lookup, auth context, repo registry,
+ * std.http response shaping, secondary-pairs builder, txn body-bytes
+ * adapter). */
 
-/* Ported to ae/svnserver/rev_load.ae. The Aether version returns
- * "" on miss instead of NULL; adapt at the boundary so existing
- * C callers keep their `if (!acl_root) ...` idiom. */
-extern const char *aether_load_rev_blob_field(const char *repo, int rev,
-                                              const char *key);
-static char *
-load_rev_blob_field(const char *repo, int rev, const char *key)
-{
-    const char *v = aether_load_rev_blob_field(repo, rev, key);
-    if (!v || !*v) return NULL;
-    return strdup(v);
-}
-
-/* load_rev_props_sha1 / paths_props_lookup / sb_put_props_as_json
- * were the building blocks of the /rev/N/props handler; all moved
- * to Aether (ae/svnserver/acl_resolve.ae::props_resolve) and
- * ae/svnserver/json.ae. */
-
-/* --- registration entry points --------------------------------------- *
- *
- * The Aether orchestration calls these to hand back handler function
- * pointers that it then passes to http_server_add_route / _get.
- *
- * Each returns a void* so Aether's ptr type system can carry it.
- */
-
-/* Base64 decode consolidated in ae/ffi/openssl/shim.c. */
 extern int svnae_openssl_b64_decode(const char *src, int src_len,
                                     unsigned char **out, int *out_len);
 #define b64_decode svnae_openssl_b64_decode
 
-/* --- REST node edit handlers (Phase 7.4) -----------------------------
- *
- *   GET    /repos/{r}/path/<path>  → raw bytes at HEAD (+ Merkle hdrs)
- *   PUT    /repos/{r}/path/<path>  → update existing file or create new
- *   DELETE /repos/{r}/path/<path>  → remove file/dir from HEAD
- *
- * Required / optional headers on PUT and DELETE:
- *   Svn-Based-On: <hex>  — prior content sha of this path. Omitted =
- *                          "path must not currently exist" (PUT only).
- *                          On mismatch: 409 + X-Svnae-Current-Hash.
- *   Svn-Author:   <name> — commit author; defaults to X-Svnae-User.
- *   Svn-Log:      <msg>  — commit log message; default is synthesized.
- *   X-Svnae-User: <name> — placeholder auth, as with other endpoints.
- *   X-Svnae-Superuser: <token> — bypass ACL + optimistic-concurrency.
- */
-
-/* Optimistic-concurrency check ported to
- * ae/svnserver/based_on_check.ae. */
-extern int aether_based_on_check(void *req, void *res,
-                                 const char *repo, int head_rev,
-                                 const char *path,
-                                 int allow_missing_as_create);
-
 /* Aether-callable wrappers around the static request-inspection and
  * mutation-policy helpers above. Each returns "" for a NULL string so
  * Aether's string externs can distinguish "header absent" from
- * "header present + empty" by string.length == 0. based_on_check
- * emits its own 4xx response on failure; we just propagate the int. */
+ * "header present + empty" by string.length == 0. */
 const char *svnserver_request_header(HttpRequest *req, const char *name) {
     const char *v = req_header(req, name);
     return (v && *v) ? v : "";
@@ -460,133 +349,14 @@ int svnserver_txn_add_b64(void *txn, const char *path, const char *b64) {
     return 0;
 }
 
-/* svnserver_branch_create_globs used to split the newline-joined glob
- * string Aether built back into a char** array for svnae_branch_create,
- * which then rejoined it back to pass to aether_filter_dir. Absurd
- * round trip; svnae_branch_create now takes globs_joined directly and
- * the Aether branch-create handler calls it without any C wrapper. */
-
-/* svnserver_branch_create_from_body C trampoline removed — the
- * Aether handler calls aether_branch_create_from_body directly. */
-
-/* --- commit handler --------------------------------------------------- *
- *
- *   POST /repos/{r}/commit
- *   Body: {
- *     "base_rev": N,
- *     "author":   "...",
- *     "log":      "...",
- *     "edits": [
- *       {"op": "add-file", "path": "...", "content": "<base64>"},
- *       {"op": "mkdir",    "path": "..."},
- *       {"op": "delete",   "path": "..."}
- *     ]
- *   }
- *   → 200 {"rev": N+1}
- *   → 400 on malformed body
- *   → 500 on txn rebuild failure
- */
-
-/* Parse the commit JSON body, run ACL/spec pre-scan, build a txn,
- * build paths-props and paths-acl blobs if included, and
- * commit-finalise-with-acl. Return value encodes the outcome:
- *    >= 0 : new_rev
- *    -1   : empty body
- *    -2   : malformed JSON
- *    -3   : missing/wrong-typed top-level field
- *    -4   : forbidden (ACL write denied OR acl-change without write)
- *    -5   : path outside branch spec
- *    -6   : oom building txn
- *    -7   : edit missing op/path
- *    -8   : add-file missing content
- *    -9   : base64 decode failed
- *    -10  : unknown op
- *    -11  : commit finalise failed
- * The Aether handler maps each to the right HTTP status. */
-/* svnserver_commit_from_body C trampoline removed — the Aether
- * handler calls aether_commit_from_body directly. */
-
-/* POST /commit — ported to ae/svnserver/handler_commit.ae; dispatcher
- * binds the Aether handler directly. */
-
-/* Subtree RW check ported to ae/svnserver/acl_subtree.ae; called
- * directly from ae/svnserver/copy_parse.ae as
- * aether_acl_user_has_rw_subtree. */
-
-/* Collect (path, acl-sha) pairs from the base rev's paths-acl blob
- * where the path starts with `from_path` (or equals it). For each
- * match, emit a parallel (rebased_path, acl-sha) pair under
- * `to_path`. Returns a paths-acl blob sha for the new rev, or NULL
- * if no entries needed rewriting.
- *
- * This is how `svn cp` auto-follows ACLs: the branch inherits the
- * source's restrictions verbatim, so visibility for anyone other
- * than the caller doesn't change.
- *
- * Caller frees via free() on the returned sha. */
-
-/* End-to-end auto-follow ported to ae/svnserver/copy_acl.ae::
- * auto_follow_copy_acl. Returns "" on miss; adapt at the
- * boundary so the copy handler's existing NULL check keeps
- * working. */
-extern const char *aether_auto_follow_copy_acl(const char *repo, int base_rev,
-                                               const char *from_path,
-                                               const char *to_path);
-static char *
-auto_follow_copy_acl(const char *repo, int base_rev,
-                    const char *from_path, const char *to_path)
-{
-    const char *v = aether_auto_follow_copy_acl(repo, base_rev, from_path, to_path);
-    if (!v || !*v) return NULL;
-    return strdup(v);
-}
-
-/* --- copy handler ------------------------------------------------------ *
- *
- *   POST /repos/{r}/copy
- *   Body: { "base_rev": N, "from_path": "...", "to_path": "...",
- *           "author": "...", "log": "..." }
- *
- * Atomic server-side copy — the new revision's tree contains to_path
- * pointing at the exact sha1 of from_path@base_rev. Full rep-sharing.
- * Caller gets back {"rev": N+1}.
- */
-/* Parse the copy JSON body, ACL/spec-check, resolve from, auto-follow
- * ACLs, txn-copy, commit. Return value encodes the outcome:
- *    >= 0 : new_rev
- *    -1   : empty body
- *    -2   : malformed JSON
- *    -3   : missing/wrong-typed field
- *    -4   : forbidden (non-super lacks RW on from subtree or to)
- *    -5   : cross-branch copy refused
- *    -6   : from_path missing at base_rev
- *    -7   : commit failed
- * The Aether handler maps each to an HTTP response code. */
-/* svnserver_copy_from_body C trampoline removed — the Aether
- * handler calls aether_copy_from_body directly. */
-
-/* POST /copy — ported to ae/svnserver/handler_copy.ae; dispatcher
- * binds the Aether handler directly. */
-
-/* Phase 8.2a: POST /repos/{r}/branches/<NAME>/create
- *
- *   Body: { "base": "main", "include": ["src/**", "README.md"] }
- *
- * Creates a new branch rooted on the given base branch, filtered
- * through the include globs. Super-user only (branch creation is
- * privileged by default; future phases may add branch-level ACLs).
- */
-
-/* POST /branches/<NAME>/create — ported to ae/svnserver/handler_branch_create.ae.
- * Aether parses the branch name from the URL itself, so the dispatcher
- * no longer needs to split it out. The dispatcher binds the Aether
- * handler directly. */
-
-/* svnae_svnserver_handler_dispatch C trampoline removed in round 58.
- * The Aether dispatcher (ae/svnserver/dispatch.ae::svnserver_dispatch)
- * carries an @c_callback("svnserver_dispatch") annotation that
- * exports it under a stable external C symbol; main.ae declares an
- * `extern svnserver_dispatch(...)` and passes the function name
- * directly to std.http's route-registration helpers. The two earlier
- * survivors of an older orchestration pass (svnae_svnserver_handler_
- * info/log/rev) were dead and removed in earlier rounds. */
+/* svnserver_branch_create_globs / _from_body, svnserver_commit_from_
+ * body, svnserver_copy_from_body, svnae_svnserver_handler_dispatch
+ * trampolines all removed in earlier rounds — Aether handlers now
+ * dispatch directly via @c_callback annotations or are bound to
+ * std.http routes by main.ae. The dispatcher itself
+ * (ae/svnserver/dispatch.ae::svnserver_dispatch) is one such
+ * @c_callback export. Auto-follow-copy-ACL similarly: copy_parse.ae
+ * declares `extern auto_follow_copy_acl` and reaches the Aether
+ * export in copy_acl.ae directly — the static C wrapper that used
+ * to strdup-on-hit was redundant once the empty-string-on-miss
+ * convention was adopted on the Aether side. */
