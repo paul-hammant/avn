@@ -88,11 +88,6 @@ extern svnae_fsfs_tree_builder_kind(tb: ptr, i: int) -> int
 extern svnae_fsfs_tree_builder_content(tb: ptr, i: int) -> ptr
 extern svnae_fsfs_tree_builder_free(tb: ptr)
 
-extern svnae_fsfs_sb_new() -> ptr
-extern svnae_fsfs_sb_push(sb: ptr, s: string) -> int
-extern svnae_fsfs_sb_data(sb: ptr) -> string
-extern svnae_fsfs_sb_length(sb: ptr) -> int
-extern svnae_fsfs_sb_free(sb: ptr)
 
 import contrib.sqlite
 
@@ -474,9 +469,12 @@ fsfs_commit_flat(repo: string, tb: ptr, author: string, logmsg: string) {
     // Actually simpler: an array-of-names sorted via repeated scans.
     // Assemble all entry records into a sorted sb.
 
-    // Write each file blob; remember sha1s in a parallel sb.
-    sha1s_sb = svnae_fsfs_sb_new()
-    names_sb = svnae_fsfs_sb_new()
+    // Write each file blob; remember sha1s in a parallel "<line>\n…"
+    // accumulator. Round 110 retired the C-side svnae_fsfs_sb_*
+    // builder — for the small repos test_revisions.ae uses, the
+    // O(n²) string.concat cost is invisible.
+    sha1s_txt = ""
+    names_txt = ""
     i = 0
     while i < count {
         path = svnae_fsfs_tree_builder_path(tb, i)
@@ -495,38 +493,30 @@ fsfs_commit_flat(repo: string, tb: ptr, author: string, logmsg: string) {
         sha1 = write_blob_text(repo, bdata)
         svnae_fsfs_buf_free(buf)
 
-        svnae_fsfs_sb_push(names_sb, path)
-        svnae_fsfs_sb_push(names_sb, "\n")
-        svnae_fsfs_sb_push(sha1s_sb, sha1)
-        svnae_fsfs_sb_push(sha1s_sb, "\n")
+        names_txt = string.concat(names_txt, path)
+        names_txt = string.concat(names_txt, "\n")
+        sha1s_txt = string.concat(sha1s_txt, sha1)
+        sha1s_txt = string.concat(sha1s_txt, "\n")
         i = i + 1
     }
 
-    // Build a sorted directory-blob body. Approach: scan names_sb for the
-    // lexicographically smallest name not yet emitted, emit its "f <sha1> <name>"
-    // line, mark as emitted, repeat.
-    //
-    // "Mark as emitted" done by wrapping each match in a separate used-flag
-    // — since we can't mutate strings, we just track the names we've already
-    // picked in a growing used_sb and skip them.
-    body_sb = svnae_fsfs_sb_new()
-    used_sb = svnae_fsfs_sb_new()
-    names_txt = svnae_fsfs_sb_data(names_sb)
-    sha1s_txt = svnae_fsfs_sb_data(sha1s_sb)
+    // Build a sorted directory-blob body. Approach: scan names_txt for
+    // the lexicographically smallest name not yet emitted, emit its
+    // "f <sha1> <name>" line, mark as emitted (via a parallel
+    // "|<idx>|" tracker), repeat.
+    body = ""
+    used_txt = ""
     remaining = count_nonempty_lines(names_txt)
     while remaining > 0 {
         // Find smallest-unused name.
         best_idx = -1
         best_name = ""
         idx = 0
-        p = names_txt
-        q = sha1s_txt
         pos = 0
-        qpos = 0
         while idx < count {
             name = line_at(names_txt, pos)
             line_len = string.length(name) + 1
-            is_used = string.contains(svnae_fsfs_sb_data(used_sb), "|${idx}|")
+            is_used = string.contains(used_txt, "|${idx}|")
             if is_used == 0 {
                 if best_idx < 0 {
                     best_idx = idx
@@ -541,22 +531,16 @@ fsfs_commit_flat(repo: string, tb: ptr, author: string, logmsg: string) {
         }
         // Emit this entry.
         sha1 = line_at(sha1s_txt, position_of_line(sha1s_txt, best_idx))
-        svnae_fsfs_sb_push(body_sb, "f ")
-        svnae_fsfs_sb_push(body_sb, sha1)
-        svnae_fsfs_sb_push(body_sb, " ")
-        svnae_fsfs_sb_push(body_sb, best_name)
-        svnae_fsfs_sb_push(body_sb, "\n")
-        svnae_fsfs_sb_push(used_sb, "|${best_idx}|")
+        body = string.concat(body, "f ")
+        body = string.concat(body, sha1)
+        body = string.concat(body, " ")
+        body = string.concat(body, best_name)
+        body = string.concat(body, "\n")
+        used_txt = string.concat(used_txt, "|${best_idx}|")
         remaining = remaining - 1
     }
 
-    body = svnae_fsfs_sb_data(body_sb)
     body_copy = string.concat("", body)
-
-    svnae_fsfs_sb_free(names_sb)
-    svnae_fsfs_sb_free(sha1s_sb)
-    svnae_fsfs_sb_free(body_sb)
-    svnae_fsfs_sb_free(used_sb)
 
     // Write the root dir blob.
     root_sha1 = write_blob_text(repo, body_copy)

@@ -199,52 +199,9 @@ svnae_fsfs_tree_builder_free(struct svnae_tree_builder *tb)
     free(tb);
 }
 
-/* ---- sbuilder: growable C-side string buffer ---------------------------
- *
- * Aether's string.concat allocates on every call; for line-by-line
- * directory-blob bodies that's quadratic. Push lines into one of these
- * instead and read the result with sb_data once at the end. */
-
-struct svnae_sbuilder {
-    char *data;
-    int   len, cap;
-};
-
-struct svnae_sbuilder *svnae_fsfs_sb_new(void) {
-    return calloc(1, sizeof(struct svnae_sbuilder));
-}
-
-static int
-sb_reserve(struct svnae_sbuilder *sb, int extra)
-{
-    int need = sb->len + extra + 1;
-    if (need <= sb->cap) return 0;
-    int ncap = sb->cap ? sb->cap : 64;
-    while (ncap < need) ncap *= 2;
-    char *p = realloc(sb->data, (size_t)ncap);
-    if (!p) return -1;
-    sb->data = p;
-    sb->cap = ncap;
-    return 0;
-}
-
-int
-svnae_fsfs_sb_push(struct svnae_sbuilder *sb, const char *s)
-{
-    if (!sb) return -1;
-    int n = (int)strlen(s);
-    if (sb_reserve(sb, n) != 0) return -1;
-    memcpy(sb->data + sb->len, s, (size_t)n);
-    sb->len += n;
-    sb->data[sb->len] = '\0';
-    return 0;
-}
-
-const char *svnae_fsfs_sb_data  (const struct svnae_sbuilder *sb) { return sb && sb->data ? sb->data : ""; }
-int         svnae_fsfs_sb_length(const struct svnae_sbuilder *sb) { return sb ? sb->len : 0; }
-
-void svnae_fsfs_sb_free(struct svnae_sbuilder *sb) {
-    if (!sb) return;
-    free(sb->data);
-    free(sb);
-}
+/* svnae_fsfs_sb_* string-builder retired in Round 110 — the only
+ * caller (test_revisions.ae) switched to plain string.concat now
+ * that std.bytes (issue #288) gives us a real mutable buffer for
+ * the binary-codec workloads that actually need one. The sbuilder
+ * was a 50-line growable-buffer optimisation for an O(n²) test
+ * fixture, where n is small. */
