@@ -64,12 +64,11 @@ extern aether_status_code(conflicted: int, st: int, kind: int,
 // helper from the pristine module.
 extern aether_wc_hash_file(wc_root: string, path: string) -> string
 
-// Statuslist storage primitive — same shape as svnae_wc_nodelist /
-// svnae_wc_proplist. Defined in status_shim.c; Aether drives the SQL
-// + walk and calls _append per entry.
-extern svnae_wc_statuslist_new() -> ptr
-extern svnae_wc_statuslist_append(L: ptr, path: string, code: int) -> int
-extern svnae_wc_statuslist_sort(L: ptr)
+// Statuslist handle constructor (status_shim.c). Wraps a Aether-
+// built packed string "<n>\x02<path>\x01<code>\x02..." into the
+// shared svnae_packed_handle struct; field accessors live in
+// ae/wc/status_packed.ae.
+extern svnae_wc_statuslist_handle(packed: string) -> ptr
 
 // IO helpers.
 extern aether_io_exists(path: string) -> int
@@ -92,10 +91,78 @@ sha_of_file_(wc_root: string, path: string) -> string {
     return string.copy(h)
 }
 
+// Append a "<path>\x01<code>\x02" record onto the running body.
+append_record_(body: string, path: string, code: int) -> string {
+    rec = "${path}\x01${code}\x02"
+    return string.concat(body, rec)
+}
+
+// Insertion-sort the running body (records separated by \x02) by
+// path. Same shape as repos/paths_changed.ae's sort_by_path —
+// O(N²) is fine for the typical WC sizes here.
+sort_body_(body: string) -> string {
+    // Count records.
+    n = 0
+    pos = 0
+    blen = string.length(body)
+    while pos < blen {
+        sep = string.index_of_from(body, "\x02", pos)
+        if sep < 0 { return body }   // malformed; bail
+        n = n + 1
+        pos = sep + 1
+    }
+    if n <= 1 { return body }
+
+    sorted = ""
+    i = 0
+    rpos = 0
+    while i < n {
+        rsep = string.index_of_from(body, "\x02", rpos)
+        this_rec = string.substring(body, rpos, rsep)
+        this_path_end = string.index_of(this_rec, "\x01")
+        this_path = string.substring(this_rec, 0, this_path_end)
+
+        // Walk `sorted` and splice this_rec into the right slot.
+        new_sorted = ""
+        sn = 0
+        spos = 0
+        slen = string.length(sorted)
+        placed = 0
+        while spos < slen {
+            ssep = string.index_of_from(sorted, "\x02", spos)
+            jrec = string.substring(sorted, spos, ssep)
+            jpath_end = string.index_of(jrec, "\x01")
+            jpath = string.substring(jrec, 0, jpath_end)
+            if placed == 0 {
+                if string.compare(this_path, jpath) < 0 {
+                    new_sorted = string.concat(new_sorted, this_rec)
+                    new_sorted = string.concat(new_sorted, "\x02")
+                    placed = 1
+                }
+            }
+            new_sorted = string.concat(new_sorted, jrec)
+            new_sorted = string.concat(new_sorted, "\x02")
+            spos = ssep + 1
+            sn = sn + 1
+        }
+        if placed == 0 {
+            new_sorted = string.concat(new_sorted, this_rec)
+            new_sorted = string.concat(new_sorted, "\x02")
+        }
+        sorted = new_sorted
+        rpos = rsep + 1
+        i = i + 1
+    }
+    return sorted
+}
+
 // Recursive filesystem walk, emitting '?' for any path not in
 // `tracked` (a std.collections.map used as a string set; we don't
 // care about the value — `map.has` is the membership test).
-walk_unversioned_(wc_root: string, rel: string, tracked: ptr, out: ptr) {
+// Returns a packed body fragment "<path>\x01<code>\x02..." for the
+// caller to fold into its own running accumulator.
+walk_unversioned_(wc_root: string, rel: string, tracked: ptr) -> string {
+    out = ""
     dir_path_borrowed = aether_path_join_rel(wc_root, rel)
     dir_path = string.copy(dir_path_borrowed)
 
@@ -107,7 +174,7 @@ walk_unversioned_(wc_root: string, rel: string, tracked: ptr, out: ptr) {
     if string.length(ignore_prop) > 0 { have_ignores = 1 }
 
     d = aether_io_listdir(dir_path)
-    if d == null { return 0 }
+    if d == null { return out }
     n_entries = aether_io_listdir_count(d)
     i = 0
     while i < n_entries {
@@ -136,15 +203,16 @@ walk_unversioned_(wc_root: string, rel: string, tracked: ptr, out: ptr) {
                 }
                 if kind == 2 {
                     if is_tracked == 0 {
-                        if ignored == 0 { svnae_wc_statuslist_append(out, child_rel, 63) }   // '?'
+                        if ignored == 0 { out = append_record_(out, child_rel, 63) }   // '?'
                     }
                     if is_tracked == 1 {
-                        walk_unversioned_(wc_root, child_rel, tracked, out)
+                        sub = walk_unversioned_(wc_root, child_rel, tracked)
+                        out = string.concat(out, sub)
                     }
                 }
                 if kind == 1 {
                     if is_tracked == 0 {
-                        if ignored == 0 { svnae_wc_statuslist_append(out, child_rel, 63) }
+                        if ignored == 0 { out = append_record_(out, child_rel, 63) }
                     }
                 }
             }
@@ -152,16 +220,16 @@ walk_unversioned_(wc_root: string, rel: string, tracked: ptr, out: ptr) {
         i = i + 1
     }
     aether_io_listdir_free(d)
-    return 0
+    return out
 }
 
-// Public entry point. Returns a statuslist ptr (C-side struct);
-// caller frees via svnae_wc_statuslist_free.
+// Public entry point. Returns a statuslist ptr (packed_handle-
+// backed); caller frees via svnae_wc_statuslist_free.
 export svnae_wc_status(wc_root: string) -> ptr {
     db = svnae_wc_db_open(wc_root)
     if db == null { return null }
 
-    out = svnae_wc_statuslist_new()
+    body = ""
     tracked = map_new()
 
     // Pass 1: every tracked node.
@@ -202,20 +270,39 @@ export svnae_wc_status(wc_root: string) -> ptr {
         }
         code = aether_status_code(conflicted, state, kind, on_disk, sha_read, sha_ok)
         if code != 32 {   // not space
-            svnae_wc_statuslist_append(out, rel, code)
+            body = append_record_(body, rel, code)
         }
         i = i + 1
     }
     svnae_wc_nodelist_free(L)
 
     // Pass 2: filesystem walk for '?' entries.
-    walk_unversioned_(wc_root, "", tracked, out)
+    walk_body = walk_unversioned_(wc_root, "", tracked)
+    body = string.concat(body, walk_body)
 
     map_free(tracked)
     svnae_wc_db_close(db)
 
-    svnae_wc_statuslist_sort(out)
-    return out
+    // Recount across full body (tracked + walker output) — every
+    // record is terminated by \x02.
+    sorted = sort_body_(body)
+    final_n = count_records_(sorted)
+    head = "${final_n}\x02"
+    packed = string.concat(head, sorted)
+    return svnae_wc_statuslist_handle(packed)
+}
+
+count_records_(body: string) -> int {
+    n = 0
+    pos = 0
+    blen = string.length(body)
+    while pos < blen {
+        sep = string.index_of_from(body, "\x02", pos)
+        if sep < 0 { return n }
+        n = n + 1
+        pos = sep + 1
+    }
+    return n
 }
 
 main() {

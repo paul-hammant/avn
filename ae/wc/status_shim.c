@@ -15,83 +15,39 @@
  * permissions and limitations under the License.
  */
 
-/* ae/wc/status_shim.c — statuslist storage primitive + accessors.
- * The recursive walk + svn:ignore filtering live in ae/wc/status.ae;
- * this file keeps:
- *   - struct svnae_wc_statuslist + (path, code) accessors
- *   - new()/append()/sort() the Aether walk calls per result row
- *   - svnae_fnmatch_plain (POSIX fnmatch(3) FFI for ignore.ae) */
+/* ae/wc/status_shim.c — statuslist constructor + accessors and the
+ * fnmatch(3) FFI helper. The list payload is a packed string built
+ * Aether-side (status.ae): "<n>\x02<path>\x01<code>\x02...". The
+ * struct + append + sort + per-row accessors that used to live here
+ * are now packed_handle one-liners; the SQL drive and the FS walk
+ * already lived in status.ae. */
 
 #include <fnmatch.h>
 #include <stdint.h>
-#include <stdlib.h>
-#include <string.h>
 
-struct status_entry { char *path; char code; };
-struct svnae_wc_statuslist { struct status_entry *items; int n; int cap; };
+#include "../subr/packed_handle/packed_handle.h"
 
+/* Field-extractor extern declarations matching the Aether exports
+ * in ae/wc/status_packed.ae. */
+extern int         aether_wc_statuslist_count   (const char *packed);
+extern const char *aether_wc_statuslist_path_at (const char *packed, int i);
+extern int         aether_wc_statuslist_code_at (const char *packed, int i);
+
+/* Construct from a Aether-built packed string. The Aether side
+ * (status.ae) builds "<n>\x02<rec>\x02..." and calls this to wrap
+ * into the shared handle type. */
 struct svnae_wc_statuslist *
-svnae_wc_statuslist_new(void)
+svnae_wc_statuslist_handle(const char *packed)
 {
-    return calloc(1, sizeof(struct svnae_wc_statuslist));
+    if (!packed) return NULL;
+    return (struct svnae_wc_statuslist *)svnae_packed_handle_new(packed,
+                                            aether_wc_statuslist_count);
 }
 
-int
-svnae_wc_statuslist_append(struct svnae_wc_statuslist *L,
-                            const char *path, int code)
-{
-    if (!L) return -1;
-    if (L->n == L->cap) {
-        int nc = L->cap ? L->cap * 2 : 8;
-        struct status_entry *p = realloc(L->items, (size_t)nc * sizeof *p);
-        if (!p) return -1;
-        L->items = p;
-        L->cap = nc;
-    }
-    L->items[L->n].path = strdup(path ? path : "");
-    L->items[L->n].code = (char)code;
-    L->n++;
-    return 0;
-}
-
-static int
-entry_cmp(const void *a, const void *b)
-{
-    return strcmp(((const struct status_entry *)a)->path,
-                  ((const struct status_entry *)b)->path);
-}
-
-void
-svnae_wc_statuslist_sort(struct svnae_wc_statuslist *L)
-{
-    if (!L || L->n <= 1) return;
-    qsort(L->items, (size_t)L->n, sizeof *L->items, entry_cmp);
-}
-
-int svnae_wc_statuslist_count(const struct svnae_wc_statuslist *L) { return L ? L->n : 0; }
-
-const char *
-svnae_wc_statuslist_path(const struct svnae_wc_statuslist *L, int i)
-{
-    if (!L || i < 0 || i >= L->n) return "";
-    return L->items[i].path;
-}
-
-int
-svnae_wc_statuslist_code(const struct svnae_wc_statuslist *L, int i)
-{
-    if (!L || i < 0 || i >= L->n) return 0;
-    return (int)(unsigned char)L->items[i].code;
-}
-
-void
-svnae_wc_statuslist_free(struct svnae_wc_statuslist *L)
-{
-    if (!L) return;
-    for (int i = 0; i < L->n; i++) free(L->items[i].path);
-    free(L->items);
-    free(L);
-}
+int svnae_wc_statuslist_count(const struct svnae_wc_statuslist *L) { return svnae_packed_count(L); }
+const char *svnae_wc_statuslist_path(const struct svnae_wc_statuslist *L, int i) { return svnae_packed_pin_at((void *)L, i, aether_wc_statuslist_path_at); }
+int  svnae_wc_statuslist_code(const struct svnae_wc_statuslist *L, int i) { return svnae_packed_int_at(L, i, aether_wc_statuslist_code_at); }
+void svnae_wc_statuslist_free(struct svnae_wc_statuslist *L) { svnae_packed_handle_free((struct svnae_packed_handle *)L); }
 
 /* FFI helper for ae/wc/ignore.ae — plain fnmatch(3) without
  * FNM_PATHNAME, matching svn:ignore's semantics (basename-style
