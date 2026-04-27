@@ -315,11 +315,9 @@ const char *svnae_ra_props_name (struct svnae_ra_props *P, int i) { return svnae
 const char *svnae_ra_props_value(struct svnae_ra_props *P, int i) { return svnae_packed_pin_at(P, i, aether_ra_props_value); }
 void        svnae_ra_props_free (struct svnae_ra_props *P) { svnae_packed_handle_free((struct svnae_packed_handle *)P); }
 
-/* svnae_ra_server_copy and svnae_ra_branch_create moved to
- * ae/ra/copy_branch.ae in Round 78. Both go through the adapter
- * below, which handles the std.http.client response object on this
- * side and returns a "<status>\x01<body>" packed string the Aether
- * caller splits. */
+/* Adapter for the Aether-side copy/branch-create posts: marshal the
+ * std.http.client response into a "<status>\x01<body>" packed string
+ * the caller splits. Bodies are JSON, no embedded NULs. */
 const char *
 svnae_ra_http_post_status_body(const char *url, const char *body)
 {

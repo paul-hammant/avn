@@ -110,15 +110,9 @@ svnae_svnserver_set_superuser_token(const char *token)
 extern const char *http_get_header(HttpRequest *req, const char *name);
 #define req_header http_get_header
 
-/* ACL rule evaluation + ancestry-walking mode check live in
- * ae/svnserver/acl_mode.ae and acl_resolve.ae. Rule syntax:
- *   +alice / +alice:r / +alice:w / +alice:rw / +*
- *   -alice (deny is absolute regardless of mode) / -*
- * 1 allow, 0 deny, -1 no-match. Explicit user beats wildcard;
- * deny beats allow at the same precedence. */
-extern int aether_acl_allows_mode(const char *repo, int rev,
-                                  const char *user, const char *target_path,
-                                  int want_write);
+/* ACL rule evaluation + ancestry walking live in ae/svnserver/
+ * acl_mode.ae and acl_resolve.ae; .ae callers reach
+ * aether_acl_allows_mode directly without going through this file. */
 
 extern int svnae_openssl_hash_hex_into(const char *algo, const char *data, int len, char *out);
 

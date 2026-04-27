@@ -15,24 +15,11 @@
  * permissions and limitations under the License.
  */
 
-/* delta/svndiff/shim.c — encode and decode svndiff streams.
- *
- * We implement svndiff1 with per-window compression disabled (the "always
- * raw" sentinel both sections use, so the instructions and new-data are
- * written verbatim). This keeps the code small and debuggable. svn's own
- * reader accepts this as valid v1 input because the sentinel is part of
- * the spec. Window-level zlib compression can be layered on later — it's
- * an output-size optimisation, not a correctness requirement.
- *
- * The encoder operates on a single window at a time. A txdelta stream is
- * a sequence of windows; callers that want to stream incrementally will
- * write one at a time. For Phase 2 we ship the one-shot "whole-buffer
- * source → whole-buffer target via one window" form, which is enough for
- * the round-trip test and for most small files.
- *
- * Aether binds these through the usual svnae_buf handle (see compress/shim)
- * so that byte streams with embedded NULs round-trip correctly.
- */
+/* delta/svndiff/shim.c — svndiff1 encode/decode (per-window
+ * compression disabled — instructions and new-data written verbatim;
+ * the "always raw" sentinel is part of v1 so svn's reader accepts
+ * this). One-shot "whole-buffer source → one window" form.
+ * Aether binds via svnae_buf handles for binary-safe round trip. */
 
 #include <stdint.h>
 #include <stdlib.h>

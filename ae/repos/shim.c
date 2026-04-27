@@ -89,12 +89,7 @@ const char *svnae_repos_log_date  (struct svnae_log *lg, int i) { return svnae_p
 const char *svnae_repos_log_msg   (struct svnae_log *lg, int i) { return svnae_packed_pin_at(lg, i, aether_ra_log_msg); }
 void svnae_repos_log_free(struct svnae_log *lg) { svnae_packed_handle_free((struct svnae_packed_handle *)lg); }
 
-/* --- cat / list: tree walk ---------------------------------------------
- *
- * Same directory blob format as Phase 3.3 (one line per entry,
- * "<kind> <sha1> <name>\n"). For cat we walk to the file entry and
- * read its blob. For list we read the directory blob and parse entries.
- */
+/* --- cat ----------------------------------------------------------- */
 
 extern const char *aether_repos_load_rev_blob_field(const char *repo, int rev,
                                                     const char *key);
@@ -216,10 +211,6 @@ int svnae_repos_paths_count(const struct svnae_paths *P) { return svnae_packed_c
 const char *svnae_repos_paths_path(struct svnae_paths *P, int i)   { return svnae_packed_pin_at((void *)P, i, aether_ra_paths_path); }
 const char *svnae_repos_paths_action(struct svnae_paths *P, int i) { return svnae_packed_pin_at((void *)P, i, aether_ra_paths_action); }
 void svnae_repos_paths_free(struct svnae_paths *P) { svnae_packed_handle_free((struct svnae_packed_handle *)P); }
-
-/* svnae_repos_resolve / _kind / _sha moved to ae/repos/resolve.ae
- * in Round 76 — both kind and sha now go through the Aether-side
- * exports of the same name. */
 
 /* --- blame -----------------------------------------------------------
  *
