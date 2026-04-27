@@ -83,7 +83,6 @@ extern const void *aether_ra_http_get(const char *url);
 extern const void *aether_ra_http_post_json(const char *url, const char *body, int body_len);
 extern int         aether_ra_http_response_status(const void *resp);
 extern const char *aether_ra_http_response_body  (const void *resp);
-extern const char *aether_ra_http_response_header(const void *resp, const char *name);
 extern void        aether_ra_http_response_free  (const void *resp);
 
 /* Copy an AetherString-backed body (length-aware, embedded-NUL safe)
@@ -155,23 +154,16 @@ http_post_json(const char *url, const char *body, char **out_resp, size_t *out_l
     return rc;
 }
 
-/* ---- public API ------------------------------------------------------ */
-
-/* svnae_ra_head_rev / svnae_ra_hash_algo moved to ae/ra/info.ae in
- * Round 88. aether_ra_parse_rev_response stays referenced from
- * copy_branch.ae's post helper. */
+/* aether_ra_parse_rev_response is referenced from copy_branch.ae's
+ * post helper, hence the explicit extern. */
 extern int aether_ra_parse_rev_response(const char *body);
 
 /* ---- packed-record handle internals ---------------------------------
  *
- * ae/ra/parse.ae produces packed "<N>\x02<entry>\x02..." payloads;
- * ae/ra/packed.ae exposes typed accessors over each entry's
- * "<f0>\x01<f1>\x01..." record. Per-domain handles (log/paths/
- * blame/list) all share the same struct {packed, n, pins} shape
- * — defined in ae/subr/packed_handle, shared with repos/shim.c.
- * ra_handle_from_url is the URL-fetch + parse + handle-construct
- * layer over svnae_packed_handle_new; per-domain wrappers below
- * cast to/from the public per-domain types. */
+ * Per-domain handles (log/paths/blame/list/info) share the
+ * {packed, n, pins} struct from ae/subr/packed_handle. The packed-
+ * string parsers live in ae/ra/packed.ae; ra_handle_from_url adds
+ * the URL-fetch + parse + handle-construct layer. */
 
 typedef const char *(*ra_parse_fn)(const char *body);
 typedef int         (*ra_count_fn)(const char *packed);
@@ -283,13 +275,10 @@ void        svnae_ra_info_free  (struct svnae_ra_info *I) { svnae_packed_handle_
 
 /* ---- cat ------------------------------------------------------------- *
  *
- * Returns a malloc'd NUL-terminated buffer with the file bytes (body
- * length may be larger than strlen for binary blobs, but for the port's
- * current scope — text + ASCII-ish — strlen suffices. A length-aware
- * variant will land when binary blobs flow end-to-end).
- * Caller frees with svnae_ra_free.
- */
-
+ * Returns malloc'd NUL-terminated body bytes (caller frees via
+ * svnae_ra_free). Embedded NULs in binary blobs aren't reflected in
+ * strlen — a length-aware variant will land when binary flows
+ * end-to-end. */
 char *
 svnae_ra_cat(const char *base_url, const char *repo_name, int rev, const char *path)
 {
