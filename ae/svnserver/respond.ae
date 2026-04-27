@@ -1,0 +1,50 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// permissions and limitations under the License.
+
+// ae/svnserver/respond.ae — small response-emitting helpers shared
+// by every handler_*.ae. Round 103 ports these out of
+// ae/svnserver/shim.c, where they were thin pass-throughs onto
+// std.http. The binary-body case (svnserver_respond_binary_ok)
+// stays C-side because std.http's set_body strdup+strlen's the
+// payload — keeping byte-length intact for embedded NULs needs raw
+// res->body / res->body_length poking.
+
+import std.string
+import std.http
+
+extern aether_error_response_json(msg: string) -> string
+
+export svnserver_respond_error(res: ptr, code: int, msg: string) {
+    http.response_set_status(res, code)
+    http.response_json(res, aether_error_response_json(msg))
+}
+
+export svnserver_respond_json_ok(res: ptr, body: string) {
+    http.response_set_status(res, 200)
+    http.response_json(res, body)
+}
+
+// Set Merkle verification headers on file/dir responses. Each header
+// is only emitted when the corresponding value is non-empty (the
+// dir-blob path has no kind/sha at the entry-list level).
+export svnserver_set_merkle_headers(res: ptr, algo: string, kind: string, sha: string) {
+    if string.length(algo) > 0 { http.response_set_header(res, "X-Svnae-Hash-Algo", algo) }
+    if string.length(kind) > 0 { http.response_set_header(res, "X-Svnae-Node-Kind", kind) }
+    if string.length(sha)  > 0 { http.response_set_header(res, "X-Svnae-Node-Hash", sha)  }
+}
+
+main() {
+    println("ae/svnserver/respond.ae is a library; not meant to run standalone")
+}

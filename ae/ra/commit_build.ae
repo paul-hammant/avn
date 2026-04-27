@@ -29,7 +29,6 @@
 import std.string
 import std.json
 
-extern svnae_ra_json_int(v: int) -> ptr
 extern svnae_ra_cb_base_rev(cb: ptr) -> int
 extern svnae_ra_cb_author(cb: ptr) -> string
 extern svnae_ra_cb_logmsg(cb: ptr) -> string
@@ -72,7 +71,7 @@ export ra_commit_build_body(cb: ptr) -> string {
 
 ra_commit_build_body_impl(cb: ptr) -> string {
     body = json_create_object()
-    json.object_set(body, "base_rev", svnae_ra_json_int(svnae_ra_cb_base_rev(cb)))
+    json.object_set(body, "base_rev", json.create_number(svnae_ra_cb_base_rev(cb)))
     json.object_set(body, "author", json_create_string(svnae_ra_cb_author(cb)))
     json.object_set(body, "log", json_create_string(svnae_ra_cb_logmsg(cb)))
 
@@ -204,7 +203,7 @@ ra_commit_build_body_impl(cb: ptr) -> string {
 export ra_copy_build_body(base_rev: int, from_path: string, to_path: string,
                            author: string, logmsg: string) -> string {
     body = json_create_object()
-    json.object_set(body, "base_rev", svnae_ra_json_int(base_rev))
+    json.object_set(body, "base_rev", json.create_number(base_rev))
     json.object_set(body, "from_path", json_create_string(from_path))
     json.object_set(body, "to_path", json_create_string(to_path))
     json.object_set(body, "author", json_create_string(author))

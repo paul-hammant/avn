@@ -41,8 +41,6 @@ struct svnae_txn;
 int  svnae_txn_add_file(struct svnae_txn *t, const char *path, const char *content, int len);
 int  svnae_branch_spec_allows(const char *repo, const char *branch, const char *path);
 
-extern const char *aether_error_response_json(const char *msg);
-
 /* Functions this file actually calls (everything else reaches the
  * C symbol at link time from another translation unit, no forward
  * decl required). */
@@ -81,8 +79,6 @@ typedef struct {
 
 void http_response_set_status(HttpServerResponse *res, int code);
 void http_response_set_header(HttpServerResponse *res, const char *k, const char *v);
-void http_response_set_body(HttpServerResponse *res, const char *body);
-void http_response_json(HttpServerResponse *res, const char *json);
 
 /* --- authorization (Phase 7.1) --------------------------------------
  *
@@ -172,18 +168,14 @@ const char *svnserver_find_repo_path(const char *name) {
 /* Response-emitting helpers for Aether. Each binds against std.http
  * directly; no intervening static wrappers since the dispatch + route
  * handlers all live on the Aether side now. */
-void svnserver_respond_error(HttpServerResponse *res, int code, const char *msg) {
-    http_response_set_status(res, code);
-    http_response_json(res, aether_error_response_json(msg ? msg : ""));
-}
-
-void svnserver_respond_json_ok(HttpServerResponse *res, const char *body) {
-    http_response_set_status(res, 200);
-    http_response_json(res, body);
-}
-
-/* Binary body (cat). std.http's set_body strdup+strlen's the payload,
- * so we poke res->body directly to preserve byte-length for NULs. */
+/* svnserver_respond_error / svnserver_respond_json_ok / svnserver_
+ * set_merkle_headers moved to ae/svnserver/respond.ae in Round 103
+ * — they were thin pass-throughs onto std.http calls and didn't
+ * need the C boundary.
+ *
+ * svnserver_respond_binary_ok below stays C-side because std.http's
+ * set_body strdup+strlen's the payload, so we poke res->body
+ * directly to preserve byte-length for NULs. */
 void svnserver_respond_binary_ok(HttpServerResponse *res, const char *data,
                                  int length, const char *content_type) {
     http_response_set_status(res, 200);
@@ -202,13 +194,7 @@ void svnserver_respond_binary_ok(HttpServerResponse *res, const char *data,
     http_response_set_header(res, "Content-Length", lenbuf);
 }
 
-/* Merkle verification headers for file/dir responses. */
-void svnserver_set_merkle_headers(HttpServerResponse *res, const char *algo,
-                                  const char *kind, const char *sha) {
-    if (algo && *algo) http_response_set_header(res, "X-Svnae-Hash-Algo", algo);
-    if (kind && *kind) http_response_set_header(res, "X-Svnae-Node-Kind", kind);
-    if (sha  && *sha)  http_response_set_header(res, "X-Svnae-Node-Hash", sha);
-}
+/* svnserver_set_merkle_headers moved to ae/svnserver/respond.ae. */
 
 /* Aether-callable helper: newline-separated "algo hash\n" pairs for each
  * configured secondary hash that the repo actually has for `node_sha`.

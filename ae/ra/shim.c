@@ -27,9 +27,6 @@
  * commit_build.ae. The C side keeps the public ABI and the auth-
  * state TLS pointers (X-Svnae-User / X-Svnae-Superuser tokens). */
 
-#include "aether_json.h"    /* JsonValue / json_create_number used by the
-                               svnae_ra_json_int helper the commit-build
-                               Aether module calls back into. */
 #include "aether_string.h"  /* aether_string_data / aether_string_length */
 #include "../subr/pin_list.h"
 #include "../subr/packed_handle/packed_handle.h"
@@ -438,12 +435,6 @@ const char *svnae_ra_cb_props_packed(const struct svnae_ra_commit *cb) {
 const char *svnae_ra_cb_acls_packed(const struct svnae_ra_commit *cb) {
     return (cb && cb->acls_packed) ? cb->acls_packed : "";
 }
-
-/* Aether's std.json.create_number takes a float; this tiny shim
- * lets the commit-builder emit an int rev number without int-to-
- * float conversion syntax on the Aether side. json_create_number
- * is already forward-declared at top of file via cJSON typedefs. */
-void *svnae_ra_json_int(int v) { return json_create_number((double)v); }
 
 /* Aether builds the JSON body string; C side takes over for HTTP POST
  * + response parse + builder free. Split this way because http_post_json
