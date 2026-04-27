@@ -54,8 +54,6 @@ extern const char *aether_wc_hash_file(const char *wc_root, const char *path);
 extern const char *aether_wc_pristine_put(const char *wc_root,
                                            const char *data, int length);
 extern const char *aether_wc_pristine_get(const char *wc_root, const char *sha);
-extern int         aether_wc_pristine_has(const char *wc_root, const char *sha);
-extern int         aether_wc_pristine_size(const char *wc_root, const char *sha);
 
 /* Hash `data[0..len]` under the WC's algorithm. Copy into caller's
  * `out` buffer (>= 65 bytes) and return the hex length. 0 on
@@ -129,16 +127,10 @@ svnae_wc_pristine_get(const char *wc_root, const char *sha)
     return out;
 }
 
-int
-svnae_wc_pristine_has(const char *wc_root, const char *sha)
-{
-    return aether_wc_pristine_has(wc_root, sha);
-}
-
-int
-svnae_wc_pristine_size(const char *wc_root, const char *sha)
-{
-    return aether_wc_pristine_size(wc_root, sha);
-}
+/* svnae_wc_pristine_has / _size were 1-line forwards onto
+ * aether_wc_pristine_has / _size; Round 104 retired them in favour
+ * of letting .ae callers use the aether_* names directly. The C
+ * pristine_get and pristine_put wrappers stay because they do
+ * length-aware malloc detach + TLS-cached sha return. */
 
 void svnae_wc_pristine_free(char *p) { free(p); }

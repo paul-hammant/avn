@@ -41,7 +41,7 @@ extern svnae_txn_rebuild_root(repo: string, base_root_sha1: string, t: ptr) -> s
 // Repository primitives.
 extern svnae_rep_write_blob(repo: string, data: string, len: int) -> string
 extern svnae_fsfs_now_iso8601() -> string
-extern svnae_repos_head_rev(repo: string) -> int
+extern aether_repos_head_rev(repo: string) -> int
 
 // Aether-side helpers (already exported as aether_* aliases).
 extern aether_repos_load_rev_blob_field(repo: string, rev: int, key: string) -> string
@@ -177,7 +177,7 @@ finalise_on_branch_(repo: string, txn: ptr,
     if string.length(new_root) == 0 { return 0 - 1 }
     new_root = string.copy(new_root)
 
-    prev = svnae_repos_head_rev(repo)
+    prev = aether_repos_head_rev(repo)
     if prev < 0 { return 0 - 1 }
     next = prev + 1
 
@@ -276,7 +276,7 @@ export svnae_branch_create(repo: string, name: string, base: string,
 
     // Cross-branch rev numbering: rev numbers are per-repo, not
     // per-branch. (See commit message on the original C version.)
-    new_rev = svnae_repos_head_rev(repo) + 1
+    new_rev = aether_repos_head_rev(repo) + 1
 
     n_globs = count_globs_(globs_joined)
     logmsg = "create branch ${name} from ${base} with ${n_globs} include(s)"

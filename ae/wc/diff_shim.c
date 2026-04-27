@@ -25,7 +25,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-extern int   svnae_wc_pristine_size(const char *wc_root, const char *sha);
+extern int   aether_wc_pristine_size(const char *wc_root, const char *sha);
 extern char *svnae_wc_pristine_get (const char *wc_root, const char *sha);
 extern void  svnae_wc_pristine_free(char *p);
 extern int   aether_io_write_atomic(const char *path, const char *data, int length);
@@ -36,7 +36,7 @@ int
 svnae_diff_tmp_write_pristine(const char *wc_root, const char *sha,
                               const char *path)
 {
-    int sz = svnae_wc_pristine_size(wc_root, sha);
+    int sz = aether_wc_pristine_size(wc_root, sha);
     char *data = svnae_wc_pristine_get(wc_root, sha);
     if (!data) return -1;
     int rc = aether_io_write_atomic(path, data, sz);

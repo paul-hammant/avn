@@ -29,7 +29,7 @@ extern svnserver_find_repo_path(name: string) -> string
 extern svnserver_request_user(req: ptr) -> string
 extern svnserver_request_is_super(req: ptr) -> int
 
-extern svnae_repos_head_rev(repo: string) -> int
+extern aether_repos_head_rev(repo: string) -> int
 extern aether_acl_allows_mode(repo: string, rev: int, user: string, target_path: string, want_write: int) -> int
 extern svnae_repos_cat(repo: string, rev: int, path: string) -> string
 extern svnae_rep_free(p: string)
@@ -75,7 +75,7 @@ handler_path_get_impl(req: ptr, res: ptr) {
         return
     }
 
-    rev = svnae_repos_head_rev(repo)
+    rev = aether_repos_head_rev(repo)
     if rev < 0 {
         svnserver_respond_error(res, 500, "cannot read head")
         return

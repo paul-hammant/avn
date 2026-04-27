@@ -47,7 +47,7 @@ extern svnae_wc_nodelist_free(L: ptr)
 // side passes the buffer right back into svnae_diff_tmp_write_pristine
 // which copies it into a tmp file; we never hold the buffer across an
 // allocation that might trigger Aether's GC.
-extern svnae_wc_pristine_size(wc_root: string, sha: string) -> int
+extern aether_wc_pristine_size(wc_root: string, sha: string) -> int
 extern svnae_diff_tmp_write_pristine(wc_root: string, sha: string, path: string) -> int
 
 extern aether_wc_hash_file(wc_root: string, path: string) -> string
@@ -142,7 +142,7 @@ diff_one_(wc_root: string, L: ptr, i: int, target: string, seq: int) -> int {
     }
     if st == 2 {
         // deleted: before = pristine, after = empty tmp
-        psize = svnae_wc_pristine_size(wc_root, base_sha)
+        psize = aether_wc_pristine_size(wc_root, base_sha)
         before = tmp_seq_("before", seq)
         seq = seq + 1
         rcw = svnae_diff_tmp_write_pristine(wc_root, base_sha, before)

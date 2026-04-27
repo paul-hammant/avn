@@ -42,7 +42,7 @@ extern svnae_wc_node_free(n: ptr)
 
 // Pristine store.
 extern svnae_wc_pristine_get(wc_root: string, sha1: string) -> string
-extern svnae_wc_pristine_size(wc_root: string, sha1: string) -> int
+extern aether_wc_pristine_size(wc_root: string, sha1: string) -> int
 extern svnae_wc_pristine_free(p: string)
 
 // IO helpers.
@@ -96,7 +96,7 @@ export svnae_wc_revert(wc_root: string, rel_path: string) -> int {
     }
 
     // File. Restore content from pristine, reset state to normal.
-    psize = svnae_wc_pristine_size(wc_root, bsha)
+    psize = aether_wc_pristine_size(wc_root, bsha)
     data  = svnae_wc_pristine_get(wc_root, bsha)
     if string.length(data) == 0 {
         svnae_wc_db_close(db)

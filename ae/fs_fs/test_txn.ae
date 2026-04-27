@@ -285,9 +285,9 @@ expect_str(label: string, got: string, want: string) {
 extern system(cmd: string) -> int
 rmtree(path: string) { system("rm -rf '${path}'"); return 0 }
 
-extern svnae_count_rep_files(repo: string) -> int
+extern aether_fs_count_rep_files(repo: string) -> int
 
-count_rep_files(repo: string) { return svnae_count_rep_files(repo) }
+count_rep_files(repo: string) { return aether_fs_count_rep_files(repo) }
 
 main() {
     fails = 0
@@ -320,16 +320,16 @@ main() {
 
     // Rev 2: modify one file deep in the tree.
     // Expect 5 new .rep files: new util.c blob + src/lib + src + root + rev blob.
-    before = svnae_count_rep_files(repo)
+    before = aether_fs_count_rep_files(repo)
     txn = svnae_txn_new(1)
     svnae_txn_add_file(txn, "src/lib/util.c", "void util(void) { /* updated */ }\n", 34)
     new_rev = commit_txn(repo, txn, "paul", "tweak util")
     svnae_txn_free(txn)
     fails = fails + expect_int("commit rev 2", new_rev, 2)
-    // (Used to need `0 + svnae_count_rep_files(repo)` to force int
+    // (Used to need `0 + aether_fs_count_rep_files(repo)` to force int
     // arithmetic — AETHER_ISSUES.md #14 worked around return-type
     // inference poisoning. Resolved upstream in v0.76.0.)
-    after_x = svnae_count_rep_files(repo)
+    after_x = aether_fs_count_rep_files(repo)
     fails = fails + expect_int("rev 2 added 5 .rep files", after_x - before, 5)
 
     fails = fails + expect_str("r2 util.c",         fsfs_read_file_at(repo, 2, "src/lib/util.c"),"void util(void) { /* updated */ }\n")

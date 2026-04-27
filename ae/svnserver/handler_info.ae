@@ -31,7 +31,7 @@ extern aether_parse_repo_name_in(path: string) -> string
 // Look up the repo filesystem path by name (static map on the C side).
 extern svnserver_find_repo_path(name: string) -> string
 
-extern svnae_repos_head_rev(repo: string) -> int
+extern aether_repos_head_rev(repo: string) -> int
 extern svnae_repo_primary_hash(repo: string) -> string
 extern aether_info_json(repo: string, name: string, head: int, hash_algo: string) -> string
 
@@ -61,7 +61,7 @@ handler_info_impl(req: ptr, res: ptr) {
         return
     }
 
-    head = svnae_repos_head_rev(repo)
+    head = aether_repos_head_rev(repo)
     if head < 0 {
         svnserver_respond_error(res, 500, "cannot read head")
         return

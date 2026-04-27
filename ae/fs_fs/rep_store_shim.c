@@ -292,16 +292,7 @@ svnae_rep_read_blob(const char *repo, const char *sha1_hex)
  * svnae_rep_read_blob / svnae_txn_rebuild_root. */
 void svnae_rep_free(char *p) { free(p); }
 
-/* Count .rep files under $repo/reps. Used by the test to prove
- * rep-sharing: the delta between two counts is the number of new
- * unique blobs written by a commit. */
-/* Ported to ae/fs_fs/count_reps.ae. (Export symbol is
- * fs_count_rep_files to avoid collision with the test_txn.ae
- * helper of the same name in svnae_count-aware test binaries.) */
-extern int aether_fs_count_rep_files(const char *repo);
-
-int
-svnae_count_rep_files(const char *repo)
-{
-    return aether_fs_count_rep_files(repo);
-}
+/* svnae_count_rep_files was a 1-line forward onto
+ * aether_fs_count_rep_files (ae/fs_fs/count_reps.ae). Round 104
+ * retired the wrapper — test_txn.ae now calls the aether_ name
+ * directly. */

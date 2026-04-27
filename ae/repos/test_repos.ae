@@ -49,7 +49,7 @@ import contrib.sqlite
 
 // --- repos shim externs ----------------------------------------------------
 
-extern svnae_repos_head_rev(repo: string) -> int
+extern aether_repos_head_rev(repo: string) -> int
 
 extern svnae_repos_log(repo: string) -> ptr
 extern svnae_repos_log_count(lg: ptr) -> int
@@ -238,7 +238,7 @@ main() {
     fails = fails + expect_int("commit 3 rev", r3, 3)
 
     // --- head_rev ---
-    fails = fails + expect_int("head rev", svnae_repos_head_rev(repo), 3)
+    fails = fails + expect_int("head rev", aether_repos_head_rev(repo), 3)
 
     // --- log ---
     lg = svnae_repos_log(repo)

@@ -49,8 +49,6 @@
 char *svnae_rep_read_blob(const char *repo, const char *sha1_hex);
 void  svnae_rep_free(char *p);
 
-extern int aether_repos_head_rev(const char *repo);
-
 /* ---- shared packed-string handle internals --------------------------
  *
  * Five accessor families (log / list / info / paths / blame) share
@@ -164,8 +162,6 @@ const char *svnae_repos_info_author(struct svnae_info *I) { return svnae_packed_
 const char *svnae_repos_info_date(struct svnae_info *I)   { return svnae_packed_pin_field(I, aether_ra_info_date); }
 const char *svnae_repos_info_msg(struct svnae_info *I)    { return svnae_packed_pin_field(I, aether_ra_info_msg); }
 void svnae_repos_info_free(struct svnae_info *I) { svnae_packed_handle_free((struct svnae_packed_handle *)I); }
-
-int svnae_repos_head_rev(const char *repo) { return aether_repos_head_rev(repo); }
 
 /* --- paths changed in a single revision -----------------------------
  *

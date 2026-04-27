@@ -67,7 +67,7 @@ extern svnae_merge3_apply(wc_path: string,
                           base_data: string, base_len: int, base_rev: int,
                           theirs_data: string, theirs_len: int, theirs_rev: int) -> int
 
-extern svnae_wc_pristine_size(wc_root: string, sha1: string) -> int
+extern aether_wc_pristine_size(wc_root: string, sha1: string) -> int
 extern svnae_wc_pristine_get(wc_root: string, sha1: string) -> string
 extern svnae_wc_pristine_free(p: string)
 
@@ -165,7 +165,7 @@ update_apply_pass_a_impl(wc_root: string, base_url: string, repo: string,
                             }
                             if local_clean == 0 {
                                 // 3-way merge.
-                                base_len = svnae_wc_pristine_size(wc_root, base_sha)
+                                base_len = aether_wc_pristine_size(wc_root, base_sha)
                                 base_buf = svnae_wc_pristine_get(wc_root, base_sha)
                                 if string.length(base_buf) == 0 {
                                     // Fallback: reject but still advance pointer.

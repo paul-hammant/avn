@@ -27,7 +27,7 @@
 import std.string
 
 // Repo metadata.
-extern svnae_repos_head_rev(repo: string) -> int
+extern aether_repos_head_rev(repo: string) -> int
 extern svnae_svnadmin_create_bare(repo: string, algos_spec: string) -> int
 
 // Dump-format builders (ae/svnadmin/dump.ae).
@@ -64,7 +64,7 @@ const TAG_SENTINEL = 0 - 2147483647
 // ---- dump -----------------------------------------------------------
 
 export svnae_svnadmin_dump(repo: string, out_fd: int) -> int {
-    head = svnae_repos_head_rev(repo)
+    head = aether_repos_head_rev(repo)
     if head < 0 { return 0 - 1 }
 
     reps_packed = admin_db_list_reps_packed(repo)
