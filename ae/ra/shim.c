@@ -315,11 +315,14 @@ const char *svnae_ra_props_name (struct svnae_ra_props *P, int i) { return svnae
 const char *svnae_ra_props_value(struct svnae_ra_props *P, int i) { return svnae_packed_pin_at(P, i, aether_ra_props_value); }
 void        svnae_ra_props_free (struct svnae_ra_props *P) { svnae_packed_handle_free((struct svnae_packed_handle *)P); }
 
-/* Adapter for the Aether-side copy/branch-create posts: marshal the
- * std.http.client response into a "<status>\x01<body>" packed string
- * the caller splits. Bodies are JSON, no embedded NULs. */
-const char *
-svnae_ra_http_post_status_body(const char *url, const char *body)
+/* Tuple-return adapter for Aether's copy / branch-create posts:
+ * issue the POST, hand back (status, body). Status 0 on transport
+ * failure; body is a TLS-cached buffer the Aether side reads
+ * once before the next call. The typedef name matches what the
+ * Aether codegen emits at every (int, string)-tuple call site. */
+typedef struct { int _0; const char *_1; } _tuple_int_string;
+_tuple_int_string
+svnae_ra_http_post(const char *url, const char *body)
 {
     static __thread char *last = NULL;
     free(last); last = NULL;
@@ -328,17 +331,12 @@ svnae_ra_http_post_status_body(const char *url, const char *body)
     int rc = http_post_json(url, body, &resp, &len, &status);
     (void)len;
 
-    if (rc != 0) {
-        last = strdup("0\x01");
-        return last ? last : "";
-    }
-    const char *body_str = resp ? resp : "";
-    int n = (int)snprintf(NULL, 0, "%d", status) + 1 + (int)strlen(body_str) + 1;
-    last = malloc((size_t)n);
-    if (!last) { free(resp); return ""; }
-    snprintf(last, (size_t)n, "%d\x01%s", status, body_str);
-    free(resp);
-    return last;
+    _tuple_int_string r;
+    if (rc != 0) { r._0 = 0; r._1 = ""; return r; }
+    last = resp;
+    r._0 = status;
+    r._1 = last ? last : "";
+    return r;
 }
 
 /* ---- list ------------------------------------------------------------ */

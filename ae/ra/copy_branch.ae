@@ -14,9 +14,9 @@
 // permissions and limitations under the License.
 
 // RA orchestration for server-side copy + branch create. Both build
-// a JSON body via the existing commit_build.ae helpers and POST it
-// through the C-side http_post_json. Round 78 ports out of
-// ae/ra/shim.c.
+// a JSON body via commit_build.ae and POST it through a thin
+// tuple-returning C adapter; the only thing that differs between
+// the two endpoints is the URL builder + the expected HTTP status.
 
 import std.string
 
@@ -35,37 +35,16 @@ extern aether_url_branches_create(base: string, repo: string,
 // Response parser (ae/ra/parse.ae).
 extern aether_ra_parse_rev_response(body: string) -> int
 
-// HTTP POST + http-status check stay in C (ae/ra/shim.c keeps its
-// curl-bound + std.http.client wrapper). Round 78 uses a small
-// adapter that returns body + status as a packed "<status>\x01<body>"
-// string — Aether splits and reads. Adapter lives in shim.c so it
-// can keep the take_body/free dance with std.http.client.
-extern svnae_ra_http_post_status_body(url: string, body: string) -> string
-
-// Split "<status>\x01<body>" packed response. Returns (status, body)
-// — status is 0 on transport failure, body is "" when absent.
-parse_status_body_(packed: string) -> ptr {
-    return string.split(packed, "\x01")
-}
+// HTTP POST + status / body extraction stays in C (the std.http.client
+// response handle + take_body/free dance lives there); the tuple
+// return brings the (status, body) pair across cleanly.
+extern svnae_ra_http_post(url: string, body: string) -> (int, string)
 
 // POST body, expect HTTP <expected_status>, parse rev from response.
 // Returns -1 on any failure. Shared by copy and branch_create — the
 // only thing that differs is the URL builder + the expected status.
 post_for_rev_(url: string, body: string, expected_status: int) -> int {
-    packed = svnae_ra_http_post_status_body(url, body)
-    if string.length(packed) == 0 { return 0 - 1 }
-    parts = string.split(packed, "\x01")
-    n = string.array_size(parts)
-    if n < 2 {
-        string.array_free(parts)
-        return 0 - 1
-    }
-    status_s = string.array_get(parts, 0)
-    status = string.get_int(status_s)
-    resp = string.array_get(parts, 1)
-    resp = string.copy(resp)
-    string.array_free(parts)
-
+    status, resp = svnae_ra_http_post(url, body)
     if status != expected_status { return 0 - 1 }
     return aether_ra_parse_rev_response(resp)
 }

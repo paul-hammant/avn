@@ -47,19 +47,11 @@ export svnae_crypto_b64_encode(data: string, length: int) -> string {
     return out
 }
 
-// Base64-decode b64. Returns the decoded string and its byte length
-// (binary-safe via AetherString — embedded NULs survive). The C
-// caller uses string length + the bytes pointer to copy out into a
-// malloc'd buffer.
-//
-// Aether tuple-returns work fine when the C extern picks up only
-// the first slot; the length comes back via a sibling extern that
-// re-runs decode. To avoid doing the work twice, we stash both
-// outputs in a per-call TLS pair on the C side and expose two
-// accessors: svnae_crypto_b64_decode (which captures + returns the
-// bytes) and svnae_crypto_b64_decode_len (returns the length the
-// previous decode captured). Pattern matches std.fs.read_binary's
-// fs_get_read_binary / fs_get_read_binary_length split.
+// Base64-decode b64. The C caller reads bytes via this export and
+// then re-fetches the byte length via svnae_crypto_b64_decode_len.
+// We can't return a tuple from `export` (Aether's multi-return
+// codegen infers a scalar return type), so we keep a TLS pair:
+// this export captures both, _len returns the int slot.
 export svnae_crypto_b64_decode_capture(b64: string) -> string {
     out, n, err = cryptography.base64_decode(b64)
     if string.length(err) > 0 {
