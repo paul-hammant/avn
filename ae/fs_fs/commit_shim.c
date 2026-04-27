@@ -15,10 +15,12 @@
  * permissions and limitations under the License.
  */
 
-/* fs_fs/commit_shim.c — two leaf bindings:
- *  - svnae_fnmatch_pathname: fnmatch(3) FFI for ae/fs_fs/spec.ae
- *  - svnae_branch_spec_allows: thin null-guarded wrapper kept stable
- *    for C callers that don't link the Aether export wrapper. */
+/* fs_fs/commit_shim.c — fnmatch(3) FFI for ae/fs_fs/spec.ae.
+ *
+ * The historical svnae_branch_spec_allows null-guarded wrapper was
+ * retired in Round 115 — its sole C caller (svnserver_spec_allows
+ * in svnserver/shim.c) inlines the null guard and calls the Aether
+ * export aether_branch_spec_allows directly. */
 
 #include <fnmatch.h>
 
@@ -26,13 +28,4 @@ int
 svnae_fnmatch_pathname(const char *glob, const char *path)
 {
     return fnmatch(glob, path, FNM_PATHNAME) == 0 ? 1 : 0;
-}
-
-extern int aether_branch_spec_allows(const char *repo, const char *branch,
-                                     const char *path);
-int
-svnae_branch_spec_allows(const char *repo, const char *branch, const char *path)
-{
-    if (!repo || !branch || !path) return -1;
-    return aether_branch_spec_allows(repo, branch, path);
 }

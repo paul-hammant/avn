@@ -39,7 +39,7 @@ struct svnae_txn;
 /* Only functions this C file actually calls — the Aether modules
  * that live alongside it declare what they need locally. */
 int  svnae_txn_add_file(struct svnae_txn *t, const char *path, const char *content, int len);
-int  svnae_branch_spec_allows(const char *repo, const char *branch, const char *path);
+extern int aether_branch_spec_allows(const char *repo, const char *branch, const char *path);
 
 /* Functions this file actually calls (everything else reaches the
  * C symbol at link time from another translation unit, no forward
@@ -241,7 +241,8 @@ const char *svnserver_request_branch(HttpRequest *req) {
 int svnserver_spec_allows(const char *repo, const char *branch,
                            const char *path, int is_super) {
     if (is_super) return 1;
-    return svnae_branch_spec_allows(repo, branch, path) == 1;
+    if (!repo || !branch || !path) return 0;
+    return aether_branch_spec_allows(repo, branch, path) == 1;
 }
 /* Pull body bytes off req for an Aether-side handler. The txn-add-file
  * variant consumes the request's binary body (which Aether's
