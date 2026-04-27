@@ -58,13 +58,6 @@ extern int aether_repos_head_rev(const char *repo);
  * by ra/shim.c). The packed-string parsers live in ae/ra/packed.ae —
  * record shape from ae/repos/log.ae matches ae/ra/parse.ae's by
  * design, so the same accessors decode both. */
-typedef int (*repos_count_fn)(const char *packed);
-
-static struct svnae_packed_handle *
-repos_handle_from_packed(const char *packed, repos_count_fn count)
-{
-    return svnae_packed_handle_new(packed, count);
-}
 
 /* --- log handle ------------------------------------------------------ */
 
@@ -78,7 +71,7 @@ extern const char *aether_ra_log_msg(const char *packed, int i);
 struct svnae_log *
 svnae_repos_log(const char *repo)
 {
-    return (struct svnae_log *)repos_handle_from_packed(
+    return (struct svnae_log *)svnae_packed_handle_new(
         aether_repos_log_packed(repo), aether_ra_log_count);
 }
 
@@ -134,7 +127,7 @@ extern const char *aether_ra_list_kind (const char *packed, int i);
 struct svnae_list *
 svnae_repos_list(const char *repo, int rev, const char *path)
 {
-    return (struct svnae_list *)repos_handle_from_packed(
+    return (struct svnae_list *)svnae_packed_handle_new(
         aether_repos_list_packed(repo, rev, path),
         aether_ra_list_count);
 }
@@ -162,7 +155,7 @@ struct svnae_info *
 svnae_repos_info_rev(const char *repo, int rev)
 {
     /* info is a single record — count_fn is NULL so n stays 0. */
-    return (struct svnae_info *)repos_handle_from_packed(
+    return (struct svnae_info *)svnae_packed_handle_new(
         aether_repos_info_packed(repo, rev), NULL);
 }
 
@@ -203,7 +196,7 @@ struct svnae_paths *
 svnae_repos_paths_changed(const char *repo, int rev)
 {
     if (rev < 0) return NULL;
-    return (struct svnae_paths *)repos_handle_from_packed(
+    return (struct svnae_paths *)svnae_packed_handle_new(
         aether_paths_changed_packed(repo, rev), aether_ra_paths_count);
 }
 
@@ -227,7 +220,7 @@ extern const char *aether_ra_blame_text(const char *packed, int i);
 struct svnae_blame *
 svnae_repos_blame(const char *repo, int target_rev, const char *path)
 {
-    return (struct svnae_blame *)repos_handle_from_packed(
+    return (struct svnae_blame *)svnae_packed_handle_new(
         aether_repos_blame_packed(repo, target_rev, path),
         aether_ra_blame_count);
 }
