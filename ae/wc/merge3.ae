@@ -1,0 +1,192 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// permissions and limitations under the License.
+
+// Three-way text merge — port of ae/wc/merge3_shim.c::svnae_merge3
+// + svnae_merge3_apply to Aether, made possible by os.run_capture
+// returning (stdout, status, err) tuple as of aether 0.94+.
+//
+// Algorithm: write the three buffers (mine / base / theirs) to
+// temp files; shell out to /usr/bin/diff3 -m with --label MINE /
+// BASE / THEIRS; capture stdout. diff3's exit status:
+//   0 -> clean merge; stdout is the merged file
+//   1 -> conflicts; stdout has <<<<<<< / ======= / >>>>>>> markers
+//   >1 -> diff3 itself errored
+//
+// The two public exports both keep their pre-Round-112 semantics:
+// svnae_merge3_apply takes a wc_path + base + theirs + revs, runs
+// the merge, writes merged back atomically, drops .mine / .r<rev>
+// sidecars on conflicts. svnae_merge3 takes raw buffers and returns
+// (merged_string, status) via the leading-status-byte channel.
+
+import std.string
+import std.os
+import std.fs
+
+extern aether_io_write_atomic(path: string, data: string, length: int) -> int
+extern aether_io_read_file(path: string) -> string
+extern aether_io_file_size(path: string) -> int
+extern aether_io_unlink(path: string) -> int
+
+extern list_new() -> ptr
+extern list_add_raw(list: ptr, item: ptr) -> int
+extern list_free(list: ptr)
+
+// ---- internal helpers ----
+
+// Generate a /tmp path unique enough to avoid collisions across
+// concurrent merges. Uses pid and a per-call sequence stashed in
+// a 1-byte std.bytes scratch... actually std.os has no monotonic
+// counter and Aether functions can't keep statics, so we encode
+// a kind tag (0=mine, 1=base, 2=theirs, 3+ = sidecar slots) and
+// pid into the name. Collisions across processes are pid-bounded;
+// collisions within a process are handled by the kind tag.
+extern svnae_getpid() -> int
+
+tmp_path_(kind: string) -> string {
+    pid = svnae_getpid()
+    return "/tmp/svnae_m3_${pid}_${kind}.tmp"
+}
+
+write_three_(mine: string, mine_len: int,
+              base: string, base_len: int,
+              theirs: string, theirs_len: int,
+              mp: string, bp: string, tp: string) -> int {
+    if aether_io_write_atomic(mp, mine, mine_len) != 0 { return 0 - 1 }
+    if aether_io_write_atomic(bp, base, base_len) != 0 {
+        aether_io_unlink(mp)
+        return 0 - 1
+    }
+    if aether_io_write_atomic(tp, theirs, theirs_len) != 0 {
+        aether_io_unlink(mp); aether_io_unlink(bp)
+        return 0 - 1
+    }
+    return 0
+}
+
+run_diff3_(mp: string, bp: string, tp: string) -> {
+    argv = list_new()
+    // os.run_capture's build_argv_array prepends prog as argv[0]
+    // for us; this list is argv[1..].
+    list_add_raw(argv, "-m")
+    list_add_raw(argv, "--label")
+    list_add_raw(argv, "MINE")
+    list_add_raw(argv, "--label")
+    list_add_raw(argv, "BASE")
+    list_add_raw(argv, "--label")
+    list_add_raw(argv, "THEIRS")
+    list_add_raw(argv, mp)
+    list_add_raw(argv, bp)
+    list_add_raw(argv, tp)
+    out, status, err = os.run_capture("/usr/bin/diff3", argv, null)
+    list_free(argv)
+    if string.length(err) > 0 {
+        return "", 0 - 1
+    }
+    return out, status
+}
+
+// ---- public ----
+
+// Public buffer-mode merge3. Returns the merged bytes prefixed by a
+// 1-byte status header and a single status byte that the C wrapper
+// strips and inspects:
+//   bytes[0] == 0  -> error
+//   bytes[0] == 1  -> clean merge; payload = bytes[1..]
+//   bytes[0] == 2  -> conflicts; payload = bytes[1..] (with markers)
+// Same channel shape as svndiff_decode/encode — Aether 0.96 still
+// rejects `export -> (T, T)` and emits no body for `export -> {`
+// tuple-shaped exports under --emit=lib.
+export aether_merge3(mine: string, mine_len: int,
+                      base: string, base_len: int,
+                      theirs: string, theirs_len: int) -> string {
+    mp = tmp_path_("mine")
+    bp = tmp_path_("base")
+    tp = tmp_path_("theirs")
+
+    if write_three_(mine, mine_len, base, base_len, theirs, theirs_len,
+                     mp, bp, tp) != 0 {
+        return ""    // length 0 -> error sentinel
+    }
+
+    merged, status = run_diff3_(mp, bp, tp)
+
+    aether_io_unlink(mp); aether_io_unlink(bp); aether_io_unlink(tp)
+
+    if status < 0 { return "" }
+    if status > 2 { return "" }
+
+    // Status: 0 = clean, 1 = conflicts. Map to leading byte 1 / 2.
+    tag = "\x01"
+    if status == 1 { tag = "\x02" }
+    return string.concat(tag, merged)
+}
+
+// Public on-disk merge3. Reads wc_path as `mine`; writes merged
+// back atomically; drops sidecars on conflict. Returns 0 (clean),
+// 1 (conflicts), or -1 (error).
+export aether_merge3_apply(wc_path: string,
+                            base: string, base_len: int, base_rev: int,
+                            theirs: string, theirs_len: int, theirs_rev: int) -> int {
+    return aether_merge3_apply_impl(wc_path, base, base_len, base_rev,
+                                     theirs, theirs_len, theirs_rev)
+}
+
+aether_merge3_apply_impl(wc_path: string,
+                          base: string, base_len: int, base_rev: int,
+                          theirs: string, theirs_len: int, theirs_rev: int) -> int {
+    if aether_io_file_size(wc_path) < 0 { return 0 - 1 }
+    mine = aether_io_read_file(wc_path)
+    if string.length(mine) == 0 {
+        // Empty file is OK; mine_len = 0.
+    }
+    mine_len = string.length(mine)
+
+    mp = tmp_path_("mine")
+    bp = tmp_path_("base")
+    tp = tmp_path_("theirs")
+
+    if write_three_(mine, mine_len, base, base_len, theirs, theirs_len,
+                     mp, bp, tp) != 0 {
+        return 0 - 1
+    }
+
+    merged, status = run_diff3_(mp, bp, tp)
+
+    aether_io_unlink(mp); aether_io_unlink(bp); aether_io_unlink(tp)
+
+    if status < 0 { return 0 - 1 }
+    if status > 2 { return 0 - 1 }
+
+    merged_len = string.length(merged)
+    if aether_io_write_atomic(wc_path, merged, merged_len) != 0 {
+        return 0 - 1
+    }
+
+    if status == 1 {
+        // Conflicts: drop sidecars for `svn resolve`.
+        side_mine = "${wc_path}.mine"
+        aether_io_write_atomic(side_mine, mine, mine_len)
+        side_base = "${wc_path}.r${base_rev}"
+        aether_io_write_atomic(side_base, base, base_len)
+        side_theirs = "${wc_path}.r${theirs_rev}"
+        aether_io_write_atomic(side_theirs, theirs, theirs_len)
+    }
+
+    return status
+}
+
+main() {
+    println("ae/wc/merge3.ae is a library; not meant to run standalone")
+}
