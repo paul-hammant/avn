@@ -37,6 +37,23 @@ export svnae_crypto_hash_supported(algo: string) -> int {
     return cryptography.hash_supported(algo)
 }
 
+// Whether the algo is on the port's recognised list (sha1 or
+// sha256). 1/0. Keeps the answer stable independent of what
+// std.cryptography happens to support today.
+export svnae_openssl_hash_supported(algo: string) -> int {
+    if string.equals(algo, "sha1")   == 1 { return 1 }
+    if string.equals(algo, "sha256") == 1 { return 1 }
+    return 0
+}
+
+// Hex width produced by `algo`. 40 (sha1), 64 (sha256); 0 for
+// unsupported algos.
+export svnae_openssl_hash_hex_len(algo: string) -> int {
+    if string.equals(algo, "sha1")   == 1 { return 40 }
+    if string.equals(algo, "sha256") == 1 { return 64 }
+    return 0
+}
+
 // Base64-encode data[0..length]. Returns "" on failure.
 // std.cryptography emits unpadded output per RFC 4648 §4; the
 // downstream svnae_openssl_b64_encode contract was padded output,

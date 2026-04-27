@@ -21,19 +21,15 @@
 
 import std.string
 
-// Declare the externs with `string` return type (Aether will emit
-// `const char*`; the shim returns `char*` which gcc accepts narrowly).
-extern svnae_sha1_hex(data: string, data_len: int) -> string
-extern svnae_checksum_free_hex(buf: string)
+// Goes straight to the Aether-side wrapper over std.cryptography.
+// Round 106 retired the checksum/shim.c forwards (svnae_sha1_hex,
+// svnae_checksum_free_hex) — they were 1-line forwards onto
+// svnae_crypto_hash_hex with a malloc-detach trampoline that
+// AetherString already gives us for free.
+extern svnae_crypto_hash_hex(algo: string, data: string, length: int) -> string
 
-// Note: we return a COPY so the value follows Aether's normal string
-// lifetime conventions. The shim's malloc'd buffer is freed right after.
 sha1_hex(data: string) {
-    n = string.length(data)
-    raw = svnae_sha1_hex(data, n)
-    copy = string.concat("", raw)
-    svnae_checksum_free_hex(raw)
-    return copy
+    return svnae_crypto_hash_hex("sha1", data, string.length(data))
 }
 
 // --- harness ---------------------------------------------------------------

@@ -22,8 +22,7 @@ import std.string
 
 // --- externs from subr shims ------------------------------------------------
 
-extern svnae_sha1_hex(data: string, data_len: int) -> string
-extern svnae_checksum_free_hex(buf: string)
+extern svnae_crypto_hash_hex(algo: string, data: string, length: int) -> string
 
 extern svnae_zlib_deflate(data: string, data_len: int, level: int) -> ptr
 extern svnae_zlib_inflate_offset(base: string, offset: int, data_len: int, expected_out: int) -> ptr
@@ -147,9 +146,7 @@ rep_cache_insert(repo: string, sha1: string, rel_path: string,
 
 write_blob(repo: string, data: string) {
     n = string.length(data)
-    raw = svnae_sha1_hex(data, n)
-    sha1_copy = string.concat("", raw)
-    svnae_checksum_free_hex(raw)
+    sha1_copy = svnae_crypto_hash_hex("sha1", data, n)
 
     if rep_cache_has(repo, sha1_copy) == 1 { return sha1_copy }
 

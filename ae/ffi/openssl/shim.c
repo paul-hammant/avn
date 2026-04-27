@@ -141,22 +141,6 @@ svnae_openssl_b64_decode(const char *src, int src_len,
  * accepts any name OpenSSL recognises (sha384/sha512/sha3-*); we
  * narrow to our golden list here so admin commands can't install
  * anything else as primary/secondary on a real repo. */
-int
-svnae_openssl_hash_supported(const char *algo)
-{
-    if (!algo) return 0;
-    if (strcmp(algo, "sha1")   == 0) return 1;
-    if (strcmp(algo, "sha256") == 0) return 1;
-    return 0;
-}
-
-/* Hex width produced by `algo`. 40 (sha1), 64 (sha256); 0 for
- * unsupported. */
-int
-svnae_openssl_hash_hex_len(const char *algo)
-{
-    if (!algo) return 0;
-    if (strcmp(algo, "sha1")   == 0) return 40;
-    if (strcmp(algo, "sha256") == 0) return 64;
-    return 0;
-}
+/* svnae_openssl_hash_supported / svnae_openssl_hash_hex_len moved
+ * to ae/ffi/openssl/crypto_helpers.ae in Round 106 — they were
+ * pure string-comparison constant lookups with no openssl content. */
