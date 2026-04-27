@@ -29,7 +29,7 @@ import std.string
 extern aether_load_rev_blob_field(repo: string, rev: int, key: string) -> string
 extern svnae_rep_read_blob(repo: string, sha: string) -> string
 extern svnae_rep_free(body: string)
-extern svnae_rep_write_blob(repo: string, data: string, len: int) -> string
+extern aether_rep_write_blob(repo: string, data: string, len: int) -> string
 extern aether_paths_index_sort_by_path(body: string) -> string
 
 // Returns the augmented body. Empty input → empty output (caller keeps
@@ -130,7 +130,7 @@ export auto_follow_copy_acl(repo: string, base_rev: int,
     if string.length(augmented) == 0 { return "" }
 
     sorted = aether_paths_index_sort_by_path(augmented)
-    return svnae_rep_write_blob(repo, sorted, string.length(sorted))
+    return aether_rep_write_blob(repo, sorted, string.length(sorted))
 }
 
 main() {

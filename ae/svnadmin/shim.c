@@ -30,7 +30,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-extern const char *svnae_rep_write_blob(const char *repo, const char *data, int len);
+extern const char *aether_rep_write_blob(const char *repo, const char *data, int len);
 
 /* Write the full string to fd, retrying on EINTR. Returns 0 ok, -1 fail. */
 static int
@@ -115,7 +115,7 @@ svnae_fd_load_rep_block(int fd, const char *repo,
     char nl;
     if (read_n(fd, &nl, 1) != 0 || nl != '\n') { free(data); return -1; }
 
-    const char *written = svnae_rep_write_blob(repo, data, size);
+    const char *written = aether_rep_write_blob(repo, data, size);
     free(data);
     if (!written || strcmp(written, expected_sha) != 0) return -1;
     return 0;

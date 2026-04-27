@@ -25,7 +25,7 @@
 // What was 90 lines of C with PATH_MAX snprintf bookkeeping becomes
 // ~70 lines of Aether using ${} interpolation; the helper calls
 // (aether_io_mkdir_p, aether_io_write_atomic, admin_db_init_schema,
-// svnae_rep_write_blob, aether_rev_blob_body) are unchanged.
+// aether_rep_write_blob, aether_rev_blob_body) are unchanged.
 
 import std.string
 
@@ -38,7 +38,7 @@ extern svnae_openssl_hash_supported(algo: string) -> int
 
 extern admin_db_init_schema(repo: string) -> string
 
-extern svnae_rep_write_blob(repo: string, data: string, len: int) -> string
+extern aether_rep_write_blob(repo: string, data: string, len: int) -> string
 extern svnae_fsfs_now_iso8601() -> string
 extern aether_rev_blob_body(root: string, branch: string, props: string, acl: string, prev: int, author: string, date: string, log: string) -> string
 
@@ -98,14 +98,14 @@ write_main_branch_layout_(repo: string) -> int {
 
 // Seed rev 0: empty root dir + rev-blob pointing at it.
 seed_rev0_(repo: string) -> int {
-    empty_sha = svnae_rep_write_blob(repo, "", 0)
+    empty_sha = aether_rep_write_blob(repo, "", 0)
     if string.length(empty_sha) == 0 { return 0 - 1 }
     empty_sha = string.copy(empty_sha)
 
     rev0 = aether_rev_blob_body(empty_sha, "main", "", "", 0,
                                  "(init)", svnae_fsfs_now_iso8601(),
                                  "initial empty revision")
-    rev0_sha = svnae_rep_write_blob(repo, rev0, string.length(rev0))
+    rev0_sha = aether_rep_write_blob(repo, rev0, string.length(rev0))
     if string.length(rev0_sha) == 0 { return 0 - 1 }
     rev0_sha = string.copy(rev0_sha)
 

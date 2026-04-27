@@ -177,7 +177,7 @@ branch_head_rev_impl(repo: string, base: string) -> int {
 // and collapses both call sites to one extern.
 //
 // `rev_sha` is the content-addressed sha of the rev blob (what
-// svnae_rep_write_blob returned). Returns "" on success, a short
+// aether_rep_write_blob returned). Returns "" on success, a short
 // error string on failure.
 
 // Format: always emit 6-digit, zero-padded.

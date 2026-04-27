@@ -62,7 +62,7 @@ extern svnae_commit_finalise_with_acl(repo: string, txn: ptr,
 // Blob builders. These produce "key=value\n" / "+user\n" /
 // "<sha> <path>\n" bodies directly from the "\n"-joined parallel
 // strings the JSON parse loop below accumulates, then write to the
-// rep store via svnae_rep_write_blob. Used to bounce through C
+// rep store via aether_rep_write_blob. Used to bounce through C
 // (svnserver_build_*_joined + svnae_build_*_blob); all that round
 // trip is gone now.
 //
@@ -70,7 +70,7 @@ extern svnae_commit_finalise_with_acl(repo: string, txn: ptr,
 // aether.toml's extra_sources line + the gcc link command are
 // bumping up against a path-list length limit; adding another
 // _generated.c would truncate the link argv.
-extern svnae_rep_write_blob(repo: string, data: string, length: int) -> string
+extern aether_rep_write_blob(repo: string, data: string, length: int) -> string
 extern aether_paths_index_sort_by_path(body: string) -> string
 
 export commit_from_body(req: ptr, res: ptr, repo: string) -> int {
@@ -492,7 +492,7 @@ build_props_blob_joined(repo: string, keys_joined: string, values_joined: string
         i = i + 1
     }
 
-    return svnae_rep_write_blob(repo, body, string.length(body))
+    return aether_rep_write_blob(repo, body, string.length(body))
 }
 
 // Build "<rule>\n" in caller-supplied order, write to rep store.
@@ -506,7 +506,7 @@ build_acl_blob_joined(repo: string, rules_joined: string) -> string {
         body = string.concat(body, "\n")
         i = i + 1
     }
-    return svnae_rep_write_blob(repo, body, string.length(body))
+    return aether_rep_write_blob(repo, body, string.length(body))
 }
 
 // Build "<sha> <path>\n" sorted by path, write to rep store. Shared
@@ -531,7 +531,7 @@ build_paths_index_blob(repo: string, paths_joined: string, shas_joined: string) 
     }
 
     sorted = aether_paths_index_sort_by_path(body)
-    return svnae_rep_write_blob(repo, sorted, string.length(sorted))
+    return aether_rep_write_blob(repo, sorted, string.length(sorted))
 }
 
 build_paths_props_blob_joined(repo: string, paths_joined: string, shas_joined: string) -> string {

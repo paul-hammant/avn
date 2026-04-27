@@ -39,7 +39,7 @@ extern svnae_txn_base_rev(t: ptr) -> int
 extern svnae_txn_rebuild_root(repo: string, base_root_sha1: string, t: ptr) -> string
 
 // Repository primitives.
-extern svnae_rep_write_blob(repo: string, data: string, len: int) -> string
+extern aether_rep_write_blob(repo: string, data: string, len: int) -> string
 extern svnae_fsfs_now_iso8601() -> string
 extern aether_repos_head_rev(repo: string) -> int
 
@@ -189,7 +189,7 @@ finalise_on_branch_(repo: string, txn: ptr,
 
     rev_body = aether_rev_blob_body(new_root, branch, ps, as_, prev, author,
                                      svnae_fsfs_now_iso8601(), logmsg)
-    rev_sha_borrowed = svnae_rep_write_blob(repo, rev_body, string.length(rev_body))
+    rev_sha_borrowed = aether_rep_write_blob(repo, rev_body, string.length(rev_body))
     if string.length(rev_sha_borrowed) == 0 { return 0 - 1 }
     rev_sha = string.copy(rev_sha_borrowed)
 
@@ -283,7 +283,7 @@ export svnae_branch_create(repo: string, name: string, base: string,
 
     rev_body = aether_rev_blob_body(new_root, name, "", "", base_rev, author,
                                      svnae_fsfs_now_iso8601(), logmsg)
-    rev_sha_borrowed = svnae_rep_write_blob(repo, rev_body, string.length(rev_body))
+    rev_sha_borrowed = aether_rep_write_blob(repo, rev_body, string.length(rev_body))
     if string.length(rev_sha_borrowed) == 0 { return 0 - 1 }
     rev_sha = string.copy(rev_sha_borrowed)
 

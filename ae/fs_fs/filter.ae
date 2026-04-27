@@ -28,7 +28,7 @@ import std.string
 // --- C FFI into the rep store + line-level helpers ------------------------
 
 extern svnae_rep_read_blob(repo: string, sha_hex: string) -> string
-extern svnae_rep_write_blob(repo: string, data: string, length: int) -> string
+extern aether_rep_write_blob(repo: string, data: string, length: int) -> string
 extern svnae_rep_free(ptr: string)
 
 // Dir-blob parsers ported earlier in ae/fs_fs/dirblob.ae.
@@ -123,7 +123,7 @@ filter_dir_impl(repo: string, src_sha: string, prefix: string,
 
     svnae_rep_free(src_body)
 
-    new_sha = svnae_rep_write_blob(repo, body, string.length(body))
+    new_sha = aether_rep_write_blob(repo, body, string.length(body))
     return new_sha
 }
 

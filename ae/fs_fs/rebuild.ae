@@ -36,7 +36,7 @@ import std.string
 // --- FFI: rep store + txn accessors + existing helpers --------------------
 
 extern svnae_rep_read_blob(repo: string, sha_hex: string) -> string
-extern svnae_rep_write_blob(repo: string, data: string, length: int) -> string
+extern aether_rep_write_blob(repo: string, data: string, length: int) -> string
 extern svnae_rep_free(blob: string)
 
 // `struct svnae_txn *` on the C side — opaque here, we pass it through.
@@ -278,7 +278,7 @@ rebuild_dir_impl(repo: string, base_dir_sha: string, prefix: string, txn: ptr) -
                                 rl = reclist_add(rl, name, kind, new_sub)
                             }
                             if string.length(new_sub) == 0 {
-                                empty_sha = svnae_rep_write_blob(repo, "", 0)
+                                empty_sha = aether_rep_write_blob(repo, "", 0)
                                 rl = reclist_add(rl, name, kind, empty_sha)
                             }
                         }
@@ -308,14 +308,14 @@ rebuild_dir_impl(repo: string, base_dir_sha: string, prefix: string, txn: ptr) -
             if ekind == EDIT_ADD_FILE {
                 content = svnae_txn_edit_content_data(txn, ei)
                 clen = svnae_txn_edit_content_len(txn, ei)
-                new_sha = svnae_rep_write_blob(repo, content, clen)
+                new_sha = aether_rep_write_blob(repo, content, clen)
                 if string.length(new_sha) > 0 {
                     rl = reclist_add(rl, name, 102, new_sha)   // 'f'
                 }
             }
             if ekind == EDIT_MKDIR {
                 if reclist_has_dir(rl, name) == 0 {
-                    empty_sha = svnae_rep_write_blob(repo, "", 0)
+                    empty_sha = aether_rep_write_blob(repo, "", 0)
                     rl = reclist_add(rl, name, 100, empty_sha) // 'd'
                 }
             }
@@ -357,7 +357,7 @@ rebuild_dir_impl(repo: string, base_dir_sha: string, prefix: string, txn: ptr) -
 
     // Step 4: sort and emit.
     sorted = reclist_sort(rl)
-    return svnae_rep_write_blob(repo, sorted, string.length(sorted))
+    return aether_rep_write_blob(repo, sorted, string.length(sorted))
 }
 
 // Helper for the "empty base blob is legitimate" edge case. An empty

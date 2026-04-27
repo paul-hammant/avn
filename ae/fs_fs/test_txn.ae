@@ -34,7 +34,7 @@ import std.string
 
 // --- rep-store (C side; shared by Aether and the rebuild algorithm) ---------
 
-extern svnae_rep_write_blob(repo: string, data: string, len: int) -> string
+extern aether_rep_write_blob(repo: string, data: string, len: int) -> string
 extern svnae_rep_read_blob(repo: string, sha1_hex: string) -> string
 extern svnae_rep_free(p: string)
 
@@ -80,10 +80,10 @@ fsfs_init(path: string) {
     sqlite.close(db)
     if string.length(err) > 0 { return 4 }
 
-    empty_sha = svnae_rep_write_blob(path, "", 0)
+    empty_sha = aether_rep_write_blob(path, "", 0)
     empty_copy = string.concat("", empty_sha)
     rev0 = "root: ${empty_copy}\nprev: 0\nauthor: (init)\ndate: ${os.now_utc_iso8601()}\nlog: initial empty revision\n"
-    rev0_sha = svnae_rep_write_blob(path, rev0, string.length(rev0))
+    rev0_sha = aether_rep_write_blob(path, rev0, string.length(rev0))
     rev0_copy = string.concat("", rev0_sha)
     rc = aether_io_write_atomic("${path}/revs/000000", "${rev0_copy}\n", string.length(rev0_copy) + 1)
     if rc != 0 { return rc }
@@ -167,7 +167,7 @@ commit_txn(repo: string, txn: ptr, author: string, logmsg: string) {
     prev = fsfs_head_rev(repo)
     next = prev + 1
     rev_body = "root: ${new_root}\nprev: ${prev}\nauthor: ${author}\ndate: ${os.now_utc_iso8601()}\nlog: ${logmsg}\n"
-    rev_sha_raw = svnae_rep_write_blob(repo, rev_body, string.length(rev_body))
+    rev_sha_raw = aether_rep_write_blob(repo, rev_body, string.length(rev_body))
     rev_sha = string.concat("", rev_sha_raw)
 
     ptr_body = "${rev_sha}\n"

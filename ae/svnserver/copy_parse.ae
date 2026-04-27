@@ -134,7 +134,7 @@ copy_from_body_impl(req: ptr, repo: string) -> int {
     if kind == 100 { from_kind_int = 1 }   // 'd'
 
     new_acl_sha = auto_follow_copy_acl(repo, base_rev, from_path, to_path)
-    // svnae_rep_write_blob returns into a thread-local buffer; the
+    // aether_rep_write_blob returns into a thread-local buffer; the
     // txn_copy/commit path below also calls rep_write_blob (for the
     // node copy's dirblob), which will overwrite this slot. Snapshot
     // before handing off to the txn machinery.

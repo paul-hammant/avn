@@ -48,17 +48,13 @@
 #define PATH_MAX 4096
 #endif
 
-#define STORAGE_RAW  1
-#define STORAGE_ZLIB 2
-
 /* --- Aether bridge ---------------------------------------------------- */
 
-/* Blob encode/write/read live in ae/fs_fs/rep_store.ae (std.zlib +
- * std.fs). Encoded envelope is "<use_zlib>\x01<bytes>". */
-extern const char *aether_rep_encode_blob(const char *data, int length);
-extern int         aether_rep_encoded_use_zlib(const char *encoded);
-extern const char *aether_rep_write_encoded(const char *repo, const char *sha,
-                                             const char *encoded);
+/* Blob read lives in ae/fs_fs/rep_store.ae (std.zlib + std.fs). The
+ * encode + write side moved entirely to Aether in Round 105 — see
+ * rep_write_blob there. The decode side stays C-glued because the
+ * read returns a length-aware AetherString that we copy into a
+ * malloc'd, NUL-terminated buffer at the FFI boundary. */
 extern const char *aether_rep_read_decoded(const char *repo, const char *sha,
                                             int uncompressed_size);
 
@@ -144,42 +140,14 @@ svnae_repo_secondary_hashes(const char *repo, char out[4][32])
     return count;
 }
 
-/* Hex-encode digest into out (>= 65 bytes). */
-/* Hash → hex lives in ae/ffi/openssl/shim.c; thin alias kept for
- * back-compat with the call sites in this file. */
-extern int svnae_openssl_hash_hex_into(const char *algo, const char *data, int len, char *out);
-
-static int
-hex_of_algo(const char *algo, const char *data, int len, char out[65])
-{
-    return svnae_openssl_hash_hex_into(algo, data, len, out);
-}
-
-/* Hash `data` using the repo's primary algorithm. `out` must be at
- * least 65 bytes (64 hex chars for sha256 + NUL). Returns the hex
- * length on success, 0 on failure. Inlines the golden list here —
- * matches ae/subr/checksum/shim.c. */
-static int
-repo_hash_of(const char *repo, const char *data, int len, char out[65])
-{
-    return hex_of_algo(svnae_repo_primary_hash(repo), data, len, out);
-}
-
 /* --- rep-cache access ---------------------------------------------- *
  *
- * Primary lookup/insert in rep_store.ae; secondary-hash table ops in
- * rep_store_sec.ae. Both go through contrib.sqlite. */
+ * Lookup helpers used by svnae_rep_read_blob (uncompressed size for
+ * the inflate path) and svnae_rep_lookup_secondary (legacy NULL-on-
+ * miss adapter for the few remaining char* callers in svnserver).
+ * Both go through contrib.sqlite (rep_store.ae / rep_store_sec.ae). */
 
-extern int aether_rep_cache_has(const char *repo, const char *sha);
 extern int aether_rep_cache_lookup_uncompressed(const char *repo, const char *sha);
-extern int aether_rep_cache_insert(const char *repo, const char *sha,
-                                    const char *rel_path,
-                                    int uncompressed, int storage);
-extern const char *aether_rep_cache_sec_ensure(const char *repo);
-extern const char *aether_rep_cache_sec_insert(const char *repo,
-                                                const char *primary,
-                                                const char *algo,
-                                                const char *secondary);
 extern const char *aether_rep_cache_sec_lookup(const char *repo,
                                                 const char *primary,
                                                 const char *algo);
@@ -205,58 +173,19 @@ svnae_rep_lookup_secondary(const char *repo, const char *primary_hex,
 
 /* --- public interface ---------------------------------------------- */
 
-/* Write `data[0..len]` to the rep store (dedup by SHA-1). Returns a pointer
- * to a static-thread-local buffer containing the hex SHA-1. Caller must
- * copy before making another call. Returns NULL on failure. */
+/* svnae_rep_write_blob — the dedup-aware blob-write orchestrator
+ * lives entirely in ae/fs_fs/rep_store.ae::rep_write_blob now
+ * (Round 105). This C-side name is preserved as a one-line forward
+ * because some checked-in *_generated.c files (rebuild_generated.c
+ * in particular — its source rebuild.ae no longer recompiles cleanly
+ * under the current aetherc, so the cached .c is what links) still
+ * reference the legacy svnae_ symbol. Once rebuild.ae regenerates,
+ * this forward can go. */
+extern const char *aether_rep_write_blob(const char *repo, const char *data, int len);
 const char *
 svnae_rep_write_blob(const char *repo, const char *data, int len)
 {
-    static __thread char sha1_buf[65];   /* sized for sha256 (64 hex chars + NUL) */
-    if (repo_hash_of(repo, data, len, sha1_buf) == 0) return NULL;
-
-    if (aether_rep_cache_has(repo, sha1_buf)) return sha1_buf;
-
-    /* Hand encode + atomic binary write to ae/fs_fs/rep_store.ae.
-     * Aether's envelope carries use_zlib back so we update
-     * rep-cache.db's `storage` column without re-inspecting the
-     * encoded payload. */
-    extern const char *aether_rep_rel_path(const char *sha);
-    const char *encoded = aether_rep_encode_blob(data, len);
-    if (!encoded) return NULL;
-    int use_zlib = aether_rep_encoded_use_zlib(encoded);
-
-    const char *werr = aether_rep_write_encoded(repo, sha1_buf, encoded);
-    if (werr && aether_string_length(werr) > 0) return NULL;
-
-    /* rel_path for the rep-cache.db row. */
-    char rel_path[80];
-    {
-        const char *rp = aether_rep_rel_path(sha1_buf);
-        size_t n = strlen(rp);
-        if (n >= sizeof rel_path) return NULL;
-        memcpy(rel_path, rp, n + 1);
-    }
-
-    if (aether_rep_cache_insert(repo, sha1_buf, rel_path, len,
-                                 use_zlib ? STORAGE_ZLIB : STORAGE_RAW) != 0) {
-        return NULL;
-    }
-
-    /* Compute + persist secondary hashes (if any). Table created on
-     * demand. Hash computation stays here since the data buffer is
-     * C-side; the sqlite drive is rep_cache_sec_ensure/_insert. */
-    char sec[4][32];
-    int sec_n = svnae_repo_secondary_hashes(repo, sec);
-    if (sec_n > 0) {
-        aether_rep_cache_sec_ensure(repo);
-        for (int i = 0; i < sec_n; i++) {
-            char shex[65];
-            if (hex_of_algo(sec[i], data, len, shex)) {
-                aether_rep_cache_sec_insert(repo, sha1_buf, sec[i], shex);
-            }
-        }
-    }
-    return sha1_buf;
+    return aether_rep_write_blob(repo, data, len);
 }
 
 /* Read a blob from the rep store. Returns a malloc'd NUL-terminated buffer
