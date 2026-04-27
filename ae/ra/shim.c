@@ -223,7 +223,7 @@ const char *svnae_ra_paths_action(struct svnae_ra_paths *P, int i) { return svna
 const char *svnae_ra_paths_path  (struct svnae_ra_paths *P, int i) { return svnae_packed_pin_at(P, i, aether_ra_paths_path); }
 void svnae_ra_paths_free(struct svnae_ra_paths *P) { svnae_packed_handle_free((struct svnae_packed_handle *)P); }
 
-/* ---- blame handle (Phase 7.6) --------------------------------------- */
+/* ---- blame handle ---------------------------------------------------- */
 
 extern const char *aether_ra_parse_blame(const char *body);
 extern int         aether_ra_blame_count(const char *packed);

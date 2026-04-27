@@ -147,9 +147,9 @@ int svnserver_request_is_super(HttpRequest *req) {
 
 /* --- repo path registry ------------------------------------------------ *
  *
- * Phase 6 single-repo mode: one name → one path. Set once at startup via
- * svnae_svnserver_register_repo(). Lookup via find_repo_path().
- */
+ * Single-repo mode: one name → one path. Set once at startup via
+ * svnae_svnserver_register_repo, looked up via svnae_svnserver_find_repo
+ * _path. Multi-repo via a config table is a future expansion. */
 
 static char *g_repo_name = NULL;
 static char *g_repo_path = NULL;

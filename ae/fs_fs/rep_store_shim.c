@@ -242,11 +242,9 @@ svnae_rep_write_blob(const char *repo, const char *data, int len)
         return NULL;
     }
 
-    /* Phase 7.5: compute and persist secondary hashes (if any). The
-     * table is created on demand so legacy repos pay no cost. The
-     * sqlite3 driving moved to Aether (rep_cache_sec_ensure + _insert
-     * via contrib.sqlite); we still compute the hash on the C side
-     * because the data buffer lives here. */
+    /* Compute + persist secondary hashes (if any). Table created on
+     * demand. Hash computation stays here since the data buffer is
+     * C-side; the sqlite drive is rep_cache_sec_ensure/_insert. */
     char sec[4][32];
     int sec_n = svnae_repo_secondary_hashes(repo, sec);
     if (sec_n > 0) {
