@@ -25,6 +25,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "aether_string.h"   /* aether_string_data / aether_string_length */
+
 /* Reuse the compress shim's buf API — same shape. We duplicate the small
  * struct here because Aether has no equivalent of C headers shared across
  * shims; at the Aether level this is still just an opaque `ptr`. */
@@ -66,26 +68,6 @@ vi_encode(uint64_t v, unsigned char *out)
     }
     (void)written;  /* silence unused in some builds */
     return n;
-}
-
-/* Decode varint at p (bounded by end). Returns # bytes consumed, or 0 on
- * malformed/overflow. Writes the value to *val. */
-static int
-vi_decode(const unsigned char *p, const unsigned char *end, uint64_t *val)
-{
-    uint64_t v = 0;
-    const unsigned char *start = p;
-    while (p < end) {
-        unsigned char c = *p++;
-        if ((c & 0x80) == 0) {
-            v = (v << 7) | c;
-            *val = v;
-            return (int)(p - start);
-        }
-        v = (v << 7) | (c & 0x7f);
-        if (p - start > 10) return 0;  /* guard against runaway */
-    }
-    return 0;
 }
 
 /* ---- instruction encoding --------------------------------------------- */
@@ -224,93 +206,43 @@ oom:
  * A multi-window reader is a straightforward extension and will land
  * when fs_fs starts emitting windowed diffs for large files.
  */
+/* Decoder body lives in ae/delta/svndiff_decode.ae now (Round 108
+ * — std.bytes from aether 0.94 unblocked the action-1 RLE-overlap
+ * pattern that needed mutable random-access byte writes). The C
+ * side does two boundary jobs:
+ *   (1) Wrap the raw `diff` and `source` byte buffers into
+ *       length-aware AetherStrings before crossing into Aether.
+ *       Aether's `string.char_at` and `string.length` use strlen()
+ *       on raw `char*` pointers, which truncates at the first
+ *       embedded NUL. Wrapping via string_new_with_length carries
+ *       the explicit length end-to-end.
+ *   (2) Repack the Aether result into the legacy svnae_buf handle
+ *       so existing callers don't change.
+ */
+/* Result format: empty AetherString = error; otherwise byte 0 is
+ * the status flag (0x01 = success) and bytes 1.. are the payload.
+ * See ae/delta/svndiff_decode.ae for why this leading-byte channel
+ * exists rather than a tuple return. */
+extern const char *aether_svndiff_decode_apply(const void *diff, int diff_len,
+                                                const void *source, int source_len);
+
 struct svnae_buf *
-svnae_svndiff_decode_apply(
-    const char *diff, int diff_len,
-    const char *source, int source_len)
+svnae_svndiff_decode_apply(const char *diff, int diff_len,
+                           const char *source, int source_len)
 {
-    const unsigned char *p   = (const unsigned char *)diff;
-    const unsigned char *end = p + diff_len;
-
-    /* Signature */
-    if (diff_len < 4) return NULL;
-    if (p[0] != 'S' || p[1] != 'V' || p[2] != 'N' || p[3] != 1) return NULL;
-    p += 4;
-
-    uint64_t sview_offset = 0, sview_len = 0, tview_len = 0;
-    uint64_t inst_len = 0, newdata_len = 0;
-    int n;
-    n = vi_decode(p, end, &sview_offset); if (n == 0) return NULL; p += n;
-    n = vi_decode(p, end, &sview_len);    if (n == 0) return NULL; p += n;
-    n = vi_decode(p, end, &tview_len);    if (n == 0) return NULL; p += n;
-    n = vi_decode(p, end, &inst_len);     if (n == 0) return NULL; p += n;
-    n = vi_decode(p, end, &newdata_len);  if (n == 0) return NULL; p += n;
-
-    if (sview_offset + sview_len > (uint64_t)source_len) return NULL;
-    if ((uint64_t)(end - p) < inst_len + newdata_len)   return NULL;
-
-    const unsigned char *inst_p    = p;
-    const unsigned char *inst_end  = p + inst_len;
-    const unsigned char *newdata_p = p + inst_len;
-
-    /* Allocate target buffer. */
-    unsigned char *target = malloc(tview_len > 0 ? tview_len + 1 : 1);
-    if (!target) return NULL;
-    uint64_t tpos = 0;
-    uint64_t new_consumed = 0;
-
-    while (inst_p < inst_end) {
-        unsigned char c = *inst_p++;
-        int action = (c >> 6) & 0x3;
-        if (action > 2) { free(target); return NULL; }
-
-        uint64_t length = c & 0x3f;
-        if (length == 0) {
-            uint64_t v;
-            n = vi_decode(inst_p, inst_end, &v);
-            if (n == 0) { free(target); return NULL; }
-            inst_p += n;
-            length = v;
-        }
-
-        uint64_t offset = 0;
-        if (action != 2) {
-            n = vi_decode(inst_p, inst_end, &offset);
-            if (n == 0) { free(target); return NULL; }
-            inst_p += n;
-        }
-
-        if (tpos + length > tview_len) { free(target); return NULL; }
-
-        if (action == 0) {
-            /* source copy */
-            if (offset + length > sview_len) { free(target); return NULL; }
-            memcpy(target + tpos,
-                   (const unsigned char *)source + sview_offset + offset,
-                   length);
-            tpos += length;
-        } else if (action == 1) {
-            /* target self-copy — byte-at-a-time because of the overlap trick */
-            if (offset >= tpos) { free(target); return NULL; }
-            for (uint64_t i = 0; i < length; i++) {
-                target[tpos + i] = target[offset + i];
-            }
-            tpos += length;
-        } else {
-            /* new-data copy */
-            if (new_consumed + length > newdata_len) { free(target); return NULL; }
-            memcpy(target + tpos, newdata_p + new_consumed, length);
-            new_consumed += length;
-            tpos += length;
-        }
-    }
-
-    if (tpos != tview_len) { free(target); return NULL; }
-
-    target[tview_len] = '\0';
-    struct svnae_buf *b = buf_from(target, (int)tview_len);
-    free(target);
-    return b;
+    if (diff_len < 0 || source_len < 0) return NULL;
+    AetherString *diff_s = string_new_with_length(diff ? diff : "", (size_t)diff_len);
+    AetherString *src_s  = string_new_with_length(source ? source : "", (size_t)source_len);
+    const char *out = aether_svndiff_decode_apply(diff_s, diff_len, src_s, source_len);
+    string_free(diff_s);
+    string_free(src_s);
+    if (!out) return NULL;
+    int n = (int)aether_string_length(out);
+    if (n == 0) return NULL;                                /* error */
+    const char *data = aether_string_data(out);
+    if (data[0] != 0x01) return NULL;                       /* unknown status */
+    /* Strip the status byte. n - 1 may be 0 (legitimate empty target). */
+    return buf_from((const unsigned char *)(data + 1), n - 1);
 }
 
 /* ---- builder API for Aether callers ---------------------------------- *

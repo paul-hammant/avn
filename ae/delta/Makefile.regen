@@ -1,0 +1,19 @@
+# Regeneration recipe for Aether-as-library C sources under ae/delta/.
+#
+# These `.ae` files are compiled to C via `aetherc --emit=lib`. The
+# generated C is NOT checked into git — ./regen.sh at the repo root
+# calls this. Never hand-edit a *_generated.c; the next regen will
+# overwrite it.
+
+AETHERC ?= $(abspath $(dir $(lastword $(MAKEFILE_LIST))))/../../.aether_binaries/build/aetherc
+
+GENERATED := svndiff_decode_generated.c
+
+all: $(GENERATED)
+
+# svndiff_decode.ae uses std.bytes (mutable byte buffer with
+# overlap-safe copy_within). No filesystem / network capabilities.
+svndiff_decode_generated.c: svndiff_decode.ae
+	$(AETHERC) --emit=lib $< $@
+
+.PHONY: all
