@@ -15,71 +15,40 @@
  * permissions and limitations under the License.
  */
 
-/* ae/wc/props_shim.c — proplist storage primitive + free helpers.
- * Same shape as db_shim.c's nodelist:
- *   - struct svnae_wc_proplist + (name, value) accessors
- *   - new()/append() the Aether-side SELECT loop in props.ae calls
- *   - malloc-free trampoline for propget's returned string */
+/* ae/wc/props_shim.c — proplist constructor + accessors (packed_
+ * handle-backed) plus the legacy svnae_wc_propget malloc-detach
+ * trampoline. The struct + new + append + per-row accessors that
+ * used to live here are now packed_handle one-liners; the SELECT
+ * loop in props.ae builds the packed string directly. */
 
 #include <stdlib.h>
 #include <string.h>
 
-struct prop_entry { char *name; char *value; };
-struct svnae_wc_proplist { struct prop_entry *items; int n; int cap; };
+#include "../subr/packed_handle/packed_handle.h"
+
+/* Field-extractor extern declarations matching the Aether exports
+ * in ae/wc/props_packed.ae. */
+extern int         aether_wc_proplist_count   (const char *packed);
+extern const char *aether_wc_proplist_name_at (const char *packed, int i);
+extern const char *aether_wc_proplist_value_at(const char *packed, int i);
 
 struct svnae_wc_proplist *
-svnae_wc_proplist_new(void)
+svnae_wc_proplist_handle(const char *packed)
 {
-    return calloc(1, sizeof(struct svnae_wc_proplist));
+    if (!packed) return NULL;
+    return (struct svnae_wc_proplist *)svnae_packed_handle_new(packed,
+                                            aether_wc_proplist_count);
 }
 
-int
-svnae_wc_proplist_append(struct svnae_wc_proplist *L,
-                         const char *name, const char *value)
-{
-    if (!L) return -1;
-    if (L->n == L->cap) {
-        int nc = L->cap ? L->cap * 2 : 8;
-        struct prop_entry *p = realloc(L->items, (size_t)nc * sizeof *p);
-        if (!p) return -1;
-        L->items = p;
-        L->cap = nc;
-    }
-    L->items[L->n].name  = strdup(name  ? name  : "");
-    L->items[L->n].value = strdup(value ? value : "");
-    L->n++;
-    return 0;
-}
-
-int svnae_wc_proplist_count(const struct svnae_wc_proplist *L) { return L ? L->n : 0; }
-
-const char *
-svnae_wc_proplist_name(const struct svnae_wc_proplist *L, int i)
-{
-    if (!L || i < 0 || i >= L->n) return "";
-    return L->items[i].name;
-}
-
-const char *
-svnae_wc_proplist_value(const struct svnae_wc_proplist *L, int i)
-{
-    if (!L || i < 0 || i >= L->n) return "";
-    return L->items[i].value;
-}
-
-void
-svnae_wc_proplist_free(struct svnae_wc_proplist *L)
-{
-    if (!L) return;
-    for (int i = 0; i < L->n; i++) { free(L->items[i].name); free(L->items[i].value); }
-    free(L->items);
-    free(L);
-}
+int svnae_wc_proplist_count(const struct svnae_wc_proplist *L) { return svnae_packed_count(L); }
+const char *svnae_wc_proplist_name (const struct svnae_wc_proplist *L, int i) { return svnae_packed_pin_at((void *)L, i, aether_wc_proplist_name_at); }
+const char *svnae_wc_proplist_value(const struct svnae_wc_proplist *L, int i) { return svnae_packed_pin_at((void *)L, i, aether_wc_proplist_value_at); }
+void svnae_wc_proplist_free(struct svnae_wc_proplist *L) { svnae_packed_handle_free((struct svnae_packed_handle *)L); }
 
 /* Legacy svnae_wc_propget — strdup-into-caller-owned-heap wrapper
  * around the Aether-side aether_wc_propget_value (returns "" on
  * miss). Preserves the historical `char *` (+ NULL-on-miss + caller-
- * frees) ABI. Aether-side callers can use aether_wc_propget_value
+ * frees) ABI. Aether-side callers use aether_wc_propget_value
  * directly. */
 extern const char *aether_wc_propget_value(const char *wc_root,
                                             const char *path,

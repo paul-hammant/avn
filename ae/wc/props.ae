@@ -37,8 +37,10 @@ extern svnae_wc_db_close(db: ptr)
 extern svnae_wc_db_node_exists(db: ptr, path: string) -> int
 
 // Storage primitives for the proplist handle (C-side, props_shim.c).
-extern svnae_wc_proplist_new() -> ptr
-extern svnae_wc_proplist_append(L: ptr, name: string, value: string) -> int
+// Proplist handle constructor (props_shim.c). Wraps a Aether-built
+// packed string "<n>\x02<name>\x01<value>\x02..." into the shared
+// svnae_packed_handle; field accessors live in ae/wc/props_packed.ae.
+extern svnae_wc_proplist_handle(packed: string) -> ptr
 
 // Idempotent schema install. Round 66: previously each operation
 // (propset / propget / propdel / proplist) called ensure_schema
@@ -157,19 +159,22 @@ export svnae_wc_proplist(wc_root: string, path: string) -> ptr {
     if string.length(perr) > 0 { close_(db); return null }
     sqlite.bind_text(stmt, 1, path)
 
-    L = svnae_wc_proplist_new()
+    n = 0
+    body = ""
     rc, _ = sqlite.step(stmt, db)
     while rc == SQLITE_ROW {
         nm = sqlite.column_text(stmt, 0)
         vl = sqlite.column_text(stmt, 1)
-        nm = string.copy(nm)
-        vl = string.copy(vl)
-        svnae_wc_proplist_append(L, nm, vl)
+        rec = "${nm}\x01${vl}\x02"
+        body = string.concat(body, rec)
+        n = n + 1
         rc, _ = sqlite.step(stmt, db)
     }
     sqlite.finalize(stmt)
     close_(db)
-    return L
+    head = "${n}\x02"
+    packed = string.concat(head, body)
+    return svnae_wc_proplist_handle(packed)
 }
 
 main() {
