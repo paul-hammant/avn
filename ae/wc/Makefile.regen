@@ -7,7 +7,7 @@
 
 AETHERC ?= $(abspath $(dir $(lastword $(MAKEFILE_LIST))))/../../.aether_binaries/build/aetherc
 
-GENERATED := mergeinfo_generated.c ignore_generated.c sidecar_generated.c status_code_generated.c pristine_path_generated.c pristine_generated.c update_apply_generated.c merge_apply_generated.c update_walk_generated.c merge_walk_generated.c update_props_generated.c db_schema_generated.c db_nodes_generated.c mutate_generated.c checkout_generated.c resolve_generated.c props_generated.c revert_generated.c status_generated.c update_generated.c merge_generated.c commit_generated.c diff_generated.c
+GENERATED := mergeinfo_generated.c ignore_generated.c sidecar_generated.c status_code_generated.c pristine_path_generated.c pristine_generated.c update_apply_generated.c merge_apply_generated.c update_walk_generated.c merge_walk_generated.c update_props_generated.c db_schema_generated.c db_nodes_generated.c db_node_packed_generated.c mutate_generated.c checkout_generated.c resolve_generated.c props_generated.c revert_generated.c status_generated.c update_generated.c merge_generated.c commit_generated.c diff_generated.c
 
 all: $(GENERATED)
 
@@ -53,6 +53,11 @@ db_schema_generated.c: db_schema.ae
 
 db_nodes_generated.c: db_nodes.ae
 	cd ../.. && $(AETHERC) --emit=lib ae/wc/db_nodes.ae ae/wc/db_nodes_generated.c
+
+# db_node_packed.ae — pure string-parsing field accessors, no
+# capabilities needed.
+db_node_packed_generated.c: db_node_packed.ae
+	$(AETHERC) --emit=lib $< $@
 
 # mutate.ae imports std.fs (file copy via read_binary + write_atomic);
 # --with=fs opts in to the filesystem capability.

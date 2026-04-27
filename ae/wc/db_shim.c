@@ -15,42 +15,13 @@
  * permissions and limitations under the License.
  */
 
-/* ae/wc/db_shim.c — the working-copy metadata database.
- *
- * Each WC has a .svn/wc.db SQLite file. Schema is deliberately narrower
- * than reference svn's wc_db — we track just what the Phase 5 commands
- * actually need. Extensions (tree conflicts, externals, changelists,
- * mergeinfo) land as the surrounding phases need them.
- *
- * Tables:
- *
- *   nodes(path TEXT PK, kind INT, base_rev INT, base_sha1 TEXT, state INT)
- *     kind:     0 = file, 1 = dir
- *     base_rev: revision this node was checked out / updated from
- *     base_sha1:pristine content sha1 (files only; "" for dirs)
- *     state:    0 = normal (tracked, base matches pristine)
- *               1 = added          (scheduled for commit, no base)
- *               2 = deleted        (scheduled for commit, was in base)
- *               3 = replaced       (delete + add against a prior path)
- *
- *   info(key TEXT PK, value TEXT)
- *     Simple KV for "url", "repo_name", "wc_root" and similar globals
- *     we want without a dedicated table.
- *
- * The shim exposes:
- *   open(wc_root)           → handle  -- opens (or creates) .svn/wc.db
- *   close(handle)
- *   upsert_node(...)        -- insert or replace a nodes row
- *   get_node(path)          → handle  -- one-row fetch (nullable)
- *   node_exists(path)       → int
- *   delete_node(path)
- *   list_nodes()            → handle  -- all rows, ordered by path
- *   set_info(key, value)
- *   get_info(key)           → string (empty if missing)
- *
- * Handle types are opaque svnae_ptr types to Aether; accessors pull
- * individual columns.
- */
+/* ae/wc/db_shim.c — wc.db lifecycle + opaque handles for the nodes
+ * table. SQL drive lives in ae/wc/db_nodes.ae; per-row field accessors
+ * are now packed-string handles (subr/packed_handle/) rather than
+ * C structs. Public ABI of svnae_wc_node{,list}_* is unchanged —
+ * callers see one-line forwards onto svnae_packed_pin_at /
+ * svnae_packed_int_at, the same pattern ra/shim.c and repos/shim.c
+ * use. */
 
 #include <errno.h>
 #include <limits.h>
@@ -61,20 +32,14 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 
+#include "../subr/packed_handle/packed_handle.h"
+
 #ifndef PATH_MAX
 #define PATH_MAX 4096
 #endif
 
 /* --- open / close ----------------------------------------------------- */
 
-/* Given a wc_root like "/home/me/proj", open (or create) .svn/wc.db and
- * install the schema if this is a fresh db. Returns the sqlite handle
- * (as ptr) or NULL. Also mkdir -p's .svn and .svn/pristine for the
- * caller's convenience.
- *
- * Schema install and the Phase 5.13 `conflicted` column migration
- * live in ae/wc/db_schema.ae now; this function does the filesystem
- * setup + sqlite_open and hands off. */
 extern int aether_wc_db_install_schema(sqlite3 *db);
 
 sqlite3 *
@@ -104,121 +69,75 @@ svnae_wc_db_open(const char *wc_root)
 
 void svnae_wc_db_close(sqlite3 *db) { if (db) sqlite3_close(db); }
 
-/* --- node CRUD -------------------------------------------------------- *
+/* --- node handle (single-record) and nodelist handle (packed array) -- *
  *
- * Node CRUD lives in ae/wc/db_nodes.ae. The C side keeps the struct
- * layout, six accessors, free, and svnae_wc_node_alloc — the storage
- * primitive Aether's get_node calls with the six row fields. */
+ * Both shapes are svnae_packed_handle backed. Single-node packs as a
+ * lone "<path>\x01<kind>\x01<base_rev>\x01<base_sha1>\x01<state>\x01
+ * <conflicted>" record (n=0); nodelist prefixes "<n>\x02" + records
+ * separated by \x02. Field accessors live in ae/wc/db_node_packed.ae.
+ *
+ * Type-safe casts: callers continue to see opaque struct pointers
+ * (struct svnae_wc_node, struct svnae_wc_nodelist), but those are
+ * just opaque names for svnae_packed_handle. */
 
-struct svnae_wc_node {
-    char *path;
-    int   kind;
-    int   base_rev;
-    char *base_sha1;
-    int   state;
-    int   conflicted;
-};
+/* Field-extractor extern declarations, matching the Aether exports
+ * in ae/wc/db_node_packed.ae. */
+extern int         aether_wc_node_count       (const char *packed);
+extern const char *aether_wc_node_path        (const char *packed);
+extern int         aether_wc_node_kind        (const char *packed);
+extern int         aether_wc_node_base_rev    (const char *packed);
+extern const char *aether_wc_node_base_sha1   (const char *packed);
+extern int         aether_wc_node_state       (const char *packed);
+extern int         aether_wc_node_conflicted  (const char *packed);
+extern const char *aether_wc_node_path_at     (const char *packed, int i);
+extern int         aether_wc_node_kind_at     (const char *packed, int i);
+extern int         aether_wc_node_base_rev_at (const char *packed, int i);
+extern const char *aether_wc_node_base_sha1_at(const char *packed, int i);
+extern int         aether_wc_node_state_at    (const char *packed, int i);
+extern int         aether_wc_node_conflicted_at(const char *packed, int i);
 
+/* Construct from a Aether-built packed string. The Aether side
+ * (db_nodes.ae) builds a single-record packed and a list packed,
+ * then calls one of these to wrap into the shared handle type. */
 struct svnae_wc_node *
-svnae_wc_node_alloc(const char *path, int kind, int base_rev,
-                     const char *base_sha1, int state, int conflicted)
+svnae_wc_node_handle(const char *packed)
 {
-    struct svnae_wc_node *n = calloc(1, sizeof *n);
-    if (!n) return NULL;
-    n->path       = strdup(path ? path : "");
-    n->kind       = kind;
-    n->base_rev   = base_rev;
-    n->base_sha1  = strdup(base_sha1 ? base_sha1 : "");
-    n->state      = state;
-    n->conflicted = conflicted;
-    return n;
+    if (!packed || !*packed) return NULL;
+    return (struct svnae_wc_node *)svnae_packed_handle_new(packed, NULL);
 }
 
-const char *svnae_wc_node_path    (const struct svnae_wc_node *n) { return n ? n->path : ""; }
-int         svnae_wc_node_kind    (const struct svnae_wc_node *n) { return n ? n->kind : -1; }
-int         svnae_wc_node_base_rev(const struct svnae_wc_node *n) { return n ? n->base_rev : -1; }
-const char *svnae_wc_node_base_sha1(const struct svnae_wc_node *n){ return n && n->base_sha1 ? n->base_sha1 : ""; }
-int         svnae_wc_node_state   (const struct svnae_wc_node *n) { return n ? n->state : -1; }
-int         svnae_wc_node_conflicted(const struct svnae_wc_node *n) { return n ? n->conflicted : 0; }
-
-void
-svnae_wc_node_free(struct svnae_wc_node *n)
-{
-    if (!n) return;
-    free(n->path);
-    free(n->base_sha1);
-    free(n);
-}
-
-/* --- list_nodes ------------------------------------------------------- *
- *
- * Returns a snapshot of all rows as an array handle + indexed accessors.
- * Ordered by path for deterministic iteration.
- */
-
-struct svnae_wc_nodelist {
-    struct svnae_wc_node *items;
-    int n;
-    int cap;
-};
-
-/* Storage primitives for db_nodes.ae's svnae_wc_db_list_nodes. The
- * Aether side drives the SQL loop and hands each row to append(). */
 struct svnae_wc_nodelist *
-svnae_wc_nodelist_new(void)
+svnae_wc_nodelist_handle(const char *packed)
 {
-    return calloc(1, sizeof(struct svnae_wc_nodelist));
+    if (!packed) return NULL;
+    return (struct svnae_wc_nodelist *)svnae_packed_handle_new(packed,
+                                                aether_wc_node_count);
 }
 
-int
-svnae_wc_nodelist_append(struct svnae_wc_nodelist *L,
-                          const char *path, int kind, int base_rev,
-                          const char *base_sha1, int state, int conflicted)
-{
-    if (!L) return -1;
-    if (L->n == L->cap) {
-        int ncap = L->cap ? L->cap * 2 : 8;
-        struct svnae_wc_node *p = realloc(L->items, (size_t)ncap * sizeof *p);
-        if (!p) return -1;
-        L->items = p;
-        L->cap = ncap;
-    }
-    struct svnae_wc_node *n = &L->items[L->n];
-    n->path       = strdup(path ? path : "");
-    n->kind       = kind;
-    n->base_rev   = base_rev;
-    n->base_sha1  = strdup(base_sha1 ? base_sha1 : "");
-    n->state      = state;
-    n->conflicted = conflicted;
-    L->n++;
-    return 0;
-}
+/* Single-record accessors (info-style). */
+const char *svnae_wc_node_path       (const struct svnae_wc_node *n) { return svnae_packed_pin_field((void *)n, aether_wc_node_path); }
+int         svnae_wc_node_kind       (const struct svnae_wc_node *n) { return svnae_packed_int_field((const void *)n, aether_wc_node_kind); }
+int         svnae_wc_node_base_rev   (const struct svnae_wc_node *n) { return svnae_packed_int_field((const void *)n, aether_wc_node_base_rev); }
+const char *svnae_wc_node_base_sha1  (const struct svnae_wc_node *n) { return svnae_packed_pin_field((void *)n, aether_wc_node_base_sha1); }
+int         svnae_wc_node_state      (const struct svnae_wc_node *n) { return svnae_packed_int_field((const void *)n, aether_wc_node_state); }
+int         svnae_wc_node_conflicted (const struct svnae_wc_node *n) { return svnae_packed_int_field((const void *)n, aether_wc_node_conflicted); }
+void        svnae_wc_node_free       (struct svnae_wc_node *n) { svnae_packed_handle_free((struct svnae_packed_handle *)n); }
 
-int svnae_wc_nodelist_count(const struct svnae_wc_nodelist *L) { return L ? L->n : 0; }
+/* Nodelist accessors. */
+int svnae_wc_nodelist_count          (const struct svnae_wc_nodelist *L) { return svnae_packed_count(L); }
+const char *svnae_wc_nodelist_path    (const struct svnae_wc_nodelist *L, int i) { return svnae_packed_pin_at((void *)L, i, aether_wc_node_path_at); }
+int         svnae_wc_nodelist_kind    (const struct svnae_wc_nodelist *L, int i) { return svnae_packed_int_at(L, i, aether_wc_node_kind_at); }
+int         svnae_wc_nodelist_base_rev(const struct svnae_wc_nodelist *L, int i) { return svnae_packed_int_at(L, i, aether_wc_node_base_rev_at); }
+const char *svnae_wc_nodelist_base_sha1(const struct svnae_wc_nodelist *L, int i) { return svnae_packed_pin_at((void *)L, i, aether_wc_node_base_sha1_at); }
+int         svnae_wc_nodelist_state   (const struct svnae_wc_nodelist *L, int i) { return svnae_packed_int_at(L, i, aether_wc_node_state_at); }
+int         svnae_wc_nodelist_conflicted(const struct svnae_wc_nodelist *L, int i) { return svnae_packed_int_at(L, i, aether_wc_node_conflicted_at); }
+void        svnae_wc_nodelist_free   (struct svnae_wc_nodelist *L) { svnae_packed_handle_free((struct svnae_packed_handle *)L); }
 
-const char *svnae_wc_nodelist_path    (const struct svnae_wc_nodelist *L, int i) { return (L && i >= 0 && i < L->n) ? L->items[i].path : ""; }
-int         svnae_wc_nodelist_kind    (const struct svnae_wc_nodelist *L, int i) { return (L && i >= 0 && i < L->n) ? L->items[i].kind : -1; }
-int         svnae_wc_nodelist_base_rev(const struct svnae_wc_nodelist *L, int i) { return (L && i >= 0 && i < L->n) ? L->items[i].base_rev : -1; }
-const char *svnae_wc_nodelist_base_sha1(const struct svnae_wc_nodelist *L, int i){ return (L && i >= 0 && i < L->n && L->items[i].base_sha1) ? L->items[i].base_sha1 : ""; }
-int         svnae_wc_nodelist_state   (const struct svnae_wc_nodelist *L, int i) { return (L && i >= 0 && i < L->n) ? L->items[i].state : -1; }
-int         svnae_wc_nodelist_conflicted(const struct svnae_wc_nodelist *L, int i) { return (L && i >= 0 && i < L->n) ? L->items[i].conflicted : 0; }
-
-void
-svnae_wc_nodelist_free(struct svnae_wc_nodelist *L)
-{
-    if (!L) return;
-    for (int i = 0; i < L->n; i++) {
-        free(L->items[i].path);
-        free(L->items[i].base_sha1);
-    }
-    free(L->items);
-    free(L);
-}
-
-/* --- info kv --------------------------------------------------------- *
+/* --- info kv malloc-detach helper ------------------------------------ *
  *
- * Lookup/store live in db_nodes.ae. svnae_wc_info_dup detaches the
- * sqlite-statement-owned column pointer for caller-malloc'd ABI. */
+ * info-table get_info hands the caller a malloc'd char*; the column
+ * pointer goes stale after sqlite_finalize(). svnae_wc_info_dup is
+ * the detach hook db_nodes.ae calls. */
 
 char *
 svnae_wc_info_dup(const char *s)

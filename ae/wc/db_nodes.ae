@@ -30,21 +30,23 @@ import contrib.sqlite
 const SQLITE_ROW  = 100
 const SQLITE_DONE = 101
 
-// Storage primitives for the nodelist that feeds status / diff /
-// commit / update. Struct layout + accessors stay in db_shim.c —
-// Aether just drives the SQL and calls append() per row.
-extern svnae_wc_nodelist_new() -> ptr
-extern svnae_wc_nodelist_append(L: ptr, path: string, kind: int, base_rev: int, base_sha1: string, node_state: int, conflicted: int) -> int
+// Packed-string handle constructors (db_shim.c). Both wrap into the
+// shared svnae_packed_handle struct; field accessors are in
+// ae/wc/db_node_packed.ae.
+extern svnae_wc_node_handle(packed: string) -> ptr
+extern svnae_wc_nodelist_handle(packed: string) -> ptr
 
 // Malloc lifecycle helper for get_info — the sqlite-owned column
 // pointer goes stale after finalize(), so we hand the caller a
 // detached strdup that pairs with svnae_wc_info_free.
 extern svnae_wc_info_dup(s: string) -> ptr
 
-// Single-node allocator. Same layout as svnae_wc_nodelist_append
-// writes into, just for the one-row get_node path. The returned
-// ptr is freed by the existing svnae_wc_node_free in db_shim.c.
-extern svnae_wc_node_alloc(path: string, kind: int, base_rev: int, base_sha1: string, node_state: int, conflicted: int) -> ptr
+// Build a single packed record "<path>\x01<kind>\x01<base_rev>\x01
+// <base_sha1>\x01<state>\x01<conflicted>". Used by both get_node
+// (alone) and list_nodes (joined with \x02 separators).
+node_record_(path: string, kind: int, base_rev: int, base_sha1: string, node_state: int, conflicted: int) -> string {
+    return "${path}\x01${kind}\x01${base_rev}\x01${base_sha1}\x01${node_state}\x01${conflicted}"
+}
 
 export svnae_wc_db_node_exists(db: ptr, path: string) -> int {
     stmt, perr = sqlite.prepare(db, "SELECT 1 FROM nodes WHERE path = ?")
@@ -112,7 +114,8 @@ export svnae_wc_db_get_node(db: ptr, path: string) -> ptr {
         base_sha1  = sqlite.column_text(stmt, 3)
         node_state = sqlite.column_int (stmt, 4)
         conflicted = sqlite.column_int (stmt, 5)
-        out = svnae_wc_node_alloc(p, kind, base_rev, base_sha1, node_state, conflicted)
+        rec = node_record_(p, kind, base_rev, base_sha1, node_state, conflicted)
+        out = svnae_wc_node_handle(rec)
     }
     sqlite.finalize(stmt)
     return out
@@ -159,7 +162,8 @@ export svnae_wc_db_list_nodes(db: ptr) -> ptr {
     stmt, perr = sqlite.prepare(db,
         "SELECT path, kind, base_rev, base_sha1, state, conflicted FROM nodes ORDER BY path")
     if string.length(perr) > 0 { return null }
-    L = svnae_wc_nodelist_new()
+    n = 0
+    body = ""
     rc, _ = sqlite.step(stmt, db)
     while rc == SQLITE_ROW {
         path       = sqlite.column_text(stmt, 0)
@@ -168,11 +172,16 @@ export svnae_wc_db_list_nodes(db: ptr) -> ptr {
         base_sha1  = sqlite.column_text(stmt, 3)
         node_state = sqlite.column_int (stmt, 4)
         conflicted = sqlite.column_int (stmt, 5)
-        svnae_wc_nodelist_append(L, path, kind, base_rev, base_sha1, node_state, conflicted)
+        rec = node_record_(path, kind, base_rev, base_sha1, node_state, conflicted)
+        body = string.concat(body, rec)
+        body = string.concat(body, "\x02")
+        n = n + 1
         rc, _ = sqlite.step(stmt, db)
     }
     sqlite.finalize(stmt)
-    return L
+    head = "${n}\x02"
+    packed = string.concat(head, body)
+    return svnae_wc_nodelist_handle(packed)
 }
 
 main() {
