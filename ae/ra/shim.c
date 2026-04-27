@@ -78,75 +78,39 @@ const char *aether_ra_get_super_token(void) {
 
 /* The libcurl-using helpers moved to ae/ra/http_client.ae. The Aether
  * helper returns a std.http.client response handle (ptr) we read via
- * typed accessors — status, body, header — and then free. */
+ * typed accessors — status, body, header — and then free.
+ *
+ * Only one C-side caller remains (svnae_ra_cat below); everything
+ * else is fetched + parsed + handed back as a packed string by
+ * ae/ra/fetch.ae. */
 extern const void *aether_ra_http_get(const char *url);
-extern const void *aether_ra_http_post_json(const char *url, const char *body, int body_len);
 extern int         aether_ra_http_response_status(const void *resp);
 extern const char *aether_ra_http_response_body  (const void *resp);
 extern void        aether_ra_http_response_free  (const void *resp);
 
-/* Copy an AetherString-backed body (length-aware, embedded-NUL safe)
- * into a fresh malloc'd buffer that out-params expect. */
-static int
-take_body(const char *src, char **out_body, size_t *out_len)
-{
-    const char *data = aether_string_data(src);
-    int n = (int)aether_string_length(src);
-    char *b = malloc((size_t)n + 1);
-    if (!b) return -1;
-    if (n > 0) memcpy(b, data, (size_t)n);
-    b[n] = '\0';
-    *out_body = b;
-    *out_len = (size_t)n;
-    return 0;
-}
-
-/* GET `url`. Returns 0 on success (body malloc'd, caller frees),
- * -1 on transport failure. */
-static int
-http_get(const char *url, char **out_body, size_t *out_len, int *out_status)
+/* GET `url`, return malloc'd body bytes iff status==200, NULL
+ * otherwise. Embedded-NUL safe (uses aether_string_length, not
+ * strlen). Used only by svnae_ra_cat, which needs a length-aware
+ * binary slurp the Aether-side aether_http_get_200 can't provide. */
+static char *
+ra_get_200_bytes(const char *url)
 {
     const void *resp = aether_ra_http_get(url);
-    if (!resp) return -1;
-    *out_status = aether_ra_http_response_status(resp);
-    int rc = take_body(aether_ra_http_response_body(resp), out_body, out_len);
+    if (!resp) return NULL;
+    int status = aether_ra_http_response_status(resp);
+    if (status != 200) { aether_ra_http_response_free(resp); return NULL; }
+
+    const char *src = aether_ra_http_response_body(resp);
+    int n = (int)aether_string_length(src);
+    const char *data = aether_string_data(src);
+    char *b = malloc((size_t)n + 1);
+    if (b) {
+        if (n > 0) memcpy(b, data, (size_t)n);
+        b[n] = '\0';
+    }
     aether_ra_http_response_free(resp);
-    return rc;
+    return b;
 }
-
-/* GET `url`, return malloc'd body iff transport succeeded AND status
- * is 200. Returns NULL on transport failure or any non-200 status —
- * the caller can't tell those apart, but every existing caller
- * already collapsed both into "give up" anyway.
- *
- * `out_len` (nullable) receives the body byte count on success. */
-static char *
-http_get_200(const char *url, size_t *out_len)
-{
-    char *body = NULL; size_t len = 0; int status = 0;
-    if (http_get(url, &body, &len, &status) != 0) return NULL;
-    if (status != 200) { free(body); return NULL; }
-    if (out_len) *out_len = len;
-    return body;
-}
-
-static int
-http_post_json(const char *url, const char *body, char **out_resp, size_t *out_len, int *out_status)
-{
-    const void *resp = aether_ra_http_post_json(url, body, (int)strlen(body));
-    if (!resp) return -1;
-
-    *out_status = aether_ra_http_response_status(resp);
-
-    const char *body_str = aether_ra_http_response_body(resp);
-    int rc = take_body(body_str, out_resp, out_len);
-    aether_ra_http_response_free(resp);
-    return rc;
-}
-
-/* aether_ra_parse_rev_response is referenced from copy_branch.ae's
- * post helper, hence the explicit extern. */
-extern int aether_ra_parse_rev_response(const char *body);
 
 /* ---- packed-record handle constructors -----------------------------
  *
@@ -256,7 +220,7 @@ svnae_ra_cat(const char *base_url, const char *repo_name, int rev, const char *p
 {
     /* Skip leading '/' in the user path so URLs look clean. */
     while (*path == '/') path++;
-    return http_get_200(aether_url_rev_cat(base_url, repo_name, rev, path), NULL);
+    return ra_get_200_bytes(aether_url_rev_cat(base_url, repo_name, rev, path));
 }
 
 void svnae_ra_free(char *p) { free(p); }
@@ -284,30 +248,6 @@ int svnae_ra_props_count(const struct svnae_ra_props *P) { return svnae_packed_c
 const char *svnae_ra_props_name (struct svnae_ra_props *P, int i) { return svnae_packed_pin_at(P, i, aether_ra_props_name); }
 const char *svnae_ra_props_value(struct svnae_ra_props *P, int i) { return svnae_packed_pin_at(P, i, aether_ra_props_value); }
 void        svnae_ra_props_free (struct svnae_ra_props *P) { svnae_packed_handle_free((struct svnae_packed_handle *)P); }
-
-/* Tuple-return adapter for Aether's copy / branch-create posts:
- * issue the POST, hand back (status, body). Status 0 on transport
- * failure; body is a TLS-cached buffer the Aether side reads
- * once before the next call. The typedef name matches what the
- * Aether codegen emits at every (int, string)-tuple call site. */
-typedef struct { int _0; const char *_1; } _tuple_int_string;
-_tuple_int_string
-svnae_ra_http_post(const char *url, const char *body)
-{
-    static __thread char *last = NULL;
-    free(last); last = NULL;
-
-    char *resp = NULL; size_t len = 0; int status = 0;
-    int rc = http_post_json(url, body, &resp, &len, &status);
-    (void)len;
-
-    _tuple_int_string r;
-    if (rc != 0) { r._0 = 0; r._1 = ""; return r; }
-    last = resp;
-    r._0 = status;
-    r._1 = last ? last : "";
-    return r;
-}
 
 /* ---- list ------------------------------------------------------------ */
 
@@ -510,6 +450,8 @@ void *svnae_ra_json_int(int v) { return json_create_number((double)v); }
  * + libcurl + the TLS-aware resp buffer all live in C. */
 extern const char *aether_ra_commit_build_body(const struct svnae_ra_commit *cb);
 
+extern int aether_ra_post_for_rev(const char *url, const char *body, int expected_status);
+
 int
 svnae_ra_commit_finish(struct svnae_ra_commit *cb,
                       const char *base_url, const char *repo_name)
@@ -518,16 +460,7 @@ svnae_ra_commit_finish(struct svnae_ra_commit *cb,
 
     const char *body_json = aether_ra_commit_build_body(cb);
     const char *url = aether_url_commit(base_url, repo_name);
-
-    char *resp = NULL; size_t len = 0; int status = 0;
-    int rc = http_post_json(url, body_json, &resp, &len, &status);
-    (void)len;
-
-    int new_rev = -1;
-    if (rc == 0 && status == 200 && resp) {
-        new_rev = aether_ra_parse_rev_response(resp);
-    }
-    free(resp);
+    int new_rev = aether_ra_post_for_rev(url, body_json, 200);
 
     free(cb->author);
     free(cb->logmsg);

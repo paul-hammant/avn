@@ -27,6 +27,11 @@
 import std.string
 
 extern aether_http_get_200(url: string) -> string
+extern aether_ra_http_post_json(url: string, body: string, body_len: int) -> ptr
+extern aether_ra_http_response_status(resp: ptr) -> int
+extern aether_ra_http_response_body(resp: ptr) -> string
+extern aether_ra_http_response_free(resp: ptr)
+extern aether_ra_parse_rev_response(body: string) -> int
 extern aether_url_info(base: string, repo: string) -> string
 extern aether_url_log(base: string, repo: string) -> string
 extern aether_url_rev_info(base: string, repo: string, rev: int) -> string
@@ -87,6 +92,27 @@ export aether_ra_list_packed(base: string, repo: string, rev: int, path: string)
     body = aether_http_get_200(aether_url_rev_list(base, repo, rev, p))
     if string.length(body) == 0 { return "" }
     return aether_ra_parse_list(body)
+}
+
+// POST `body` (JSON) to `url`, expect HTTP <expected_status>, parse
+// rev from response. Returns -1 on any failure (transport, wrong
+// status, parse error). Shared by:
+//   - copy_branch.ae   (server-side copy / branch_create POSTs)
+//   - svnae_ra_commit_finish  (commit POST, in ra/shim.c)
+// Round 102 retired the C-side http_post_json + take_body helpers
+// in favour of this single shared post-and-parse-rev pipeline.
+export aether_ra_post_for_rev(url: string, body: string, expected_status: int) -> int {
+    resp = aether_ra_http_post_json(url, body, string.length(body))
+    if resp == null { return 0 - 1 }
+    status = aether_ra_http_response_status(resp)
+    if status != expected_status {
+        aether_ra_http_response_free(resp)
+        return 0 - 1
+    }
+    body_str = aether_ra_http_response_body(resp)
+    rev = aether_ra_parse_rev_response(body_str)
+    aether_ra_http_response_free(resp)
+    return rev
 }
 
 main() {
