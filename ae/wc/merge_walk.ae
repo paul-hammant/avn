@@ -34,8 +34,8 @@ extern svnae_ra_free(p: string)
 
 extern aether_path_join_rel(prefix: string, name: string) -> string
 
-extern svnae_mergert_add_dir(rt: ptr, path: string)
-extern svnae_mergert_add_file(rt: ptr, path: string, data: string, data_len: int)
+extern svnae_rtree_add_dir(rt: ptr, path: string)
+extern svnae_rtree_add_file(rt: ptr, path: string, data: string, data_len: int)
 
 export merge_walk_remote(base_url: string, repo: string, rev: int,
                           source_path: string, sub_prefix: string,
@@ -65,7 +65,7 @@ merge_walk_remote_impl(base_url: string, repo: string, rev: int,
             rel = string.copy(rel)
 
             if string.equals(kind, "dir") == 1 {
-                svnae_mergert_add_dir(rt, rel)
+                svnae_rtree_add_dir(rt, rel)
                 if merge_walk_remote_impl(base_url, repo, rev,
                                            source_path, rel, rt) != 0 {
                     result = -1
@@ -79,7 +79,7 @@ merge_walk_remote_impl(base_url: string, repo: string, rev: int,
                     result = -1
                 }
                 if result == 0 {
-                    svnae_mergert_add_file(rt, rel, data, string.length(data))
+                    svnae_rtree_add_file(rt, rel, data, string.length(data))
                     svnae_ra_free(data)
                 }
             }

@@ -45,10 +45,10 @@ extern svnae_wc_propdel(wc_root: string, path: string, name: string) -> int
 extern aether_wc_propget_value(wc_root: string, path: string, name: string) -> string
 
 // Opaque rtree storage in C (merge_shim.c). The recursive walk fills
-// it via svnae_mergert_add_dir / _add_file; apply passes read it via
+// it via svnae_rtree_add_dir / _add_file; apply passes read it via
 // the mergert_* accessors.
-extern svnae_mergert_new() -> ptr
-extern svnae_mergert_free(rt: ptr)
+extern svnae_rtree_new() -> ptr
+extern svnae_rtree_free(rt: ptr)
 extern svnae_update_set_wc_root(wc_root: string)
 
 // Walker + apply passes (Aether-side helpers).
@@ -128,18 +128,18 @@ export svnae_wc_merge(wc_root: string, source_path: string,
     svnae_update_set_wc_root(wc_root)
 
     // Fetch the source tree at both endpoints.
-    a = svnae_mergert_new()
-    b = svnae_mergert_new()
+    a = svnae_rtree_new()
+    b = svnae_rtree_new()
     arc = aether_merge_walk_remote(base_url, repo, rev_base, source_path, "", a)
     brc = aether_merge_walk_remote(base_url, repo, rev_theirs, source_path, "", b)
     if arc != 0 {
-        svnae_mergert_free(a)
-        svnae_mergert_free(b)
+        svnae_rtree_free(a)
+        svnae_rtree_free(b)
         return 0 - 1
     }
     if brc != 0 {
-        svnae_mergert_free(a)
-        svnae_mergert_free(b)
+        svnae_rtree_free(a)
+        svnae_rtree_free(b)
         return 0 - 1
     }
 
@@ -158,8 +158,8 @@ export svnae_wc_merge(wc_root: string, source_path: string,
     aether_merge_apply_adds_mods(wc_root, target_path, rev_a, rev_b, a, b, db)
     svnae_wc_db_close(db)
 
-    svnae_mergert_free(a)
-    svnae_mergert_free(b)
+    svnae_rtree_free(a)
+    svnae_rtree_free(b)
 
     // Record merged range in svn:mergeinfo. The reverse flag turns
     // into the leading '-' on the emitted line.
