@@ -30,10 +30,9 @@
 
 import std.string
 
-extern svnae_svndiff_encode_window(
-    source_len: int, target_len: int,
-    ops: ptr, nops: int,
-    new_data: string, new_data_len: int) -> ptr
+// svnae_svndiff_encode_window retired in Round 109 — encoder_finish
+// is the only consumer and it now drives the Aether-side encoder
+// via aether_svndiff_encode_window directly.
 
 extern svnae_svndiff_decode_apply(
     diff: string, diff_len: int,
