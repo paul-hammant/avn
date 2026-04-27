@@ -114,16 +114,6 @@ http_get(const char *url, char **out_body, size_t *out_len, int *out_status)
     return rc;
 }
 
-/* Simple "fetch URL and return the body as a malloc'd string" used by
- * CLI subcommands that just want to print a JSON response verbatim.
- * Returns "" on any failure. Caller takes ownership. */
-char *svnae_http_get_body(const char *url) {
-    char *body = NULL; size_t len = 0; int status = 0;
-    if (http_get(url, &body, &len, &status) != 0) return strdup("");
-    if (status != 200) { free(body); return strdup(""); }
-    return body ? body : strdup("");
-}
-
 /* GET `url`, return malloc'd body iff transport succeeded AND status
  * is 200. Returns NULL on transport failure or any non-200 status —
  * the caller can't tell those apart, but every existing caller
@@ -158,30 +148,21 @@ http_post_json(const char *url, const char *body, char **out_resp, size_t *out_l
  * post helper, hence the explicit extern. */
 extern int aether_ra_parse_rev_response(const char *body);
 
-/* ---- packed-record handle internals ---------------------------------
+/* ---- packed-record handle constructors -----------------------------
  *
- * Per-domain handles (log/paths/blame/list/info) share the
+ * Per-domain handles (log/paths/blame/list/info/props) share the
  * {packed, n, pins} struct from ae/subr/packed_handle. The packed-
- * string parsers live in ae/ra/packed.ae; ra_handle_from_url adds
- * the URL-fetch + parse + handle-construct layer. */
+ * string parsers live in ae/ra/packed.ae; the URL-fetch + JSON parse
+ * pipeline now lives in ae/ra/fetch.ae, so each constructor below
+ * is a one-line wrap onto svnae_packed_handle_new. */
 
-typedef const char *(*ra_parse_fn)(const char *body);
-typedef int         (*ra_count_fn)(const char *packed);
+extern const char *aether_ra_log_packed   (const char *base, const char *repo);
+extern const char *aether_ra_paths_packed (const char *base, const char *repo, int rev);
+extern const char *aether_ra_blame_packed (const char *base, const char *repo, int rev, const char *path);
+extern const char *aether_ra_info_packed  (const char *base, const char *repo, int rev);
+extern const char *aether_ra_props_packed (const char *base, const char *repo, int rev, const char *path);
+extern const char *aether_ra_list_packed  (const char *base, const char *repo, int rev, const char *path);
 
-static struct svnae_packed_handle *
-ra_handle_from_url(const char *url, ra_parse_fn parse, ra_count_fn count)
-{
-    char *body = http_get_200(url, NULL);
-    if (!body) return NULL;
-    const char *packed = parse(body);
-    struct svnae_packed_handle *h = svnae_packed_handle_new(packed, count);
-    free(body);
-    return h;
-}
-
-/* ---- log handle ------------------------------------------------------ */
-
-extern const char *aether_ra_parse_log(const char *body);
 extern int         aether_ra_log_count(const char *packed);
 extern int         aether_ra_log_rev(const char *packed, int i);
 extern const char *aether_ra_log_author(const char *packed, int i);
@@ -191,9 +172,8 @@ extern const char *aether_ra_log_msg(const char *packed, int i);
 struct svnae_ra_log *
 svnae_ra_log(const char *base_url, const char *repo_name)
 {
-    return (struct svnae_ra_log *)ra_handle_from_url(
-        aether_url_log(base_url, repo_name),
-        aether_ra_parse_log, aether_ra_log_count);
+    return (struct svnae_ra_log *)svnae_packed_handle_new(
+        aether_ra_log_packed(base_url, repo_name), aether_ra_log_count);
 }
 
 int svnae_ra_log_count(const struct svnae_ra_log *lg) { return svnae_packed_count(lg); }
@@ -205,7 +185,6 @@ void svnae_ra_log_free(struct svnae_ra_log *lg) { svnae_packed_handle_free((stru
 
 /* ---- paths-changed handle (for `svn log --verbose`) ----------------- */
 
-extern const char *aether_ra_parse_paths(const char *body);
 extern int         aether_ra_paths_count(const char *packed);
 extern const char *aether_ra_paths_action(const char *packed, int i);
 extern const char *aether_ra_paths_path(const char *packed, int i);
@@ -213,9 +192,8 @@ extern const char *aether_ra_paths_path(const char *packed, int i);
 struct svnae_ra_paths *
 svnae_ra_paths_changed(const char *base_url, const char *repo_name, int rev)
 {
-    return (struct svnae_ra_paths *)ra_handle_from_url(
-        aether_url_rev_paths(base_url, repo_name, rev),
-        aether_ra_parse_paths, aether_ra_paths_count);
+    return (struct svnae_ra_paths *)svnae_packed_handle_new(
+        aether_ra_paths_packed(base_url, repo_name, rev), aether_ra_paths_count);
 }
 
 int svnae_ra_paths_count (const struct svnae_ra_paths *P) { return svnae_packed_count(P); }
@@ -225,7 +203,6 @@ void svnae_ra_paths_free(struct svnae_ra_paths *P) { svnae_packed_handle_free((s
 
 /* ---- blame handle ---------------------------------------------------- */
 
-extern const char *aether_ra_parse_blame(const char *body);
 extern int         aether_ra_blame_count(const char *packed);
 extern int         aether_ra_blame_rev(const char *packed, int i);
 extern const char *aether_ra_blame_author(const char *packed, int i);
@@ -235,9 +212,8 @@ struct svnae_ra_blame *
 svnae_ra_blame(const char *base_url, const char *repo_name,
               int rev, const char *path)
 {
-    return (struct svnae_ra_blame *)ra_handle_from_url(
-        aether_url_rev_blame(base_url, repo_name, rev, path),
-        aether_ra_parse_blame, aether_ra_blame_count);
+    return (struct svnae_ra_blame *)svnae_packed_handle_new(
+        aether_ra_blame_packed(base_url, repo_name, rev, path), aether_ra_blame_count);
 }
 
 int svnae_ra_blame_count (const struct svnae_ra_blame *B) { return svnae_packed_count(B); }
@@ -248,7 +224,6 @@ void svnae_ra_blame_free(struct svnae_ra_blame *B) { svnae_packed_handle_free((s
 
 /* ---- info handle ----------------------------------------------------- */
 
-extern const char *aether_ra_parse_info_rev(const char *body);
 extern int         aether_ra_info_rev(const char *packed);
 extern const char *aether_ra_info_author(const char *packed);
 extern const char *aether_ra_info_date(const char *packed);
@@ -258,12 +233,9 @@ extern const char *aether_ra_info_root(const char *packed);
 struct svnae_ra_info *
 svnae_ra_info_rev(const char *base_url, const char *repo_name, int rev)
 {
-    char *body = http_get_200(aether_url_rev_info(base_url, repo_name, rev), NULL);
-    if (!body) return NULL;
-    const char *packed = aether_ra_parse_info_rev(body);
-    struct svnae_packed_handle *h = svnae_packed_handle_new(packed, NULL);
-    free(body);
-    return (struct svnae_ra_info *)h;
+    /* info is a single record — count_fn is NULL so n stays 0. */
+    return (struct svnae_ra_info *)svnae_packed_handle_new(
+        aether_ra_info_packed(base_url, repo_name, rev), NULL);
 }
 
 int svnae_ra_info_rev_num (const struct svnae_ra_info *I) { return svnae_packed_int_field(I, aether_ra_info_rev); }
@@ -295,7 +267,6 @@ void svnae_ra_free(char *p) { free(p); }
  * We expose it as a handle with indexed name/value accessors.
  */
 
-extern const char *aether_ra_parse_props(const char *body);
 extern int         aether_ra_props_count(const char *packed);
 extern const char *aether_ra_props_name(const char *packed, int i);
 extern const char *aether_ra_props_value(const char *packed, int i);
@@ -304,10 +275,9 @@ struct svnae_ra_props *
 svnae_ra_get_props(const char *base_url, const char *repo_name,
                    int rev, const char *path)
 {
-    while (*path == '/') path++;
-    return (struct svnae_ra_props *)ra_handle_from_url(
-        aether_url_rev_props(base_url, repo_name, rev, path),
-        aether_ra_parse_props, aether_ra_props_count);
+    return (struct svnae_ra_props *)svnae_packed_handle_new(
+        aether_ra_props_packed(base_url, repo_name, rev, path),
+        aether_ra_props_count);
 }
 
 int svnae_ra_props_count(const struct svnae_ra_props *P) { return svnae_packed_count(P); }
@@ -341,7 +311,6 @@ svnae_ra_http_post(const char *url, const char *body)
 
 /* ---- list ------------------------------------------------------------ */
 
-extern const char *aether_ra_parse_list(const char *body);
 extern int         aether_ra_list_count(const char *packed);
 extern const char *aether_ra_list_name(const char *packed, int i);
 extern const char *aether_ra_list_kind(const char *packed, int i);
@@ -349,10 +318,9 @@ extern const char *aether_ra_list_kind(const char *packed, int i);
 struct svnae_ra_list *
 svnae_ra_list(const char *base_url, const char *repo_name, int rev, const char *path)
 {
-    while (*path == '/') path++;
-    return (struct svnae_ra_list *)ra_handle_from_url(
-        aether_url_rev_list(base_url, repo_name, rev, path),
-        aether_ra_parse_list, aether_ra_list_count);
+    return (struct svnae_ra_list *)svnae_packed_handle_new(
+        aether_ra_list_packed(base_url, repo_name, rev, path),
+        aether_ra_list_count);
 }
 
 int svnae_ra_list_count(const struct svnae_ra_list *L) { return svnae_packed_count(L); }

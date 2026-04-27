@@ -89,14 +89,14 @@ extern svnae_ra_commit_acl_add(cb: ptr, path: string, rule: string) -> int
 extern svnae_ra_set_user(user: string)
 extern svnae_ra_set_superuser_token(token: string)
 extern os_getenv(name: string) -> string
-extern svnae_http_get_body(url: string) -> string
+extern aether_http_get_200(url: string) -> string
 
 env_get(name: string) {
     v = os_getenv(name)
     if v == null { return "" }
     return v
 }
-http_get_body(url: string) { return svnae_http_get_body(url) }
+http_get_body(url: string) { return aether_http_get_200(url) }
 
 // Writer for binary-safe cat output (println would strlen-truncate
 // though our content is currently NUL-terminated text in all tests).

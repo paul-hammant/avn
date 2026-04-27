@@ -29,6 +29,7 @@
 // passed in to each of these calls.
 
 import std.string
+import std.json
 import std.http.client
 
 // ---- helpers ---------------------------------------------------------
@@ -102,6 +103,28 @@ export aether_ra_http_response_header(resp: ptr, name: string) -> string {
 
 export aether_ra_http_response_free(resp: ptr) {
     client.response_free(resp)
+}
+
+// One-shot GET helper: fetch URL, return body iff status==200, "" on
+// any failure (transport, non-200). Frees the response handle. The
+// returned string survives across FFI because we copy via
+// string.copy before releasing the std.http.client buffer. Used by
+// the per-domain "fetch + parse + return packed" callers in fetch.ae
+// and by info.ae (head_rev / hash_algo) — saves each from open-coding
+// the same six-line dance.
+export aether_http_get_200(url: string) -> string {
+    req = client.request("GET", url)
+    resp = send_with_auth(req)
+    if resp == null { return "" }
+    status = client.response_status(resp)
+    if status != 200 {
+        client.response_free(resp)
+        return ""
+    }
+    body = client.response_body(resp)
+    body_copy = string.copy(body)
+    client.response_free(resp)
+    return body_copy
 }
 
 main() {

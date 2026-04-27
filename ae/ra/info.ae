@@ -15,42 +15,31 @@
 
 // RA endpoint helpers that just GET /repos/<r>/info, parse the JSON,
 // and return one scalar field. Round 88 ports them out of
-// ae/ra/shim.c.
+// ae/ra/shim.c. Round 100 retires svnae_http_get_body in favour of
+// aether_http_get_200 (Aether-side, in http_client.ae).
 
 import std.string
 
 extern aether_url_info(base: string, repo: string) -> string
 extern aether_ra_parse_head_rev(body: string) -> int
 extern aether_ra_parse_hash_algo(body: string) -> string
-extern svnae_http_get_body(url: string) -> string
-extern svnae_ra_free(p: string)
+extern aether_http_get_200(url: string) -> string
 
 // Returns the server's current revision number, or -1 on failure
 // (transport error, non-200 status, or JSON parse failure).
 export svnae_ra_head_rev(base_url: string, repo_name: string) -> int {
-    body = svnae_http_get_body(aether_url_info(base_url, repo_name))
-    if string.length(body) == 0 {
-        svnae_ra_free(body)
-        return 0 - 1
-    }
-    rev = aether_ra_parse_head_rev(body)
-    svnae_ra_free(body)
-    return rev
+    body = aether_http_get_200(aether_url_info(base_url, repo_name))
+    if string.length(body) == 0 { return 0 - 1 }
+    return aether_ra_parse_head_rev(body)
 }
 
 // Returns the server's primary content-address algorithm, or "" on
 // failure. Pre-Phase-6.1 servers omit the field; the Aether parser
 // defaults to "sha1".
 export svnae_ra_hash_algo(base_url: string, repo_name: string) -> string {
-    body = svnae_http_get_body(aether_url_info(base_url, repo_name))
-    if string.length(body) == 0 {
-        svnae_ra_free(body)
-        return ""
-    }
-    algo = aether_ra_parse_hash_algo(body)
-    algo_copy = string.copy(algo)
-    svnae_ra_free(body)
-    return algo_copy
+    body = aether_http_get_200(aether_url_info(base_url, repo_name))
+    if string.length(body) == 0 { return "" }
+    return aether_ra_parse_hash_algo(body)
 }
 
 main() {
