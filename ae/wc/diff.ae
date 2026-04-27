@@ -43,12 +43,25 @@ extern svnae_wc_nodelist_base_rev(L: ptr, i: int) -> int
 extern svnae_wc_nodelist_base_sha1(L: ptr, i: int) -> string
 extern svnae_wc_nodelist_free(L: ptr)
 
-// Pristine slurp + size — return malloc'd C buffer / int. The Aether
-// side passes the buffer right back into svnae_diff_tmp_write_pristine
-// which copies it into a tmp file; we never hold the buffer across an
-// allocation that might trigger Aether's GC.
+// Pristine slurp + size. Round 113 retired the C-side
+// svnae_diff_tmp_write_pristine — the whole step (size lookup,
+// blob fetch, tmp write) is one Aether-native function now,
+// thanks to wc_pristine_get returning a length-aware AetherString
+// that std.fs.write_atomic unwraps correctly.
 extern aether_wc_pristine_size(wc_root: string, sha: string) -> int
-extern svnae_diff_tmp_write_pristine(wc_root: string, sha: string, path: string) -> int
+extern aether_wc_pristine_get(wc_root: string, sha: string) -> string
+extern aether_io_write_atomic(path: string, data: string, length: int) -> int
+
+diff_tmp_write_pristine_(wc_root: string, sha: string, path: string) -> int {
+    sz = aether_wc_pristine_size(wc_root, sha)
+    if sz < 0 { return 0 - 1 }
+    data = aether_wc_pristine_get(wc_root, sha)
+    // wc_pristine_get returns "" on miss; even legitimate empty
+    // blobs are size>=1 (svn never stores zero-length pristines),
+    // so length-0 is unambiguously a miss.
+    if string.length(data) == 0 { return 0 - 1 }
+    return aether_io_write_atomic(path, data, sz)
+}
 
 extern aether_wc_hash_file(wc_root: string, path: string) -> string
 
@@ -145,7 +158,7 @@ diff_one_(wc_root: string, L: ptr, i: int, target: string, seq: int) -> int {
         psize = aether_wc_pristine_size(wc_root, base_sha)
         before = tmp_seq_("before", seq)
         seq = seq + 1
-        rcw = svnae_diff_tmp_write_pristine(wc_root, base_sha, before)
+        rcw = diff_tmp_write_pristine_(wc_root, base_sha, before)
         if rcw != 0 { return seq }
         after_p = write_data_tmp_("", 0, seq, "after")
         seq = seq + 1
@@ -163,7 +176,7 @@ diff_one_(wc_root: string, L: ptr, i: int, target: string, seq: int) -> int {
         if string.equals(cur, base_sha) == 1 { return seq }
         before = tmp_seq_("before", seq)
         seq = seq + 1
-        rcw = svnae_diff_tmp_write_pristine(wc_root, base_sha, before)
+        rcw = diff_tmp_write_pristine_(wc_root, base_sha, before)
         if rcw != 0 { return seq }
         after_p = disk
         cleanup_before = 1
