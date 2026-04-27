@@ -24,7 +24,7 @@ import std.string
 
 // Find the start offset of the i-th record in a "<n>\x02<rec>\x02..."
 // packed string. Returns -1 if out of range.
-status_record_start_(packed: string, i: int) -> int {
+record_start_(packed: string, i: int) -> int {
     sep = string.index_of(packed, "\x02")
     if sep < 0 { return 0 - 1 }
     pos = sep + 1
@@ -40,7 +40,7 @@ status_record_start_(packed: string, i: int) -> int {
     return pos
 }
 
-status_record_end_(packed: string, start: int) -> int {
+record_end_(packed: string, start: int) -> int {
     if start < 0 { return 0 - 1 }
     n = string.length(packed)
     if start >= n { return n }
@@ -50,10 +50,10 @@ status_record_end_(packed: string, start: int) -> int {
 }
 
 // Field-extractor for the i-th row of a packed list.
-status_list_field_(packed: string, i: int, fi: int) -> string {
-    s = status_record_start_(packed, i)
+list_field_(packed: string, i: int, fi: int) -> string {
+    s = record_start_(packed, i)
     if s < 0 { return "" }
-    e = status_record_end_(packed, s)
+    e = record_end_(packed, s)
     if e <= s { return "" }
     rec = string.substring(packed, s, e)
     n = string.length(rec)
@@ -70,8 +70,8 @@ status_list_field_(packed: string, i: int, fi: int) -> string {
     return string.substring(rec, pos, end)
 }
 
-status_list_field_int_(packed: string, i: int, fi: int) -> int {
-    s = status_list_field_(packed, i, fi)
+list_field_int_(packed: string, i: int, fi: int) -> int {
+    s = list_field_(packed, i, fi)
     if string.length(s) == 0 { return 0 - 1 }
     return string.get_int(s)
 }
@@ -86,8 +86,8 @@ export aether_wc_statuslist_count(packed: string) -> int {
     return string.get_int(nstr)
 }
 
-export aether_wc_statuslist_path_at(packed: string, i: int) -> string { return status_list_field_(packed, i, 0) }
-export aether_wc_statuslist_code_at(packed: string, i: int) -> int    { return status_list_field_int_(packed, i, 1) }
+export aether_wc_statuslist_path_at(packed: string, i: int) -> string { return list_field_(packed, i, 0) }
+export aether_wc_statuslist_code_at(packed: string, i: int) -> int    { return list_field_int_(packed, i, 1) }
 
 main() {
     println("ae/wc/status_packed.ae is a library; not meant to run standalone")

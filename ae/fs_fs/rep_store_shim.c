@@ -174,19 +174,11 @@ svnae_rep_lookup_secondary(const char *repo, const char *primary_hex,
 /* --- public interface ---------------------------------------------- */
 
 /* svnae_rep_write_blob — the dedup-aware blob-write orchestrator
- * lives entirely in ae/fs_fs/rep_store.ae::rep_write_blob now
- * (Round 105). This C-side name is preserved as a one-line forward
- * because some checked-in *_generated.c files (rebuild_generated.c
- * in particular — its source rebuild.ae no longer recompiles cleanly
- * under the current aetherc, so the cached .c is what links) still
- * reference the legacy svnae_ symbol. Once rebuild.ae regenerates,
- * this forward can go. */
-extern const char *aether_rep_write_blob(const char *repo, const char *data, int len);
-const char *
-svnae_rep_write_blob(const char *repo, const char *data, int len)
-{
-    return aether_rep_write_blob(repo, data, len);
-}
+ * lives entirely in ae/fs_fs/rep_store.ae::rep_write_blob (Round
+ * 105). The temporary svnae_-named forward we kept here for
+ * rebuild_generated.c stale-cache compatibility was retired in
+ * Round 107 once rebuild.ae regenerated cleanly under aether
+ * 0.95+. */
 
 /* Read a blob from the rep store. Returns a malloc'd NUL-terminated buffer
  * (embedded NULs allowed; caller uses strlen only if they know the content

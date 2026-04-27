@@ -20,14 +20,9 @@
 // pins} struct from subr/packed_handle/ and one-line accessor
 // wrappers using svnae_packed_pin_at.
 //
-// Privates carry a `props_` prefix so they don't collide with the
-// like-named helpers in db_node_packed.ae / status_packed.ae —
-// Aether emits non-`export` functions with global linkage today, so
-// any unprefixed `record_start_` would clash at link time.
-
 import std.string
 
-props_record_start_(packed: string, i: int) -> int {
+record_start_(packed: string, i: int) -> int {
     sep = string.index_of(packed, "\x02")
     if sep < 0 { return 0 - 1 }
     pos = sep + 1
@@ -43,7 +38,7 @@ props_record_start_(packed: string, i: int) -> int {
     return pos
 }
 
-props_record_end_(packed: string, start: int) -> int {
+record_end_(packed: string, start: int) -> int {
     if start < 0 { return 0 - 1 }
     n = string.length(packed)
     if start >= n { return n }
@@ -52,10 +47,10 @@ props_record_end_(packed: string, start: int) -> int {
     return rsep
 }
 
-props_list_field_(packed: string, i: int, fi: int) -> string {
-    s = props_record_start_(packed, i)
+list_field_(packed: string, i: int, fi: int) -> string {
+    s = record_start_(packed, i)
     if s < 0 { return "" }
-    e = props_record_end_(packed, s)
+    e = record_end_(packed, s)
     if e <= s { return "" }
     rec = string.substring(packed, s, e)
     n = string.length(rec)
@@ -82,8 +77,8 @@ export aether_wc_proplist_count(packed: string) -> int {
     return string.get_int(nstr)
 }
 
-export aether_wc_proplist_name_at (packed: string, i: int) -> string { return props_list_field_(packed, i, 0) }
-export aether_wc_proplist_value_at(packed: string, i: int) -> string { return props_list_field_(packed, i, 1) }
+export aether_wc_proplist_name_at (packed: string, i: int) -> string { return list_field_(packed, i, 0) }
+export aether_wc_proplist_value_at(packed: string, i: int) -> string { return list_field_(packed, i, 1) }
 
 main() {
     println("ae/wc/props_packed.ae is a library; not meant to run standalone")

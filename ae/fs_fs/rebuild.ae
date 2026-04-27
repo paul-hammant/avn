@@ -257,42 +257,40 @@ rebuild_dir_impl(repo: string, base_dir_sha: string, prefix: string, txn: ptr) -
     // empty-dir blob") produces zero iterations — correct.
     if string.length(base_dir_sha) > 0 {
         base_body = svnae_rep_read_blob(repo, base_dir_sha)
-        {
-            n_entries = aether_dir_count_entries(base_body)
-            ei = 0
-            while ei < n_entries {
-                kind = aether_dir_entry_kind(base_body, ei)
-                sha = aether_dir_entry_sha(base_body, ei)
-                name = aether_dir_entry_name(base_body, ei)
-                full_path = aether_path_join_rel(prefix, name)
+        n_entries = aether_dir_count_entries(base_body)
+        ei = 0
+        while ei < n_entries {
+            kind = aether_dir_entry_kind(base_body, ei)
+            sha = aether_dir_entry_sha(base_body, ei)
+            name = aether_dir_entry_name(base_body, ei)
+            full_path = aether_path_join_rel(prefix, name)
 
-                k_edit = txn_find_edit_kind(txn, full_path)
-                keep = 1
-                if k_edit == EDIT_DELETE   { keep = 0 }
-                if k_edit == EDIT_ADD_FILE { keep = 0 }  // step 2 will add
-                if keep == 1 {
-                    if kind == 100 {                     // 'd'
-                        if edits_touch_subtree(txn, full_path) == 1 {
-                            new_sub = rebuild_dir_impl(repo, sha, full_path, txn)
-                            if string.length(new_sub) > 0 {
-                                rl = reclist_add(rl, name, kind, new_sub)
-                            }
-                            if string.length(new_sub) == 0 {
-                                empty_sha = aether_rep_write_blob(repo, "", 0)
-                                rl = reclist_add(rl, name, kind, empty_sha)
-                            }
+            k_edit = txn_find_edit_kind(txn, full_path)
+            keep = 1
+            if k_edit == EDIT_DELETE   { keep = 0 }
+            if k_edit == EDIT_ADD_FILE { keep = 0 }  // step 2 will add
+            if keep == 1 {
+                if kind == 100 {                     // 'd'
+                    if edits_touch_subtree(txn, full_path) == 1 {
+                        new_sub = rebuild_dir_impl(repo, sha, full_path, txn)
+                        if string.length(new_sub) > 0 {
+                            rl = reclist_add(rl, name, kind, new_sub)
                         }
-                        if edits_touch_subtree(txn, full_path) == 0 {
-                            rl = reclist_add(rl, name, kind, sha)
+                        if string.length(new_sub) == 0 {
+                            empty_sha = aether_rep_write_blob(repo, "", 0)
+                            rl = reclist_add(rl, name, kind, empty_sha)
                         }
                     }
-                    if kind != 100 {
+                    if edits_touch_subtree(txn, full_path) == 0 {
                         rl = reclist_add(rl, name, kind, sha)
                     }
                 }
-
-                ei = ei + 1
+                if kind != 100 {
+                    rl = reclist_add(rl, name, kind, sha)
+                }
             }
+
+            ei = ei + 1
         }
         svnae_rep_free(base_body)
     }
