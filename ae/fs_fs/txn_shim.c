@@ -249,58 +249,6 @@ svnae_txn_free(struct svnae_txn *t)
     free(t);
 }
 
-/* ---- a small dynamic string list ------------------------------------- *
- *
- * The commit algorithm gathers all paths affecting a given directory
- * (either directly or via a subpath) and groups them. A plain sorted-
- * unique list of strings is cheaper than our line-oriented sbuilders for
- * set operations.
- */
-
-struct svnae_strset {
-    char **items;
-    int    n;
-    int    cap;
-};
-
-struct svnae_strset *svnae_strset_new(void) { return calloc(1, sizeof(struct svnae_strset)); }
-
-int
-svnae_strset_add(struct svnae_strset *s, const char *v)
-{
-    if (!s) return -1;
-    /* Skip duplicates. */
-    for (int i = 0; i < s->n; i++)
-        if (strcmp(s->items[i], v) == 0) return 0;
-    if (s->n == s->cap) {
-        int ncap = s->cap ? s->cap * 2 : 8;
-        char **p = realloc(s->items, (size_t)ncap * sizeof *p);
-        if (!p) return -1;
-        s->items = p;
-        s->cap = ncap;
-    }
-    s->items[s->n++] = strdup(v);
-    return 0;
-}
-
-int svnae_strset_count(const struct svnae_strset *s) { return s ? s->n : 0; }
-
-const char *
-svnae_strset_get(const struct svnae_strset *s, int i)
-{
-    if (!s || i < 0 || i >= s->n) return "";
-    return s->items[i];
-}
-
-void
-svnae_strset_free(struct svnae_strset *s)
-{
-    if (!s) return;
-    for (int i = 0; i < s->n; i++) free(s->items[i]);
-    free(s->items);
-    free(s);
-}
-
 /* Recursive tree rebuilder lives in ae/fs_fs/rebuild.ae; rep-store
  * read/write stays in C via the externs. */
 

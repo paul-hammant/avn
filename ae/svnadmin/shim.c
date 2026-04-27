@@ -17,22 +17,9 @@
 
 /* ae/svnadmin/shim.c — fd I/O primitives for svnadmin dump/load.
  *
- * The dump/load orchestration lives in ae/svnadmin/dump_load.ae;
- * what remains here is the read(2)/write(2) plumbing that std.fs
- * doesn't expose:
- *
- *   svnae_fd_write_str(fd, str) — write the full string, retry EINTR
- *   svnae_fd_write_rep_body(fd, repo, sha, size) — slurp + write a
- *     binary rep blob, then a trailing newline
- *   svnae_fd_read_line(fd) — read one '\n'-delimited line into a TLS
- *     buffer, return as Aether string ("" on EOF)
- *   svnae_fd_load_rep_block(fd, repo, expected_sha, size) — read
- *     `size` bytes + the trailing '\n', call svnae_rep_write_blob,
- *     verify the returned hash matches `expected_sha`. Returns 0
- *     ok / -1 on any error or hash mismatch.
- *
- * Plus svnae_fsfs_now_iso8601 (TLS-cached UTC timestamp wrapping
- * std.os's raw extern). */
+ * Orchestration lives in dump_load.ae. Four C primitives bridge the
+ * std.fs gap (no fd-level read/write API): write_str, write_rep_body,
+ * read_line, load_rep_block. */
 
 #include <errno.h>
 #include <fcntl.h>
