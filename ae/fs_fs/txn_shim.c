@@ -111,6 +111,20 @@ push_edit(struct svnae_txn *t)
     return t->n++;
 }
 
+/* AetherString-aware add_file. The Aether-side commit_parse.ae
+ * txn_add_b64_ helper passes its content as an AetherString-bearing
+ * `string` parameter; the codegen hands the C side the struct
+ * pointer rather than the raw byte payload. Calling this entry
+ * point unwraps via aether_string_data first, then forwards to
+ * svnae_txn_add_file. See yet_more_issues.md §3 for why. */
+int
+svnae_txn_add_file_aether(struct svnae_txn *t, const char *path,
+                          const void *aether_handle, int len)
+{
+    extern const char *aether_string_data(const void *s);
+    return svnae_txn_add_file(t, path, aether_string_data(aether_handle), len);
+}
+
 int
 svnae_txn_add_file(struct svnae_txn *t, const char *path, const char *content, int len)
 {

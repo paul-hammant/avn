@@ -38,6 +38,7 @@ extern const char *svnae_crypto_b64_decode_capture(const char *b64);
 static __thread int s_b64_decode_len = 0;
 
 void svnae_crypto_b64_decode_set_len(int n) { s_b64_decode_len = n; }
+int  svnae_crypto_b64_decode_len(void) { return s_b64_decode_len; }
 
 /* --- public API ------------------------------------------------------- */
 
@@ -99,41 +100,12 @@ svnae_openssl_b64_encode(const unsigned char *src, int len)
     return out;
 }
 
-/* Base64-decode `src[0..src_len]` into a malloc'd buffer. Returns 0 on
- * success with `*out` / `*out_len` set; caller frees with free().
- * Returns -1 on OOM or decode failure. */
-int
-svnae_openssl_b64_decode(const char *src, int src_len,
-                        unsigned char **out, int *out_len)
-{
-    /* std.cryptography.base64_decode takes a NUL-terminated string,
-     * not (ptr, len). If src isn't already NUL-terminated at src_len
-     * we need to copy it. Cheap path: most callers pass strlen-sized
-     * src, so check first. */
-    char *tmp = NULL;
-    const char *b64 = src;
-    if (src_len < 0) return -1;
-    if (src[src_len] != '\0') {
-        tmp = malloc((size_t)src_len + 1);
-        if (!tmp) return -1;
-        memcpy(tmp, src, (size_t)src_len);
-        tmp[src_len] = '\0';
-        b64 = tmp;
-    }
-    s_b64_decode_len = 0;
-    const char *bytes = svnae_crypto_b64_decode_capture(b64);
-    if (tmp) free(tmp);
-    if (!bytes) return -1;
-    int n = s_b64_decode_len;
-    if (n < 0) return -1;
-    unsigned char *buf = malloc((size_t)n + 1);
-    if (!buf) return -1;
-    if (n > 0) memcpy(buf, aether_string_data(bytes), (size_t)n);
-    buf[n] = '\0';
-    *out = buf;
-    *out_len = n;
-    return 0;
-}
+/* svnae_openssl_b64_decode (the malloc-detach (out, out_len) shape)
+ * retired in Round 110. The svnserver commit-parse path now calls
+ * svnae_crypto_b64_decode_capture + _len directly from Aether, then
+ * hands the AetherString into svnae_txn_add_file_aether (which
+ * unwraps via aether_string_data before forwarding to the legacy
+ * svnae_txn_add_file). */
 
 /* Is `algo` allowed as a repo's *content-address* algorithm? 1 = yes,
  * 0 = no. sha1 + sha256 only — the only two algorithms anything in

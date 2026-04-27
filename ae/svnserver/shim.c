@@ -218,9 +218,11 @@ const char *svnserver_build_secondary_pairs(const char *repo, const char *node_s
     return pairs;
 }
 
-extern int svnae_openssl_b64_decode(const char *src, int src_len,
-                                    unsigned char **out, int *out_len);
-#define b64_decode svnae_openssl_b64_decode
+/* svnae_openssl_b64_decode + svnserver_txn_add_b64 retired in
+ * Round 110 — the b64 decode + txn-add path now lives entirely
+ * in commit_parse.ae's txn_add_b64_ helper, calling
+ * svnae_crypto_b64_decode_capture / _len + svnae_txn_add_file_aether
+ * directly. */
 
 /* Header value or "" — Aether tests string.length == 0 to distinguish
  * "header absent" from "header present + empty" since string externs
@@ -261,14 +263,4 @@ int svnserver_request_body_length(HttpRequest *req) {
     return req->body ? (int)req->body_length : 0;
 }
 
-/* base64 decode + svnae_txn_add_file with byte length. Returns 0 ok,
- * -1 on decode failure. Kept on the C side for the binary boundary. */
-int svnserver_txn_add_b64(void *txn, const char *path, const char *b64) {
-    if (!b64) return -1;
-    unsigned char *raw = NULL;
-    int raw_len = 0;
-    if (b64_decode(b64, (int)strlen(b64), &raw, &raw_len) != 0) return -1;
-    svnae_txn_add_file((struct svnae_txn *)txn, path, (const char *)raw, raw_len);
-    free(raw);
-    return 0;
-}
+/* svnserver_txn_add_b64 retired — see top-of-file comment. */

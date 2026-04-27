@@ -54,7 +54,31 @@ extern svnae_txn_new(base_rev: int) -> ptr
 extern svnae_txn_mkdir(t: ptr, path: string) -> int
 extern svnae_txn_delete(t: ptr, path: string) -> int
 extern svnae_txn_free(t: ptr)
-extern svnserver_txn_add_b64(txn: ptr, path: string, b64: string) -> int
+
+// Round 110: b64-decode + txn_add_file ported from C
+// (svnserver_txn_add_b64) to Aether. The crypto wrapper returns a
+// length-aware AetherString; the companion TLS getter gives the
+// byte count. svnae_txn_add_file_aether is a thin C entry point
+// over svnae_txn_add_file that unwraps the AetherString to its
+// raw byte pointer before memcpy — needed because passing an
+// AetherString as a `const char*` C parameter delivers the struct
+// header pointer, not the bytes. See yet_more_issues.md §3.
+extern svnae_txn_add_file_aether(txn: ptr, path: string,
+                                  content: string, content_len: int) -> int
+extern svnae_crypto_b64_decode_capture(b64: string) -> string
+extern svnae_crypto_b64_decode_len() -> int
+
+txn_add_b64_(txn: ptr, path: string, b64: string) -> int {
+    raw = svnae_crypto_b64_decode_capture(b64)
+    if string.length(raw) == 0 {
+        // Non-empty input that decoded to nothing is a parse failure;
+        // genuinely-empty input (length==0 b64) decodes successfully
+        // to 0 bytes.
+        if string.length(b64) > 0 { return 0 - 1 }
+    }
+    n = svnae_crypto_b64_decode_len()
+    return svnae_txn_add_file_aether(txn, path, raw, n)
+}
 extern svnae_commit_finalise_with_acl(repo: string, txn: ptr,
                                        author: string, log_msg: string,
                                        props_sha: string, acl_sha: string) -> int
@@ -196,7 +220,7 @@ commit_from_body_impl(req: ptr, res: ptr, repo: string) -> int {
             if jcontent == null { svnae_txn_free(txn); json.free(root); return -8 }
             b64, berr = json.get_string(jcontent)
             if string.length(berr) > 0 { svnae_txn_free(txn); json.free(root); return -8 }
-            if svnserver_txn_add_b64(txn, epath, b64) != 0 {
+            if txn_add_b64_(txn, epath, b64) != 0 {
                 svnae_txn_free(txn); json.free(root); return -9
             }
         }
