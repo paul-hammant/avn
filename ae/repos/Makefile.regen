@@ -2,7 +2,7 @@
 
 AETHERC ?= $(abspath $(dir $(lastword $(MAKEFILE_LIST))))/../../.aether_binaries/build/aetherc
 
-GENERATED := blobfield_generated.c resolve_generated.c paths_changed_generated.c rev_io_generated.c log_generated.c list_packed_generated.c
+GENERATED := blobfield_generated.c resolve_generated.c paths_changed_generated.c rev_io_generated.c log_generated.c list_packed_generated.c accessors_generated.c
 
 all: $(GENERATED)
 
@@ -22,6 +22,11 @@ log_generated.c: log.ae
 	$(AETHERC) --emit=lib $< $@
 
 list_packed_generated.c: list_packed.ae
+	$(AETHERC) --emit=lib $< $@
+
+# Round 154: log/list/info/paths/blame handle accessors, ported
+# from C wrappers in ae/repos/shim.c.
+accessors_generated.c: accessors.ae
 	$(AETHERC) --emit=lib $< $@
 
 .PHONY: all
