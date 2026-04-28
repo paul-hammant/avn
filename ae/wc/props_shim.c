@@ -15,14 +15,11 @@
  * permissions and limitations under the License.
  */
 
-/* ae/wc/props_shim.c — proplist constructor + accessors (packed_
- * handle-backed) plus the legacy svnae_wc_propget malloc-detach
- * trampoline. The struct + new + append + per-row accessors that
- * used to live here are now packed_handle one-liners; the SELECT
- * loop in props.ae builds the packed string directly. */
-
-#include <stdlib.h>
-#include <string.h>
+/* ae/wc/props_shim.c — proplist constructor + accessors (all
+ * packed_handle-backed). The struct + new + append + per-row
+ * accessors that used to live here are now packed_handle
+ * one-liners; the SELECT loop in props.ae builds the packed
+ * string directly. */
 
 #include "../subr/packed_handle/packed_handle.h"
 
@@ -45,20 +42,8 @@ const char *svnae_wc_proplist_name (const struct svnae_wc_proplist *L, int i) { 
 const char *svnae_wc_proplist_value(const struct svnae_wc_proplist *L, int i) { return svnae_packed_pin_at((void *)L, i, aether_wc_proplist_value_at); }
 void svnae_wc_proplist_free(struct svnae_wc_proplist *L) { svnae_packed_handle_free((struct svnae_packed_handle *)L); }
 
-/* Legacy svnae_wc_propget — strdup-into-caller-owned-heap wrapper
- * around the Aether-side aether_wc_propget_value (returns "" on
- * miss). Preserves the historical `char *` (+ NULL-on-miss + caller-
- * frees) ABI. Aether-side callers use aether_wc_propget_value
- * directly. */
-extern const char *aether_wc_propget_value(const char *wc_root,
-                                            const char *path,
-                                            const char *name);
-char *
-svnae_wc_propget(const char *wc_root, const char *path, const char *name)
-{
-    const char *v = aether_wc_propget_value(wc_root, path, name);
-    if (!v || !*v) return NULL;
-    return strdup(v);
-}
-
-void svnae_wc_props_free(char *s) { free(s); }
+/* svnae_wc_propget + svnae_wc_props_free retired in Round 133 —
+ * the strdup-detach wrapper was unnecessary once #297 made
+ * AetherString returns length-aware on the .ae caller side. The
+ * sole caller (svn/main.ae) now calls aether_wc_propget_value
+ * directly and uses string.length() == 0 for the miss check. */

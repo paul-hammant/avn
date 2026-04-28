@@ -101,11 +101,10 @@ svnae_openssl_b64_encode(const unsigned char *src, int len)
 }
 
 /* svnae_openssl_b64_decode (the malloc-detach (out, out_len) shape)
- * retired in Round 110. The svnserver commit-parse path now calls
+ * retired in Round 110. The svnserver commit-parse path calls
  * svnae_crypto_b64_decode_capture + _len directly from Aether, then
- * hands the AetherString into svnae_txn_add_file_aether (which
- * unwraps via aether_string_data before forwarding to the legacy
- * svnae_txn_add_file). */
+ * hands the AetherString into svnae_txn_add_file (the _aether
+ * trampoline went away in Round 123 once #297 auto-unwrap landed). */
 
 /* Is `algo` allowed as a repo's *content-address* algorithm? 1 = yes,
  * 0 = no. sha1 + sha256 only — the only two algorithms anything in

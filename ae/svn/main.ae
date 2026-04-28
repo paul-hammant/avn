@@ -121,9 +121,8 @@ extern svnae_wc_merge(wc_root: string, source_path: string, rev_a: int, rev_b: i
 extern svnae_wc_resolve(wc_root: string, rel_path: string, accept: int) -> int
 
 extern svnae_wc_propset(wc_root: string, path: string, name: string, value: string) -> int
-extern svnae_wc_propget(wc_root: string, path: string, name: string) -> string
+extern aether_wc_propget_value(wc_root: string, path: string, name: string) -> string
 extern svnae_wc_propdel(wc_root: string, path: string, name: string) -> int
-extern svnae_wc_props_free(s: string)
 extern svnae_wc_proplist(wc_root: string, path: string) -> ptr
 extern svnae_wc_proplist_count(L: ptr) -> int
 extern svnae_wc_proplist_name(L: ptr, i: int) -> string
@@ -1118,12 +1117,11 @@ cmd_propget(argv_start: int) {
     }
     name = aether_args_get(argv_start)
     path = prop_path(aether_args_get(argv_start + 1))
-    v = svnae_wc_propget(".", path, name)
-    if v == 0 {
+    v = aether_wc_propget_value(".", path, name)
+    if string.length(v) == 0 {
         return 1
     }
     println(v)
-    svnae_wc_props_free(v)
     return 0
 }
 
