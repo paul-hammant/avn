@@ -9,119 +9,67 @@
  *     http://www.apache.org/licenses/LICENSE-2.0
  */
 
-/* ae/subr/rtree/shim.c — single canonical implementation of the
- * remote-tree storage shape. Used by both the update walker
- * (ae/wc/update_shim.c forwards svnae_rtree_*) and the merge
- * walker (ae/wc/merge_shim.c forwards svnae_mergert_*). */
+/* ae/subr/rtree/shim.c — opaque holder for the remote-tree edit
+ * list. Round 152 hoisted the storage bulk (struct array of
+ * {path, kind, sha, data, data_len}) into ae/subr/rtree/rtree.ae
+ * using three std.list (paths/shas/contents) and two std.gintarr
+ * (kinds/content_lens). What stays here:
+ *
+ *   - struct svnae_rt (5 container handles)
+ *   - svnae_rtree_new / _free
+ *   - 5 get_*_(rt) accessors so the Aether helpers can reach in
+ *   - 2 set_*_(rt, p) setters for the gintarr handles (gintarr_add
+ *     can return a new handle on regrow). */
 
 #include <stdlib.h>
-#include <string.h>
 
 #include "rtree.h"
 
-extern int svnae_wc_hash_bytes(const char *wc_root, const char *data,
-                               int len, char *out);
+extern void *aether_gintarr_new(int initial_cap);
+extern void  aether_gintarr_free(void *a);
+extern void *list_new(void);
+extern void  list_free(void *list);
+
+struct svnae_rt {
+    void *kinds;
+    void *paths;
+    void *shas;
+    void *contents;
+    void *content_lens;
+};
 
 struct svnae_rt *
-svnae_rt_new(void)
+svnae_rtree_new(void)
 {
-    return calloc(1, sizeof(struct svnae_rt));
-}
-
-static void
-rt_grow(struct svnae_rt *rt)
-{
-    int nc = rt->cap ? rt->cap * 2 : 16;
-    rt->items = realloc(rt->items, (size_t)nc * sizeof *rt->items);
-    rt->cap = nc;
-}
-
-void
-svnae_rt_add_dir(struct svnae_rt *rt, const char *path)
-{
-    if (!rt) return;
-    if (rt->n == rt->cap) rt_grow(rt);
-    struct svnae_rt_node *e = &rt->items[rt->n++];
-    e->path = strdup(path ? path : "");
-    e->kind = 1;
-    e->sha1[0] = '\0';
-    e->data = NULL;
-    e->data_len = 0;
+    struct svnae_rt *rt = calloc(1, sizeof *rt);
+    if (!rt) return NULL;
+    rt->kinds        = aether_gintarr_new(16);
+    rt->paths        = list_new();
+    rt->shas         = list_new();
+    rt->contents     = list_new();
+    rt->content_lens = aether_gintarr_new(16);
+    return rt;
 }
 
 void
-svnae_rt_add_file(struct svnae_rt *rt, const char *path,
-                  const char *data, int data_len,
-                  const char *wc_root)
+svnae_rtree_free(struct svnae_rt *rt)
 {
     if (!rt) return;
-    if (rt->n == rt->cap) rt_grow(rt);
-    struct svnae_rt_node *e = &rt->items[rt->n++];
-    e->path = strdup(path ? path : "");
-    e->kind = 0;
-    e->sha1[0] = '\0';
-    if (data) {
-        e->data = malloc((size_t)data_len + 1);
-        memcpy(e->data, data, (size_t)data_len);
-        e->data[data_len] = '\0';
-        e->data_len = data_len;
-        if (wc_root) svnae_wc_hash_bytes(wc_root, data, data_len, e->sha1);
-    } else {
-        e->data = NULL;
-        e->data_len = 0;
-    }
-}
-
-void
-svnae_rt_free(struct svnae_rt *rt)
-{
-    if (!rt) return;
-    for (int i = 0; i < rt->n; i++) {
-        free(rt->items[i].path);
-        free(rt->items[i].data);
-    }
-    free(rt->items);
+    aether_gintarr_free(rt->kinds);
+    list_free(rt->paths);
+    list_free(rt->shas);
+    list_free(rt->contents);
+    aether_gintarr_free(rt->content_lens);
     free(rt);
 }
 
-int svnae_rt_count(const struct svnae_rt *rt) { return rt ? rt->n : 0; }
+/* Container getters (Aether reaches in via these). */
+void *svnae_rt_get_kinds       (struct svnae_rt *rt) { return rt ? rt->kinds        : NULL; }
+void *svnae_rt_get_paths       (struct svnae_rt *rt) { return rt ? rt->paths        : NULL; }
+void *svnae_rt_get_shas        (struct svnae_rt *rt) { return rt ? rt->shas         : NULL; }
+void *svnae_rt_get_contents    (struct svnae_rt *rt) { return rt ? rt->contents     : NULL; }
+void *svnae_rt_get_content_lens(struct svnae_rt *rt) { return rt ? rt->content_lens : NULL; }
 
-const char *
-svnae_rt_path_at(const struct svnae_rt *rt, int i)
-{
-    return (rt && i >= 0 && i < rt->n) ? rt->items[i].path : "";
-}
-
-int
-svnae_rt_kind_at(const struct svnae_rt *rt, int i)
-{
-    return (rt && i >= 0 && i < rt->n) ? rt->items[i].kind : -1;
-}
-
-const char *
-svnae_rt_sha_at(const struct svnae_rt *rt, int i)
-{
-    return (rt && i >= 0 && i < rt->n) ? rt->items[i].sha1 : "";
-}
-
-const char *
-svnae_rt_data_at(const struct svnae_rt *rt, int i)
-{
-    return (rt && i >= 0 && i < rt->n && rt->items[i].data) ? rt->items[i].data : "";
-}
-
-int
-svnae_rt_data_len_at(const struct svnae_rt *rt, int i)
-{
-    return (rt && i >= 0 && i < rt->n) ? rt->items[i].data_len : 0;
-}
-
-int
-svnae_rt_find_by_path(const struct svnae_rt *rt, const char *path)
-{
-    if (!rt || !path) return -1;
-    for (int i = 0; i < rt->n; i++) {
-        if (strcmp(rt->items[i].path, path) == 0) return i;
-    }
-    return -1;
-}
+/* gintarr handle setters (gintarr_add can regrow → new handle). */
+void svnae_rt_set_kinds       (struct svnae_rt *rt, void *p) { if (rt) rt->kinds        = p; }
+void svnae_rt_set_content_lens(struct svnae_rt *rt, void *p) { if (rt) rt->content_lens = p; }

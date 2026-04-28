@@ -1,0 +1,151 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+
+// Remote-tree storage — Aether port of ae/subr/rtree/shim.c.
+// Five parallel containers, all indexed by node position:
+//
+//   paths         std.list       AetherString per node
+//   kinds         std.gintarr    0=file 1=dir
+//   shas          std.list       40-char hex string, "" for dirs
+//   contents      std.list       AetherString per node (binary-safe)
+//   content_lens  std.gintarr    bytes in contents[i], 0 for dirs
+//
+// Used by the update walker (svnae_rtree_*) and the merge walker
+// (rtree_* read-only accessors).
+//
+// Round 152 ported these out of C. The pre-port shape was a
+// growable struct array {path, kind, sha1[65], data, data_len};
+// post-port shape uses parallel containers chosen for each
+// field's lifetime/binary-safety needs (same approach Round 151
+// used for txn.ae).
+
+import std.string
+import std.list
+import std.intarr
+
+// Per-container handle accessors (defined C-side in
+// ae/subr/rtree/shim.c). The C side holds the outer struct
+// (paths/kinds/shas/contents/content_lens handles) and lets us
+// thread gintarr regrows back through the setters.
+extern svnae_rt_get_paths       (rt: ptr) -> ptr
+extern svnae_rt_get_kinds       (rt: ptr) -> ptr
+extern svnae_rt_get_shas        (rt: ptr) -> ptr
+extern svnae_rt_get_contents    (rt: ptr) -> ptr
+extern svnae_rt_get_content_lens(rt: ptr) -> ptr
+
+extern svnae_rt_set_kinds       (rt: ptr, p: ptr)
+extern svnae_rt_set_content_lens(rt: ptr, p: ptr)
+
+// Growable intarr helpers.
+extern aether_gintarr_count(a: ptr) -> int
+extern aether_gintarr_get(a: ptr, i: int) -> int
+extern aether_gintarr_add(a: ptr, value: int) -> ptr
+
+// WC hash (lookup algo via wc.db, hash bytes accordingly).
+// Returns 40-char hex string (or longer for sha256), "" on error.
+extern aether_wc_hash_bytes(wc_root: string, data: string, length: int) -> string
+
+// ---- public add ops ------------------------------------------
+
+export svnae_rtree_add_dir(rt: ptr, path: string) {
+    if rt == null { return 0 }
+    list_add_raw(svnae_rt_get_paths(rt),    string.copy(path))
+    list_add_raw(svnae_rt_get_shas(rt),     string.copy(""))
+    list_add_raw(svnae_rt_get_contents(rt), string.copy(""))
+
+    k = aether_gintarr_add(svnae_rt_get_kinds(rt), 1)        // 1=dir
+    svnae_rt_set_kinds(rt, k)
+    cl = aether_gintarr_add(svnae_rt_get_content_lens(rt), 0)
+    svnae_rt_set_content_lens(rt, cl)
+    return 0
+}
+
+export svnae_rtree_add_file(rt: ptr, path: string,
+                             data: string, data_len: int,
+                             wc_root: string) {
+    if rt == null { return 0 }
+    if data_len < 0 { data_len = 0 }
+
+    // Compute file's sha under the WC's configured algorithm.
+    sha = ""
+    if string.length(wc_root) > 0 {
+        sha = aether_wc_hash_bytes(wc_root, data, data_len)
+    }
+
+    list_add_raw(svnae_rt_get_paths(rt),    string.copy(path))
+    list_add_raw(svnae_rt_get_shas(rt),     string.copy(sha))
+    list_add_raw(svnae_rt_get_contents(rt), string.copy(data))
+
+    k = aether_gintarr_add(svnae_rt_get_kinds(rt), 0)        // 0=file
+    svnae_rt_set_kinds(rt, k)
+    cl = aether_gintarr_add(svnae_rt_get_content_lens(rt), data_len)
+    svnae_rt_set_content_lens(rt, cl)
+    return 0
+}
+
+// ---- read accessors (rtree_* names — no svnae_ prefix —
+// historical; kept stable to avoid touching every caller) ----
+
+export rtree_count(rt: ptr) -> int {
+    if rt == null { return 0 }
+    return aether_gintarr_count(svnae_rt_get_kinds(rt))
+}
+
+export rtree_path_at(rt: ptr, i: int) -> string {
+    if rt == null { return "" }
+    p = list_get_raw(svnae_rt_get_paths(rt), i)
+    if p == null { return "" }
+    return p
+}
+
+export rtree_kind_at(rt: ptr, i: int) -> int {
+    if rt == null { return 0 - 1 }
+    n = aether_gintarr_count(svnae_rt_get_kinds(rt))
+    if i < 0 { return 0 - 1 }
+    if i >= n { return 0 - 1 }
+    return aether_gintarr_get(svnae_rt_get_kinds(rt), i)
+}
+
+export rtree_sha_at(rt: ptr, i: int) -> string {
+    if rt == null { return "" }
+    p = list_get_raw(svnae_rt_get_shas(rt), i)
+    if p == null { return "" }
+    return p
+}
+
+export rtree_data_at(rt: ptr, i: int) -> string {
+    if rt == null { return "" }
+    p = list_get_raw(svnae_rt_get_contents(rt), i)
+    if p == null { return "" }
+    return p
+}
+
+export rtree_data_len_at(rt: ptr, i: int) -> int {
+    if rt == null { return 0 }
+    return aether_gintarr_get(svnae_rt_get_content_lens(rt), i)
+}
+
+export rtree_find_by_path(rt: ptr, path: string) -> int {
+    if rt == null { return 0 - 1 }
+    n = aether_gintarr_count(svnae_rt_get_kinds(rt))
+    paths = svnae_rt_get_paths(rt)
+    i = 0
+    while i < n {
+        p = list_get_raw(paths, i)
+        if p != null {
+            if string.equals(p, path) == 1 { return i }
+        }
+        i = i + 1
+    }
+    return 0 - 1
+}
+
+main() {
+    println("ae/subr/rtree/rtree.ae is a library; not meant to run standalone")
+}
