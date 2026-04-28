@@ -99,53 +99,40 @@ run_diff3_(mp: string, bp: string, tp: string) -> {
 
 // ---- public ----
 
-// Public buffer-mode merge3. Returns the merged bytes prefixed by a
-// 1-byte status header and a single status byte that the C wrapper
-// strips and inspects:
-//   bytes[0] == 0  -> error
-//   bytes[0] == 1  -> clean merge; payload = bytes[1..]
-//   bytes[0] == 2  -> conflicts; payload = bytes[1..] (with markers)
-// Same channel shape as svndiff_decode/encode — Aether 0.96 still
-// rejects `export -> (T, T)` and emits no body for `export -> {`
-// tuple-shaped exports under --emit=lib.
+// Public buffer-mode merge3. Returns (merged_bytes, status) where:
+//   status == -1  -> error (run_diff3 failure, etc.)
+//   status ==  0  -> clean merge; merged_bytes is the result
+//   status ==  1  -> conflicts; merged_bytes has marker-annotated text
+// Aether 0.99+ accepts `export ... -> (string, int)` (#285);
+// pre-fix this used a leading-status-byte channel that the C
+// wrapper at ae/wc/merge3_shim.c stripped.
 export aether_merge3(mine: string, mine_len: int,
                       base: string, base_len: int,
-                      theirs: string, theirs_len: int) -> string {
+                      theirs: string, theirs_len: int) -> (string, int) {
     mp = tmp_path_("mine")
     bp = tmp_path_("base")
     tp = tmp_path_("theirs")
 
     if write_three_(mine, mine_len, base, base_len, theirs, theirs_len,
                      mp, bp, tp) != 0 {
-        return ""    // length 0 -> error sentinel
+        return "", 0 - 1
     }
 
     merged, status = run_diff3_(mp, bp, tp)
 
     aether_io_unlink(mp); aether_io_unlink(bp); aether_io_unlink(tp)
 
-    if status < 0 { return "" }
-    if status > 2 { return "" }
-
-    // Status: 0 = clean, 1 = conflicts. Map to leading byte 1 / 2.
-    tag = "\x01"
-    if status == 1 { tag = "\x02" }
-    return string.concat(tag, merged)
+    if status < 0 { return "", 0 - 1 }
+    if status > 1 { return "", 0 - 1 }   // diff3 status >= 2 = trouble
+    return merged, status
 }
 
 // Public on-disk merge3. Reads wc_path as `mine`; writes merged
 // back atomically; drops sidecars on conflict. Returns 0 (clean),
-// 1 (conflicts), or -1 (error).
+// 1 (conflicts), or -1 (error). Single-int return needs no tuple.
 export aether_merge3_apply(wc_path: string,
                             base: string, base_len: int, base_rev: int,
                             theirs: string, theirs_len: int, theirs_rev: int) -> int {
-    return aether_merge3_apply_impl(wc_path, base, base_len, base_rev,
-                                     theirs, theirs_len, theirs_rev)
-}
-
-aether_merge3_apply_impl(wc_path: string,
-                          base: string, base_len: int, base_rev: int,
-                          theirs: string, theirs_len: int, theirs_rev: int) -> int {
     if aether_io_file_size(wc_path) < 0 { return 0 - 1 }
     mine = aether_io_read_file(wc_path)
     if string.length(mine) == 0 {

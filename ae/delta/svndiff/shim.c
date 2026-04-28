@@ -27,6 +27,11 @@
 
 #include "aether_string.h"   /* aether_string_data / aether_string_length */
 
+/* Aether tuple-return ABI — `(string, int)` exports synthesise this
+ * struct (typedef name matches Aether's _tuple_<T1>_<T2> convention).
+ * Both encoder + decoder Aether-side functions return it. */
+typedef struct { const char *_0; int _1; } _tuple_string_int;
+
 /* Reuse the compress shim's buf API — same shape. We duplicate the small
  * struct here because Aether has no equivalent of C headers shared across
  * shims; at the Aether level this is still just an opaque `ptr`. */
@@ -62,12 +67,12 @@ static struct svnae_buf *buf_from(const unsigned char *src, int n) {
  * from svnae_svndiff_encoder_finish (same translation unit), so no
  * external caller breakage. */
 
-/* Result format: empty AetherString = error; otherwise byte 0 is
- * the status flag (0x01 = success) and bytes 1.. are the payload.
- * Same channel as svndiff_decode.ae. */
-extern const char *aether_svndiff_encode_window(const void *e,
-                                                 int source_len, int target_len,
-                                                 const void *new_data, int new_data_len);
+/* Round 121 (aether 0.99 #285): clean (string, int) tuple return
+ * replaces the leading-status-byte channel — wrapper drops the
+ * byte-strip dance. */
+extern _tuple_string_int aether_svndiff_encode_window(const void *e,
+                                                       int source_len, int target_len,
+                                                       const void *new_data, int new_data_len);
 
 static struct svnae_buf *
 encode_window_aether(const void *enc, int source_len, int target_len,
@@ -75,15 +80,12 @@ encode_window_aether(const void *enc, int source_len, int target_len,
 {
     AetherString *nd_s = string_new_with_length(new_data ? new_data : "",
                                                  (size_t)(new_data_len > 0 ? new_data_len : 0));
-    const char *out = aether_svndiff_encode_window(enc, source_len, target_len,
-                                                    nd_s, new_data_len);
+    _tuple_string_int r = aether_svndiff_encode_window(enc, source_len, target_len,
+                                                        nd_s, new_data_len);
     string_free(nd_s);
-    if (!out) return NULL;
-    int n = (int)aether_string_length(out);
-    if (n < 1) return NULL;
-    const char *data = aether_string_data(out);
-    if (data[0] != 0x01) return NULL;
-    return buf_from((const unsigned char *)(data + 1), n - 1);
+    if (r._1 == 0) return NULL;
+    int n = (int)aether_string_length(r._0);
+    return buf_from((const unsigned char *)aether_string_data(r._0), n);
 }
 
 /* ---- decode + apply -------------------------------------------------- *
@@ -96,25 +98,19 @@ encode_window_aether(const void *enc, int source_len, int target_len,
  * A multi-window reader is a straightforward extension and will land
  * when fs_fs starts emitting windowed diffs for large files.
  */
-/* Decoder body lives in ae/delta/svndiff_decode.ae now (Round 108
- * — std.bytes from aether 0.94 unblocked the action-1 RLE-overlap
- * pattern that needed mutable random-access byte writes). The C
- * side does two boundary jobs:
- *   (1) Wrap the raw `diff` and `source` byte buffers into
- *       length-aware AetherStrings before crossing into Aether.
- *       Aether's `string.char_at` and `string.length` use strlen()
- *       on raw `char*` pointers, which truncates at the first
- *       embedded NUL. Wrapping via string_new_with_length carries
- *       the explicit length end-to-end.
- *   (2) Repack the Aether result into the legacy svnae_buf handle
- *       so existing callers don't change.
- */
-/* Result format: empty AetherString = error; otherwise byte 0 is
- * the status flag (0x01 = success) and bytes 1.. are the payload.
- * See ae/delta/svndiff_decode.ae for why this leading-byte channel
- * exists rather than a tuple return. */
-extern const char *aether_svndiff_decode_apply(const void *diff, int diff_len,
-                                                const void *source, int source_len);
+/* Decoder body lives in ae/delta/svndiff_decode.ae (Round 108).
+ * Round 121 (aether 0.99 #285 fix) switched the export from a
+ * leading-status-byte channel to a clean (string, int) tuple
+ * return — this wrapper is a thin AetherString wrap + tuple
+ * destructure. The legacy AetherString wrap of `diff` and
+ * `source` is still useful: aether 0.99 auto-unwrap fires going
+ * INTO C externs, but the inputs here cross the boundary FROM C
+ * INTO Aether — and Aether's `string.char_at` / `string.length`
+ * fall through to strlen on a raw char* (truncating binary at
+ * the first NUL). string_new_with_length carries the explicit
+ * length end-to-end. */
+extern _tuple_string_int aether_svndiff_decode_apply(const void *diff, int diff_len,
+                                                      const void *source, int source_len);
 
 struct svnae_buf *
 svnae_svndiff_decode_apply(const char *diff, int diff_len,
@@ -123,16 +119,13 @@ svnae_svndiff_decode_apply(const char *diff, int diff_len,
     if (diff_len < 0 || source_len < 0) return NULL;
     AetherString *diff_s = string_new_with_length(diff ? diff : "", (size_t)diff_len);
     AetherString *src_s  = string_new_with_length(source ? source : "", (size_t)source_len);
-    const char *out = aether_svndiff_decode_apply(diff_s, diff_len, src_s, source_len);
+    _tuple_string_int r = aether_svndiff_decode_apply(diff_s, diff_len, src_s, source_len);
     string_free(diff_s);
     string_free(src_s);
-    if (!out) return NULL;
-    int n = (int)aether_string_length(out);
-    if (n == 0) return NULL;                                /* error */
-    const char *data = aether_string_data(out);
-    if (data[0] != 0x01) return NULL;                       /* unknown status */
-    /* Strip the status byte. n - 1 may be 0 (legitimate empty target). */
-    return buf_from((const unsigned char *)(data + 1), n - 1);
+    if (r._1 == 0) return NULL;     /* status==0 → error */
+    int n = (int)aether_string_length(r._0);
+    /* Length-0 with status==1 is a legitimate empty target. */
+    return buf_from((const unsigned char *)aether_string_data(r._0), n);
 }
 
 /* ---- builder API for Aether callers ---------------------------------- *

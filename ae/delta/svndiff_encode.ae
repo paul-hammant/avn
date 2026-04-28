@@ -128,25 +128,23 @@ build_inst_section_(e: ptr) -> string {
     return bytes.finish(inst, pos)
 }
 
-// Public: emit the full svndiff1 stream. Returns the bytes prefixed
-// by a 1-byte status header (0x01 = success), same channel shape as
-// svndiff_decode.ae's export. The C side strips the byte before
-// handing back via svnae_buf.
+// Public: emit the full svndiff1 stream. Returns (bytes, status)
+// where status is 1 on success, 0 on failure. Aether 0.99+
+// accepts the `(string, int)` tuple-return syntax on `export`
+// (#285); pre-fix this used a leading-status-byte channel that
+// the C side stripped.
 export aether_svndiff_encode_window(e: ptr, source_len: int, target_len: int,
-                                     new_data: string, new_data_len: int) -> string {
+                                     new_data: string, new_data_len: int) -> (string, int) {
     inst_section = build_inst_section_(e)
     inst_len = string.length(inst_section)
 
     // Worst case: signature (4) + 5 varints * 10 bytes (50) + inst
-    // section + new_data + status byte. 64-byte slack handles small
-    // edge cases without a second realloc.
+    // section + new_data. 64-byte slack handles small edge cases
+    // without a second realloc.
     cap = 4 + 50 + inst_len + new_data_len + 64
     out = bytes.new(cap)
-    if out == null { return "" }
-
-    // Status byte at offset 0 (0x01 = success).
-    bytes.set(out, 0, 1)
-    pos = 1
+    if out == null { return "", 0 }
+    pos = 0
 
     // Signature: 'S' 'V' 'N' 0x01
     bytes.set(out, pos, 83); pos = pos + 1
@@ -171,7 +169,7 @@ export aether_svndiff_encode_window(e: ptr, source_len: int, target_len: int,
         bytes.copy_from_string(out, pos, new_data, new_data_len)
         pos = pos + new_data_len
     }
-    return bytes.finish(out, pos)
+    return bytes.finish(out, pos), 1
 }
 
 main() {

@@ -15,24 +15,22 @@
  * Round 112 hoisted the body — fork/pipe/exec/wait dance for
  * /usr/bin/diff3 plus tmp-file management plus sidecar drops —
  * into Aether using os.run_capture (which started returning
- * (stdout, status, err) in aether 0.94, issue #289). The C side
- * keeps two job:
- *   - svnae_merge3: receives raw (mine, base, theirs) byte
- *     buffers + the (out_merged, out_len) malloc-detach contract
- *     the C-side callers historically used. Wraps the byte buffers
- *     into AetherStrings, calls aether_merge3, parses the leading-
- *     status-byte channel, hands back malloc'd bytes.
- *   - svnae_merge3_apply: forwards to aether_merge3_apply, which
- *     does the wc_path read + write_atomic + sidecar drops itself.
+ * (stdout, status, err) in aether 0.94, issue #289). Round 121
+ * (aether 0.99 #285) switched aether_merge3's return from a
+ * leading-status-byte channel to a clean (string, int) tuple,
+ * which collapses the byte-strip dance below to a tuple
+ * destructure plus a malloc-and-copy.
  */
 
 #include <stdlib.h>
 #include <string.h>
 #include "aether_string.h"
 
-extern const char *aether_merge3(const void *mine, int mine_len,
-                                  const void *base, int base_len,
-                                  const void *theirs, int theirs_len);
+typedef struct { const char *_0; int _1; } _tuple_string_int;
+
+extern _tuple_string_int aether_merge3(const void *mine, int mine_len,
+                                        const void *base, int base_len,
+                                        const void *theirs, int theirs_len);
 
 extern int aether_merge3_apply(const char *wc_path,
                                 const void *base, int base_len, int base_rev,
@@ -55,29 +53,23 @@ svnae_merge3(const char *mine,   int mine_len,
     AetherString *base_s   = string_new_with_length(base   ? base   : "", (size_t)base_len);
     AetherString *theirs_s = string_new_with_length(theirs ? theirs : "", (size_t)theirs_len);
 
-    const char *result = aether_merge3(mine_s, mine_len,
-                                        base_s, base_len,
-                                        theirs_s, theirs_len);
+    _tuple_string_int r = aether_merge3(mine_s, mine_len,
+                                         base_s, base_len,
+                                         theirs_s, theirs_len);
 
     string_free(mine_s); string_free(base_s); string_free(theirs_s);
 
-    if (!result) { *out_merged = NULL; *out_len = 0; return -1; }
-    int n = (int)aether_string_length(result);
-    if (n == 0) { *out_merged = NULL; *out_len = 0; return -1; }   /* error */
-
-    const char *data = aether_string_data(result);
-    int status_byte = (unsigned char)data[0];   /* 1 = clean, 2 = conflicts */
-    if (status_byte != 1 && status_byte != 2) {
-        *out_merged = NULL; *out_len = 0; return -1;
-    }
-    int payload_len = n - 1;
-    char *buf = malloc((size_t)payload_len + 1);
+    /* status: -1 = error, 0 = clean, 1 = conflicts. */
+    if (r._1 < 0) { *out_merged = NULL; *out_len = 0; return -1; }
+    if (r._1 > 1) { *out_merged = NULL; *out_len = 0; return -1; }
+    int n = (int)aether_string_length(r._0);
+    char *buf = malloc((size_t)n + 1);
     if (!buf) { *out_merged = NULL; *out_len = 0; return -1; }
-    if (payload_len > 0) memcpy(buf, data + 1, (size_t)payload_len);
-    buf[payload_len] = '\0';
+    if (n > 0) memcpy(buf, aether_string_data(r._0), (size_t)n);
+    buf[n] = '\0';
     *out_merged = buf;
-    *out_len    = payload_len;
-    return status_byte == 1 ? 0 : 1;
+    *out_len    = n;
+    return r._1;
 }
 
 void svnae_merge3_free(char *p) { free(p); }
