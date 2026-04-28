@@ -60,48 +60,17 @@ extern const char *aether_rep_read_decoded(const char *repo, const char *sha,
 
 #include "aether_string.h"
 
-/* Binary-safe concat + slice for pristine_generated.c and
- * rep_store_generated.c. std.string has no byte-construction
- * primitive that handles embedded NULs; these route through
- * string_new_with_length (length-aware). Named aether_pristine_*
- * for historical reasons; pristine_shim.c was the original site. */
-
-/* Both `prefix` and `suf` may arrive as raw byte buffers (#297
- * auto-unwrap from aether 0.98 — the codegen hands us the
- * AetherString's data pointer rather than its struct header).
- * That means we cannot derive their lengths via
- * aether_string_length here — strlen on binary content
- * truncates at the first NUL, which is exactly the bug Round 116
- * hit during the 0.99 toolchain bump. Instead, the caller passes
- * both lengths explicitly. */
-const char *
-aether_pristine_concat_binary_n(const char *prefix, int prefix_len,
-                                 const char *suf, int suf_len)
-{
-    if (prefix_len < 0) prefix_len = 0;
-    if (suf_len < 0) suf_len = 0;
-    const char *pdata = aether_string_data(prefix);
-    const char *sdata = aether_string_data(suf);
-
-    int total = prefix_len + suf_len;
-    char *buf = malloc((size_t)total + 1);
-    if (!buf) return (const char *)string_new_with_length("", 0);
-    if (prefix_len) memcpy(buf,              pdata, (size_t)prefix_len);
-    if (suf_len)    memcpy(buf + prefix_len, sdata, (size_t)suf_len);
-    buf[total] = '\0';
-    const char *out = (const char *)string_new_with_length(buf, total);
-    free(buf);
-    return out;
-}
+/* aether_pristine_concat_binary_n moved to ae/subr/binbuf.ae in
+ * Round 126 (std.bytes makes the binary-safe concat expressible in
+ * Aether). The slice helper stayed C-side: its input auto-unwraps
+ * at the .ae extern boundary to a raw char*, after which Aether
+ * can't recover the true byte length (string.length / .substring
+ * fall through to strlen). C trusts the caller's [start, end)
+ * directly — no strlen, no truncation on binary buffers. */
 
 const char *
 aether_pristine_slice_binary(const char *s, int start, int end)
 {
-    /* Trust the caller's [start, end) directly. aether_string_length
-     * would strlen-truncate post-#297-auto-unwrap when `s` arrives as
-     * a raw byte buffer (not NUL-terminated). The Aether-side caller
-     * always passes start/end that are already within the buffer's
-     * known logical length. */
     const char *data = aether_string_data(s);
     if (start < 0) start = 0;
     if (end < start) end = start;

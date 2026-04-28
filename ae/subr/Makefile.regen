@@ -8,11 +8,15 @@
 
 AETHERC ?= $(abspath $(dir $(lastword $(MAKEFILE_LIST))))/../../.aether_binaries/build/aetherc
 
-GENERATED := io_generated.c
+GENERATED := io_generated.c binbuf_generated.c
 
 all: $(GENERATED)
 
 io_generated.c: io.ae
 	$(AETHERC) --emit=lib --with=fs $< $@
+
+# binbuf.ae: pure std.bytes / std.string. No filesystem capability needed.
+binbuf_generated.c: binbuf.ae
+	$(AETHERC) --emit=lib $< $@
 
 .PHONY: all
