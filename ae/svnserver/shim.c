@@ -114,19 +114,12 @@ extern const char *http_get_header(HttpRequest *req, const char *name);
  * via aether_repo_primary_hash and call svnae_crypto_hash_hex
  * (Aether-native, returns AetherString) directly. */
 
-/* Effective username for this request (X-Svnae-User header verbatim;
- * empty string for anonymous). Cached in a TLS buffer so the returned
- * pointer is stable until the next call on this thread. */
-const char *svnserver_request_user(HttpRequest *req) {
-    static __thread char user_cache[128];
-    const char *hdr = req_header(req, "X-Svnae-User");
-    if (!hdr) { user_cache[0] = '\0'; return user_cache; }
-    size_t n = strlen(hdr);
-    if (n >= sizeof user_cache) n = sizeof user_cache - 1;
-    memcpy(user_cache, hdr, n);
-    user_cache[n] = '\0';
-    return user_cache;
-}
+/* svnserver_request_user retired in Round 141 — was a TLS-cache
+ * around req_header(req, "X-Svnae-User"). Sibling
+ * svnserver_request_header doesn't cache, and req's own header
+ * storage outlives every handler call, so the TLS-cache shape was
+ * unnecessary belt-and-braces. .ae callers now invoke
+ * svnserver_request_header(req, "X-Svnae-User") directly. */
 
 /* 1 if this request carries a valid X-Svnae-Superuser token, 0 otherwise. */
 int svnserver_request_is_super(HttpRequest *req) {

@@ -42,7 +42,7 @@ import std.json
 
 extern svnserver_request_body(req: ptr) -> string
 extern svnserver_request_body_length(req: ptr) -> int
-extern svnserver_request_user(req: ptr) -> string
+extern svnserver_request_header(req: ptr, name: string) -> string
 extern svnserver_request_is_super(req: ptr) -> int
 extern svnserver_request_branch(req: ptr) -> string
 
@@ -142,7 +142,7 @@ commit_from_body_impl(req: ptr, res: ptr, repo: string) -> int {
         }
     }
 
-    user = svnserver_request_user(req)
+    user = svnserver_request_header(req, "X-Svnae-User")
     is_super = svnserver_request_is_super(req)
 
     // Pre-scan: every edit path needs ACL write + branch-spec allow.
