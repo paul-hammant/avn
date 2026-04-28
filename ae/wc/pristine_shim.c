@@ -44,7 +44,7 @@ aether_pristine_pack_le32(int v)
     return (const char *)string_new_with_length(buf, 4);
 }
 
-/* aether_pristine_concat_binary / _slice_binary live in
+/* aether_pristine_concat_binary_n / _slice_binary live in
  * fs_fs/rep_store_shim.c — both shims always co-link, so exporting
  * once avoids duplicate-symbol errors. */
 

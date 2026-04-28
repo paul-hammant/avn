@@ -94,17 +94,6 @@ aether_pristine_concat_binary_n(const char *prefix, int prefix_len,
     return out;
 }
 
-/* Compatibility shim: the legacy 3-arg form derives prefix length
- * via aether_string_length. Now only safe when prefix is genuinely
- * an AetherString (magic-bearing) — runs strlen otherwise. Live
- * callers should migrate to the _n variant. */
-const char *
-aether_pristine_concat_binary(const char *prefix, const char *suf, int suf_len)
-{
-    int plen = (int)aether_string_length(prefix);
-    return aether_pristine_concat_binary_n(prefix, plen, suf, suf_len);
-}
-
 const char *
 aether_pristine_slice_binary(const char *s, int start, int end)
 {
