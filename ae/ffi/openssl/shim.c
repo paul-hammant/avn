@@ -42,42 +42,10 @@ int  svnae_crypto_b64_decode_len(void) { return s_b64_decode_len; }
 
 /* --- public API ------------------------------------------------------- */
 
-/* Compute the named hash of `data[0..len]`, write lowercase hex to `out`
- * (caller-sized, typically 65 bytes for sha256 + NUL). Returns hex
- * length on success, 0 on unsupported algo or buffer too small.
- *
- * The "into a caller-provided buffer" shape matches the five inlined
- * EVP loops that existed in the port's C shims — they all wrote into
- * a stack char[65]. */
-int
-svnae_openssl_hash_hex_into(const char *algo, const char *data, int len, char *out)
-{
-    const char *hex = svnae_crypto_hash_hex(algo, data, len);
-    if (!hex) { out[0] = '\0'; return 0; }
-    int hlen = (int)aether_string_length(hex);
-    if (hlen == 0 || hlen >= 65) { out[0] = '\0'; return 0; }
-    const char *hdata = aether_string_data(hex);
-    memcpy(out, hdata, (size_t)hlen);
-    out[hlen] = '\0';
-    return hlen;
-}
-
-/* Compute the named hash, return a malloc'd lowercase-hex string.
- * Caller frees with free(). Returns NULL on unsupported algo or OOM.
- *
- * This is the shape the subr/checksum module exposes to Aether tests
- * and to the high-level svnae_* APIs that want a returnable string. */
-char *
-svnae_openssl_hash_hex(const char *algo, const char *data, int len)
-{
-    char buf[65];
-    int n = svnae_openssl_hash_hex_into(algo, data, len, buf);
-    if (n == 0) return NULL;
-    char *out = malloc((size_t)n + 1);
-    if (!out) return NULL;
-    memcpy(out, buf, (size_t)n + 1);
-    return out;
-}
+/* svnae_openssl_hash_hex_into / _hash_hex retired in Round 134:
+ * the only external caller (svnserver_hash_hex) was retired in
+ * the same round; other code paths reach svnae_crypto_hash_hex
+ * (Aether-native, returns AetherString) directly. */
 
 /* Base64-encode `src[0..len]` into a malloc'd NUL-terminated string.
  * Caller frees. Padded output — std.cryptography emits unpadded so

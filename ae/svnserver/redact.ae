@@ -38,9 +38,12 @@ extern aether_dir_entry_name(body: string, i: int) -> string
 extern aether_dir_entry_line(kind: int, sha: string, name: string) -> string
 extern aether_path_join_rel(prefix: string, name: string) -> string
 
-// C-side ACL decision + hash wrappers.
+// C-side ACL decision + Aether-side hash. Round 134 retired
+// svnserver_hash_hex (TLS-buf detour); this file now resolves the
+// repo's primary algo and calls the canonical svnae_crypto_hash_hex.
 extern aether_acl_allows_mode(repo: string, rev: int, user: string, target_path: string, want_write: int) -> int
-extern svnserver_hash_hex(repo: string, data: string, length: int) -> string
+extern aether_repo_primary_hash(repo: string) -> string
+extern svnae_crypto_hash_hex(algo: string, data: string, length: int) -> string
 
 // Recursive entry. Returns the hex digest of the redacted dir body,
 // or "" on failure.
@@ -88,7 +91,8 @@ redacted_dir_sha_impl(repo: string, rev: int, user: string,
         i = i + 1
     }
     svnae_rep_free(body)
-    return svnserver_hash_hex(repo, redact, string.length(redact))
+    algo = aether_repo_primary_hash(repo)
+    return svnae_crypto_hash_hex(algo, redact, string.length(redact))
 }
 
 main() {

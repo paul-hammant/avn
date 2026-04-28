@@ -110,15 +110,10 @@ extern const char *http_get_header(HttpRequest *req, const char *name);
  * acl_mode.ae and acl_resolve.ae; .ae callers reach
  * aether_acl_allows_mode directly without going through this file. */
 
-extern int svnae_openssl_hash_hex_into(const char *algo, const char *data, int len, char *out);
-
-const char *svnserver_hash_hex(const char *repo, const char *data, int length) {
-    static __thread char buf[65];
-    buf[0] = '\0';
-    svnae_openssl_hash_hex_into(aether_repo_primary_hash(repo),
-                                data ? data : "", length, buf);
-    return buf;
-}
+/* svnserver_hash_hex retired in Round 134 — was a TLS-buf detour
+ * over svnae_openssl_hash_hex_into. .ae callers now resolve algo
+ * via aether_repo_primary_hash and call svnae_crypto_hash_hex
+ * (Aether-native, returns AetherString) directly. */
 
 /* Effective username for this request (X-Svnae-User header verbatim;
  * empty string for anonymous). Cached in a TLS buffer so the returned
