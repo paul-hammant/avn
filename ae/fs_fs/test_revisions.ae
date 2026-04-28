@@ -75,16 +75,13 @@ extern dir_exists(path: string) -> int
 // --- externs from fs_fs/shim.c ---------------------------------------------
 
 extern aether_io_read_file(path: string) -> string
-extern svnae_fsfs_buf_length(b: ptr) -> int
-extern svnae_fsfs_buf_data(b: ptr) -> string
-extern svnae_fsfs_buf_free(b: ptr)
 
 extern svnae_fsfs_tree_builder_new() -> ptr
 extern svnae_fsfs_tree_builder_add(tb: ptr, path: string, kind: int, content: string, content_len: int) -> int
 extern svnae_fsfs_tree_builder_count(tb: ptr) -> int
 extern svnae_fsfs_tree_builder_path(tb: ptr, i: int) -> string
 extern svnae_fsfs_tree_builder_kind(tb: ptr, i: int) -> int
-extern svnae_fsfs_tree_builder_content(tb: ptr, i: int) -> ptr
+extern svnae_fsfs_tree_builder_content_data(tb: ptr, i: int) -> string
 extern svnae_fsfs_tree_builder_free(tb: ptr)
 
 
@@ -480,14 +477,11 @@ fsfs_commit_flat(repo: string, tb: ptr, author: string, logmsg: string) {
             i = i + 1
             continue
         }
-        buf = svnae_fsfs_tree_builder_content(tb, i)
-        blen = svnae_fsfs_buf_length(buf)
-        bdata = svnae_fsfs_buf_data(buf)
+        bdata = svnae_fsfs_tree_builder_content_data(tb, i)
         // write_blob_text: since we know content may be arbitrary bytes,
         // we should have a binary-safe variant. For tests we use text,
         // so this is fine.
         sha1 = write_blob_text(repo, bdata)
-        svnae_fsfs_buf_free(buf)
 
         names_txt = string.concat(names_txt, path)
         names_txt = string.concat(names_txt, "\n")

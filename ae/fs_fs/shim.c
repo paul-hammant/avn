@@ -29,44 +29,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
-#include <time.h>
-#include <unistd.h>
-#include "aether_string.h"   /* aether_string_data / aether_string_length */
 
-/* Same svnae_buf layout as everywhere else. */
-struct svnae_buf {
-    char *data;
-    int   length;
-};
-
-static struct svnae_buf *
-buf_from(const unsigned char *src, int n)
-{
-    struct svnae_buf *b = malloc(sizeof *b);
-    if (!b) return NULL;
-    b->data = malloc((size_t)n + 1);
-    if (!b->data) { free(b); return NULL; }
-    if (n > 0) memcpy(b->data, src, n);
-    b->data[n] = '\0';
-    b->length = n;
-    return b;
-}
-
-/* svnae_fsfs_read_small_file retired in Round 137 — was a
- * struct-svnae_buf wrap over aether_io_read_file. .ae callers now
- * call aether_io_read_file directly and use string.length() == 0
- * as the miss check. The svnae_buf accessors stay because the
- * tree_builder_content path still uses them for binary content. */
-
-int         svnae_fsfs_buf_length(const struct svnae_buf *b) { return b ? b->length : 0; }
-const char *svnae_fsfs_buf_data  (const struct svnae_buf *b) { return b ? b->data : ""; }
-void        svnae_fsfs_buf_free  (struct svnae_buf *b)
-{
-    if (!b) return;
-    free(b->data);
-    free(b);
-}
+/* svnae_fsfs_read_small_file + the svnae_buf wrapper trio +
+ * buf_from helper retired in Rounds 137–138. .ae callers now use
+ * aether_io_read_file (text path) and svnae_fsfs_tree_builder_
+ * content_data / _len (binary path) directly. */
 
 /* Current ISO-8601 UTC timestamp, without milliseconds. For the revision
  * blob's `date:` field. Returned string is static and must be used before
@@ -165,14 +132,23 @@ svnae_fsfs_tree_builder_kind(const struct svnae_tree_builder *tb, int i)
     return tb->entries[i].kind;
 }
 
-/* Return the file content as a buf so Aether can pass it into write_blob
- * via the usual handle. Caller frees with svnae_fsfs_buf_free. */
-struct svnae_buf *
-svnae_fsfs_tree_builder_content(const struct svnae_tree_builder *tb, int i)
+/* Raw content + length accessors. Mirrors txn_shim's content_data /
+ * content_len pair — explicit length composes better with .ae
+ * callers' string.length / std.bytes idioms than the svnae_buf
+ * handle did. The svnae_buf-returning shape was retired in Round
+ * 138 along with its svnae_fsfs_buf_* accessor trio. */
+const char *
+svnae_fsfs_tree_builder_content_data(const struct svnae_tree_builder *tb, int i)
 {
-    if (!tb || i < 0 || i >= tb->n) return NULL;
-    return buf_from((const unsigned char *)tb->entries[i].content,
-                    tb->entries[i].content_len);
+    if (!tb || i < 0 || i >= tb->n) return "";
+    return tb->entries[i].content ? tb->entries[i].content : "";
+}
+
+int
+svnae_fsfs_tree_builder_content_len(const struct svnae_tree_builder *tb, int i)
+{
+    if (!tb || i < 0 || i >= tb->n) return 0;
+    return tb->entries[i].content_len;
 }
 
 void
