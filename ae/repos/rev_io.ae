@@ -91,9 +91,6 @@ export repos_head_rev(repo: string) -> int {
 
 // $repo/revs/NNNNNN → rev blob sha (hex string), or "" on miss.
 export repos_rev_blob_sha(repo: string, rev: int) -> string {
-    return repos_rev_blob_sha_impl(repo, rev)
-}
-repos_rev_blob_sha_impl(repo: string, rev: int) -> string {
     path = string.concat(string.concat(repo, "/revs/"), repos_pad6(rev))
     if aether_io_file_size(path) < 0 { return "" }
     src = aether_io_read_file(path)
@@ -110,11 +107,7 @@ extern svnae_rep_free(body: string)
 extern aether_blobfield_get(body: string, key: string) -> string
 
 export repos_load_rev_blob_field(repo: string, rev: int, key: string) -> string {
-    return repos_load_rev_blob_field_impl(repo, rev, key)
-}
-
-repos_load_rev_blob_field_impl(repo: string, rev: int, key: string) -> string {
-    sha = repos_rev_blob_sha_impl(repo, rev)
+    sha = repos_rev_blob_sha(repo, rev)
     if string.length(sha) == 0 { return "" }
     body = svnae_rep_read_blob(repo, sha)
     if string.length(body) == 0 { return "" }
@@ -135,7 +128,7 @@ repos_load_rev_blob_field_impl(repo: string, rev: int, key: string) -> string {
 export repos_inherit_rev_field(repo: string, prev: int, key: string,
                                 override: string) -> string {
     if string.length(override) > 0 { return string.copy(override) }
-    return repos_load_rev_blob_field_impl(repo, prev, key)
+    return repos_load_rev_blob_field(repo, prev, key)
 }
 
 // $repo/format → first-line contents, whitespace-stripped.
@@ -144,10 +137,6 @@ export repos_inherit_rev_field(repo: string, prev: int, key: string,
 // fgets' "first line or bust" semantics, so we preserve that by
 // clipping at the first '\n' if one happens to slip in.
 export repos_format_line(repo: string) -> string {
-    return repos_format_line_impl(repo)
-}
-
-repos_format_line_impl(repo: string) -> string {
     path = string.concat(repo, "/format")
     if aether_io_file_size(path) < 0 { return "" }
     src = aether_io_read_file(path)
@@ -183,7 +172,7 @@ extern aether_format_secondary_count(format_line: string) -> int
 extern aether_format_secondary_hash(format_line: string, i: int) -> string
 
 export repo_primary_hash(repo: string) -> string {
-    line = repos_format_line_impl(repo)
+    line = repos_format_line(repo)
     if string.length(line) == 0 { return "sha1" }
     primary = aether_format_primary_hash(line)
     if string.length(primary) == 0 { return "sha1" }
@@ -195,7 +184,7 @@ export repo_primary_hash(repo: string) -> string {
 // Length limit (32/entry) enforced here so we never return a name
 // the C caller would reject anyway.
 export repo_secondary_hashes_joined(repo: string) -> string {
-    line = repos_format_line_impl(repo)
+    line = repos_format_line(repo)
     if string.length(line) == 0 { return "" }
     n = aether_format_secondary_count(line)
     if n > 4 { n = 4 }

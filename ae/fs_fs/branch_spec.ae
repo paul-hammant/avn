@@ -89,10 +89,6 @@ parse_head_line(s: string) -> int {
 }
 
 export branch_head_rev(repo: string, base: string) -> int {
-    return branch_head_rev_impl(repo, base)
-}
-
-branch_head_rev_impl(repo: string, base: string) -> int {
     // Preferred path: $repo/branches/<base>/head, "rev=N".
     base_head_path = string.concat(string.concat(string.concat(repo, "/branches/"), base), "/head")
     sz = aether_io_file_size(base_head_path)
@@ -209,11 +205,6 @@ branch_pad2hex(n: int) -> string {
 // -1 on failure is enough — the caller aborts the commit anyway.
 export write_rev_pointer_set(repo: string, branch: string, next_rev: int,
                               rev_sha: string) -> int {
-    return write_rev_pointer_set_impl(repo, branch, next_rev, rev_sha)
-}
-
-write_rev_pointer_set_impl(repo: string, branch: string, next_rev: int,
-                            rev_sha: string) -> int {
     if string.length(repo) == 0 { return -1 }
     if string.length(branch) == 0 { return -1 }
     if string.length(rev_sha) == 0 { return -1 }
