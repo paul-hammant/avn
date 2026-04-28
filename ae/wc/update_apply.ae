@@ -54,7 +54,6 @@ extern svnae_wc_db_set_conflicted(db: ptr, path: string, conflicted: int) -> int
 
 // --- pristine + hash FFI --------------------------------------------------
 extern aether_wc_pristine_put(wc_root: string, data: string, length: int) -> string
-extern svnae_wc_hash_file(wc_root: string, path: string, out_buf: ptr) -> int
 
 // --- io helpers + merge3 entry -------------------------------------------
 extern aether_io_mkdir_p(path: string) -> int
@@ -77,11 +76,11 @@ extern aether_ingest_props(base_url: string, repo: string, rev: int,
                             wc_root: string, rel: string)
 
 // --- disk-sha helper ------------------------------------------------------
-// Thin wrapper around svnae_wc_hash_file that drops the out_buf pointer
-// and returns the 65-byte hex (C side owns the string; we strcmp it via
-// string.equals). C implementation writes into a TLS scratch and
-// returns the pointer.
-extern update_sha1_of_file(wc_root: string, path: string) -> string
+// Hash the contents of `path` on disk via the canonical wc_hash_file in
+// pristine.ae. Round 130 dropped the C trampoline (update_sha1_of_file +
+// svnae_wc_hash_file) — both were a TLS-scratch detour the .ae caller
+// no longer needs.
+extern aether_wc_hash_file(wc_root: string, path: string) -> string
 
 // --- stderr helper (lightly-typed println for our "C    foo" trace) ------
 extern svnae_stderr_puts(s: string)
@@ -146,7 +145,7 @@ update_apply_pass_a_impl(wc_root: string, base_url: string, repo: string,
                         if string.equals(r_sha, base_sha) == 0 {
                             // Remote changed. Clean or conflict?
                             disk = aether_path_join_rel(wc_root, rel)
-                            disk_sha = update_sha1_of_file(wc_root, disk)
+                            disk_sha = aether_wc_hash_file(wc_root, disk)
                             local_clean = 0
                             if string.length(disk_sha) > 0 {
                                 if string.equals(disk_sha, base_sha) == 1 {

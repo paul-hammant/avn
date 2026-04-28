@@ -36,7 +36,6 @@
 
 extern const char *aether_wc_hash_bytes(const char *wc_root,
                                         const char *data, int length);
-extern const char *aether_wc_hash_file(const char *wc_root, const char *path);
 /* Hash `data[0..len]` under the WC's algorithm. Copy into caller's
  * `out` buffer (>= 65 bytes) and return the hex length. 0 on
  * failure. */
@@ -53,19 +52,8 @@ svnae_wc_hash_bytes(const char *wc_root, const char *data, int len, char *out)
     return hlen;
 }
 
-int
-svnae_wc_hash_file(const char *wc_root, const char *path, char *out)
-{
-    const char *hex = aether_wc_hash_file(wc_root, path);
-    if (!hex) { out[0] = '\0'; return -1; }
-    const char *hdata = aether_string_data(hex);
-    int         hlen  = (int)aether_string_length(hex);
-    if (hlen == 0) { out[0] = '\0'; return -1; }
-    if (hlen >= 65) hlen = 64;
-    memcpy(out, hdata, (size_t)hlen);
-    out[hlen] = '\0';
-    return 0;
-}
+/* svnae_wc_hash_file retired in Round 130 — only caller was the
+ * (also-retired) update_shim.c::update_sha1_of_file trampoline. */
 
 /* svnae_wc_pristine_{has,size,put,get,free} all retired:
  *   - has / size: Round 104 — 1-line forwards, callers use aether_* directly

@@ -25,8 +25,6 @@
 
 #include "../subr/rtree/rtree.h"
 
-extern int svnae_wc_hash_file(const char *wc_root, const char *path, char *out);
-
 static __thread const char *g_wc_root = NULL;
 
 void svnae_update_set_wc_root(const char *wc_root) { g_wc_root = wc_root; }
@@ -48,14 +46,6 @@ const char *rtree_data_at     (const struct svnae_rt *rt, int i)          { retu
 int         rtree_data_len_at (const struct svnae_rt *rt, int i)          { return svnae_rt_data_len_at(rt, i); }
 int         rtree_find_by_path(const struct svnae_rt *rt, const char *p)  { return svnae_rt_find_by_path(rt, p); }
 
-/* Aether-callable disk-file hash. Returns a TLS scratch buffer with
- * the 65-byte hex digest (or "" on failure). The two-pass apply
- * compares this against the remote node's sha1 to detect dirty WCs. */
-const char *
-update_sha1_of_file(const char *wc_root, const char *path)
-{
-    static __thread char buf[65];
-    buf[0] = '\0';
-    if (svnae_wc_hash_file(wc_root, path, buf) != 0) buf[0] = '\0';
-    return buf;
-}
+/* update_sha1_of_file retired in Round 130 — was a thin TLS-buf
+ * detour over svnae_wc_hash_file. update_apply.ae now calls the
+ * canonical aether_wc_hash_file directly. */
