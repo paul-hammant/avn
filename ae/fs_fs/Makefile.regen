@@ -8,7 +8,7 @@
 
 AETHERC ?= $(abspath $(dir $(lastword $(MAKEFILE_LIST))))/../../.aether_binaries/build/aetherc
 
-GENERATED := spec_generated.c dirblob_generated.c format_line_generated.c pathutil_generated.c reppath_generated.c filter_generated.c rebuild_generated.c branch_spec_generated.c count_reps_generated.c rep_store_generated.c rep_store_sec_generated.c commit_finalise_generated.c txn_generated.c
+GENERATED := spec_generated.c dirblob_generated.c format_line_generated.c pathutil_generated.c reppath_generated.c filter_generated.c rebuild_generated.c branch_spec_generated.c count_reps_generated.c rep_store_generated.c rep_store_sec_generated.c commit_finalise_generated.c txn_generated.c tree_builder_generated.c
 
 all: $(GENERATED)
 
@@ -59,6 +59,11 @@ commit_finalise_generated.c: commit_finalise.ae
 # txn.ae: the transaction edit-list (Round 151 port from
 # txn_shim.c). Pure std.list/std.intarr/string.
 txn_generated.c: txn.ae
+	$(AETHERC) --emit=lib $< $@
+
+# tree_builder.ae: test-suite (path, kind, content) builder
+# (Round 153 port from fs_fs/shim.c). Same containers as txn.ae.
+tree_builder_generated.c: tree_builder.ae
 	$(AETHERC) --emit=lib $< $@
 
 .PHONY: all

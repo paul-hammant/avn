@@ -1,0 +1,93 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+
+// Tree builder — Aether port of ae/fs_fs/shim.c's
+// svnae_tree_builder. Same shape as Round 151 (txn) and Round 152
+// (rtree): four parallel containers behind a tiny C-side opaque
+// holder.
+//
+//   paths         std.list      AetherString per entry
+//   kinds         std.gintarr   0=file 1=dir
+//   contents      std.list      AetherString per entry (binary-safe)
+//   content_lens  std.gintarr
+//
+// Used by ae/fs_fs/test_revisions.ae's commit-rev fixture: build a
+// flat (path, kind, content) list, then walk it to emit dir blobs
+// bottom-up.
+
+import std.string
+import std.list
+import std.intarr
+
+extern svnae_fsfs_tb_get_paths       (tb: ptr) -> ptr
+extern svnae_fsfs_tb_get_kinds       (tb: ptr) -> ptr
+extern svnae_fsfs_tb_get_contents    (tb: ptr) -> ptr
+extern svnae_fsfs_tb_get_content_lens(tb: ptr) -> ptr
+
+extern svnae_fsfs_tb_set_kinds       (tb: ptr, p: ptr)
+extern svnae_fsfs_tb_set_content_lens(tb: ptr, p: ptr)
+
+extern aether_gintarr_count(a: ptr) -> int
+extern aether_gintarr_get(a: ptr, i: int) -> int
+extern aether_gintarr_add(a: ptr, value: int) -> ptr
+
+export svnae_fsfs_tree_builder_add(tb: ptr, path: string, kind: int,
+                                    content: string, content_len: int) -> int {
+    if tb == null { return 0 - 1 }
+    list_add_raw(svnae_fsfs_tb_get_paths(tb), string.copy(path))
+    if kind == 0 {
+        if content_len < 0 { content_len = 0 }
+        list_add_raw(svnae_fsfs_tb_get_contents(tb), string.copy(content))
+    } else {
+        list_add_raw(svnae_fsfs_tb_get_contents(tb), string.copy(""))
+        content_len = 0
+    }
+
+    k = aether_gintarr_add(svnae_fsfs_tb_get_kinds(tb), kind)
+    svnae_fsfs_tb_set_kinds(tb, k)
+    cl = aether_gintarr_add(svnae_fsfs_tb_get_content_lens(tb), content_len)
+    svnae_fsfs_tb_set_content_lens(tb, cl)
+    return 0
+}
+
+export svnae_fsfs_tree_builder_count(tb: ptr) -> int {
+    if tb == null { return 0 }
+    return aether_gintarr_count(svnae_fsfs_tb_get_kinds(tb))
+}
+
+export svnae_fsfs_tree_builder_path(tb: ptr, i: int) -> string {
+    if tb == null { return "" }
+    p = list_get_raw(svnae_fsfs_tb_get_paths(tb), i)
+    if p == null { return "" }
+    return p
+}
+
+export svnae_fsfs_tree_builder_kind(tb: ptr, i: int) -> int {
+    if tb == null { return 0 - 1 }
+    n = aether_gintarr_count(svnae_fsfs_tb_get_kinds(tb))
+    if i < 0 { return 0 - 1 }
+    if i >= n { return 0 - 1 }
+    return aether_gintarr_get(svnae_fsfs_tb_get_kinds(tb), i)
+}
+
+export svnae_fsfs_tree_builder_content_data(tb: ptr, i: int) -> string {
+    if tb == null { return "" }
+    p = list_get_raw(svnae_fsfs_tb_get_contents(tb), i)
+    if p == null { return "" }
+    return p
+}
+
+export svnae_fsfs_tree_builder_content_len(tb: ptr, i: int) -> int {
+    if tb == null { return 0 }
+    return aether_gintarr_get(svnae_fsfs_tb_get_content_lens(tb), i)
+}
+
+main() {
+    println("ae/fs_fs/tree_builder.ae is a library; not meant to run standalone")
+}
