@@ -66,34 +66,55 @@ extern const char *aether_rep_read_decoded(const char *repo, const char *sha,
  * string_new_with_length (length-aware). Named aether_pristine_*
  * for historical reasons; pristine_shim.c was the original site. */
 
+/* Both `prefix` and `suf` may arrive as raw byte buffers (#297
+ * auto-unwrap from aether 0.98 — the codegen hands us the
+ * AetherString's data pointer rather than its struct header).
+ * That means we cannot derive their lengths via
+ * aether_string_length here — strlen on binary content
+ * truncates at the first NUL, which is exactly the bug Round 116
+ * hit during the 0.99 toolchain bump. Instead, the caller passes
+ * both lengths explicitly. */
 const char *
-aether_pristine_concat_binary(const char *prefix, const char *suf, int suf_len)
+aether_pristine_concat_binary_n(const char *prefix, int prefix_len,
+                                 const char *suf, int suf_len)
 {
+    if (prefix_len < 0) prefix_len = 0;
+    if (suf_len < 0) suf_len = 0;
     const char *pdata = aether_string_data(prefix);
-    int         plen  = (int)aether_string_length(prefix);
-
     const char *sdata = aether_string_data(suf);
-    int         slen  = (int)aether_string_length(suf);
-    if (slen < suf_len) suf_len = slen;
 
-    int total = plen + suf_len;
+    int total = prefix_len + suf_len;
     char *buf = malloc((size_t)total + 1);
     if (!buf) return (const char *)string_new_with_length("", 0);
-    if (plen) memcpy(buf,        pdata, (size_t)plen);
-    if (suf_len) memcpy(buf + plen, sdata, (size_t)suf_len);
+    if (prefix_len) memcpy(buf,              pdata, (size_t)prefix_len);
+    if (suf_len)    memcpy(buf + prefix_len, sdata, (size_t)suf_len);
     buf[total] = '\0';
     const char *out = (const char *)string_new_with_length(buf, total);
     free(buf);
     return out;
 }
 
+/* Compatibility shim: the legacy 3-arg form derives prefix length
+ * via aether_string_length. Now only safe when prefix is genuinely
+ * an AetherString (magic-bearing) — runs strlen otherwise. Live
+ * callers should migrate to the _n variant. */
+const char *
+aether_pristine_concat_binary(const char *prefix, const char *suf, int suf_len)
+{
+    int plen = (int)aether_string_length(prefix);
+    return aether_pristine_concat_binary_n(prefix, plen, suf, suf_len);
+}
+
 const char *
 aether_pristine_slice_binary(const char *s, int start, int end)
 {
+    /* Trust the caller's [start, end) directly. aether_string_length
+     * would strlen-truncate post-#297-auto-unwrap when `s` arrives as
+     * a raw byte buffer (not NUL-terminated). The Aether-side caller
+     * always passes start/end that are already within the buffer's
+     * known logical length. */
     const char *data = aether_string_data(s);
-    int         len  = (int)aether_string_length(s);
     if (start < 0) start = 0;
-    if (end > len) end = len;
     if (end < start) end = start;
     return (const char *)string_new_with_length(data + start, end - start);
 }

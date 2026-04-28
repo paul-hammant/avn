@@ -42,7 +42,7 @@ import std.zlib
 // pristine_shim.c and reached from here via rep_store_shim.c's
 // linked copy (they're both pulled into every binary that uses
 // either pristine_generated.c or rep_store_generated.c).
-extern aether_pristine_concat_binary(prefix: string, suf: string, suf_len: int) -> string
+extern aether_pristine_concat_binary_n(prefix: string, prefix_len: int, suf: string, suf_len: int) -> string
 extern aether_pristine_slice_binary(s: string, start: int, end: int) -> string
 
 // Path builder already lives in ae/fs_fs/reppath.ae.
@@ -89,10 +89,14 @@ rep_encode_blob_impl(data: string, length: int) -> string {
 
     tag = "R"
     if use_zlib == 1 { tag = "Z" }
-    payload = aether_pristine_concat_binary(tag, body, body_len)
+    payload = aether_pristine_concat_binary_n(tag, 1, body, body_len)
+    payload_len = 1 + body_len
 
     header = string.concat(string.from_int(use_zlib), "\x01")
-    return aether_pristine_concat_binary(header, payload, 1 + body_len)
+    // header is "0\x01" or "1\x01" — 2 ASCII bytes built via plain
+    // string.concat, so its strlen would be safe, but we pass the
+    // explicit length anyway for symmetry.
+    return aether_pristine_concat_binary_n(header, 2, payload, payload_len)
 }
 
 // Accessors the C caller uses on the encoded envelope.

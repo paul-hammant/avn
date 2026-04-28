@@ -85,7 +85,7 @@ extern aether_io_is_regular_file(path: string) -> int
 
 // Byte-level C helpers — see bottom of pristine_shim.c for impls.
 extern aether_pristine_pack_le32(v: int) -> string
-extern aether_pristine_concat_binary(prefix: string, suf: string, suf_len: int) -> string
+extern aether_pristine_concat_binary_n(prefix: string, prefix_len: int, suf: string, suf_len: int) -> string
 extern aether_pristine_slice_binary(s: string, start: int, end: int) -> string
 
 // ---- hashing -------------------------------------------------------------
@@ -170,8 +170,8 @@ wc_pristine_put_impl(wc_root: string, data: string, length: int) -> string {
         body_len = zlen
     }
 
-    buf = aether_pristine_concat_binary(header_tag, le, 4)
-    buf = aether_pristine_concat_binary(buf, body, body_len)
+    buf = aether_pristine_concat_binary_n(header_tag, 1, le, 4)
+    buf = aether_pristine_concat_binary_n(buf, 5, body, body_len)
 
     total_len = 1 + 4 + body_len
     werr = fs.write_binary(path, buf, total_len)
