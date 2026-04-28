@@ -60,7 +60,7 @@ extern svnae_buf_free(b: ptr)
 extern svnae_write_header_and_buf(path: string, header: string, buf: ptr) -> int
 
 extern aether_io_write_atomic(path: string, data: string, length: int) -> int
-extern svnae_write_header_and_body(path: string, header: string, body: string, body_len: int) -> int
+extern aether_io_write_header_and_body(path: string, header: string, body: string, body_len: int) -> int
 extern aether_io_rename(from: string, to: string) -> int
 extern aether_io_is_regular_file(path: string) -> int
 extern aether_io_remove(path: string) -> int
@@ -205,7 +205,7 @@ write_blob_text(repo: string, data: string) {
     if use_zlib == 1 {
         wrc = svnae_write_header_and_buf(tmp, storage_hdr, comp)
     } else {
-        wrc = svnae_write_header_and_body(tmp, storage_hdr, data, n)
+        wrc = aether_io_write_header_and_body(tmp, storage_hdr, data, n)
     }
     if comp != 0 { svnae_buf_free(comp) }
     if wrc != 0 { aether_io_remove(tmp); return "" }

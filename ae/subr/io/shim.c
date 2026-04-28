@@ -18,10 +18,10 @@
 /* io/shim.c — fd-level file operations that std.fs doesn't expose:
  * direct open() returning a fd (for svnadmin dump/load), unbuffered
  * writes to stdout/stderr (escape hatch for test traces around
- * std.println's buffering), getpid (for tmp-filename construction),
- * and svnae_write_header_and_body (header byte + binary body in one
- * fsync'd write). Pure file I/O — atomic-write, mkdir-p, rename,
- * unlink, etc. — lives in subr/io.ae via std.fs. */
+ * std.println's buffering), and getpid (for tmp-filename
+ * construction). Pure file I/O — atomic-write, mkdir-p, rename,
+ * unlink, header+body atomic write — lives in subr/io.ae via
+ * std.fs + std.bytes. */
 
 #include <errno.h>
 #include <fcntl.h>
@@ -66,38 +66,6 @@ int open_file_for_read(const char *path) {
 }
 int close_fd(int fd) {
     return close(fd);
-}
-
-/* Write `header` (NUL-terminated Aether string, in practice "R"/"Z")
- * immediately followed by `body_len` bytes at `body` (which may contain
- * embedded NULs). One fsync at the end. */
-int
-svnae_write_header_and_body(const char *path, const char *header,
-                            const char *body, int body_len)
-{
-    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    if (fd < 0) return -errno;
-
-    int header_len = (int)strlen(header);
-    const char *p = header;
-    int rem = header_len;
-    while (rem > 0) {
-        ssize_t w = write(fd, p, (size_t)rem);
-        if (w < 0) { if (errno == EINTR) continue; close(fd); return -errno; }
-        p += w; rem -= (int)w;
-    }
-
-    p = body;
-    rem = body_len;
-    while (rem > 0) {
-        ssize_t w = write(fd, p, (size_t)rem);
-        if (w < 0) { if (errno == EINTR) continue; close(fd); return -errno; }
-        p += w; rem -= (int)w;
-    }
-
-    if (fsync(fd) != 0) { int rc = -errno; close(fd); return rc; }
-    if (close(fd) != 0) return -errno;
-    return 0;
 }
 
 /* Read the entire file into an svnae_buf_local (binary-safe). Returns
