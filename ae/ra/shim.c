@@ -400,61 +400,7 @@ svnae_ra_commit_finish(struct svnae_ra_commit *cb,
 /* svnae_verify_counter_* retired in Round 147 — verify.ae now uses
  * a 2-element std.intarr (slot 0 = files, slot 1 = secondaries). */
 
-struct ventry { char *name; int kind_c; char *sha; };
-struct svnae_verify_entries { struct ventry *items; int n; int cap; };
-
-void *svnae_verify_entries_new(void) {
-    return calloc(1, sizeof(struct svnae_verify_entries));
-}
-void svnae_verify_entries_add(void *p, const char *name, int kind_c) {
-    struct svnae_verify_entries *e = p;
-    if (!e) return;
-    if (e->n == e->cap) {
-        int nc = e->cap ? e->cap * 2 : 8;
-        struct ventry *q = realloc(e->items, (size_t)nc * sizeof *q);
-        if (!q) return;
-        e->items = q; e->cap = nc;
-    }
-    e->items[e->n].name   = strdup(name ? name : "");
-    e->items[e->n].kind_c = kind_c;
-    e->items[e->n].sha    = NULL;
-    e->n++;
-}
-void svnae_verify_entries_set_sha(void *p, int i, const char *sha) {
-    struct svnae_verify_entries *e = p;
-    if (!e || i < 0 || i >= e->n) return;
-    free(e->items[i].sha);
-    e->items[i].sha = strdup(sha ? sha : "");
-}
-const char *svnae_verify_entries_name(const void *p, int i) {
-    const struct svnae_verify_entries *e = p;
-    return (e && i >= 0 && i < e->n && e->items[i].name) ? e->items[i].name : "";
-}
-int svnae_verify_entries_kind(const void *p, int i) {
-    const struct svnae_verify_entries *e = p;
-    return (e && i >= 0 && i < e->n) ? e->items[i].kind_c : 102;
-}
-const char *svnae_verify_entries_sha(const void *p, int i) {
-    const struct svnae_verify_entries *e = p;
-    return (e && i >= 0 && i < e->n && e->items[i].sha) ? e->items[i].sha : "";
-}
-
-static int ventry_cmp(const void *a, const void *b) {
-    const struct ventry *ea = a, *eb = b;
-    return strcmp(ea->name, eb->name);
-}
-void svnae_verify_entries_sort(void *p) {
-    struct svnae_verify_entries *e = p;
-    if (!e || e->n < 2) return;
-    qsort(e->items, (size_t)e->n, sizeof *e->items, ventry_cmp);
-}
-void svnae_verify_entries_free(void *p) {
-    struct svnae_verify_entries *e = p;
-    if (!e) return;
-    for (int i = 0; i < e->n; i++) {
-        free(e->items[i].name);
-        free(e->items[i].sha);
-    }
-    free(e->items);
-    free(e);
-}
+/* svnae_verify_entries_* (struct + 7 ops + qsort comparator)
+ * retired in Round 148. verify.ae uses three parallel Aether
+ * containers (std.list of names, std.intarr of kinds, std.list of
+ * shas) plus a stable insertion sort keyed on name. */
