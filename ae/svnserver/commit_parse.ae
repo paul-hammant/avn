@@ -53,18 +53,14 @@ extern svnserver_spec_allows(repo: string, branch: string,
 extern svnae_txn_new(base_rev: int) -> ptr
 extern svnae_txn_mkdir(t: ptr, path: string) -> int
 extern svnae_txn_delete(t: ptr, path: string) -> int
+extern svnae_txn_add_file(t: ptr, path: string, content: string, len: int) -> int
 extern svnae_txn_free(t: ptr)
 
-// Round 110: b64-decode + txn_add_file ported from C
-// (svnserver_txn_add_b64) to Aether. The crypto wrapper returns a
-// length-aware AetherString; the companion TLS getter gives the
-// byte count. svnae_txn_add_file_aether is a thin C entry point
-// over svnae_txn_add_file that unwraps the AetherString to its
-// raw byte pointer before memcpy — needed because passing an
-// AetherString as a `const char*` C parameter delivers the struct
-// header pointer, not the bytes. See yet_more_issues.md §3.
-extern svnae_txn_add_file_aether(txn: ptr, path: string,
-                                  content: string, content_len: int) -> int
+// b64-decode + txn_add_file. The crypto wrapper returns a length-
+// aware AetherString; companion TLS getter gives the byte count.
+// As of aether 0.98 (#297) AetherStrings auto-unwrap at C extern
+// boundaries declared `const char*`, so we call the canonical
+// svnae_txn_add_file directly — no _aether wrapper needed.
 extern svnae_crypto_b64_decode_capture(b64: string) -> string
 extern svnae_crypto_b64_decode_len() -> int
 
@@ -77,7 +73,7 @@ txn_add_b64_(txn: ptr, path: string, b64: string) -> int {
         if string.length(b64) > 0 { return 0 - 1 }
     }
     n = svnae_crypto_b64_decode_len()
-    return svnae_txn_add_file_aether(txn, path, raw, n)
+    return svnae_txn_add_file(txn, path, raw, n)
 }
 extern svnae_commit_finalise_with_acl(repo: string, txn: ptr,
                                        author: string, log_msg: string,
