@@ -518,10 +518,6 @@ void svnae_verify_entries_set_sha(void *p, int i, const char *sha) {
     free(e->items[i].sha);
     e->items[i].sha = strdup(sha ? sha : "");
 }
-int svnae_verify_entries_count(const void *p) {
-    const struct svnae_verify_entries *e = p;
-    return e ? e->n : 0;
-}
 const char *svnae_verify_entries_name(const void *p, int i) {
     const struct svnae_verify_entries *e = p;
     return (e && i >= 0 && i < e->n && e->items[i].name) ? e->items[i].name : "";

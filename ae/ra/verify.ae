@@ -91,7 +91,6 @@ extern svnae_verify_counter_free(c: ptr)
 extern svnae_verify_entries_new() -> ptr
 extern svnae_verify_entries_add(e: ptr, name: string, kind_c: int)
 extern svnae_verify_entries_set_sha(e: ptr, i: int, sha: string)
-extern svnae_verify_entries_count(e: ptr) -> int
 extern svnae_verify_entries_name(e: ptr, i: int) -> string
 extern svnae_verify_entries_kind(e: ptr, i: int) -> int
 extern svnae_verify_entries_sha(e: ptr, i: int) -> string
