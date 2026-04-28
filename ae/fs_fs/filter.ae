@@ -29,7 +29,7 @@ import std.string
 
 extern svnae_rep_read_blob(repo: string, sha_hex: string) -> string
 extern aether_rep_write_blob(repo: string, data: string, length: int) -> string
-extern svnae_rep_free(ptr: string)
+extern svnae_rep_free(p: string)
 
 // Dir-blob parsers ported earlier in ae/fs_fs/dirblob.ae.
 extern aether_dir_count_entries(body: string) -> int
