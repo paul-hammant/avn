@@ -46,10 +46,6 @@ extern aether_resolve_kind(repo: string, root_sha: string, path: string) -> int
 extern aether_resolve_sha(repo: string, root_sha: string, path: string) -> string
 
 export repos_log_packed(repo: string) -> string {
-    return repos_log_packed_impl(repo)
-}
-
-repos_log_packed_impl(repo: string) -> string {
     head = aether_repos_head_rev(repo)
     if head < 0 { return "" }
 
@@ -99,10 +95,6 @@ repos_log_packed_impl(repo: string) -> string {
 // Empty string on miss (no rev pointer, or rev blob missing "root").
 
 export repos_info_packed(repo: string, rev: int) -> string {
-    return repos_info_packed_impl(repo, rev)
-}
-
-repos_info_packed_impl(repo: string, rev: int) -> string {
     sha = aether_repos_rev_blob_sha(repo, rev)
     if string.length(sha) == 0 { return "" }
     body = svnae_rep_read_blob(repo, sha)
@@ -434,10 +426,6 @@ step_rev(rev: int, author: string,
 // doesn't resolve at target_rev.
 
 export repos_blame_packed(repo: string, target_rev: int, path: string) -> string {
-    return repos_blame_packed_impl(repo, target_rev, path)
-}
-
-repos_blame_packed_impl(repo: string, target_rev: int, path: string) -> string {
     if target_rev < 0 {
         target_rev = aether_repos_head_rev(repo)
     }
@@ -494,7 +482,7 @@ repos_blame_packed_impl(repo: string, target_rev: int, path: string) -> string {
         svnae_rep_free(body_raw)
 
         // Author for attribution.
-        info = repos_info_packed_impl(repo, r)
+        info = repos_info_packed(repo, r)
         author = ""
         if string.length(info) > 0 {
             author = rec_author(info)

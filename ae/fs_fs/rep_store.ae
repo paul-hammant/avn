@@ -68,10 +68,6 @@ const SQLITE_DONE = 101
 // the C version used and the wc pristine store reuses.
 
 export rep_encode_blob(data: string, length: int) -> string {
-    return rep_encode_blob_impl(data, length)
-}
-
-rep_encode_blob_impl(data: string, length: int) -> string {
     use_zlib = 0
     body = data
     body_len = length
@@ -102,10 +98,6 @@ rep_encode_blob_impl(data: string, length: int) -> string {
 // Accessors the C caller uses on the encoded envelope.
 
 export rep_encoded_use_zlib(encoded: string) -> int {
-    return rep_encoded_use_zlib_impl(encoded)
-}
-
-rep_encoded_use_zlib_impl(encoded: string) -> int {
     if string.length(encoded) == 0 { return 0 }
     ch = string.char_at(encoded, 0)
     if ch == 49 { return 1 }   // '1'
@@ -113,20 +105,12 @@ rep_encoded_use_zlib_impl(encoded: string) -> int {
 }
 
 export rep_encoded_bytes(encoded: string) -> string {
-    return rep_encoded_bytes_impl(encoded)
-}
-
-rep_encoded_bytes_impl(encoded: string) -> string {
     n = string.length(encoded)
     if n < 2 { return "" }
     return aether_pristine_slice_binary(encoded, 2, n)
 }
 
 export rep_encoded_length(encoded: string) -> int {
-    return rep_encoded_length_impl(encoded)
-}
-
-rep_encoded_length_impl(encoded: string) -> int {
     n = string.length(encoded)
     if n < 2 { return 0 }
     return n - 2
@@ -139,16 +123,12 @@ rep_encoded_length_impl(encoded: string) -> int {
 // success, error message otherwise.
 
 export rep_write_encoded(repo: string, sha: string, encoded: string) -> string {
-    return rep_write_encoded_impl(repo, sha, encoded)
-}
-
-rep_write_encoded_impl(repo: string, sha: string, encoded: string) -> string {
     dir = string.copy(aether_rep_dir(repo, sha))
     if aether_io_mkdir_p(dir) != 0 { return "mkdir_p failed" }
 
     path = string.copy(aether_rep_path(repo, sha))
-    body = rep_encoded_bytes_impl(encoded)
-    body_len = rep_encoded_length_impl(encoded)
+    body = rep_encoded_bytes(encoded)
+    body_len = rep_encoded_length(encoded)
     return fs.write_binary(path, body, body_len)
 }
 
@@ -159,10 +139,6 @@ rep_write_encoded_impl(repo: string, sha: string, encoded: string) -> string {
 // decoded payload, or "" on miss / decompression failure.
 
 export rep_read_decoded(repo: string, sha: string, uncompressed_size: int) -> string {
-    return rep_read_decoded_impl(repo, sha, uncompressed_size)
-}
-
-rep_read_decoded_impl(repo: string, sha: string, uncompressed_size: int) -> string {
     path = string.copy(aether_rep_path(repo, sha))
     file, fsize, err = fs.read_binary(path)
     if string.length(err) > 0 { return "" }
@@ -200,10 +176,6 @@ rep_read_decoded_impl(repo: string, sha: string, uncompressed_size: int) -> stri
 //     0 on success, non-zero on failure (propagates the sqlite rc).
 
 export rep_cache_has(repo: string, sha: string) -> int {
-    return rep_cache_has_impl(repo, sha)
-}
-
-rep_cache_has_impl(repo: string, sha: string) -> int {
     db, oerr = sqlite.open("${repo}/rep-cache.db")
     if string.length(oerr) > 0 { return 0 }
     stmt, perr = sqlite.prepare(db, "SELECT 1 FROM rep_cache WHERE hash = ?")
@@ -233,11 +205,6 @@ export rep_cache_lookup_uncompressed(repo: string, sha: string) -> int {
 
 export rep_cache_insert(repo: string, sha: string, rel_path: string,
                          uncompressed: int, storage: int) -> int {
-    return rep_cache_insert_impl(repo, sha, rel_path, uncompressed, storage)
-}
-
-rep_cache_insert_impl(repo: string, sha: string, rel_path: string,
-                       uncompressed: int, storage: int) -> int {
     db, oerr = sqlite.open("${repo}/rep-cache.db")
     if string.length(oerr) > 0 { return 1 }
     stmt, perr = sqlite.prepare(db,
@@ -318,19 +285,19 @@ export rep_write_blob(repo: string, data: string, length: int) -> string {
     // invocations.
     sha_owned = string.copy(sha)
 
-    if rep_cache_has_impl(repo, sha_owned) == 1 { return sha_owned }
+    if rep_cache_has(repo, sha_owned) == 1 { return sha_owned }
 
-    encoded = rep_encode_blob_impl(data, length)
+    encoded = rep_encode_blob(data, length)
     if string.length(encoded) == 0 { return "" }
-    use_zlib = rep_encoded_use_zlib_impl(encoded)
+    use_zlib = rep_encoded_use_zlib(encoded)
 
-    werr = rep_write_encoded_impl(repo, sha_owned, encoded)
+    werr = rep_write_encoded(repo, sha_owned, encoded)
     if string.length(werr) > 0 { return "" }
 
     rel_path = string.copy(aether_rep_rel_path(sha_owned))
     storage = STORAGE_RAW
     if use_zlib == 1 { storage = STORAGE_ZLIB }
-    if rep_cache_insert_impl(repo, sha_owned, rel_path, length, storage) != 0 {
+    if rep_cache_insert(repo, sha_owned, rel_path, length, storage) != 0 {
         return ""
     }
 

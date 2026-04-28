@@ -42,10 +42,6 @@ extern aether_path_join_rel(prefix: string, name: string) -> string
 // the *full* path (prefix + name), not just the basename. Returns
 // an unsorted concatenation (callers sort separately).
 flatten_tree(repo: string, dir_sha: string, prefix: string) -> string {
-    return flatten_tree_impl(repo, dir_sha, prefix)
-}
-
-flatten_tree_impl(repo: string, dir_sha: string, prefix: string) -> string {
     body = svnae_rep_read_blob(repo, dir_sha)
     out = ""
     n = aether_dir_count_entries(body)
@@ -59,7 +55,7 @@ flatten_tree_impl(repo: string, dir_sha: string, prefix: string) -> string {
         full_path = aether_path_join_rel(prefix, name)
         out = string.concat(out, aether_dir_entry_line(kind, sha, full_path))
         if kind == 100 {    // 'd'
-            out = string.concat(out, flatten_tree_impl(repo, sha, full_path))
+            out = string.concat(out, flatten_tree(repo, sha, full_path))
         }
         i = i + 1
     }
@@ -117,15 +113,10 @@ sort_by_path(body: string) -> string {
 // path in cur_root becomes an add.
 export paths_changed_between(repo: string, prev_root_sha: string,
                              cur_root_sha: string) -> string {
-    return paths_changed_between_impl(repo, prev_root_sha, cur_root_sha)
-}
-
-paths_changed_between_impl(repo: string, prev_root_sha: string,
-                           cur_root_sha: string) -> string {
-    cur_flat = sort_by_path(flatten_tree_impl(repo, cur_root_sha, ""))
+    cur_flat = sort_by_path(flatten_tree(repo, cur_root_sha, ""))
     prev_flat = ""
     if string.length(prev_root_sha) > 0 {
-        prev_flat = sort_by_path(flatten_tree_impl(repo, prev_root_sha, ""))
+        prev_flat = sort_by_path(flatten_tree(repo, prev_root_sha, ""))
     }
 
     cn = aether_dir_count_entries(cur_flat)
@@ -200,10 +191,6 @@ paths_changed_between_impl(repo: string, prev_root_sha: string,
 extern aether_repos_load_rev_blob_field(repo: string, rev: int, key: string) -> string
 
 export paths_changed_packed(repo: string, rev: int) -> string {
-    return paths_changed_packed_impl(repo, rev)
-}
-
-paths_changed_packed_impl(repo: string, rev: int) -> string {
     if rev < 0 { return "" }
 
     cur_root = string.copy(aether_repos_load_rev_blob_field(repo, rev, "root"))
@@ -215,7 +202,7 @@ paths_changed_packed_impl(repo: string, rev: int) -> string {
         if string.length(prev_root) == 0 { return "" }
     }
 
-    diff = paths_changed_between_impl(repo, prev_root, cur_root)
+    diff = paths_changed_between(repo, prev_root, cur_root)
     return pack_amd_pairs(diff)
 }
 
