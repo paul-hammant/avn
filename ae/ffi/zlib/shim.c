@@ -32,11 +32,8 @@
  * trip. No length-encoded prefix hack.
  */
 
-#include <errno.h>
-#include <fcntl.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 #include <zlib.h>
 
 struct svnae_buf {
@@ -104,38 +101,10 @@ svnae_zlib_inflate_offset(const char *base, int offset, int data_len, int expect
     return svnae_zlib_inflate(base + offset, data_len, expected_out);
 }
 
-/* Write `header` (NUL-terminated) followed by the contents of `buf` (which
- * may contain embedded NULs) to `path`. Used by fs_fs to persist a
- * 1-byte header + zlib payload without routing the binary payload through
- * Aether's strlen-based string pipeline. */
-int
-svnae_write_header_and_buf(const char *path, const char *header, const struct svnae_buf *buf)
-{
-    if (!buf) return -1;
-    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    if (fd < 0) return -errno;
-
-    int header_len = (int)strlen(header);
-    const char *p = header;
-    int rem = header_len;
-    while (rem > 0) {
-        ssize_t w = write(fd, p, (size_t)rem);
-        if (w < 0) { if (errno == EINTR) continue; close(fd); return -errno; }
-        p += w; rem -= (int)w;
-    }
-
-    p = buf->data;
-    rem = buf->length;
-    while (rem > 0) {
-        ssize_t w = write(fd, p, (size_t)rem);
-        if (w < 0) { if (errno == EINTR) continue; close(fd); return -errno; }
-        p += w; rem -= (int)w;
-    }
-
-    if (fsync(fd) != 0) { int rc = -errno; close(fd); return rc; }
-    if (close(fd) != 0) return -errno;
-    return 0;
-}
+/* svnae_write_header_and_buf retired in Round 128 — callers now
+ * unwrap the buf via svnae_buf_data/_length and call the
+ * length-aware aether_io_write_header_and_body (subr/io.ae's
+ * std.bytes path is binary-safe end-to-end). */
 
 void
 svnae_buf_free(struct svnae_buf *b)

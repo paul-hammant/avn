@@ -57,7 +57,6 @@ extern svnae_zlib_inflate_offset(base: string, offset: int, data_len: int, expec
 extern svnae_buf_length(b: ptr) -> int
 extern svnae_buf_data(b: ptr) -> string
 extern svnae_buf_free(b: ptr)
-extern svnae_write_header_and_buf(path: string, header: string, buf: ptr) -> int
 
 extern aether_io_write_atomic(path: string, data: string, length: int) -> int
 extern aether_io_write_header_and_body(path: string, header: string, body: string, body_len: int) -> int
@@ -203,7 +202,9 @@ write_blob_text(repo: string, data: string) {
     tmp = "${full}.tmp.${svnae_getpid()}.0"
     wrc = 0
     if use_zlib == 1 {
-        wrc = svnae_write_header_and_buf(tmp, storage_hdr, comp)
+        wrc = aether_io_write_header_and_body(tmp, storage_hdr,
+                                              svnae_buf_data(comp),
+                                              svnae_buf_length(comp))
     } else {
         wrc = aether_io_write_header_and_body(tmp, storage_hdr, data, n)
     }
