@@ -1,6 +1,6 @@
 AETHERC ?= $(abspath $(dir $(lastword $(MAKEFILE_LIST))))/../../.aether_binaries/build/aetherc
 
-GENERATED := urls_generated.c parse_generated.c commit_build_generated.c packed_generated.c http_client_generated.c verify_generated.c copy_branch_generated.c info_generated.c fetch_generated.c
+GENERATED := urls_generated.c parse_generated.c commit_build_generated.c packed_generated.c http_client_generated.c verify_generated.c copy_branch_generated.c info_generated.c fetch_generated.c accessors_generated.c
 
 all: $(GENERATED)
 
@@ -42,6 +42,11 @@ info_generated.c: info.ae
 # No fresh capability deps — the GET helpers it calls are already
 # net-capable via http_client.ae.
 fetch_generated.c: fetch.ae
+	$(AETHERC) --emit=lib $< $@
+
+# Round 155: log/paths/blame/info/props/list handle accessors,
+# ported from C wrappers in ae/ra/shim.c.
+accessors_generated.c: accessors.ae
 	$(AETHERC) --emit=lib $< $@
 
 .PHONY: all
