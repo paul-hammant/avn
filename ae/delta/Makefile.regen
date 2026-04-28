@@ -7,17 +7,19 @@
 
 AETHERC ?= $(abspath $(dir $(lastword $(MAKEFILE_LIST))))/../../.aether_binaries/build/aetherc
 
-GENERATED := svndiff_decode_generated.c svndiff_encode_generated.c
+GENERATED := svndiff_decode_generated.c svndiff_encode_generated.c xdelta_generated.c
 
 all: $(GENERATED)
 
-# svndiff_{decode,encode}.ae use std.bytes (mutable byte buffer
-# with overlap-safe copy_within for decode; varint emit + frame
-# layout for encode). No filesystem / network capabilities.
+# svndiff_{decode,encode}.ae and xdelta.ae all use std.bytes for
+# their write-side buffers. No filesystem / network capabilities.
 svndiff_decode_generated.c: svndiff_decode.ae
 	$(AETHERC) --emit=lib $< $@
 
 svndiff_encode_generated.c: svndiff_encode.ae
+	$(AETHERC) --emit=lib $< $@
+
+xdelta_generated.c: xdelta.ae
 	$(AETHERC) --emit=lib $< $@
 
 .PHONY: all

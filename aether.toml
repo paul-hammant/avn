@@ -64,7 +64,7 @@ extra_sources = ["ae/subr/io/shim.c", "ae/subr/io_generated.c"]
 [[bin]]
 name = "test_svndiff"
 path = "ae/delta/test_svndiff.ae"
-extra_sources = ["ae/delta/svndiff/shim.c", "ae/delta/svndiff_decode_generated.c", "ae/delta/svndiff_encode_generated.c"]
+extra_sources = ["ae/delta/svndiff/shim.c", "ae/delta/svndiff_decode_generated.c", "ae/delta/svndiff_encode_generated.c", "ae/delta/xdelta_generated.c"]
 
 [[bin]]
 name = "test_sqlite"
@@ -94,4 +94,4 @@ extra_sources = ["contrib/sqlite/aether_sqlite.c", "ae/subr/io/shim.c", "ae/subr
 [[bin]]
 name = "test_xdelta"
 path = "ae/delta/test_xdelta.ae"
-extra_sources = ["ae/delta/svndiff/shim.c", "ae/delta/xdelta/shim.c", "ae/delta/svndiff_decode_generated.c", "ae/delta/svndiff_encode_generated.c"]
+extra_sources = ["ae/delta/svndiff/shim.c", "ae/delta/xdelta/shim.c", "ae/delta/svndiff_decode_generated.c", "ae/delta/svndiff_encode_generated.c", "ae/delta/xdelta_generated.c"]
