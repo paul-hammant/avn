@@ -38,7 +38,6 @@ extern svnae_wc_db_close(db: ptr)
 extern svnae_wc_db_upsert_node(db: ptr, path: string, kind: int, base_rev: int, base_sha1: string, node_state: int) -> int
 extern svnae_wc_db_node_exists(db: ptr, path: string) -> int
 extern svnae_wc_db_get_info(db: ptr, key: string) -> string
-extern svnae_wc_info_free(s: string)
 
 extern svnae_wc_propset(wc_root: string, path: string, name: string, value: string) -> int
 extern svnae_wc_propdel(wc_root: string, path: string, name: string) -> int
@@ -110,19 +109,12 @@ export svnae_wc_merge(wc_root: string, source_path: string,
 
     db = svnae_wc_db_open(wc_root)
     if db == null { return 0 - 1 }
+    // get_info returns refcounted AetherString (Round 143).
     base_url = svnae_wc_db_get_info(db, "base_url")
     repo     = svnae_wc_db_get_info(db, "repo")
     svnae_wc_db_close(db)
-    if string.length(base_url) == 0 {
-        svnae_wc_info_free(base_url)
-        svnae_wc_info_free(repo)
-        return 0 - 1
-    }
-    if string.length(repo) == 0 {
-        svnae_wc_info_free(base_url)
-        svnae_wc_info_free(repo)
-        return 0 - 1
-    }
+    if string.length(base_url) == 0 { return 0 - 1 }
+    if string.length(repo) == 0 { return 0 - 1 }
     base_url = string.copy(base_url)
     repo     = string.copy(repo)
 

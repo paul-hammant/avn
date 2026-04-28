@@ -45,7 +45,6 @@ extern svnae_wc_nodelist_free(L: ptr)
 
 extern svnae_wc_db_set_info(db: ptr, key: string, value: string) -> int
 extern svnae_wc_db_get_info(db: ptr, key: string) -> string
-extern svnae_wc_info_free(s: string)
 
 expect_int(label: string, got: int, want: int) {
     if got == want { println("ok   ${label}: ${got}"); return 0 }
@@ -133,23 +132,20 @@ main() {
     svnae_wc_db_set_info(db, "repo", "demo")
     v = svnae_wc_db_get_info(db, "url")
     fails = fails + expect_str("info url", v, "http://localhost:9000/demo")
-    svnae_wc_info_free(v)
 
-    // Unknown key → empty.
+    // Unknown key → empty (Round 143: was null pointer).
     v = svnae_wc_db_get_info(db, "nope")
-    if v != 0 {
+    if string.length(v) > 0 {
         println("FAIL info unknown: got [${v}]")
         fails = fails + 1
-        svnae_wc_info_free(v)
     } else {
-        println("ok   info unknown key is null")
+        println("ok   info unknown key is empty")
     }
 
     // Update (overwrite).
     svnae_wc_db_set_info(db, "url", "http://new/demo")
     v = svnae_wc_db_get_info(db, "url")
     fails = fails + expect_str("info url updated", v, "http://new/demo")
-    svnae_wc_info_free(v)
 
     svnae_wc_db_close(db)
 
@@ -158,7 +154,6 @@ main() {
     fails = fails + expect_int("reopen README exists", svnae_wc_db_node_exists(db, "README"), 1)
     v = svnae_wc_db_get_info(db, "url")
     fails = fails + expect_str("reopen info url", v, "http://new/demo")
-    svnae_wc_info_free(v)
     svnae_wc_db_close(db)
 
     system("rm -rf ${wc}")

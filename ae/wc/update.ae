@@ -40,7 +40,6 @@ extern svnae_wc_db_open(wc_root: string) -> ptr
 extern svnae_wc_db_close(db: ptr)
 extern svnae_wc_db_get_info(db: ptr, key: string) -> string
 extern svnae_wc_db_set_info(db: ptr, key: string, value: string) -> int
-extern svnae_wc_info_free(s: string)
 
 // Nodelist (tracked WC nodes).
 extern svnae_wc_db_list_nodes(db: ptr) -> ptr
@@ -83,17 +82,14 @@ svnae_wc_update_impl(wc_root: string, target_rev: int) -> int {
     db = svnae_wc_db_open(wc_root)
     if db == null { return 0 - 1 }
 
+    // get_info returns refcounted AetherString (Round 143).
     base_url = svnae_wc_db_get_info(db, "base_url")
     repo     = svnae_wc_db_get_info(db, "repo")
     if string.length(base_url) == 0 {
-        svnae_wc_info_free(base_url)
-        svnae_wc_info_free(repo)
         svnae_wc_db_close(db)
         return 0 - 1
     }
     if string.length(repo) == 0 {
-        svnae_wc_info_free(base_url)
-        svnae_wc_info_free(repo)
         svnae_wc_db_close(db)
         return 0 - 1
     }

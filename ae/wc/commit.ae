@@ -48,7 +48,6 @@ extern svnae_wc_db_upsert_node(db: ptr, path: string, kind: int, base_rev: int, 
 extern svnae_wc_db_delete_node(db: ptr, path: string) -> int
 extern svnae_wc_db_get_info(db: ptr, key: string) -> string
 extern svnae_wc_db_set_info(db: ptr, key: string, value: string) -> int
-extern svnae_wc_info_free(s: string)
 
 // Nodelist accessors.
 extern svnae_wc_db_list_nodes(db: ptr) -> ptr
@@ -118,36 +117,27 @@ export svnae_wc_commit(wc_root: string, author: string, logmsg: string) -> int {
     db = svnae_wc_db_open(wc_root)
     if db == null { return 0 - 1 }
 
+    // get_info returns refcounted AetherString already (Round 143);
+    // no explicit free pair needed here.
     base_url    = svnae_wc_db_get_info(db, "base_url")
     repo        = svnae_wc_db_get_info(db, "repo")
     base_rev_s  = svnae_wc_db_get_info(db, "base_rev")
 
     if string.length(base_url) == 0 {
-        svnae_wc_info_free(base_url)
-        svnae_wc_info_free(repo)
-        svnae_wc_info_free(base_rev_s)
         svnae_wc_db_close(db)
         return 0 - 1
     }
     if string.length(repo) == 0 {
-        svnae_wc_info_free(base_url)
-        svnae_wc_info_free(repo)
-        svnae_wc_info_free(base_rev_s)
         svnae_wc_db_close(db)
         return 0 - 1
     }
     if string.length(base_rev_s) == 0 {
-        svnae_wc_info_free(base_url)
-        svnae_wc_info_free(repo)
-        svnae_wc_info_free(base_rev_s)
         svnae_wc_db_close(db)
         return 0 - 1
     }
     base_url   = string.copy(base_url)
     repo       = string.copy(repo)
-    base_rev_s_owned = string.copy(base_rev_s)
-    svnae_wc_info_free(base_rev_s)
-    base_rev   = string.get_int(base_rev_s_owned)
+    base_rev   = string.get_int(base_rev_s)
 
     L = svnae_wc_db_list_nodes(db)
     n = svnae_wc_nodelist_count(L)

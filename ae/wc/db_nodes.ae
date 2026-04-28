@@ -38,8 +38,8 @@ extern svnae_wc_nodelist_handle(packed: string) -> ptr
 
 // Malloc lifecycle helper for get_info — the sqlite-owned column
 // pointer goes stale after finalize(), so we hand the caller a
-// detached strdup that pairs with svnae_wc_info_free.
-extern svnae_wc_info_dup(s: string) -> ptr
+// (svnae_wc_info_dup retired in Round 143 — string.copy on the
+// sqlite column does the same detach in pure Aether.)
 
 // Build a single packed record "<path>\x01<kind>\x01<base_rev>\x01
 // <base_sha1>\x01<state>\x01<conflicted>". Used by both get_node
@@ -135,20 +135,21 @@ export svnae_wc_db_set_info(db: ptr, key: string, value: string) -> int {
     return -1
 }
 
-// Read the value for `key` from the `info` table. Returns a
-// malloc'd char* the caller frees with svnae_wc_info_free, or 0
-// when the row is missing. Matches the original C contract one-
-// for-one — the sqlite column pointer is volatile after finalize,
-// so we detach through svnae_wc_info_dup before returning.
-export svnae_wc_db_get_info(db: ptr, key: string) -> ptr {
+// Read the value for `key` from the `info` table. Returns the
+// row's value as an AetherString, or "" when the row is missing.
+// The sqlite column pointer is volatile after finalize, so we
+// detach through string.copy (refcounted AetherString) before the
+// finalize runs. Round 143 retired the C-side strdup-detach
+// helper; .ae callers no longer need an explicit free pair.
+export svnae_wc_db_get_info(db: ptr, key: string) -> string {
     stmt, perr = sqlite.prepare(db, "SELECT value FROM info WHERE key = ?")
-    if string.length(perr) > 0 { return null }
+    if string.length(perr) > 0 { return "" }
     sqlite.bind_text(stmt, 1, key)
     rc, _ = sqlite.step(stmt, db)
-    out = null
+    out = ""
     if rc == SQLITE_ROW {
         s = sqlite.column_text(stmt, 0)
-        out = svnae_wc_info_dup(s)
+        out = string.copy(s)
     }
     sqlite.finalize(stmt)
     return out

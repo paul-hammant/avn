@@ -133,16 +133,7 @@ int         svnae_wc_nodelist_state   (const struct svnae_wc_nodelist *L, int i)
 int         svnae_wc_nodelist_conflicted(const struct svnae_wc_nodelist *L, int i) { return svnae_packed_int_at(L, i, aether_wc_node_conflicted_at); }
 void        svnae_wc_nodelist_free   (struct svnae_wc_nodelist *L) { svnae_packed_handle_free((struct svnae_packed_handle *)L); }
 
-/* --- info kv malloc-detach helper ------------------------------------ *
- *
- * info-table get_info hands the caller a malloc'd char*; the column
- * pointer goes stale after sqlite_finalize(). svnae_wc_info_dup is
- * the detach hook db_nodes.ae calls. */
-
-char *
-svnae_wc_info_dup(const char *s)
-{
-    return strdup(s ? s : "");
-}
-
-void svnae_wc_info_free(char *s) { free(s); }
+/* svnae_wc_info_dup / _free retired in Round 143 — db_nodes.ae now
+ * detaches sqlite columns via string.copy (refcounted AetherString)
+ * before sqlite_finalize, and svnae_wc_db_get_info returns a
+ * `string` instead of a malloc'd `ptr`. */
