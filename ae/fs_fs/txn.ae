@@ -1,0 +1,155 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+
+// Transaction edit-list — Aether port of ae/fs_fs/txn_shim.c's
+// growable struct-of-arrays. The C side keeps a tiny opaque
+// holder (struct svnae_txn) with 6 container handles + base_rev;
+// every actual operation lives here.
+//
+// Storage shape — six parallel containers, all indexed by edit
+// position:
+//
+//   kinds         std.gintarr   1=ADD_FILE 2=MKDIR 3=DELETE 4=COPY
+//   paths         std.list      AetherString per entry
+//   contents      std.list      AetherString per entry (binary-safe)
+//   content_lens  std.gintarr   bytes in contents[i]
+//   copy_shas     std.list      AetherString per entry (40-char hex)
+//   copy_kinds    std.gintarr   0=file 1=dir, only meaningful for COPY
+//
+// Round 151 ported these out of C. The pre-port shape was a
+// growable struct array with 5 fields per entry; the post-port
+// shape is six type-specialised containers chosen for each
+// field's lifetime/binary-safety needs.
+
+import std.string
+import std.list
+import std.intarr
+
+const EDIT_ADD_FILE = 1
+const EDIT_MKDIR    = 2
+const EDIT_DELETE   = 3
+const EDIT_COPY     = 4
+
+// Per-container handle accessors (defined C-side).
+extern svnae_txn_get_kinds       (t: ptr) -> ptr
+extern svnae_txn_get_paths       (t: ptr) -> ptr
+extern svnae_txn_get_contents    (t: ptr) -> ptr
+extern svnae_txn_get_content_lens(t: ptr) -> ptr
+extern svnae_txn_get_copy_shas   (t: ptr) -> ptr
+extern svnae_txn_get_copy_kinds  (t: ptr) -> ptr
+
+extern svnae_txn_set_kinds       (t: ptr, p: ptr)
+extern svnae_txn_set_content_lens(t: ptr, p: ptr)
+extern svnae_txn_set_copy_kinds  (t: ptr, p: ptr)
+
+// Growable intarr helpers.
+extern aether_gintarr_new(initial_cap: int) -> ptr
+extern aether_gintarr_count(a: ptr) -> int
+extern aether_gintarr_get(a: ptr, i: int) -> int
+extern aether_gintarr_add(a: ptr, value: int) -> ptr
+extern aether_gintarr_free(a: ptr)
+
+// ---- public count accessor ------------------------------------
+
+export svnae_txn_count(t: ptr) -> int {
+    if t == null { return 0 }
+    return aether_gintarr_count(svnae_txn_get_kinds(t))
+}
+
+// ---- add ops --------------------------------------------------
+
+// Common-suffix: append to every container so all 6 stay in
+// lockstep. Caller passes the (kind, path, content, content_len,
+// copy_sha, copy_kind) bundle pre-formed.
+push_edit_(t: ptr,
+            kind: int,
+            path: string,
+            content: string, content_len: int,
+            copy_sha: string, copy_kind: int) -> int {
+    // gintarr_add can return a new handle on regrow; thread it
+    // back through the C-side setter so subsequent reads see the
+    // new buffer.
+    k = aether_gintarr_add(svnae_txn_get_kinds(t), kind)
+    svnae_txn_set_kinds(t, k)
+    cl = aether_gintarr_add(svnae_txn_get_content_lens(t), content_len)
+    svnae_txn_set_content_lens(t, cl)
+    ck = aether_gintarr_add(svnae_txn_get_copy_kinds(t), copy_kind)
+    svnae_txn_set_copy_kinds(t, ck)
+
+    // std.list grows in place; no setter needed.
+    list_add_raw(svnae_txn_get_paths(t),    string.copy(path))
+    list_add_raw(svnae_txn_get_contents(t), string.copy(content))
+    list_add_raw(svnae_txn_get_copy_shas(t),
+                 string.copy(copy_sha))
+    return 0
+}
+
+export svnae_txn_add_file(t: ptr, path: string, content: string, len: int) -> int {
+    if t == null { return 0 - 1 }
+    if len < 0 { len = 0 }
+    return push_edit_(t, EDIT_ADD_FILE, path, content, len, "", 0)
+}
+
+export svnae_txn_mkdir(t: ptr, path: string) -> int {
+    if t == null { return 0 - 1 }
+    return push_edit_(t, EDIT_MKDIR, path, "", 0, "", 0)
+}
+
+export svnae_txn_delete(t: ptr, path: string) -> int {
+    if t == null { return 0 - 1 }
+    return push_edit_(t, EDIT_DELETE, path, "", 0, "", 0)
+}
+
+export svnae_txn_copy(t: ptr, path: string, from_sha1: string, from_kind: int) -> int {
+    if t == null { return 0 - 1 }
+    if string.length(from_sha1) != 40 { return 0 - 1 }
+    return push_edit_(t, EDIT_COPY, path, "", 0, from_sha1, from_kind)
+}
+
+// ---- read accessors ------------------------------------------
+
+export svnae_txn_edit_kind(t: ptr, i: int) -> int {
+    if t == null { return 0 - 1 }
+    return aether_gintarr_get(svnae_txn_get_kinds(t), i)
+}
+
+export svnae_txn_edit_path(t: ptr, i: int) -> string {
+    if t == null { return "" }
+    p = list_get_raw(svnae_txn_get_paths(t), i)
+    if p == null { return "" }
+    return p
+}
+
+export svnae_txn_edit_content_data(t: ptr, i: int) -> string {
+    if t == null { return "" }
+    p = list_get_raw(svnae_txn_get_contents(t), i)
+    if p == null { return "" }
+    return p
+}
+
+export svnae_txn_edit_content_len(t: ptr, i: int) -> int {
+    if t == null { return 0 }
+    return aether_gintarr_get(svnae_txn_get_content_lens(t), i)
+}
+
+export svnae_txn_edit_copy_sha(t: ptr, i: int) -> string {
+    if t == null { return "" }
+    p = list_get_raw(svnae_txn_get_copy_shas(t), i)
+    if p == null { return "" }
+    return p
+}
+
+export svnae_txn_edit_copy_kind(t: ptr, i: int) -> int {
+    if t == null { return 0 }
+    return aether_gintarr_get(svnae_txn_get_copy_kinds(t), i)
+}
+
+main() {
+    println("ae/fs_fs/txn.ae is a library; not meant to run standalone")
+}

@@ -7,60 +7,38 @@
  * You may obtain a copy of the License at
  *
  *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
- * implied. See the License for the specific language governing
- * permissions and limitations under the License.
  */
 
-/* fs_fs/txn_shim.c — transaction accumulator.
+/* fs_fs/txn_shim.c — opaque holder for the transaction edit list.
  *
- * A txn holds a base revision and a list of pending edits. Edits are:
- *     ADD_FILE    path, content-bytes          — create a new file
- *     MOD_FILE    path, content-bytes          — replace an existing file
- *                                                 (same representation on-wire)
- *     MKDIR       path                         — create an empty directory
- *     DELETE      path                         — remove a file or directory
+ * Round 151 hoisted the edit-list bulk into ae/fs_fs/txn.ae using
+ * three std.list (paths/contents/copy_shas) and three std.gintarr
+ * (kinds/content_lens/copy_kinds). What stays here:
  *
- * Aether can't cheaply allocate byte blobs that travel through function
- * calls, so content for ADD_FILE/MOD_FILE is taken via `const char *` and
- * an explicit length (binary-safe).
- *
- * At commit time the Aether side walks the edit list bottom-up, applying
- * them against the base rev's tree. That walk is written in Aether; this
- * shim just provides storage for the edit list and a couple of read
- * accessors (so Aether can iterate without juggling arrays).
+ *   - struct svnae_txn (base_rev + 6 container handles)
+ *   - svnae_txn_new / _free / _base_rev
+ *   - 6 get_*_(t) accessors so the Aether helpers can reach the
+ *     containers
+ *   - 3 set_*_(t, p) setters for the gintarr handles (gintarr_add
+ *     can return a new handle on regrow; the .ae caller threads
+ *     it back through the setter)
  */
 
 #include <stdlib.h>
-#include <string.h>
 
-/* --- edit list --------------------------------------------------------- */
-
-enum edit_kind {
-    EDIT_ADD_FILE = 1,   /* ADD or replace; fs_fs storage is the same */
-    EDIT_MKDIR    = 2,
-    EDIT_DELETE   = 3,
-    EDIT_COPY     = 4,   /* copy-from: target path points at existing sha1 */
-};
-
-struct edit {
-    int   kind;
-    char *path;      /* canonical: no leading '/', '/' separator, no trailing '/' */
-    char *content;   /* only for ADD_FILE; malloc'd, binary-safe */
-    int   content_len;
-    /* For EDIT_COPY: */
-    char *copy_from_sha1;  /* 40-char, already resolved by caller */
-    int   copy_kind;       /* 0=file 1=dir */
-};
+extern void *aether_gintarr_new(int initial_cap);
+extern void  aether_gintarr_free(void *a);
+extern void *list_new(void);
+extern void  list_free(void *list);
 
 struct svnae_txn {
     int   base_rev;
-    struct edit *edits;
-    int   n;
-    int   cap;
+    void *kinds;
+    void *paths;
+    void *contents;
+    void *content_lens;
+    void *copy_shas;
+    void *copy_kinds;
 };
 
 struct svnae_txn *
@@ -68,162 +46,42 @@ svnae_txn_new(int base_rev)
 {
     struct svnae_txn *t = calloc(1, sizeof *t);
     if (!t) return NULL;
-    t->base_rev = base_rev;
+    t->base_rev     = base_rev;
+    t->kinds        = aether_gintarr_new(8);
+    t->paths        = list_new();
+    t->contents     = list_new();
+    t->content_lens = aether_gintarr_new(8);
+    t->copy_shas    = list_new();
+    t->copy_kinds   = aether_gintarr_new(8);
     return t;
 }
 
 int svnae_txn_base_rev(const struct svnae_txn *t) { return t ? t->base_rev : -1; }
 
-static int
-push_edit(struct svnae_txn *t)
-{
-    if (t->n == t->cap) {
-        int ncap = t->cap ? t->cap * 2 : 8;
-        struct edit *p = realloc(t->edits, (size_t)ncap * sizeof *p);
-        if (!p) return -1;
-        t->edits = p;
-        t->cap = ncap;
-    }
-    /* realloc() doesn't zero new storage; every caller expects the new
-     * slot to be fully zeroed so free() of its (optional) fields at
-     * teardown doesn't hit garbage. */
-    memset(&t->edits[t->n], 0, sizeof t->edits[t->n]);
-    return t->n++;
-}
-
-int
-svnae_txn_add_file(struct svnae_txn *t, const char *path, const char *content, int len)
-{
-    if (!t) return -1;
-    int idx = push_edit(t);
-    if (idx < 0) return -1;
-    struct edit *e = &t->edits[idx];
-    e->kind = EDIT_ADD_FILE;
-    e->path = strdup(path);
-    if (len > 0 && content) {
-        e->content = malloc((size_t)len);
-        if (!e->content) { free(e->path); return -1; }
-        memcpy(e->content, content, (size_t)len);
-        e->content_len = len;
-    } else {
-        e->content = NULL;
-        e->content_len = 0;
-    }
-    return 0;
-}
-
-int
-svnae_txn_mkdir(struct svnae_txn *t, const char *path)
-{
-    if (!t) return -1;
-    int idx = push_edit(t);
-    if (idx < 0) return -1;
-    struct edit *e = &t->edits[idx];
-    e->kind = EDIT_MKDIR;
-    e->path = strdup(path);
-    e->content = NULL;
-    e->content_len = 0;
-    return 0;
-}
-
-int
-svnae_txn_delete(struct svnae_txn *t, const char *path)
-{
-    if (!t) return -1;
-    int idx = push_edit(t);
-    if (idx < 0) return -1;
-    struct edit *e = &t->edits[idx];
-    e->kind = EDIT_DELETE;
-    e->path = strdup(path);
-    e->content = NULL;
-    e->content_len = 0;
-    return 0;
-}
-
-/* Copy-from: place `path` pointing at an existing (already-resolved)
- * sha1 with the given kind (0=file, 1=dir). The caller resolves
- * (from_path@base_rev) -> sha1 before calling this. */
-int
-svnae_txn_copy(struct svnae_txn *t, const char *path,
-               const char *from_sha1, int from_kind)
-{
-    if (!t || !from_sha1 || strlen(from_sha1) != 40) return -1;
-    int idx = push_edit(t);
-    if (idx < 0) return -1;
-    struct edit *e = &t->edits[idx];
-    e->kind = EDIT_COPY;
-    e->path = strdup(path);
-    e->content = NULL;
-    e->content_len = 0;
-    e->copy_from_sha1 = strdup(from_sha1);
-    e->copy_kind = from_kind;
-    return 0;
-}
-
-int svnae_txn_count(const struct svnae_txn *t) { return t ? t->n : 0; }
-
-int
-svnae_txn_edit_kind(const struct svnae_txn *t, int i)
-{
-    if (!t || i < 0 || i >= t->n) return -1;
-    return t->edits[i].kind;
-}
-
-const char *
-svnae_txn_edit_path(const struct svnae_txn *t, int i)
-{
-    if (!t || i < 0 || i >= t->n) return "";
-    return t->edits[i].path;
-}
-
-/* Raw-pointer accessors for content and copy_from_sha1. Aether
- * strings + explicit lengths compose better than svnae_buf. */
-const char *
-svnae_txn_edit_content_data(const struct svnae_txn *t, int i)
-{
-    if (!t || i < 0 || i >= t->n) return "";
-    return t->edits[i].content ? t->edits[i].content : "";
-}
-
-int
-svnae_txn_edit_content_len(const struct svnae_txn *t, int i)
-{
-    if (!t || i < 0 || i >= t->n) return 0;
-    return t->edits[i].content_len;
-}
-
-const char *
-svnae_txn_edit_copy_sha(const struct svnae_txn *t, int i)
-{
-    if (!t || i < 0 || i >= t->n) return "";
-    return t->edits[i].copy_from_sha1 ? t->edits[i].copy_from_sha1 : "";
-}
-
-int
-svnae_txn_edit_copy_kind(const struct svnae_txn *t, int i)
-{
-    if (!t || i < 0 || i >= t->n) return 0;
-    return t->edits[i].copy_kind;
-}
-
 void
 svnae_txn_free(struct svnae_txn *t)
 {
     if (!t) return;
-    for (int i = 0; i < t->n; i++) {
-        free(t->edits[i].path);
-        free(t->edits[i].content);
-        free(t->edits[i].copy_from_sha1);
-    }
-    free(t->edits);
+    aether_gintarr_free(t->kinds);
+    list_free(t->paths);
+    list_free(t->contents);
+    aether_gintarr_free(t->content_lens);
+    list_free(t->copy_shas);
+    aether_gintarr_free(t->copy_kinds);
     free(t);
 }
 
-/* Recursive tree rebuilder lives in ae/fs_fs/rebuild.ae; rep-store
- * read/write stays in C via the externs. */
+/* Container getters — Aether helpers in txn.ae reach in via these. */
+void *svnae_txn_get_kinds       (struct svnae_txn *t) { return t ? t->kinds        : NULL; }
+void *svnae_txn_get_paths       (struct svnae_txn *t) { return t ? t->paths        : NULL; }
+void *svnae_txn_get_contents    (struct svnae_txn *t) { return t ? t->contents     : NULL; }
+void *svnae_txn_get_content_lens(struct svnae_txn *t) { return t ? t->content_lens : NULL; }
+void *svnae_txn_get_copy_shas   (struct svnae_txn *t) { return t ? t->copy_shas    : NULL; }
+void *svnae_txn_get_copy_kinds  (struct svnae_txn *t) { return t ? t->copy_kinds   : NULL; }
 
-/* svnae_txn_rebuild_root retired in Round 135 — was a strdup-detach
- * over aether_rebuild_dir. .ae callers now invoke aether_rebuild_dir
- * directly with prefix="" and use string.length() == 0 for the miss
- * check. */
-
+/* Setters for the three gintarr containers — gintarr_add can
+ * regrow and return a new handle; the .ae caller threads it back
+ * through here so subsequent reads see the new buffer. */
+void svnae_txn_set_kinds       (struct svnae_txn *t, void *p) { if (t) t->kinds        = p; }
+void svnae_txn_set_content_lens(struct svnae_txn *t, void *p) { if (t) t->content_lens = p; }
+void svnae_txn_set_copy_kinds  (struct svnae_txn *t, void *p) { if (t) t->copy_kinds   = p; }
