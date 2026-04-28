@@ -36,6 +36,108 @@ extern svnae_ra_cb_edits_packed(cb: ptr) -> string
 extern svnae_ra_cb_props_packed(cb: ptr) -> string
 extern svnae_ra_cb_acls_packed(cb: ptr) -> string
 
+// Round 146: writers ported from C (svnae_ra_commit_add_file etc.
+// in ra/shim.c). The struct stays C-side; setters below replace
+// the old pack_append + 5 add-op pile.
+extern svnae_ra_cb_set_edits_packed(cb: ptr, packed: string)
+extern svnae_ra_cb_set_props_packed(cb: ptr, packed: string)
+extern svnae_ra_cb_set_acls_packed(cb: ptr, packed: string)
+extern svnae_ra_cb_n_edits(cb: ptr) -> int
+extern svnae_ra_cb_n_props(cb: ptr) -> int
+extern svnae_ra_cb_n_acls(cb: ptr) -> int
+
+// b64-encode (unpadded; the server's base64_decode handles both
+// padded and unpadded — see std.cryptography.base64_decode in the
+// Aether stdlib).
+extern svnae_crypto_b64_encode(data: string, length: int) -> string
+
+// Append `record` to the "<count>\x02<recs...>\x02" packed string
+// `cur`. count is passed in (caller stores it C-side); returns the
+// new packed string. The new record gets a trailing \x02 separator
+// — same shape ae/ra/parse.ae expects on the read side.
+pack_append_(cur: string, count: int, record: string) -> string {
+    new_count = count + 1
+    if string.length(cur) == 0 {
+        out = "${new_count}\x02"
+        out = string.concat(out, record)
+        out = string.concat(out, "\x02")
+        return out
+    }
+    sep = string.index_of(cur, "\x02")
+    body = string.substring(cur, sep + 1, string.length(cur))
+    out = "${new_count}\x02"
+    out = string.concat(out, body)
+    out = string.concat(out, record)
+    out = string.concat(out, "\x02")
+    return out
+}
+
+// Public add-ops. Each builds a record with the right op-tag, calls
+// pack_append_, and stashes the result back via the C-side setter.
+// Round 146 ported these from ra/shim.c. Returns 0 on success
+// (matching the prior C contract).
+export svnae_ra_commit_add_file(cb: ptr, path: string, content: string, len: int) -> int {
+    b64 = ""
+    if len > 0 {
+        b64 = svnae_crypto_b64_encode(content, len)
+    }
+    rec = "1\x01"
+    rec = string.concat(rec, path)
+    rec = string.concat(rec, "\x01")
+    rec = string.concat(rec, b64)
+    n = svnae_ra_cb_n_edits(cb)
+    cur = svnae_ra_cb_edits_packed(cb)
+    new_packed = pack_append_(cur, n, rec)
+    svnae_ra_cb_set_edits_packed(cb, new_packed)
+    return 0
+}
+
+export svnae_ra_commit_mkdir(cb: ptr, path: string) -> int {
+    rec = "2\x01"
+    rec = string.concat(rec, path)
+    rec = string.concat(rec, "\x01")
+    n = svnae_ra_cb_n_edits(cb)
+    cur = svnae_ra_cb_edits_packed(cb)
+    new_packed = pack_append_(cur, n, rec)
+    svnae_ra_cb_set_edits_packed(cb, new_packed)
+    return 0
+}
+
+export svnae_ra_commit_delete(cb: ptr, path: string) -> int {
+    rec = "3\x01"
+    rec = string.concat(rec, path)
+    rec = string.concat(rec, "\x01")
+    n = svnae_ra_cb_n_edits(cb)
+    cur = svnae_ra_cb_edits_packed(cb)
+    new_packed = pack_append_(cur, n, rec)
+    svnae_ra_cb_set_edits_packed(cb, new_packed)
+    return 0
+}
+
+export svnae_ra_commit_acl_add(cb: ptr, path: string, rule: string) -> int {
+    rec = path
+    rec = string.concat(rec, "\x01")
+    rec = string.concat(rec, rule)
+    n = svnae_ra_cb_n_acls(cb)
+    cur = svnae_ra_cb_acls_packed(cb)
+    new_packed = pack_append_(cur, n, rec)
+    svnae_ra_cb_set_acls_packed(cb, new_packed)
+    return 0
+}
+
+export svnae_ra_commit_set_prop(cb: ptr, path: string, key: string, value: string) -> int {
+    rec = path
+    rec = string.concat(rec, "\x01")
+    rec = string.concat(rec, key)
+    rec = string.concat(rec, "\x01")
+    rec = string.concat(rec, value)
+    n = svnae_ra_cb_n_props(cb)
+    cur = svnae_ra_cb_props_packed(cb)
+    new_packed = pack_append_(cur, n, rec)
+    svnae_ra_cb_set_props_packed(cb, new_packed)
+    return 0
+}
+
 // Round 62: the C builder accumulates each collection (edits / props /
 // acls) as a single packed string in the same shape ae/ra/parse.ae
 // produces on the read side:

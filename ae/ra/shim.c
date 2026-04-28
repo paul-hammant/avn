@@ -285,47 +285,6 @@ struct svnae_ra_commit {
     int   n_acls;
 };
 
-/* Append `record` (a "\x01"-joined field string) as one entry in `*buf`.
- * Updates `*count`. Buffer grows to "<count>\x02<rec0>\x02<rec1>\x02..."
- * Initial empty buffer becomes "1\x02<rec0>\x02"; subsequent appends
- * rewrite the leading count and tack the new record + trailing \x02. */
-static int
-pack_append(char **buf, int *count, const char *record)
-{
-    if (!record) record = "";
-    int new_count = *count + 1;
-    char header[16];
-    int hlen = snprintf(header, sizeof header, "%d", new_count);
-    int rlen = (int)strlen(record);
-
-    /* New size: header + \x02 + every existing record (between the
-     * leading "<old_count>\x02" and trailing \x02) + record + \x02 + NUL. */
-    const char *existing_body = "";
-    int body_len = 0;
-    if (*buf) {
-        const char *first_sep = strchr(*buf, '\x02');
-        if (first_sep) {
-            existing_body = first_sep + 1;
-            body_len = (int)strlen(existing_body);
-        }
-    }
-
-    int total = hlen + 1 + body_len + rlen + 1 + 1;
-    char *out = malloc((size_t)total);
-    if (!out) return -1;
-    memcpy(out, header, (size_t)hlen);
-    out[hlen] = '\x02';
-    memcpy(out + hlen + 1, existing_body, (size_t)body_len);
-    memcpy(out + hlen + 1 + body_len, record, (size_t)rlen);
-    out[hlen + 1 + body_len + rlen] = '\x02';
-    out[hlen + 1 + body_len + rlen + 1] = '\0';
-
-    free(*buf);
-    *buf = out;
-    *count = new_count;
-    return 0;
-}
-
 struct svnae_ra_commit *
 svnae_ra_commit_begin(int base_rev, const char *author, const char *logmsg)
 {
@@ -337,80 +296,46 @@ svnae_ra_commit_begin(int base_rev, const char *author, const char *logmsg)
     return cb;
 }
 
-/* Consolidated in ae/ffi/openssl/shim.c. */
-extern char *svnae_openssl_b64_encode(const unsigned char *src, int len);
+/* svnae_ra_commit_{add_file,mkdir,delete,acl_add,set_prop} +
+ * pack_append retired in Round 146 — moved to ae/ra/commit_build.ae
+ * via std.string. The struct + setters/n-getters below let .ae
+ * read the current packed buffer, build the new one with
+ * pack_append_, and stash it back. */
 
-int
-svnae_ra_commit_add_file(struct svnae_ra_commit *cb, const char *path,
-                         const char *content, int len)
+/* Setters for the three packed-record buffers. Aether-side
+ * pack_append_ produces the new packed string; we strdup-into the
+ * struct field (replacing any previous value). */
+static void
+set_packed_(char **slot, const char *str, int *count_slot)
 {
-    if (!cb) return -1;
-    char *b64 = (len > 0 && content)
-        ? svnae_openssl_b64_encode((const unsigned char *)content, len)
-        : strdup("");
-    if (!b64) return -1;
-    int rlen = (int)strlen(path) + 1 + 1 + 1 + (int)strlen(b64) + 1;
-    char *rec = malloc((size_t)rlen);
-    if (!rec) { free(b64); return -1; }
-    snprintf(rec, (size_t)rlen, "1\x01%s\x01%s", path, b64);
-    int rc = pack_append(&cb->edits_packed, &cb->n_edits, rec);
-    free(rec); free(b64);
-    return rc;
+    free(*slot);
+    *slot = strdup(str ? str : "");
+    /* Re-derive count from the new packed shape: leading "<n>\x02"
+     * if non-empty, else 0. Keeps cb->n_* in sync without the
+     * Aether caller having to do extra setter work. */
+    if (*slot && **slot) {
+        *count_slot = atoi(*slot);
+    } else {
+        *count_slot = 0;
+    }
 }
-
-int
-svnae_ra_commit_mkdir(struct svnae_ra_commit *cb, const char *path)
-{
-    if (!cb) return -1;
-    int rlen = (int)strlen(path) + 1 + 1 + 1 + 1;
-    char *rec = malloc((size_t)rlen);
-    if (!rec) return -1;
-    snprintf(rec, (size_t)rlen, "2\x01%s\x01", path);
-    int rc = pack_append(&cb->edits_packed, &cb->n_edits, rec);
-    free(rec);
-    return rc;
+void svnae_ra_cb_set_edits_packed(struct svnae_ra_commit *cb, const char *str) {
+    if (cb) set_packed_(&cb->edits_packed, str, &cb->n_edits);
 }
-
-int
-svnae_ra_commit_delete(struct svnae_ra_commit *cb, const char *path)
-{
-    if (!cb) return -1;
-    int rlen = (int)strlen(path) + 1 + 1 + 1 + 1;
-    char *rec = malloc((size_t)rlen);
-    if (!rec) return -1;
-    snprintf(rec, (size_t)rlen, "3\x01%s\x01", path);
-    int rc = pack_append(&cb->edits_packed, &cb->n_edits, rec);
-    free(rec);
-    return rc;
+void svnae_ra_cb_set_props_packed(struct svnae_ra_commit *cb, const char *str) {
+    if (cb) set_packed_(&cb->props_packed, str, &cb->n_props);
 }
-
-int
-svnae_ra_commit_acl_add(struct svnae_ra_commit *cb,
-                        const char *path, const char *rule)
-{
-    if (!cb) return -1;
-    int rlen = (int)strlen(path) + 1 + (int)strlen(rule) + 1;
-    char *rec = malloc((size_t)rlen);
-    if (!rec) return -1;
-    snprintf(rec, (size_t)rlen, "%s\x01%s", path, rule);
-    int rc = pack_append(&cb->acls_packed, &cb->n_acls, rec);
-    free(rec);
-    return rc;
+void svnae_ra_cb_set_acls_packed(struct svnae_ra_commit *cb, const char *str) {
+    if (cb) set_packed_(&cb->acls_packed, str, &cb->n_acls);
 }
-
-int
-svnae_ra_commit_set_prop(struct svnae_ra_commit *cb,
-                         const char *path, const char *key, const char *value)
-{
-    if (!cb) return -1;
-    int rlen = (int)strlen(path) + 1 + (int)strlen(key) + 1
-             + (int)strlen(value) + 1;
-    char *rec = malloc((size_t)rlen);
-    if (!rec) return -1;
-    snprintf(rec, (size_t)rlen, "%s\x01%s\x01%s", path, key, value);
-    int rc = pack_append(&cb->props_packed, &cb->n_props, rec);
-    free(rec);
-    return rc;
+int svnae_ra_cb_n_edits(const struct svnae_ra_commit *cb) {
+    return cb ? cb->n_edits : 0;
+}
+int svnae_ra_cb_n_props(const struct svnae_ra_commit *cb) {
+    return cb ? cb->n_props : 0;
+}
+int svnae_ra_cb_n_acls(const struct svnae_ra_commit *cb) {
+    return cb ? cb->n_acls : 0;
 }
 
 /* --- Aether-callable accessors -------------------------------------- *
