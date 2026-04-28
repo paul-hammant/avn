@@ -35,15 +35,20 @@ extern svnae_ra_free(p: string)
 extern aether_path_join_rel(prefix: string, name: string) -> string
 
 extern svnae_rtree_add_dir(rt: ptr, path: string)
-extern svnae_rtree_add_file(rt: ptr, path: string, data: string, data_len: int)
+extern svnae_rtree_add_file(rt: ptr, path: string, data: string, data_len: int,
+                             wc_root: string)
 
-export merge_walk_remote(base_url: string, repo: string, rev: int,
+// Round 140: wc_root threaded through explicitly so add_file can
+// compute per-file sha1; replaces the C-side TLS pointer.
+export merge_walk_remote(wc_root: string,
+                          base_url: string, repo: string, rev: int,
                           source_path: string, sub_prefix: string,
                           rt: ptr) -> int {
-    return merge_walk_remote_impl(base_url, repo, rev, source_path, sub_prefix, rt)
+    return merge_walk_remote_impl(wc_root, base_url, repo, rev, source_path, sub_prefix, rt)
 }
 
-merge_walk_remote_impl(base_url: string, repo: string, rev: int,
+merge_walk_remote_impl(wc_root: string,
+                        base_url: string, repo: string, rev: int,
                         source_path: string, sub_prefix: string,
                         rt: ptr) -> int {
     full = aether_path_join_rel(source_path, sub_prefix)
@@ -66,7 +71,7 @@ merge_walk_remote_impl(base_url: string, repo: string, rev: int,
 
             if string.equals(kind, "dir") == 1 {
                 svnae_rtree_add_dir(rt, rel)
-                if merge_walk_remote_impl(base_url, repo, rev,
+                if merge_walk_remote_impl(wc_root, base_url, repo, rev,
                                            source_path, rel, rt) != 0 {
                     result = -1
                 }
@@ -79,7 +84,7 @@ merge_walk_remote_impl(base_url: string, repo: string, rev: int,
                     result = -1
                 }
                 if result == 0 {
-                    svnae_rtree_add_file(rt, rel, data, string.length(data))
+                    svnae_rtree_add_file(rt, rel, data, string.length(data), wc_root)
                     svnae_ra_free(data)
                 }
             }

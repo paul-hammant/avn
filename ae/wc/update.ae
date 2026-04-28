@@ -56,14 +56,12 @@ extern svnae_ra_head_rev(base_url: string, repo_name: string) -> int
 extern svnae_rtree_new() -> ptr
 extern svnae_rtree_free(rt: ptr)
 
-// Set the TLS wc_root pointer rtree_add reads via sha1_of_bytes so
-// remote_tree files get their hash filled in at add-time. Called
-// before aether_update_walk_remote so the per-file callback has a
-// wc_root to hash under.
-extern svnae_update_set_wc_root(wc_root: string)
-
-// Pass A / Pass B of the update apply.
-extern aether_update_walk_remote(base_url: string, repo: string,
+// Pass A / Pass B of the update apply. wc_root is now passed
+// through to walk_remote (Round 140 retired the C-side TLS
+// pointer); add_file uses it to compute per-file sha1 at
+// add-time.
+extern aether_update_walk_remote(wc_root: string,
+                                  base_url: string, repo: string,
                                   rev: int, prefix: string, rt: ptr) -> int
 extern aether_update_apply_pass_a(wc_root: string, base_url: string,
                                    repo: string, target_rev: int,
@@ -110,11 +108,11 @@ svnae_wc_update_impl(wc_root: string, target_rev: int) -> int {
         }
     }
 
-    // 1. Pull full remote tree at target_rev. Set the TLS wc_root
-    // first so rtree_add can compute per-file hashes during the walk.
-    svnae_update_set_wc_root(wc_root)
+    // 1. Pull full remote tree at target_rev. wc_root is threaded
+    // explicitly so rtree_add can compute per-file hashes during the
+    // walk.
     rt = svnae_rtree_new()
-    if aether_update_walk_remote(base_url, repo, target_rev, "", rt) != 0 {
+    if aether_update_walk_remote(wc_root, base_url, repo, target_rev, "", rt) != 0 {
         svnae_rtree_free(rt)
         svnae_wc_db_close(db)
         return 0 - 1

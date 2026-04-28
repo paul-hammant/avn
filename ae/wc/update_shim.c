@@ -17,25 +17,19 @@
 
 /* ae/wc/update_shim.c — public svnae_rtree_* + rtree_* ABI for svn
  * update. The storage primitive lives in ae/subr/rtree/ and is
- * shared with ae/wc/merge_shim.c (svnae_mergert_*). Only the TLS
- * wc_root pointer (used to compute sha1 across walker calls) and
- * the disk-file hash helper stay here. */
-
-#include <stddef.h>
+ * shared with ae/wc/merge_shim.c (svnae_mergert_*). */
 
 #include "../subr/rtree/rtree.h"
 
-static __thread const char *g_wc_root = NULL;
-
-void svnae_update_set_wc_root(const char *wc_root) { g_wc_root = wc_root; }
-const char *svnae_update_get_wc_root(void) { return g_wc_root; }
-
 /* Public svnae_rtree_* ABI — thin forwards onto svnae_rt_*. The
- * Aether walker holds a `void *` rt handle and calls these names. */
+ * Aether walker holds a `void *` rt handle and calls these names.
+ * Round 140 retired the TLS g_wc_root: add_file now takes wc_root
+ * explicitly so the .ae walker threads it through directly instead
+ * of going through a C-side global. */
 void *svnae_rtree_new (void)                     { return svnae_rt_new(); }
 void  svnae_rtree_free(void *rt)                 { svnae_rt_free((struct svnae_rt *)rt); }
 void  svnae_rtree_add_dir (void *rt, const char *path) { svnae_rt_add_dir((struct svnae_rt *)rt, path); }
-void  svnae_rtree_add_file(void *rt, const char *path, const char *data, int data_len) { svnae_rt_add_file((struct svnae_rt *)rt, path, data, data_len, g_wc_root); }
+void  svnae_rtree_add_file(void *rt, const char *path, const char *data, int data_len, const char *wc_root) { svnae_rt_add_file((struct svnae_rt *)rt, path, data, data_len, wc_root); }
 
 /* Aether-side reader names (no svnae_ prefix — historical). */
 int         rtree_count       (const struct svnae_rt *rt)                 { return svnae_rt_count(rt); }

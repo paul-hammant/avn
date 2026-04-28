@@ -49,10 +49,12 @@ extern aether_wc_propget_value(wc_root: string, path: string, name: string) -> s
 // the mergert_* accessors.
 extern svnae_rtree_new() -> ptr
 extern svnae_rtree_free(rt: ptr)
-extern svnae_update_set_wc_root(wc_root: string)
 
-// Walker + apply passes (Aether-side helpers).
-extern aether_merge_walk_remote(base_url: string, repo: string, rev: int,
+// Walker + apply passes (Aether-side helpers). wc_root is passed
+// explicitly through the walker so add_file can hash files at
+// add-time (Round 140 retired the C-side TLS pointer).
+extern aether_merge_walk_remote(wc_root: string,
+                                 base_url: string, repo: string, rev: int,
                                  source_path: string, sub_prefix: string,
                                  rt: ptr) -> int
 extern aether_merge_apply_deletions(wc_root: string, target_path: string,
@@ -124,14 +126,12 @@ export svnae_wc_merge(wc_root: string, source_path: string,
     base_url = string.copy(base_url)
     repo     = string.copy(repo)
 
-    // Set the TLS wc_root for rtree_add's per-file hash compute.
-    svnae_update_set_wc_root(wc_root)
-
-    // Fetch the source tree at both endpoints.
+    // Fetch the source tree at both endpoints. wc_root threads
+    // through so add_file can hash files at add-time.
     a = svnae_rtree_new()
     b = svnae_rtree_new()
-    arc = aether_merge_walk_remote(base_url, repo, rev_base, source_path, "", a)
-    brc = aether_merge_walk_remote(base_url, repo, rev_theirs, source_path, "", b)
+    arc = aether_merge_walk_remote(wc_root, base_url, repo, rev_base, source_path, "", a)
+    brc = aether_merge_walk_remote(wc_root, base_url, repo, rev_theirs, source_path, "", b)
     if arc != 0 {
         svnae_rtree_free(a)
         svnae_rtree_free(b)
