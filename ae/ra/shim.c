@@ -28,8 +28,6 @@
  * state TLS pointers (X-Svnae-User / X-Svnae-Superuser tokens). */
 
 #include "aether_string.h"  /* aether_string_data / aether_string_length */
-#include "../subr/pin_list.h"
-#include "../subr/packed_handle/packed_handle.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
