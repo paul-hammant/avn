@@ -203,13 +203,10 @@ const char *svnserver_request_header(HttpRequest *req, const char *name) {
     const char *v = req_header(req, name);
     return (v && *v) ? v : "";
 }
-/* Branch this mutation targets. Clients pass Svn-Branch when working
- * against a non-main branch; absent header → "main" (open by default
- * on seeded repos with no spec). */
-const char *svnserver_request_branch(HttpRequest *req) {
-    const char *b = req_header(req, "Svn-Branch");
-    return (b && *b) ? b : "main";
-}
+/* svnserver_request_branch retired in Round 142 — was a one-line
+ * convenience around req_header(req, "Svn-Branch") with a "main"
+ * fallback. .ae callers now inline the same two-line check
+ * (svnserver_request_header + length check). */
 int svnserver_spec_allows(const char *repo, const char *branch,
                            const char *path, int is_super) {
     if (is_super) return 1;

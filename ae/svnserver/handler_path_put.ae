@@ -28,7 +28,6 @@ extern aether_parse_repo_name_in(path: string) -> string
 extern svnserver_find_repo_path(name: string) -> string
 extern svnserver_request_is_super(req: ptr) -> int
 extern svnserver_request_header(req: ptr, name: string) -> string
-extern svnserver_request_branch(req: ptr) -> string
 
 extern aether_repos_head_rev(repo: string) -> int
 extern aether_acl_allows_mode(repo: string, rev: int, user: string, target_path: string, want_write: int) -> int
@@ -91,7 +90,8 @@ handler_path_put_impl(req: ptr, res: ptr) {
         }
     }
 
-    branch = svnserver_request_branch(req)
+    branch = svnserver_request_header(req, "Svn-Branch")
+    if string.length(branch) == 0 { branch = "main" }
     if svnserver_spec_allows(repo, branch, file_path, is_super) == 0 {
         svnserver_respond_error(res, 403, "path outside branch spec")
         return
