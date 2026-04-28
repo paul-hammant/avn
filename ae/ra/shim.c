@@ -397,25 +397,8 @@ svnae_ra_commit_finish(struct svnae_ra_commit *cb,
  * Storage in C since Aether can't allocate struct-of-arrays with
  * ergonomic field access from FFI. */
 
-struct svnae_verify_counter { int files; int secondaries; };
-
-void *svnae_verify_counter_new(void) {
-    struct svnae_verify_counter *c = calloc(1, sizeof *c);
-    return c;
-}
-int  svnae_verify_counter_files(const void *p) {
-    return p ? ((const struct svnae_verify_counter *)p)->files : 0;
-}
-int  svnae_verify_counter_secondaries(const void *p) {
-    return p ? ((const struct svnae_verify_counter *)p)->secondaries : 0;
-}
-void svnae_verify_counter_inc_files(void *p) {
-    if (p) ((struct svnae_verify_counter *)p)->files++;
-}
-void svnae_verify_counter_inc_secondaries(void *p) {
-    if (p) ((struct svnae_verify_counter *)p)->secondaries++;
-}
-void svnae_verify_counter_free(void *p) { free(p); }
+/* svnae_verify_counter_* retired in Round 147 — verify.ae now uses
+ * a 2-element std.intarr (slot 0 = files, slot 1 = secondaries). */
 
 struct ventry { char *name; int kind_c; char *sha; };
 struct svnae_verify_entries { struct ventry *items; int n; int cap; };

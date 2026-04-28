@@ -38,6 +38,7 @@
 
 import std.string
 import std.cryptography
+import std.intarr
 
 // URL builders (Aether-side already).
 extern aether_url_rev_cat(base: string, repo: string, rev: int, path: string) -> string
@@ -78,13 +79,10 @@ extern aether_ra_parse_hashes_secondaries(body: string) -> string
 // stderr writer for diagnostics. Plain wrapper around write(2,…).
 extern svnae_stderr_puts(s: string) -> int
 
-// Counter helpers: 2-int accumulator for files_checked + secondary_count.
-extern svnae_verify_counter_new() -> ptr
-extern svnae_verify_counter_files(c: ptr) -> int
-extern svnae_verify_counter_secondaries(c: ptr) -> int
-extern svnae_verify_counter_inc_files(c: ptr)
-extern svnae_verify_counter_inc_secondaries(c: ptr)
-extern svnae_verify_counter_free(c: ptr)
+// Counter is a 2-element std.intarr (slot 0 = files, slot 1 =
+// secondaries). Round 147 retired the C-side svnae_verify_counter
+// struct + 6 accessors; std.intarr's get_unchecked / set_unchecked
+// give the same semantics in Aether.
 
 // Entry-list builder used by verify_dir. Keeps name/kind/sha triples
 // for one directory, sorts them by name, then exposes back to Aether.
@@ -274,7 +272,8 @@ verify_secondaries_in_dir(base: string, repo: string, rev: int,
             if rc != 0 {
                 if overall == 0 { overall = rc }
             }
-            svnae_verify_counter_inc_files(counter)
+            intarr_set_unchecked(counter, 0,
+                intarr_get_unchecked(counter, 0) + 1)
         }
         i = i + 1
     }
@@ -333,7 +332,8 @@ verify_one_file_secondaries(base: string, repo: string, rev: int,
         server_hex = string.substring(sec_owned, mid + 1, entry_end)
         local = local_hash(algo_s, cbody_owned, body_len)
         if string.equals(local, server_hex) == 1 {
-            svnae_verify_counter_inc_secondaries(counter)
+            intarr_set_unchecked(counter, 1,
+                intarr_get_unchecked(counter, 1) + 1)
         } else {
             svnae_stderr_puts("verify: secondary ${algo_s} mismatch at /${rel}\n")
             svnae_stderr_puts("  server: ${server_hex}\n")
@@ -389,11 +389,11 @@ verify_full_impl(base_url: string, repo_name: string, rev: int, with_secondaries
     files = 0
     sec_count = 0
     if with_secondaries == 1 {
-        counter = svnae_verify_counter_new()
+        counter, _err = intarr.new(2)
         sec_rc = verify_secondaries_in_dir(base_url, repo_name, rev, "", counter)
-        files = svnae_verify_counter_files(counter)
-        sec_count = svnae_verify_counter_secondaries(counter)
-        svnae_verify_counter_free(counter)
+        files = intarr_get_unchecked(counter, 0)
+        sec_count = intarr_get_unchecked(counter, 1)
+        intarr_free(counter)
         if sec_rc != 0 {
             svnae_stderr_puts("verify: secondary check failed (rc=${sec_rc})\n")
             return sec_rc
