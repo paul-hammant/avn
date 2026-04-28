@@ -13,8 +13,10 @@
 // implied. See the License for the specific language governing
 // permissions and limitations under the License.
 
-// $repo/format line parser — ported from svnae_repo_primary_hash and
-// svnae_repo_secondary_hashes in ae/fs_fs/rep_store_shim.c.
+// $repo/format line parser. Was ported from C-side
+// svnae_repo_primary_hash + svnae_repo_secondary_hashes; both
+// retired (Rounds 132 / 136 respectively) once the .ae callers
+// switched to these accessors directly.
 //
 // Format line shapes (caller has already read the file, trimmed, and
 // passed the first line):

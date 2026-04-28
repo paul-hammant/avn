@@ -84,60 +84,15 @@ aether_pristine_slice_binary(const char *s, int start, int end)
  * cache shape was unnecessary once #297 + length-aware AetherString
  * returns landed. */
 
-/* Splitter for ae/repos/rev_io.ae's \n-separated names — kept here
- * because Aether can't hand C a fixed char[4][32] array directly. */
-extern const char *aether_repo_secondary_hashes_joined(const char *repo);
+/* svnae_repo_secondary_hashes (the char[4][32] splitter) +
+ * svnae_rep_lookup_secondary (the malloc-detach lookup) retired in
+ * Round 136 — both existed only to feed svnserver_build_secondary_pairs
+ * a C-shaped array; the .ae caller now walks
+ * aether_format_secondary_count / _hash + aether_rep_cache_sec_lookup
+ * directly. */
 
-int
-svnae_repo_secondary_hashes(const char *repo, char out[4][32])
-{
-    const char *joined = aether_repo_secondary_hashes_joined(repo);
-    if (!joined || !*joined) return 0;
-    int count = 0;
-    const char *p = joined;
-    while (*p && count < 4) {
-        const char *eol = strchr(p, '\n');
-        size_t slen = eol ? (size_t)(eol - p) : strlen(p);
-        if (slen == 0 || slen >= 32) break;
-        memcpy(out[count], p, slen);
-        out[count][slen] = '\0';
-        count++;
-        if (!eol) break;
-        p = eol + 1;
-    }
-    return count;
-}
-
-/* --- rep-cache access ---------------------------------------------- *
- *
- * Lookup helpers used by svnae_rep_read_blob (uncompressed size for
- * the inflate path) and svnae_rep_lookup_secondary (legacy NULL-on-
- * miss adapter for the few remaining char* callers in svnserver).
- * Both go through contrib.sqlite (rep_store.ae / rep_store_sec.ae). */
-
+/* --- rep-cache access ---------------------------------------------- */
 extern int aether_rep_cache_lookup_uncompressed(const char *repo, const char *sha);
-extern const char *aether_rep_cache_sec_lookup(const char *repo,
-                                                const char *primary,
-                                                const char *algo);
-
-/* Lookup: returns malloc'd hex or NULL. Caller frees. The Aether
- * helper returns "" on miss; we adapt at the boundary so existing
- * `if (shex)` callers keep working. */
-char *
-svnae_rep_lookup_secondary(const char *repo, const char *primary_hex,
-                          const char *algo)
-{
-    const char *v = aether_rep_cache_sec_lookup(repo, primary_hex, algo);
-    if (!v) return NULL;
-    int n = (int)aether_string_length(v);
-    if (n == 0) return NULL;
-    const char *data = aether_string_data(v);
-    char *out = malloc((size_t)n + 1);
-    if (!out) return NULL;
-    memcpy(out, data, (size_t)n);
-    out[n] = '\0';
-    return out;
-}
 
 /* --- public interface ---------------------------------------------- */
 

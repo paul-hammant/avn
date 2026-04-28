@@ -45,10 +45,9 @@ extern int aether_branch_spec_allows(const char *repo, const char *branch, const
  * C symbol at link time from another translation unit, no forward
  * decl required). */
 extern const char *aether_repo_primary_hash(const char *repo);
-int         svnae_repo_secondary_hashes(const char *repo, char out[4][32]);
-char       *svnae_rep_lookup_secondary(const char *repo,
-                                       const char *primary_hex,
-                                       const char *algo);
+/* svnae_repo_secondary_hashes / svnae_rep_lookup_secondary forward
+ * decls retired alongside svnserver_build_secondary_pairs in
+ * Round 136. */
 
 /* Aether HTTP server types we reach into. Must match the layout in
  * aether/std/net/aether_http_server.h exactly. */
@@ -191,27 +190,11 @@ void svnserver_respond_binary_ok(HttpServerResponse *res, const char *data,
 
 /* svnserver_set_merkle_headers moved to ae/svnserver/respond.ae. */
 
-/* Aether-callable helper: newline-separated "algo hash\n" pairs for each
- * configured secondary hash that the repo actually has for `node_sha`.
- * Returned buffer is heap-allocated (free via svnae_rep_free). "" on none. */
-const char *svnserver_build_secondary_pairs(const char *repo, const char *node_sha) {
-    char sec[4][32];
-    int sec_n = svnae_repo_secondary_hashes(repo, sec);
-    size_t cap = 512, slen = 0;
-    char *pairs = malloc(cap);
-    if (!pairs) return "";
-    pairs[0] = '\0';
-    for (int i = 0; i < sec_n; i++) {
-        char *shex = svnae_rep_lookup_secondary(repo, node_sha, sec[i]);
-        if (shex && *shex) {
-            size_t need = strlen(sec[i]) + 1 + strlen(shex) + 2;
-            if (slen + need >= cap) { cap = (slen + need) * 2; pairs = realloc(pairs, cap); }
-            slen += (size_t)snprintf(pairs + slen, cap - slen, "%s %s\n", sec[i], shex);
-        }
-        free(shex);
-    }
-    return pairs;
-}
+/* svnserver_build_secondary_pairs retired in Round 136 — moved to
+ * ae/svnserver/handler_rev_hashes.ae. The format-line accessors and
+ * rep_cache_sec_lookup are all Aether-native; the C version only
+ * existed to bridge svnae_repo_secondary_hashes' fixed char[4][32]
+ * shape, which the Aether port doesn't need. */
 
 /* svnae_openssl_b64_decode + svnserver_txn_add_b64 retired in
  * Round 110 — the b64 decode + txn-add path now lives entirely
