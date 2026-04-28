@@ -32,7 +32,7 @@ extern svnae_repos_resolve_kind(repo: string, rev: int, path: string) -> int
 extern svnae_repos_resolve_sha(repo: string, rev: int, path: string) -> string
 extern svnae_rep_read_blob(repo: string, sha: string) -> string
 extern svnae_rep_free(body: string)
-extern svnae_repo_primary_hash(repo: string) -> string
+extern aether_repo_primary_hash(repo: string) -> string
 
 extern aether_list_build(repo: string, rev: int, user: string, is_super: int,
                          dir_body: string, dir_path: string) -> string
@@ -83,7 +83,7 @@ list_handle_impl(req: ptr, res: ptr, repo: string, rev: int,
         i = i + 1
     }
 
-    algo = svnae_repo_primary_hash(repo)
+    algo = aether_repo_primary_hash(repo)
     if is_super == 1 {
         svnserver_set_merkle_headers(res, algo, "dir", dir_sha)
     }

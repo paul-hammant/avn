@@ -29,7 +29,7 @@ extern svnae_repos_cat(repo: string, rev: int, path: string) -> string
 extern svnae_rep_free(p: string)
 extern svnae_repos_resolve_kind(repo: string, rev: int, path: string) -> int
 extern svnae_repos_resolve_sha(repo: string, rev: int, path: string) -> string
-extern svnae_repo_primary_hash(repo: string) -> string
+extern aether_repo_primary_hash(repo: string) -> string
 extern svnserver_respond_binary_ok(res: ptr, data: string, length: int,
                                    content_type: string)
 extern svnserver_set_merkle_headers(res: ptr, algo: string, kind: string, sha: string)
@@ -69,7 +69,7 @@ cat_handle_impl(req: ptr, res: ptr, repo: string, rev: int,
     sha = svnae_repos_resolve_sha(repo, rev, file_path)
     if kind != 0 {
         if string.length(sha) > 0 {
-            algo = svnae_repo_primary_hash(repo)
+            algo = aether_repo_primary_hash(repo)
             kind_str = "file"
             if kind == 100 { kind_str = "dir" }
             svnserver_set_merkle_headers(res, algo, kind_str, sha)

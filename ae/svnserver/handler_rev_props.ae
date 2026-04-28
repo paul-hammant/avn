@@ -26,7 +26,7 @@
 import std.string
 
 extern aether_acl_allows_mode(repo: string, rev: int, user: string, target_path: string, want_write: int) -> int
-extern svnae_repo_primary_hash(repo: string) -> string
+extern aether_repo_primary_hash(repo: string) -> string
 extern aether_props_resolve(repo: string, rev: int, target: string) -> string
 
 extern svnserver_set_merkle_headers(res: ptr, algo: string, kind: string, sha: string)
@@ -58,7 +58,7 @@ props_handle_impl(req: ptr, res: ptr, repo: string, rev: int,
 
     if sep > 0 {
         sha = string.substring(packed, 0, sep)
-        algo = svnae_repo_primary_hash(repo)
+        algo = aether_repo_primary_hash(repo)
         svnserver_set_merkle_headers(res, algo, "props", sha)
     }
 

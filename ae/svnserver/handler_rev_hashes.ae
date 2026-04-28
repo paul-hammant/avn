@@ -30,7 +30,7 @@ import std.string
 extern aether_acl_allows_mode(repo: string, rev: int, user: string, target_path: string, want_write: int) -> int
 extern svnae_repos_resolve_kind(repo: string, rev: int, path: string) -> int
 extern svnae_repos_resolve_sha(repo: string, rev: int, path: string) -> string
-extern svnae_repo_primary_hash(repo: string) -> string
+extern aether_repo_primary_hash(repo: string) -> string
 extern svnserver_build_secondary_pairs(repo: string, node_sha: string) -> string
 extern svnae_rep_free(pairs: string)
 extern aether_hashes_json(algo: string, primary_sha: string,
@@ -63,7 +63,7 @@ hashes_handle_impl(req: ptr, res: ptr, repo: string, rev: int,
     node_sha = svnae_repos_resolve_sha(repo, rev, target)
     node_sha = string.copy(node_sha)          // TLS snapshot
 
-    algo = svnae_repo_primary_hash(repo)
+    algo = aether_repo_primary_hash(repo)
     pairs = svnserver_build_secondary_pairs(repo, node_sha)
     body = aether_hashes_json(algo, node_sha, pairs)
     svnae_rep_free(pairs)

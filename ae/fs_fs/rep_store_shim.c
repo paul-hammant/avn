@@ -78,22 +78,11 @@ aether_pristine_slice_binary(const char *s, int start, int end)
 }
 
 
-/* Backed by ae/repos/rev_io.ae::repo_primary_hash. TLS-cached so
- * callers can hold the pointer across subsequent calls. */
-extern const char *aether_repo_primary_hash(const char *repo);
-
-const char *
-svnae_repo_primary_hash(const char *repo)
-{
-    static __thread char cache[32];
-    const char *v = aether_repo_primary_hash(repo);
-    const char *src = (v && *v) ? v : "sha1";
-    size_t n = strlen(src);
-    if (n >= sizeof cache) n = sizeof cache - 1;
-    memcpy(cache, src, n);
-    cache[n] = '\0';
-    return cache;
-}
+/* svnae_repo_primary_hash retired in Round 132 — was a TLS-buf
+ * detour over aether_repo_primary_hash. The Aether body already
+ * has the "sha1" fallback on missing format files; the C-side
+ * cache shape was unnecessary once #297 + length-aware AetherString
+ * returns landed. */
 
 /* Splitter for ae/repos/rev_io.ae's \n-separated names — kept here
  * because Aether can't hand C a fixed char[4][32] array directly. */

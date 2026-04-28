@@ -32,7 +32,7 @@ extern aether_parse_repo_name_in(path: string) -> string
 extern svnserver_find_repo_path(name: string) -> string
 
 extern aether_repos_head_rev(repo: string) -> int
-extern svnae_repo_primary_hash(repo: string) -> string
+extern aether_repo_primary_hash(repo: string) -> string
 extern aether_info_json(repo: string, name: string, head: int, hash_algo: string) -> string
 
 // ACL-free route; no auth decoding needed beyond "did path parse".
@@ -67,7 +67,7 @@ handler_info_impl(req: ptr, res: ptr) {
         return
     }
 
-    body = aether_info_json(repo, name, head, svnae_repo_primary_hash(repo))
+    body = aether_info_json(repo, name, head, aether_repo_primary_hash(repo))
     http.response_set_status(res, 200)
     http.response_json(res, body)
 }

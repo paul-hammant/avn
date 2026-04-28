@@ -44,7 +44,7 @@ extern int aether_branch_spec_allows(const char *repo, const char *branch, const
 /* Functions this file actually calls (everything else reaches the
  * C symbol at link time from another translation unit, no forward
  * decl required). */
-const char *svnae_repo_primary_hash(const char *repo);
+extern const char *aether_repo_primary_hash(const char *repo);
 int         svnae_repo_secondary_hashes(const char *repo, char out[4][32]);
 char       *svnae_rep_lookup_secondary(const char *repo,
                                        const char *primary_hex,
@@ -115,7 +115,7 @@ extern int svnae_openssl_hash_hex_into(const char *algo, const char *data, int l
 const char *svnserver_hash_hex(const char *repo, const char *data, int length) {
     static __thread char buf[65];
     buf[0] = '\0';
-    svnae_openssl_hash_hex_into(svnae_repo_primary_hash(repo),
+    svnae_openssl_hash_hex_into(aether_repo_primary_hash(repo),
                                 data ? data : "", length, buf);
     return buf;
 }
