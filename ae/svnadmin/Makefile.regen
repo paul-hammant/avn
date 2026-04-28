@@ -14,9 +14,9 @@ dump_generated.c: dump.ae
 admin_db_generated.c: admin_db.ae
 	cd ../.. && $(AETHERC) --emit=lib ae/svnadmin/admin_db.ae ae/svnadmin/admin_db_generated.c
 
-# create.ae is pure orchestration — no contrib.sqlite, no std.fs imports.
+# create.ae uses std.os.now_utc_iso8601 for the genesis-rev date.
 create_generated.c: create.ae
-	$(AETHERC) --emit=lib $< $@
+	$(AETHERC) --emit=lib --with=os $< $@
 
 # dump_load.ae is pure orchestration — fd I/O goes through the C-side
 # svnae_fd_* helpers, so no fresh capability deps.

@@ -50,9 +50,10 @@ rep_store_generated.c: rep_store.ae
 rep_store_sec_generated.c: rep_store_sec.ae
 	cd ../.. && $(AETHERC) --emit=lib ae/fs_fs/rep_store_sec.ae ae/fs_fs/rep_store_sec_generated.c
 
-# commit_finalise.ae imports contrib.sqlite (path_rev INSERT loop) and
-# std.fs (atomic write of the branch spec file).
+# commit_finalise.ae imports contrib.sqlite (path_rev INSERT loop),
+# std.fs (atomic write of the branch spec file), and std.os
+# (now_utc_iso8601 for the date: field on the rev blob).
 commit_finalise_generated.c: commit_finalise.ae
-	cd ../.. && $(AETHERC) --emit=lib --with=fs ae/fs_fs/commit_finalise.ae ae/fs_fs/commit_finalise_generated.c
+	cd ../.. && $(AETHERC) --emit=lib --with=fs --with=os ae/fs_fs/commit_finalise.ae ae/fs_fs/commit_finalise_generated.c
 
 .PHONY: all

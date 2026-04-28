@@ -15,18 +15,11 @@
  * permissions and limitations under the License.
  */
 
-/* fs_fs/shim.c — small storage primitives the rest of fs_fs and the
- * test suites reach via FFI:
- *   svnae_buf:           binary-safe (data, length) holder + accessors
- *   svnae_fsfs_read_small_file:  binary slurp returning svnae_buf
- *   svnae_fsfs_now_iso8601:      TLS-cached UTC timestamp string
- *   svnae_tree_builder:  (path, kind, content) tuple list for tests
- *   svnae_sbuilder:      growable string buffer
- * Everything else in fs_fs is in *.ae now. */
+/* fs_fs/shim.c — svnae_tree_builder: (path, kind, content) tuple
+ * list used by the test suites. Aether walks the builder to group
+ * entries by parent and emit dir blobs bottom-up. Everything else
+ * in fs_fs is in *.ae now. */
 
-#include <errno.h>
-#include <fcntl.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -35,27 +28,10 @@
  * aether_io_read_file (text path) and svnae_fsfs_tree_builder_
  * content_data / _len (binary path) directly. */
 
-/* Current ISO-8601 UTC timestamp, without milliseconds. For the revision
- * blob's `date:` field. Returned string is static and must be used before
- * the next call. */
-extern char *os_now_utc_iso8601_raw(void);
-
-const char *
-svnae_fsfs_now_iso8601(void)
-{
-    /* The caller-lifetime contract here is "valid until the next
-     * call"; std.os's raw extern hands back a malloc we'd have to
-     * free, so cache into a TLS buffer for drop-in behaviour. */
-    static __thread char buf[32];
-    char *s = os_now_utc_iso8601_raw();
-    if (!s) { buf[0] = '\0'; return buf; }
-    size_t n = strlen(s);
-    if (n >= sizeof buf) n = sizeof buf - 1;
-    memcpy(buf, s, n);
-    buf[n] = '\0';
-    free(s);
-    return buf;
-}
+/* svnae_fsfs_now_iso8601 retired in Round 139 — was a TLS-buf shim
+ * over std.os's os_now_utc_iso8601_raw. .ae callers
+ * (commit_finalise.ae, svnadmin/create.ae) now compile with
+ * --with=os and call os.now_utc_iso8601() directly. */
 
 /* ---- tree builder ----------------------------------------------------- *
  *

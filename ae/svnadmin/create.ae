@@ -28,6 +28,7 @@
 // aether_rep_write_blob, aether_rev_blob_body) are unchanged.
 
 import std.string
+import std.os
 
 extern aether_io_mkdir_p(path: string) -> int
 extern aether_io_write_atomic(path: string, data: string, length: int) -> int
@@ -39,7 +40,6 @@ extern svnae_openssl_hash_supported(algo: string) -> int
 extern admin_db_init_schema(repo: string) -> string
 
 extern aether_rep_write_blob(repo: string, data: string, len: int) -> string
-extern svnae_fsfs_now_iso8601() -> string
 extern aether_rev_blob_body(root: string, branch: string, props: string, acl: string, prev: int, author: string, date: string, log: string) -> string
 
 // Lay down the empty disk layout: dirs, format file, rep-cache schema.
@@ -103,7 +103,7 @@ seed_rev0_(repo: string) -> int {
     empty_sha = string.copy(empty_sha)
 
     rev0 = aether_rev_blob_body(empty_sha, "main", "", "", 0,
-                                 "(init)", svnae_fsfs_now_iso8601(),
+                                 "(init)", os.now_utc_iso8601(),
                                  "initial empty revision")
     rev0_sha = aether_rep_write_blob(repo, rev0, string.length(rev0))
     if string.length(rev0_sha) == 0 { return 0 - 1 }

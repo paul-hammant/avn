@@ -27,6 +27,7 @@
 
 import std.string
 import std.fs
+import std.os
 import contrib.sqlite
 
 const SQLITE_DONE = 101
@@ -39,7 +40,6 @@ extern aether_rebuild_dir(repo: string, base_dir_sha: string, prefix: string, t:
 
 // Repository primitives.
 extern aether_rep_write_blob(repo: string, data: string, len: int) -> string
-extern svnae_fsfs_now_iso8601() -> string
 extern aether_repos_head_rev(repo: string) -> int
 
 // Aether-side helpers (already exported as aether_* aliases).
@@ -187,7 +187,7 @@ finalise_on_branch_(repo: string, txn: ptr,
     as_ = string.copy(as_)
 
     rev_body = aether_rev_blob_body(new_root, branch, ps, as_, prev, author,
-                                     svnae_fsfs_now_iso8601(), logmsg)
+                                     os.now_utc_iso8601(), logmsg)
     rev_sha_borrowed = aether_rep_write_blob(repo, rev_body, string.length(rev_body))
     if string.length(rev_sha_borrowed) == 0 { return 0 - 1 }
     rev_sha = string.copy(rev_sha_borrowed)
@@ -281,7 +281,7 @@ export svnae_branch_create(repo: string, name: string, base: string,
     logmsg = "create branch ${name} from ${base} with ${n_globs} include(s)"
 
     rev_body = aether_rev_blob_body(new_root, name, "", "", base_rev, author,
-                                     svnae_fsfs_now_iso8601(), logmsg)
+                                     os.now_utc_iso8601(), logmsg)
     rev_sha_borrowed = aether_rep_write_blob(repo, rev_body, string.length(rev_body))
     if string.length(rev_sha_borrowed) == 0 { return 0 - 1 }
     rev_sha = string.copy(rev_sha_borrowed)
