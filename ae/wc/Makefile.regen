@@ -7,7 +7,7 @@
 
 AETHERC ?= $(abspath $(dir $(lastword $(MAKEFILE_LIST))))/../../.aether_binaries/build/aetherc
 
-GENERATED := mergeinfo_generated.c ignore_generated.c sidecar_generated.c status_code_generated.c pristine_path_generated.c pristine_generated.c update_apply_generated.c merge_apply_generated.c update_walk_generated.c merge_walk_generated.c update_props_generated.c db_schema_generated.c db_nodes_generated.c db_node_packed_generated.c db_accessors_generated.c mutate_generated.c checkout_generated.c resolve_generated.c props_generated.c props_packed_generated.c revert_generated.c status_generated.c status_packed_generated.c update_generated.c merge_generated.c merge3_generated.c commit_generated.c diff_generated.c
+GENERATED := mergeinfo_generated.c ignore_generated.c sidecar_generated.c status_code_generated.c pristine_path_generated.c pristine_generated.c update_apply_generated.c merge_apply_generated.c update_walk_generated.c merge_walk_generated.c update_props_generated.c db_schema_generated.c db_nodes_generated.c db_node_packed_generated.c db_accessors_generated.c wc_accessors_generated.c mutate_generated.c checkout_generated.c resolve_generated.c props_generated.c props_packed_generated.c revert_generated.c status_generated.c status_packed_generated.c update_generated.c merge_generated.c merge3_generated.c commit_generated.c diff_generated.c
 
 all: $(GENERATED)
 
@@ -62,6 +62,11 @@ db_node_packed_generated.c: db_node_packed.ae
 # Round 156: node + nodelist handle accessors, ported from
 # C wrappers in ae/wc/db_shim.c.
 db_accessors_generated.c: db_accessors.ae
+	$(AETHERC) --emit=lib $< $@
+
+# Round 157: statuslist + proplist handle accessors, ported from
+# C wrappers in ae/wc/status_shim.c and ae/wc/props_shim.c.
+wc_accessors_generated.c: wc_accessors.ae
 	$(AETHERC) --emit=lib $< $@
 
 # mutate.ae imports std.fs (file copy via read_binary + write_atomic);
