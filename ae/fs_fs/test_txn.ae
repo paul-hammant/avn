@@ -46,7 +46,7 @@ extern svnae_txn_add_file(t: ptr, path: string, content: string, len: int) -> in
 extern svnae_txn_mkdir(t: ptr, path: string) -> int
 extern svnae_txn_delete(t: ptr, path: string) -> int
 extern svnae_txn_free(t: ptr)
-extern svnae_txn_rebuild_root(repo: string, base_root_sha1: string, t: ptr) -> string
+extern aether_rebuild_dir(repo: string, base_dir_sha: string, prefix: string, t: ptr) -> string
 
 // --- subr: FS + SQLite (for init + revision metadata) ---------------------
 
@@ -159,10 +159,9 @@ commit_txn(repo: string, txn: ptr, author: string, logmsg: string) {
     base_root = rev_root_sha1(repo, base_rev)
     if string.length(base_root) == 0 { return -1 }
 
-    new_root_raw = svnae_txn_rebuild_root(repo, base_root, txn)
-    if new_root_raw == 0 { return -1 }
-    new_root = string.concat("", new_root_raw)
-    svnae_rep_free(new_root_raw)
+    new_root = aether_rebuild_dir(repo, base_root, "", txn)
+    if string.length(new_root) == 0 { return -1 }
+    new_root = string.copy(new_root)
 
     prev = fsfs_head_rev(repo)
     next = prev + 1

@@ -222,18 +222,8 @@ svnae_txn_free(struct svnae_txn *t)
 /* Recursive tree rebuilder lives in ae/fs_fs/rebuild.ae; rep-store
  * read/write stays in C via the externs. */
 
-extern const char *aether_rebuild_dir(const char *repo,
-                                      const char *base_dir_sha,
-                                      const char *prefix,
-                                      const struct svnae_txn *txn);
-
-char *
-svnae_txn_rebuild_root(const char *repo, const char *base_root_sha1,
-                       const struct svnae_txn *txn)
-{
-    const char *sha = aether_rebuild_dir(repo,
-                                         base_root_sha1 ? base_root_sha1 : "",
-                                         "", txn);
-    return (sha && *sha) ? strdup(sha) : NULL;
-}
+/* svnae_txn_rebuild_root retired in Round 135 — was a strdup-detach
+ * over aether_rebuild_dir. .ae callers now invoke aether_rebuild_dir
+ * directly with prefix="" and use string.length() == 0 for the miss
+ * check. */
 

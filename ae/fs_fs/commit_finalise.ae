@@ -15,11 +15,10 @@
 
 // Round 64 (Gordian knot): port the orchestration of commit finalise
 // and branch create out of ae/fs_fs/commit_shim.c. The recursive
-// tree-rebuild stays in C (svnae_txn_rebuild_root) — that's a leaf
-// operation. Everything around it (load base root sha, rebuild,
-// inherit props/acl, write rev blob, write the 4-file pointer set,
-// populate path_rev index) was pure orchestration calling Aether
-// helpers; the C-side glue went away.
+// tree-rebuild lives in ae/fs_fs/rebuild.ae (called as
+// aether_rebuild_dir); everything around it — load base root sha,
+// inherit props/acl, write rev blob, the 4-file pointer set,
+// path_rev index population — is pure orchestration here.
 //
 // Net retired from commit_shim.c: roughly 250 lines including the
 // 55-line inline sqlite3 path_rev block (lines 211-265 pre-Round 64).
@@ -36,7 +35,7 @@ const SQLITE_DONE = 101
 
 // Recursive tree rebuild stays in C (txn_shim.c) — bulk content walk.
 extern svnae_txn_base_rev(t: ptr) -> int
-extern svnae_txn_rebuild_root(repo: string, base_root_sha1: string, t: ptr) -> string
+extern aether_rebuild_dir(repo: string, base_dir_sha: string, prefix: string, t: ptr) -> string
 
 // Repository primitives.
 extern aether_rep_write_blob(repo: string, data: string, len: int) -> string
@@ -173,7 +172,7 @@ finalise_on_branch_(repo: string, txn: ptr,
     base_root = load_rev_root_sha1_(repo, base_rev)
     if string.length(base_root) == 0 { return 0 - 1 }
 
-    new_root = svnae_txn_rebuild_root(repo, base_root, txn)
+    new_root = aether_rebuild_dir(repo, base_root, "", txn)
     if string.length(new_root) == 0 { return 0 - 1 }
     new_root = string.copy(new_root)
 

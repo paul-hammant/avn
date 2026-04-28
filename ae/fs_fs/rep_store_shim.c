@@ -178,7 +178,7 @@ svnae_rep_read_blob(const char *repo, const char *sha1_hex)
 }
 
 /* A small helper the test uses to free the malloc'd output of
- * svnae_rep_read_blob / svnae_txn_rebuild_root. */
+ * svnae_rep_read_blob. (svnae_txn_rebuild_root retired in Round 135.) */
 void svnae_rep_free(char *p) { free(p); }
 
 /* svnae_count_rep_files was a 1-line forward onto
