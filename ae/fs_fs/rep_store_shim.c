@@ -15,38 +15,13 @@
  * permissions and limitations under the License.
  */
 
-/* rep_store_shim.c — C-side rep-store read/write.
- *
- * Why this exists: txn_shim.c's rebuild_dir_c needs to read and write blobs
- * during its recursive work, but the original read/write logic lives on the
- * Aether side. Calling back from C into Aether functions isn't modelled by
- * Aether's FFI. So we maintain a parallel C implementation that matches
- * the on-disk format exactly (the Aether readers can still pick up what
- * this shim writes — they share the format, not the code).
- *
- * Format recap (from ae/fs_fs/test_repo.ae):
- *   $repo/reps/aa/bb/<sha1>.rep: 1-byte header 'R' or 'Z' + payload.
- *     'R' = raw bytes, payload is the uncompressed blob.
- *     'Z' = zlib-compressed payload; uncompressed size comes from the
- *           rep-cache.db row's `uncompressed_size` column.
- *   $repo/rep-cache.db: one row per unique sha1.
- *     (hash TEXT PK, rel_path TEXT, uncompressed_size INT, storage INT).
- *     storage=1=RAW, 2=ZLIB.
- */
+/* rep_store_shim.c — thin malloc-detach over the Aether-side
+ * rep_read_decoded + slice helper. Everything else (the encode/
+ * write side, the on-disk format primitives, secondary-pair
+ * lookup) is in ae/fs_fs/rep_store.ae and friends. */
 
-#include <errno.h>
-#include <fcntl.h>
-#include <limits.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
-#include <sys/types.h>
-#include <unistd.h>
-
-#ifndef PATH_MAX
-#define PATH_MAX 4096
-#endif
 
 /* --- Aether bridge ---------------------------------------------------- */
 

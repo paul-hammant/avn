@@ -19,18 +19,13 @@
  *
  * Routes, dispatch, JSON parse/build, and per-route handlers all live
  * in ae/svnserver/{dispatch,handler_*,*_parse,*_json}.ae. What's
- * here: TLS-buffered request peeks (header / branch / user / body),
- * the superuser-token + repo-name registry, response wrappers bound
- * to std.http types, and binary-body adapters that Aether's
- * NUL-terminated `string` can't safely carry across FFI. */
+ * here: superuser-token + repo-name registry, request-header peek,
+ * binary-body adapters that Aether's NUL-terminated `string` can't
+ * safely carry across FFI, and the request_is_super check. */
 
-#include <dirent.h>
-#include <sys/stat.h>
-#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <strings.h>
 
 /* --- forward decls from other shims ------------------------------------ */
 
