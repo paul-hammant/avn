@@ -41,9 +41,7 @@ extern aether_io_write_atomic(path: string, data: string, length: int) -> int
 extern svnae_getpid() -> int
 extern dir_exists(path: string) -> int
 
-extern svnae_fsfs_read_small_file(path: string) -> ptr
-extern svnae_fsfs_buf_data(b: ptr) -> string
-extern svnae_fsfs_buf_free(b: ptr)
+extern aether_io_read_file(path: string) -> string
 
 import contrib.sqlite
 
@@ -144,10 +142,9 @@ parse_line_value(body: string, key: string) {
 }
 
 rev_root_sha1(repo: string, rev: int) {
-    b = svnae_fsfs_read_small_file(rev_file_path(repo, rev))
-    if b == 0 { return "" }
-    rev_blob_sha1 = string.trim(svnae_fsfs_buf_data(b))
-    svnae_fsfs_buf_free(b)
+    raw = aether_io_read_file(rev_file_path(repo, rev))
+    if string.length(raw) == 0 { return "" }
+    rev_blob_sha1 = string.trim(raw)
     rev_body = svnae_rep_read_blob(repo, rev_blob_sha1)
     root = parse_line_value(rev_body, "root")
     root_copy = string.concat("", root)
@@ -156,10 +153,9 @@ rev_root_sha1(repo: string, rev: int) {
 }
 
 fsfs_head_rev(repo: string) {
-    b = svnae_fsfs_read_small_file("${repo}/head")
-    if b == 0 { return -1 }
-    t = string.trim(svnae_fsfs_buf_data(b))
-    svnae_fsfs_buf_free(b)
+    raw = aether_io_read_file("${repo}/head")
+    if string.length(raw) == 0 { return -1 }
+    t = string.trim(raw)
     if string.try_int(t) == 0 { return -1 }
     return string.get_int(t)
 }

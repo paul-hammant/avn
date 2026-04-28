@@ -74,7 +74,7 @@ extern dir_exists(path: string) -> int
 
 // --- externs from fs_fs/shim.c ---------------------------------------------
 
-extern svnae_fsfs_read_small_file(path: string) -> ptr
+extern aether_io_read_file(path: string) -> string
 extern svnae_fsfs_buf_length(b: ptr) -> int
 extern svnae_fsfs_buf_data(b: ptr) -> string
 extern svnae_fsfs_buf_free(b: ptr)
@@ -275,12 +275,9 @@ fsfs_init(path: string) {
 
 // Read the current head revision number (as int).
 fsfs_head_rev(repo: string) {
-    b = svnae_fsfs_read_small_file("${repo}/head")
-    if b == 0 { return -1 }
-    s = svnae_fsfs_buf_data(b)
-    t = string.trim(s)
-    svnae_fsfs_buf_free(b)
-    // string.try_int / get_int via std.string
+    raw = aether_io_read_file("${repo}/head")
+    if string.length(raw) == 0 { return -1 }
+    t = string.trim(raw)
     ok = string.try_int(t)
     if ok == 0 { return -1 }
     return string.get_int(t)
@@ -301,11 +298,9 @@ rev_file_path(repo: string, rev: int) {
 
 // Read the revision blob for rev `N`. Returns "" on failure.
 fsfs_load_rev_blob(repo: string, rev: int) {
-    b = svnae_fsfs_read_small_file(rev_file_path(repo, rev))
-    if b == 0 { return "" }
-    s = svnae_fsfs_buf_data(b)
-    sha1_line = string.trim(s)
-    svnae_fsfs_buf_free(b)
+    raw = aether_io_read_file(rev_file_path(repo, rev))
+    if string.length(raw) == 0 { return "" }
+    sha1_line = string.trim(raw)
     return read_blob(repo, sha1_line)
 }
 
@@ -633,13 +628,10 @@ rmtree(path: string) { system("rm -rf '${path}'"); return 0 }
 count_rep_files(repo: string) {
     count_file = "/tmp/svnae_count_${svnae_getpid()}.txt"
     system("find '${repo}/reps' -name '*.rep' | wc -l > '${count_file}'")
-    b = svnae_fsfs_read_small_file(count_file)
-    if b == 0 { return -1 }
-    s = svnae_fsfs_buf_data(b)
-    t = string.trim(s)
-    v = string.get_int(t)
-    svnae_fsfs_buf_free(b)
-    return v
+    raw = aether_io_read_file(count_file)
+    if string.length(raw) == 0 { return -1 }
+    t = string.trim(raw)
+    return string.get_int(t)
 }
 
 main() {

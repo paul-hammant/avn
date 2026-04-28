@@ -53,23 +53,11 @@ buf_from(const unsigned char *src, int n)
     return b;
 }
 
-/* Binary-safe slurp via std.fs (subr/io.ae). is_regular_file +
- * file_size pre-checks distinguish miss / empty / not-a-file. */
-extern int aether_io_is_regular_file(const char *path);
-extern int aether_io_file_size(const char *path);
-extern const char *aether_io_read_file(const char *path);
-
-struct svnae_buf *
-svnae_fsfs_read_small_file(const char *path)
-{
-    if (!aether_io_is_regular_file(path)) return NULL;
-    int size = aether_io_file_size(path);
-    if (size < 0) return NULL;
-    const char *src = aether_io_read_file(path);
-    if (!src) return NULL;
-    return buf_from((const unsigned char *)aether_string_data(src),
-                    (int)aether_string_length(src));
-}
+/* svnae_fsfs_read_small_file retired in Round 137 — was a
+ * struct-svnae_buf wrap over aether_io_read_file. .ae callers now
+ * call aether_io_read_file directly and use string.length() == 0
+ * as the miss check. The svnae_buf accessors stay because the
+ * tree_builder_content path still uses them for binary content. */
 
 int         svnae_fsfs_buf_length(const struct svnae_buf *b) { return b ? b->length : 0; }
 const char *svnae_fsfs_buf_data  (const struct svnae_buf *b) { return b ? b->data : ""; }
