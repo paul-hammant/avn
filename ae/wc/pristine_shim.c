@@ -31,22 +31,9 @@
 
 #include "aether_string.h"   /* aether_string_data / aether_string_length / string_new_with_length */
 
-/* 4-byte little-endian packing of `v`. Returns an AetherString of
- * length 4. */
-const char *
-aether_pristine_pack_le32(int v)
-{
-    char buf[4];
-    buf[0] = (char)(v         & 0xff);
-    buf[1] = (char)((v >> 8)  & 0xff);
-    buf[2] = (char)((v >> 16) & 0xff);
-    buf[3] = (char)((v >> 24) & 0xff);
-    return (const char *)string_new_with_length(buf, 4);
-}
-
-/* aether_pristine_concat_binary_n / _slice_binary live in
- * fs_fs/rep_store_shim.c — both shims always co-link, so exporting
- * once avoids duplicate-symbol errors. */
+/* aether_pristine_pack_le32 / _concat_binary_n moved to
+ * ae/subr/binbuf.ae (Round 126/127). aether_pristine_slice_binary
+ * stays C-side in fs_fs/rep_store_shim.c — see binbuf.ae for why. */
 
 extern const char *aether_wc_hash_bytes(const char *wc_root,
                                         const char *data, int length);

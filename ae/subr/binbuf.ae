@@ -46,6 +46,22 @@ export aether_pristine_concat_binary_n(prefix: string, prefix_len: int,
     return bytes.finish(buf, total)
 }
 
+// Pack a 32-bit value little-endian into a 4-byte AetherString.
+// Used by the pristine writer to encode the uncompressed-length
+// prefix; the produced AetherString must travel binary-safely
+// through downstream concat. We build the bytes via std.bytes
+// `set` (single-byte writes), then bytes.finish to get a length-
+// aware return — same shape as concat above.
+export aether_pristine_pack_le32(v: int) -> string {
+    buf = bytes.new(5)
+    if buf == null { return "" }
+    bytes.set(buf, 0, v         & 255)
+    bytes.set(buf, 1, (v >> 8)  & 255)
+    bytes.set(buf, 2, (v >> 16) & 255)
+    bytes.set(buf, 3, (v >> 24) & 255)
+    return bytes.finish(buf, 4)
+}
+
 main() {
     println("ae/subr/binbuf.ae is a library; not meant to run standalone")
 }
