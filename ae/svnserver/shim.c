@@ -221,8 +221,9 @@ const char *svnserver_build_secondary_pairs(const char *repo, const char *node_s
 /* svnae_openssl_b64_decode + svnserver_txn_add_b64 retired in
  * Round 110 — the b64 decode + txn-add path now lives entirely
  * in commit_parse.ae's txn_add_b64_ helper, calling
- * svnae_crypto_b64_decode_capture / _len + svnae_txn_add_file_aether
- * directly. */
+ * svnae_crypto_b64_decode_capture / _len + svnae_txn_add_file
+ * directly (the _aether wrapper went away in Round 123 — #297
+ * auto-unwrap made it dead weight). */
 
 /* Header value or "" — Aether tests string.length == 0 to distinguish
  * "header absent" from "header present + empty" since string externs

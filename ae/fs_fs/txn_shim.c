@@ -32,30 +32,10 @@
  * them against the base rev's tree. That walk is written in Aether; this
  * shim just provides storage for the edit list and a couple of read
  * accessors (so Aether can iterate without juggling arrays).
- *
- * We reuse the `struct svnae_buf` shape from the rest of the port so the
- * Aether `ptr` opaque handle means the same thing everywhere.
  */
 
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-struct svnae_buf {
-    char *data;
-    int   length;
-};
-
-static struct svnae_buf *buf_from(const unsigned char *src, int n) {
-    struct svnae_buf *b = malloc(sizeof *b);
-    if (!b) return NULL;
-    b->data = malloc((size_t)n + 1);
-    if (!b->data) { free(b); return NULL; }
-    if (n > 0) memcpy(b->data, src, n);
-    b->data[n] = '\0';
-    b->length = n;
-    return b;
-}
 
 /* --- edit list --------------------------------------------------------- */
 
@@ -196,18 +176,8 @@ svnae_txn_edit_path(const struct svnae_txn *t, int i)
     return t->edits[i].path;
 }
 
-struct svnae_buf *
-svnae_txn_edit_content(const struct svnae_txn *t, int i)
-{
-    if (!t || i < 0 || i >= t->n) return NULL;
-    return buf_from((const unsigned char *)t->edits[i].content,
-                    t->edits[i].content_len);
-}
-
-/* Raw-pointer accessors for the Aether rebuild_dir port. The Aether
- * side needs to pass content and copy_from_sha1 through to the rep
- * store writer without going through the opaque svnae_buf wrapper
- * (Aether strings + explicit lengths compose better). */
+/* Raw-pointer accessors for content and copy_from_sha1. Aether
+ * strings + explicit lengths compose better than svnae_buf. */
 const char *
 svnae_txn_edit_content_data(const struct svnae_txn *t, int i)
 {
