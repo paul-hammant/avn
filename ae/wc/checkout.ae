@@ -51,7 +51,7 @@ extern svnae_wc_db_upsert_node(db: ptr, path: string, kind: int, base_rev: int, 
 extern svnae_wc_db_set_info(db: ptr, key: string, value: string) -> int
 
 // Pristine store.
-extern svnae_wc_pristine_put(wc_root: string, data: string, len: int) -> string
+extern aether_wc_pristine_put(wc_root: string, data: string, len: int) -> string
 
 // WC propset (per-path key=value persist).
 extern svnae_wc_propset(wc_root: string, path: string, name: string, value: string) -> int
@@ -122,7 +122,7 @@ walk_(base_url: string, repo: string, rev: int,
                 svnae_ra_list_free(L)
                 return 0 - 1
             }
-            sha = svnae_wc_pristine_put(dest, data, len)
+            sha = aether_wc_pristine_put(dest, data, len)
             if string.length(sha) == 0 {
                 svnae_ra_free(data)
                 svnae_ra_list_free(L)

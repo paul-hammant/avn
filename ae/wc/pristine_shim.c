@@ -17,12 +17,11 @@
 
 /* ae/wc/pristine_shim.c — thin adapter over ae/wc/pristine.ae.
  *
- * Two responsibilities:
- *  1. byte-level helpers (pack_le32; concat/slice live in
- *     rep_store_shim.c which is always co-linked) wrapping
- *     string_new_with_length so Aether can build binary payloads.
- *  2. public svnae_wc_* signatures — out-param/length-aware C ABI —
- *     adapting Aether's string returns. */
+ * Just public svnae_wc_* signatures — out-param + length-aware C
+ * ABI shaping that adapts Aether's string returns for downstream
+ * C callers. The byte-level helpers (concat / pack_le32) moved to
+ * subr/binbuf.ae; slice stays in rep_store_shim.c (see binbuf.ae
+ * for why). */
 
 #include <stdint.h>
 #include <stdio.h>
@@ -38,10 +37,6 @@
 extern const char *aether_wc_hash_bytes(const char *wc_root,
                                         const char *data, int length);
 extern const char *aether_wc_hash_file(const char *wc_root, const char *path);
-extern const char *aether_wc_pristine_put(const char *wc_root,
-                                           const char *data, int length);
-extern const char *aether_wc_pristine_get(const char *wc_root, const char *sha);
-
 /* Hash `data[0..len]` under the WC's algorithm. Copy into caller's
  * `out` buffer (>= 65 bytes) and return the hex length. 0 on
  * failure. */
@@ -72,52 +67,11 @@ svnae_wc_hash_file(const char *wc_root, const char *path, char *out)
     return 0;
 }
 
-/* Put. Returns the sha hex (TLS-cached; caller copies before next
- * call) or NULL on failure. */
-const char *
-svnae_wc_pristine_put(const char *wc_root, const char *data, int len)
-{
-    static __thread char sha[65];
-    const char *r = aether_wc_pristine_put(wc_root, data, len);
-    if (!r) return NULL;
-    const char *rdata = aether_string_data(r);
-    int         rlen  = (int)aether_string_length(r);
-    if (rlen == 0) return NULL;
-    if (rlen >= 65) rlen = 64;
-    memcpy(sha, rdata, (size_t)rlen);
-    sha[rlen] = '\0';
-    return sha;
-}
-
-/* Get. Returns a malloc'd NUL-terminated copy (embedded NULs
- * preserved up to the recorded uncompressed length, but length
- * isn't exposed — existing callers either know the content is
- * text, or query svnae_wc_pristine_size first). NULL on miss. */
-char *
-svnae_wc_pristine_get(const char *wc_root, const char *sha)
-{
-    const char *r = aether_wc_pristine_get(wc_root, sha);
-    if (!r) return NULL;
-    const char *rdata = aether_string_data(r);
-    int         rlen  = (int)aether_string_length(r);
-    if (rlen == 0) {
-        /* Empty payload is a miss — pristine entries are never empty:
-         * every real blob has at least one byte in it. (Matches C
-         * version's behaviour, whose uncompressed=0 was never emitted
-         * because svnae_rep_write_blob rejects len==0 too.) */
-        return NULL;
-    }
-    char *out = malloc((size_t)rlen + 1);
-    if (!out) return NULL;
-    memcpy(out, rdata, (size_t)rlen);
-    out[rlen] = '\0';
-    return out;
-}
-
-/* svnae_wc_pristine_has / _size were 1-line forwards onto
- * aether_wc_pristine_has / _size; Round 104 retired them in favour
- * of letting .ae callers use the aether_* names directly. The C
- * pristine_get and pristine_put wrappers stay because they do
- * length-aware malloc detach + TLS-cached sha return. */
-
-void svnae_wc_pristine_free(char *p) { free(p); }
+/* svnae_wc_pristine_{has,size,put,get,free} all retired:
+ *   - has / size: Round 104 — 1-line forwards, callers use aether_* directly
+ *   - put: Round 129 — TLS-sha truncation never fired (sha1 is always 40
+ *     chars), .ae callers now use aether_wc_pristine_put directly and
+ *     receive an AetherString (refcount handles lifetime)
+ *   - get + free: Round 129 — caller-side malloc detach was unnecessary
+ *     once #297 + length-aware AetherString returns landed; callers
+ *     dropped the explicit free() too. */

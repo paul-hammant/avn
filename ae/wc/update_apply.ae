@@ -53,7 +53,7 @@ extern svnae_wc_db_delete_node(db: ptr, path: string) -> int
 extern svnae_wc_db_set_conflicted(db: ptr, path: string, conflicted: int) -> int
 
 // --- pristine + hash FFI --------------------------------------------------
-extern svnae_wc_pristine_put(wc_root: string, data: string, length: int) -> string
+extern aether_wc_pristine_put(wc_root: string, data: string, length: int) -> string
 extern svnae_wc_hash_file(wc_root: string, path: string, out_buf: ptr) -> int
 
 // --- io helpers + merge3 entry -------------------------------------------
@@ -68,8 +68,7 @@ extern svnae_merge3_apply(wc_path: string,
                           theirs_data: string, theirs_len: int, theirs_rev: int) -> int
 
 extern aether_wc_pristine_size(wc_root: string, sha1: string) -> int
-extern svnae_wc_pristine_get(wc_root: string, sha1: string) -> string
-extern svnae_wc_pristine_free(p: string)
+extern aether_wc_pristine_get(wc_root: string, sha1: string) -> string
 
 // --- prop ingest -------------------------------------------------------
 // Implementation lives in ae/wc/update_props.ae; call the aether-
@@ -158,7 +157,7 @@ update_apply_pass_a_impl(wc_root: string, base_url: string, repo: string,
                                 // Straight overwrite.
                                 ok = aether_io_write_atomic(disk, r_data, r_len)
                                 if ok == 0 {
-                                    svnae_wc_pristine_put(wc_root, r_data, r_len)
+                                    aether_wc_pristine_put(wc_root, r_data, r_len)
                                     svnae_wc_db_upsert_node(db, rel, 0, target_rev, r_sha, 0)
                                     aether_ingest_props(base_url, repo, target_rev, wc_root, rel)
                                 }
@@ -166,7 +165,7 @@ update_apply_pass_a_impl(wc_root: string, base_url: string, repo: string,
                             if local_clean == 0 {
                                 // 3-way merge.
                                 base_len = aether_wc_pristine_size(wc_root, base_sha)
-                                base_buf = svnae_wc_pristine_get(wc_root, base_sha)
+                                base_buf = aether_wc_pristine_get(wc_root, base_sha)
                                 if string.length(base_buf) == 0 {
                                     // Fallback: reject but still advance pointer.
                                     svnae_wc_db_upsert_node(db, rel, kind, target_rev, base_sha, 0)
@@ -176,14 +175,13 @@ update_apply_pass_a_impl(wc_root: string, base_url: string, repo: string,
                                     m3rc = svnae_merge3_apply(disk,
                                                               base_buf, base_len, local_base_rev,
                                                               r_data, r_len, target_rev)
-                                    svnae_wc_pristine_free(base_buf)
                                     if m3rc == 0 {
-                                        svnae_wc_pristine_put(wc_root, r_data, r_len)
+                                        aether_wc_pristine_put(wc_root, r_data, r_len)
                                         svnae_wc_db_upsert_node(db, rel, 0, target_rev, r_sha, 0)
                                         aether_ingest_props(base_url, repo, target_rev, wc_root, rel)
                                     }
                                     if m3rc == 1 {
-                                        svnae_wc_pristine_put(wc_root, r_data, r_len)
+                                        aether_wc_pristine_put(wc_root, r_data, r_len)
                                         svnae_wc_db_upsert_node(db, rel, 0, target_rev, r_sha, 0)
                                         svnae_wc_db_set_conflicted(db, rel, 1)
                                         had_conflict = 1
@@ -257,7 +255,7 @@ update_apply_pass_b_impl(wc_root: string, base_url: string, repo: string,
             }
             if r_kind == 0 {
                 if aether_io_write_atomic(disk, r_data, r_len) == 0 {
-                    svnae_wc_pristine_put(wc_root, r_data, r_len)
+                    aether_wc_pristine_put(wc_root, r_data, r_len)
                     svnae_wc_db_upsert_node(db, rpath, 0, target_rev, r_sha, 0)
                     ok = 1
                 }

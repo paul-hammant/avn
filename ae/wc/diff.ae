@@ -22,10 +22,8 @@
 //
 // Round 80 (Gordian) ports the orchestration off ae/wc/diff_shim.c.
 // fork + execl /usr/bin/diff goes through std.os.os_run; tmp-file
-// staging via fs.write_atomic; pristine fetch via the existing
-// svnae_wc_pristine_get C wrapper. Only the binary-blob slurp path
-// stays in C-side (svnae_wc_pristine_get returns malloc'd bytes
-// that may have embedded NULs).
+// staging via fs.write_atomic; pristine fetch via the canonical
+// aether_wc_pristine_get (Round 129 retired the C wrapper).
 
 import std.fs
 import std.string

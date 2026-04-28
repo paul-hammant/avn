@@ -55,7 +55,7 @@ extern svnae_wc_node_base_sha1(n: ptr) -> string
 extern svnae_wc_node_free(n: ptr)
 
 // --- pristine + merge3 ---------------------------------------------------
-extern svnae_wc_pristine_put(wc_root: string, data: string, length: int) -> string
+extern aether_wc_pristine_put(wc_root: string, data: string, length: int) -> string
 extern svnae_merge3_apply(wc_path: string,
                           base_data: string, base_len: int, base_rev: int,
                           theirs_data: string, theirs_len: int, theirs_rev: int) -> int
@@ -165,7 +165,7 @@ merge_apply_adds_mods_impl(wc_root: string, target_path: string,
                 if exists_on_disk == 0 {
                     // Not on disk — new add.
                     if aether_io_write_atomic(disk, rb_data, rb_len) == 0 {
-                        svnae_wc_pristine_put(wc_root, rb_data, rb_len)
+                        aether_wc_pristine_put(wc_root, rb_data, rb_len)
                         if tracked == 0 {
                             svnae_wc_db_upsert_node(db, wc_rel, 0, 0, "", 1)
                         }
@@ -175,7 +175,7 @@ merge_apply_adds_mods_impl(wc_root: string, target_path: string,
                     if tracked == 0 {
                         // On disk but untracked — same new-add path.
                         if aether_io_write_atomic(disk, rb_data, rb_len) == 0 {
-                            svnae_wc_pristine_put(wc_root, rb_data, rb_len)
+                            aether_wc_pristine_put(wc_root, rb_data, rb_len)
                             svnae_wc_db_upsert_node(db, wc_rel, 0, 0, "", 1)
                         }
                     }
