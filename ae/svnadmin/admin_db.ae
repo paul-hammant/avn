@@ -67,8 +67,7 @@ export admin_db_list_reps_packed(repo: string) -> string {
     // string and prepend the count at the end.
     n = 0
     body = ""
-    rc, _ = sqlite.step(stmt, db)
-    while rc == SQLITE_ROW {
+    while sqlite.next_row(stmt, db) == 1 {
         sha  = sqlite.column_text(stmt, 0)
         size = sqlite.column_int (stmt, 1)
         sha_owned = string.copy(sha)
@@ -77,7 +76,6 @@ export admin_db_list_reps_packed(repo: string) -> string {
         body = string.concat(body, "${size}")
         body = string.concat(body, "\x02")
         n = n + 1
-        rc, _ = sqlite.step(stmt, db)
     }
     sqlite.finalize(stmt)
     sqlite.close(db)

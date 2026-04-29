@@ -161,14 +161,12 @@ export svnae_wc_proplist(wc_root: string, path: string) -> ptr {
 
     n = 0
     body = ""
-    rc, _ = sqlite.step(stmt, db)
-    while rc == SQLITE_ROW {
+    while sqlite.next_row(stmt, db) == 1 {
         nm = sqlite.column_text(stmt, 0)
         vl = sqlite.column_text(stmt, 1)
         rec = "${nm}\x01${vl}\x02"
         body = string.concat(body, rec)
         n = n + 1
-        rc, _ = sqlite.step(stmt, db)
     }
     sqlite.finalize(stmt)
     close_(db)

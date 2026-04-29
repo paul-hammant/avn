@@ -165,8 +165,7 @@ export svnae_wc_db_list_nodes(db: ptr) -> ptr {
     if string.length(perr) > 0 { return null }
     n = 0
     body = ""
-    rc, _ = sqlite.step(stmt, db)
-    while rc == SQLITE_ROW {
+    while sqlite.next_row(stmt, db) == 1 {
         path       = sqlite.column_text(stmt, 0)
         kind       = sqlite.column_int (stmt, 1)
         base_rev   = sqlite.column_int (stmt, 2)
@@ -177,7 +176,6 @@ export svnae_wc_db_list_nodes(db: ptr) -> ptr {
         body = string.concat(body, rec)
         body = string.concat(body, "\x02")
         n = n + 1
-        rc, _ = sqlite.step(stmt, db)
     }
     sqlite.finalize(stmt)
     head = "${n}\x02"

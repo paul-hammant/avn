@@ -49,11 +49,9 @@ wc_db_install_schema_impl(db: ptr) -> int {
     stmt, perr = sqlite.prepare(db, "PRAGMA table_info(nodes)")
     if string.length(perr) > 0 { return 0 }
     has_conflicted = 0
-    step_rc, _ = sqlite.step(stmt, db)
-    while step_rc == SQLITE_ROW {
+    while sqlite.next_row(stmt, db) == 1 {
         nm = sqlite.column_text(stmt, 1)
         if string.equals(nm, "conflicted") == 1 { has_conflicted = 1 }
-        step_rc, _ = sqlite.step(stmt, db)
     }
     sqlite.finalize(stmt)
     if has_conflicted == 0 {
