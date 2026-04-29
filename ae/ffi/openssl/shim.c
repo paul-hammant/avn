@@ -15,68 +15,12 @@
  * permissions and limitations under the License.
  */
 
-/* ae/ffi/openssl/shim.c — thin glue to std.cryptography v2.
+/* ae/ffi/openssl/shim.c — fully retired in Round 160.
  *
- * Digest + Base64 work lives in ae/ffi/openssl/crypto_helpers.ae;
- * the C functions below preserve the historical svnae_openssl_*
- * signatures (six downstream shims + the test harness link
- * against them), copying AetherString results into malloc'd /
- * stack-buffer shapes the C contract expects. */
-
-#include <stdlib.h>
-#include <string.h>
-#include "aether_string.h"   /* aether_string_data / aether_string_length */
-
-extern const char *svnae_crypto_hash_hex(const char *algo, const char *data, int length);
-extern int         svnae_crypto_hash_supported(const char *algo);
-extern const char *svnae_crypto_b64_encode(const char *data, int length);
-
-/* svnae_crypto_b64_decode_set_len / _len retired in Round 159 —
- * for_porter_claude.md confirmed `export -> (T1, T2, T3)` worked
- * all along (Aether #285 in 0.99). The Aether-side
- * svnae_crypto_b64_decode now returns (bytes, length, err) cleanly;
- * the .ae caller in commit_parse.ae destructures it directly. */
-
-/* --- public API ------------------------------------------------------- */
-
-/* svnae_openssl_hash_hex_into / _hash_hex retired in Round 134:
- * the only external caller (svnserver_hash_hex) was retired in
- * the same round; other code paths reach svnae_crypto_hash_hex
- * (Aether-native, returns AetherString) directly. */
-
-/* Base64-encode `src[0..len]` into a malloc'd NUL-terminated string.
- * Caller frees. Padded output — std.cryptography emits unpadded so
- * we append '=' as needed to make the length a multiple of 4. */
-char *
-svnae_openssl_b64_encode(const unsigned char *src, int len)
-{
-    const char *enc = svnae_crypto_b64_encode((const char *)src, len);
-    if (!enc) return NULL;
-    int n = (int)aether_string_length(enc);
-    /* Pad to a multiple of 4 with '='. The downstream svn shims
-     * expected padded output (matches reference RFC 4648 §4 and
-     * the libcurl/openssl convention). */
-    int pad = (4 - (n & 3)) & 3;
-    char *out = malloc((size_t)n + (size_t)pad + 1);
-    if (!out) return NULL;
-    memcpy(out, aether_string_data(enc), (size_t)n);
-    for (int i = 0; i < pad; i++) out[n + i] = '=';
-    out[n + pad] = '\0';
-    return out;
-}
-
-/* svnae_openssl_b64_decode (the malloc-detach (out, out_len) shape)
- * retired in Round 110. The svnserver commit-parse path calls
- * svnae_crypto_b64_decode_capture + _len directly from Aether, then
- * hands the AetherString into svnae_txn_add_file (the _aether
- * trampoline went away in Round 123 once #297 auto-unwrap landed). */
-
-/* Is `algo` allowed as a repo's *content-address* algorithm? 1 = yes,
- * 0 = no. sha1 + sha256 only — the only two algorithms anything in
- * the port has ever asked for. std.cryptography.hash_supported
- * accepts any name OpenSSL recognises (sha384/sha512/sha3-*); we
- * narrow to our golden list here so admin commands can't install
- * anything else as primary/secondary on a real repo. */
-/* svnae_openssl_hash_supported / svnae_openssl_hash_hex_len moved
- * to ae/ffi/openssl/crypto_helpers.ae in Round 106 — they were
- * pure string-comparison constant lookups with no openssl content. */
+ * The padded-base64 padding loop (the last live function) went
+ * away when crypto_helpers.ae switched to
+ * cryptography.base64_encode_padded — see std_cryptography_gaps.md
+ * Gap 1 ("Optional padded base64_encode") which shipped in Aether
+ * [current]. Every other historical openssl_* entry was retired in
+ * earlier rounds (134 / 110 / 106 / 159). File kept as a headstone
+ * so aether.toml's extra_sources reference doesn't dangle. */

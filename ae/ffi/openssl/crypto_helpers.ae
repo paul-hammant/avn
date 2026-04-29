@@ -55,11 +55,14 @@ export svnae_openssl_hash_hex_len(algo: string) -> int {
 }
 
 // Base64-encode data[0..length]. Returns "" on failure.
-// std.cryptography emits unpadded output per RFC 4648 §4; the
-// downstream svnae_openssl_b64_encode contract was padded output,
-// so the C side appends '=' as needed.
+// Round 160: padded output via std.cryptography's
+// base64_encode_padded (which arrived in [current] after
+// std_cryptography_gaps.md asked for it). Matches the svn-port's
+// historical wire-format contract; OpenSSL base64_decode accepts
+// either form anyway, but padded is the conventional shape libcurl
+// + Apache base64 emit on the other side.
 export svnae_crypto_b64_encode(data: string, length: int) -> string {
-    out, err = cryptography.base64_encode(data, length)
+    out, err = cryptography.base64_encode_padded(data, length)
     if string.length(err) > 0 { return "" }
     return out
 }
