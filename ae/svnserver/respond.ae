@@ -14,15 +14,20 @@
 // permissions and limitations under the License.
 
 // ae/svnserver/respond.ae — small response-emitting helpers shared
-// by every handler_*.ae. Round 103 ports these out of
-// ae/svnserver/shim.c, where they were thin pass-throughs onto
-// std.http. The binary-body case (svnserver_respond_binary_ok)
-// stays C-side because std.http's set_body strdup+strlen's the
-// payload — keeping byte-length intact for embedded NULs needs raw
-// res->body / res->body_length poking.
+// by every handler_*.ae. Round 162 retired the last C-side helper
+// (svnserver_respond_binary_ok) by switching to
+// http.response_set_body_n which arrived in Aether [current].
 
 import std.string
 import std.http
+
+// Inline extern (not via `import std.http`) for the new
+// http_response_set_body_n entry: per the [current] CHANGELOG,
+// module-imported externs don't currently trigger the #297
+// auto-unwrap at call sites; declaring it inline here picks up
+// the unwrap correctly. Same shape `http.response_set_status` /
+// `http.response_set_header` use here.
+extern http_response_set_body_n(res: ptr, body: string, length: int)
 
 extern aether_error_response_json(msg: string) -> string
 
@@ -34,6 +39,17 @@ export svnserver_respond_error(res: ptr, code: int, msg: string) {
 export svnserver_respond_json_ok(res: ptr, body: string) {
     http.response_set_status(res, 200)
     http.response_json(res, body)
+}
+
+// Binary-body response. Length is explicit — the body may carry
+// embedded NULs (binary file content from svn cat etc.) and the
+// length-aware setter preserves them end-to-end.
+export svnserver_respond_binary_ok(res: ptr, data: string, length: int,
+                                    content_type: string) {
+    http.response_set_status(res, 200)
+    http.response_set_header(res, "Content-Type", content_type)
+    http_response_set_body_n(res, data, length)
+    http.response_set_header(res, "Content-Length", "${length}")
 }
 
 // Set Merkle verification headers on file/dir responses. Each header

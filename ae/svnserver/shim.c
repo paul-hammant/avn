@@ -147,36 +147,11 @@ const char *svnserver_find_repo_path(const char *name) {
     return strcmp(name, g_repo_name) == 0 ? g_repo_path : "";
 }
 
-/* Response-emitting helpers for Aether. Each binds against std.http
- * directly; no intervening static wrappers since the dispatch + route
- * handlers all live on the Aether side now. */
-/* svnserver_respond_error / svnserver_respond_json_ok / svnserver_
- * set_merkle_headers moved to ae/svnserver/respond.ae in Round 103
- * — they were thin pass-throughs onto std.http calls and didn't
- * need the C boundary.
- *
- * svnserver_respond_binary_ok below stays C-side because std.http's
- * set_body strdup+strlen's the payload, so we poke res->body
- * directly to preserve byte-length for NULs. */
-void svnserver_respond_binary_ok(HttpServerResponse *res, const char *data,
-                                 int length, const char *content_type) {
-    http_response_set_status(res, 200);
-    http_response_set_header(res, "Content-Type", content_type);
-    free(res->body);
-    res->body = malloc((size_t)length + 1);
-    if (res->body) {
-        memcpy(res->body, data, (size_t)length);
-        res->body[length] = '\0';
-        res->body_length = (size_t)length;
-    } else {
-        res->body_length = 0;
-    }
-    char lenbuf[32];
-    snprintf(lenbuf, sizeof lenbuf, "%d", length);
-    http_response_set_header(res, "Content-Length", lenbuf);
-}
-
-/* svnserver_set_merkle_headers moved to ae/svnserver/respond.ae. */
+/* svnserver_respond_error / _respond_json_ok / _set_merkle_headers
+ * moved to respond.ae in Round 103. svnserver_respond_binary_ok
+ * moved to respond.ae in Round 162 once
+ * http.response_set_body_n landed in Aether [current] — see
+ * std_remaining_gaps.md Gap 3. */
 
 /* svnserver_build_secondary_pairs retired in Round 136 — moved to
  * ae/svnserver/handler_rev_hashes.ae. The format-line accessors and
