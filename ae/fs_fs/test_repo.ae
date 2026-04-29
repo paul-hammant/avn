@@ -35,7 +35,7 @@ extern aether_io_write_header_and_body(path: string, header: string, body: strin
 extern aether_io_rename(from: string, to: string) -> int
 extern aether_io_is_regular_file(path: string) -> int
 extern aether_io_remove(path: string) -> int
-extern svnae_getpid() -> int
+extern os_getpid_raw() -> int
 extern svnae_read_file(path: string, out_len: ptr) -> ptr
 extern svnae_read_file_length(b: ptr) -> int
 extern svnae_read_file_data(b: ptr) -> string
@@ -167,7 +167,7 @@ write_blob(repo: string, data: string) {
     rel = rel_path_for_hash(sha1_copy)
     full = "${repo}/reps/${rel}"
 
-    tmp = "${full}.tmp.${svnae_getpid()}.0"
+    tmp = "${full}.tmp.${os_getpid_raw()}.0"
     wrc = 0
     // ZLIB payloads can contain NULs but the explicit-length write path
     // is binary-safe: svnae_buf_data hands us a plain char*, the .ae
@@ -247,7 +247,7 @@ rmtree(path: string) { system("rm -rf '${path}'"); return 0 }
 
 main() {
     fails = 0
-    pid = svnae_getpid()
+    pid = os_getpid_raw()
     repo = "/tmp/svnae_test_repo_${pid}"
     rmtree(repo)
 

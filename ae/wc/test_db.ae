@@ -17,7 +17,7 @@
 
 import std.string
 
-extern svnae_getpid() -> int
+extern os_getpid_raw() -> int
 extern system(cmd: string) -> int
 
 extern svnae_wc_db_open(wc_root: string) -> ptr
@@ -60,7 +60,7 @@ expect_str(label: string, got: string, want: string) {
 
 main() {
     fails = 0
-    pid = svnae_getpid()
+    pid = os_getpid_raw()
     wc = "/tmp/svnae_test_wcdb_${pid}"
     system("rm -rf ${wc}")
     system("mkdir -p ${wc}")

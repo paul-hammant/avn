@@ -25,7 +25,7 @@ import contrib.sqlite
 const SQLITE_ROW  = 100
 const SQLITE_DONE = 101
 
-extern svnae_getpid() -> int
+extern os_getpid_raw() -> int
 extern aether_io_remove(path: string) -> int
 
 expect_int(label: string, got: int, want: int) {
@@ -44,7 +44,7 @@ expect_str(label: string, got: string, want: string) {
 
 main() {
     fails = 0
-    pid = svnae_getpid()
+    pid = os_getpid_raw()
     dbpath = "/tmp/svnae_test_sqlite_${pid}.db"
     aether_io_remove(dbpath)
 

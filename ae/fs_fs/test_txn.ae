@@ -51,7 +51,7 @@ extern aether_rebuild_dir(repo: string, base_dir_sha: string, prefix: string, t:
 // --- subr: FS + SQLite (for init + revision metadata) ---------------------
 
 extern aether_io_write_atomic(path: string, data: string, length: int) -> int
-extern svnae_getpid() -> int
+extern os_getpid_raw() -> int
 extern dir_exists(path: string) -> int
 
 extern aether_io_read_file(path: string) -> string
@@ -285,7 +285,7 @@ count_rep_files(repo: string) { return aether_fs_count_rep_files(repo) }
 
 main() {
     fails = 0
-    pid = svnae_getpid()
+    pid = os_getpid_raw()
     repo = "/tmp/svnae_test_txn_${pid}"
     rmtree(repo)
 

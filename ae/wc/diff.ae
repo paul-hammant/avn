@@ -64,7 +64,7 @@ diff_tmp_write_pristine_(wc_root: string, sha: string, path: string) -> int {
 extern aether_wc_hash_file(wc_root: string, path: string) -> string
 
 extern aether_io_unlink(path: string) -> int
-extern svnae_getpid() -> int
+extern os_getpid_raw() -> int
 
 extern os_run(prog: string, argv_list: ptr, env_list: ptr) -> int
 extern list_new() -> ptr
@@ -74,7 +74,7 @@ extern list_free(list: ptr)
 // Globally-monotonic counter for tmp filenames so two svn diff calls
 // running concurrently in the same process don't collide.
 tmp_seq_(prefix: string, seq: int) -> string {
-    pid = svnae_getpid()
+    pid = os_getpid_raw()
     return "/tmp/svnae_diff_${pid}_${seq}_${prefix}.tmp"
 }
 

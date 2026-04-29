@@ -52,10 +52,10 @@ extern list_free(list: ptr)
 // a kind tag (0=mine, 1=base, 2=theirs, 3+ = sidecar slots) and
 // pid into the name. Collisions across processes are pid-bounded;
 // collisions within a process are handled by the kind tag.
-extern svnae_getpid() -> int
+extern os_getpid_raw() -> int
 
 tmp_path_(kind: string) -> string {
-    pid = svnae_getpid()
+    pid = os_getpid_raw()
     return "/tmp/svnae_m3_${pid}_${kind}.tmp"
 }
 

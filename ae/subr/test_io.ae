@@ -23,7 +23,7 @@ import std.fs
 import std.string
 
 extern aether_io_write_atomic(path: string, data: string, length: int) -> int
-extern svnae_getpid() -> int
+extern os_getpid_raw() -> int
 extern aether_io_is_regular_file(path: string) -> int
 extern aether_io_remove(path: string) -> int
 
@@ -53,7 +53,7 @@ expect_str(label: string, got: string, want: string) {
 
 main() {
     fails = 0
-    pid = svnae_getpid()
+    pid = os_getpid_raw()
     path = "/tmp/svnae_test_io_${pid}.dat"
 
     // Make sure the file doesn't exist from a prior run.

@@ -32,8 +32,9 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-/* Return the current PID (for building unique tmp filenames). */
-int svnae_getpid(void) { return (int)getpid(); }
+/* svnae_getpid retired in Round 164 — std.os exposes os.getpid()
+ * (asked for in std_remaining_gaps.md, shipped in Aether
+ * [current]). Callers reach `os_getpid_raw` via inline extern. */
 
 /* Unbuffered writer to stderr (fd 2). Aether's println buffers, so when
  * debugging a crash we lose everything between the last flush and the
