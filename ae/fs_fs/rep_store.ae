@@ -43,7 +43,7 @@ import std.zlib
 // linked copy (they're both pulled into every binary that uses
 // either pristine_generated.c or rep_store_generated.c).
 extern aether_pristine_concat_binary_n(prefix: string, prefix_len: int, suf: string, suf_len: int) -> string
-extern aether_pristine_slice_binary(s: string, start: int, end: int) -> string
+extern aether_pristine_slice_binary_n(s: string, s_len: int, start: int, end: int) -> string
 
 // Path builder already lives in ae/fs_fs/reppath.ae.
 extern aether_rep_path(repo: string, sha: string) -> string
@@ -107,7 +107,7 @@ export rep_encoded_use_zlib(encoded: string) -> int {
 export rep_encoded_bytes(encoded: string) -> string {
     n = string.length(encoded)
     if n < 2 { return "" }
-    return aether_pristine_slice_binary(encoded, 2, n)
+    return aether_pristine_slice_binary_n(encoded, n, 2, n)
 }
 
 export rep_encoded_length(encoded: string) -> int {
@@ -146,7 +146,7 @@ export rep_read_decoded(repo: string, sha: string, uncompressed_size: int) -> st
 
     header = string.char_at(file, 0)
     payload_len = fsize - 1
-    payload = aether_pristine_slice_binary(file, 1, fsize)
+    payload = aether_pristine_slice_binary_n(file, fsize, 1, fsize)
 
     if header == 82 {          // 'R'
         return payload

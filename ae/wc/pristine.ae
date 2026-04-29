@@ -86,7 +86,7 @@ extern aether_io_is_regular_file(path: string) -> int
 // Byte-level C helpers — see bottom of pristine_shim.c for impls.
 extern aether_pristine_pack_le32(v: int) -> string
 extern aether_pristine_concat_binary_n(prefix: string, prefix_len: int, suf: string, suf_len: int) -> string
-extern aether_pristine_slice_binary(s: string, start: int, end: int) -> string
+extern aether_pristine_slice_binary_n(s: string, s_len: int, start: int, end: int) -> string
 
 // ---- hashing -------------------------------------------------------------
 
@@ -198,7 +198,7 @@ wc_pristine_get_impl(wc_root: string, sha: string) -> string {
     uncompressed = unpack_le32(file, 1)
 
     payload_len = fsize - 5
-    payload = aether_pristine_slice_binary(file, 5, fsize)
+    payload = aether_pristine_slice_binary_n(file, fsize, 5, fsize)
 
     if header == 82 {          // 'R'
         if payload_len != uncompressed { return "" }

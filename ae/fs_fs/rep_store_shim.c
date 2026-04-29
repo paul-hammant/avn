@@ -36,22 +36,13 @@ extern const char *aether_rep_read_decoded(const char *repo, const char *sha,
 #include "aether_string.h"
 
 /* aether_pristine_concat_binary_n moved to ae/subr/binbuf.ae in
- * Round 126 (std.bytes makes the binary-safe concat expressible in
- * Aether). The slice helper stayed C-side: its input auto-unwraps
- * at the .ae extern boundary to a raw char*, after which Aether
- * can't recover the true byte length (string.length / .substring
- * fall through to strlen). C trusts the caller's [start, end)
- * directly — no strlen, no truncation on binary buffers. */
-
-const char *
-aether_pristine_slice_binary(const char *s, int start, int end)
-{
-    const char *data = aether_string_data(s);
-    if (start < 0) start = 0;
-    if (end < start) end = start;
-    return (const char *)string_new_with_length(data + start, end - start);
-}
-
+ * Round 126 (std.bytes makes the binary-safe concat expressible
+ * in Aether). aether_pristine_slice_binary stayed C-side because
+ * the auto-unwrap from #297 made the .ae caller's `s` a raw
+ * char* with no recoverable length. Round 163 ports it Aether-side
+ * as aether_pristine_slice_binary_n(s, s_len, start, end) using
+ * std.string.substring_n (which arrived in Aether [current] —
+ * see std_remaining_gaps.md / string_substring_binary_NULs.md). */
 
 /* svnae_repo_primary_hash retired in Round 132 — was a TLS-buf
  * detour over aether_repo_primary_hash. The Aether body already
