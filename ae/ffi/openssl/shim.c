@@ -30,15 +30,12 @@
 extern const char *svnae_crypto_hash_hex(const char *algo, const char *data, int length);
 extern int         svnae_crypto_hash_supported(const char *algo);
 extern const char *svnae_crypto_b64_encode(const char *data, int length);
-extern const char *svnae_crypto_b64_decode_capture(const char *b64);
 
-/* TLS slot the Aether-side b64 decoder writes into so the second
- * accessor (length) can read back what the first accessor produced.
- * Same split-accessor shape std.fs.read_binary uses. */
-static __thread int s_b64_decode_len = 0;
-
-void svnae_crypto_b64_decode_set_len(int n) { s_b64_decode_len = n; }
-int  svnae_crypto_b64_decode_len(void) { return s_b64_decode_len; }
+/* svnae_crypto_b64_decode_set_len / _len retired in Round 159 —
+ * for_porter_claude.md confirmed `export -> (T1, T2, T3)` worked
+ * all along (Aether #285 in 0.99). The Aether-side
+ * svnae_crypto_b64_decode now returns (bytes, length, err) cleanly;
+ * the .ae caller in commit_parse.ae destructures it directly. */
 
 /* --- public API ------------------------------------------------------- */
 

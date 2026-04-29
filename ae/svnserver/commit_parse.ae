@@ -55,23 +55,16 @@ extern svnae_txn_delete(t: ptr, path: string) -> int
 extern svnae_txn_add_file(t: ptr, path: string, content: string, len: int) -> int
 extern svnae_txn_free(t: ptr)
 
-// b64-decode + txn_add_file. The crypto wrapper returns a length-
-// aware AetherString; companion TLS getter gives the byte count.
-// As of aether 0.98 (#297) AetherStrings auto-unwrap at C extern
-// boundaries declared `const char*`, so we call the canonical
-// svnae_txn_add_file directly — no _aether wrapper needed.
-extern svnae_crypto_b64_decode_capture(b64: string) -> string
-extern svnae_crypto_b64_decode_len() -> int
+// b64-decode + txn_add_file. svnae_crypto_b64_decode returns the
+// (bytes, length, err) triple cleanly via export-tuple-return —
+// Round 159 dropped the prior TLS-pair workaround. AetherStrings
+// auto-unwrap at C extern boundaries declared `const char*` (#297),
+// so we call svnae_txn_add_file directly.
+extern svnae_crypto_b64_decode(b64: string) -> (string, int, string)
 
 txn_add_b64_(txn: ptr, path: string, b64: string) -> int {
-    raw = svnae_crypto_b64_decode_capture(b64)
-    if string.length(raw) == 0 {
-        // Non-empty input that decoded to nothing is a parse failure;
-        // genuinely-empty input (length==0 b64) decodes successfully
-        // to 0 bytes.
-        if string.length(b64) > 0 { return 0 - 1 }
-    }
-    n = svnae_crypto_b64_decode_len()
+    raw, n, err = svnae_crypto_b64_decode(b64)
+    if string.length(err) > 0 { return 0 - 1 }
     return svnae_txn_add_file(txn, path, raw, n)
 }
 extern svnae_commit_finalise_with_acl(repo: string, txn: ptr,

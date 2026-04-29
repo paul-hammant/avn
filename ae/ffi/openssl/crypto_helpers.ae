@@ -64,22 +64,17 @@ export svnae_crypto_b64_encode(data: string, length: int) -> string {
     return out
 }
 
-// Base64-decode b64. The C caller reads bytes via this export and
-// then re-fetches the byte length via svnae_crypto_b64_decode_len.
-// We can't return a tuple from `export` (Aether's multi-return
-// codegen infers a scalar return type), so we keep a TLS pair:
-// this export captures both, _len returns the int slot.
-export svnae_crypto_b64_decode_capture(b64: string) -> string {
+// Base64-decode b64. Returns (bytes, length, err) — empty err on
+// success, non-empty on malformed input or openssl unavailable.
+// Round 159 dropped the TLS-pair workaround that used to thread
+// `n` through a static int slot via svnae_crypto_b64_decode_set_len
+// + _len; for_porter_claude.md confirmed `export -> (T1, T2, T3)`
+// has worked since #285 in 0.99 and we'd been mis-diagnosing it.
+export svnae_crypto_b64_decode(b64: string) -> (string, int, string) {
     out, n, err = cryptography.base64_decode(b64)
-    if string.length(err) > 0 {
-        svnae_crypto_b64_decode_set_len(0)
-        return ""
-    }
-    svnae_crypto_b64_decode_set_len(n)
-    return out
+    if string.length(err) > 0 { return "", 0, err }
+    return out, n, ""
 }
-
-extern svnae_crypto_b64_decode_set_len(n: int)
 
 main() {
     println("ae/ffi/openssl/crypto_helpers.ae is a library; not meant to run standalone")
