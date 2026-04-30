@@ -30,10 +30,6 @@ extern log_json(repo: string, lg: ptr, user: string, is_super: int) -> string
 extern error_response_json(msg: string) -> string
 
 export handler_log(req: ptr, res: ptr) {
-    handler_log_impl(req, res)
-}
-
-handler_log_impl(req: ptr, res: ptr) {
     path = http.request_path(req)
     name = parse_repo_name_in(path)
     if string.length(name) == 0 {
@@ -66,6 +62,7 @@ handler_log_impl(req: ptr, res: ptr) {
     http.response_set_status(res, 200)
     http.response_json(res, body)
 }
+
 
 // Delegate error-response emission to the C shim wrapper
 // (svnserver_respond_error in shim.c). Unique-named local wrapper

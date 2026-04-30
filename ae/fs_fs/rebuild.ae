@@ -244,10 +244,6 @@ reclist_sort(body: string) -> string {
 // after applying `txn`'s edits. Returns the new dir blob's sha (empty
 // string if nothing survived at all).
 export rebuild_dir(repo: string, base_dir_sha: string, prefix: string, txn: ptr) -> string {
-    return rebuild_dir_impl(repo, base_dir_sha, prefix, txn)
-}
-
-rebuild_dir_impl(repo: string, base_dir_sha: string, prefix: string, txn: ptr) -> string {
     // reclist body starts empty; we build up "K SHA NAME\n" lines.
     rl = ""
 
@@ -272,7 +268,7 @@ rebuild_dir_impl(repo: string, base_dir_sha: string, prefix: string, txn: ptr) -
             if keep == 1 {
                 if kind == 100 {                     // 'd'
                     if edits_touch_subtree(txn, full_path) == 1 {
-                        new_sub = rebuild_dir_impl(repo, sha, full_path, txn)
+                        new_sub = rebuild_dir(repo, sha, full_path, txn)
                         if string.length(new_sub) > 0 {
                             rl = reclist_add(rl, name, kind, new_sub)
                         }
@@ -344,7 +340,7 @@ rebuild_dir_impl(repo: string, base_dir_sha: string, prefix: string, txn: ptr) -
             subprefix = path_join_rel(prefix, dname)
             if edits_touch_subtree(txn, subprefix) == 1 {
                 cur_sha = reclist_dir_sha(rl, dname)
-                new_sub = rebuild_dir_impl(repo, cur_sha, subprefix, txn)
+                new_sub = rebuild_dir(repo, cur_sha, subprefix, txn)
                 if string.length(new_sub) > 0 {
                     rl = reclist_update_sha(rl, dname, new_sub)
                 }
@@ -357,6 +353,7 @@ rebuild_dir_impl(repo: string, base_dir_sha: string, prefix: string, txn: ptr) -
     sorted = reclist_sort(rl)
     return rep_write_blob(repo, sorted, string.length(sorted))
 }
+
 
 // Helper for the "empty base blob is legitimate" edge case. An empty
 // string returned from rep_read_blob could mean either "blob

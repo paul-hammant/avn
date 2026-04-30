@@ -37,10 +37,6 @@ extern info_json(repo: string, name: string, head: int, hash_algo: string) -> st
 
 // ACL-free route; no auth decoding needed beyond "did path parse".
 export handler_info(req: ptr, res: ptr) {
-    handler_info_impl(req, res)
-}
-
-handler_info_impl(req: ptr, res: ptr) {
     path = http.request_path(req)
 
     // Must be of the shape "/repos/{name}/info".
@@ -71,6 +67,7 @@ handler_info_impl(req: ptr, res: ptr) {
     http.response_set_status(res, 200)
     http.response_json(res, body)
 }
+
 
 // Error emitter is a C shim (svnserver_respond_error in shim.c);
 // Aether just calls through.

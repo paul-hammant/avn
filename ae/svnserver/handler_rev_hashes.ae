@@ -74,11 +74,6 @@ build_secondary_pairs_(repo: string, node_sha: string) -> string {
 
 export hashes_handle(req: ptr, res: ptr, repo: string, rev: int,
                      target: string, user: string, is_super: int) {
-    hashes_handle_impl(req, res, repo, rev, target, user, is_super)
-}
-
-hashes_handle_impl(req: ptr, res: ptr, repo: string, rev: int,
-                   target: string, user: string, is_super: int) {
     if is_super == 0 {
         if acl_allows_mode(repo, rev, user, target, 0) == 0 {
             svnserver_respond_error(res, 404, "not found")
@@ -102,6 +97,7 @@ hashes_handle_impl(req: ptr, res: ptr, repo: string, rev: int,
 
     svnserver_respond_json_ok(res, body)
 }
+
 
 main() {
     println("ae/svnserver/handler_rev_hashes.ae is a library; not meant to run standalone")

@@ -45,11 +45,6 @@ extern acl_allows_mode(repo: string, rev: int, user: string, target_path: string
 // unlikely to appear in JSON or the K SHA NAME\n format.
 export list_build(repo: string, rev: int, user: string, is_super: int,
                   dir_body: string, dir_path: string) -> string {
-    return list_build_impl(repo, rev, user, is_super, dir_body, dir_path)
-}
-
-list_build_impl(repo: string, rev: int, user: string, is_super: int,
-                dir_body: string, dir_path: string) -> string {
     body = "{\"entries\":["
     redact = ""
     any = 0
@@ -86,6 +81,7 @@ list_build_impl(repo: string, rev: int, user: string, is_super: int,
     out = string.concat(body, "\x01")
     return string.concat(out, redact)
 }
+
 
 main() {
     println("ae/svnserver/list_json.ae is a library; not meant to run standalone")

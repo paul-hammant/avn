@@ -88,11 +88,6 @@ map_wc_rel(target_path: string, p: string) -> string {
 
 export merge_apply_deletions(wc_root: string, target_path: string,
                              a_rt: ptr, b_rt: ptr, db: ptr) {
-    merge_apply_deletions_impl(wc_root, target_path, a_rt, b_rt, db)
-}
-
-merge_apply_deletions_impl(wc_root: string, target_path: string,
-                           a_rt: ptr, b_rt: ptr, db: ptr) {
     n_a = rtree_count(a_rt)
     i = 0
     while i < n_a {
@@ -120,6 +115,7 @@ merge_apply_deletions_impl(wc_root: string, target_path: string,
     }
 }
 
+
 // =========================================================================
 // pass 2: adds and mods from B.
 // =========================================================================
@@ -127,12 +123,6 @@ merge_apply_deletions_impl(wc_root: string, target_path: string,
 export merge_apply_adds_mods(wc_root: string, target_path: string,
                              rev_a: int, rev_b: int,
                              a_rt: ptr, b_rt: ptr, db: ptr) {
-    merge_apply_adds_mods_impl(wc_root, target_path, rev_a, rev_b, a_rt, b_rt, db)
-}
-
-merge_apply_adds_mods_impl(wc_root: string, target_path: string,
-                           rev_a: int, rev_b: int,
-                           a_rt: ptr, b_rt: ptr, db: ptr) {
     n_b = rtree_count(b_rt)
     i = 0
     while i < n_b {
@@ -217,6 +207,7 @@ merge_apply_adds_mods_impl(wc_root: string, target_path: string,
         i = i + 1
     }
 }
+
 
 main() {
     println("ae/wc/merge_apply.ae is a library; not meant to run standalone")

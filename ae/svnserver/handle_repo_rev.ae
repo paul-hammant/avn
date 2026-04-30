@@ -57,10 +57,6 @@ extern list_handle(req: ptr, res: ptr, repo: string, rev: int,
                            dir_path: string, user: string, is_super: int)
 
 export handle_repo_rev(req: ptr, res: ptr) {
-    handle_repo_rev_impl(req, res)
-}
-
-handle_repo_rev_impl(req: ptr, res: ptr) {
     path = http.request_path(req)
 
     name = parse_repo_name_in(path)
@@ -186,6 +182,7 @@ handle_repo_rev_impl(req: ptr, res: ptr) {
 
     svnserver_respond_error(res, 404, "not found")
 }
+
 
 main() {
     println("ae/svnserver/handle_repo_rev.ae is a library; not meant to run standalone")

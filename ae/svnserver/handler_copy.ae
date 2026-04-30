@@ -37,10 +37,6 @@ extern svnserver_respond_error(res: ptr, code: int, msg: string)
 extern svnserver_respond_json_ok(res: ptr, body: string)
 
 export handler_copy(req: ptr, res: ptr) {
-    handler_copy_impl(req, res)
-}
-
-handler_copy_impl(req: ptr, res: ptr) {
     path = http.request_path(req)
 
     name = parse_repo_name_in(path)
@@ -92,6 +88,7 @@ handler_copy_impl(req: ptr, res: ptr) {
 
     svnserver_respond_json_ok(res, rev_response_json(rv))
 }
+
 
 main() {
     println("ae/svnserver/handler_copy.ae is a library; not meant to run standalone")

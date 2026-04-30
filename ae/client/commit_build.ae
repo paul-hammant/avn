@@ -168,10 +168,6 @@ records_(packed: string) -> ptr {
 }
 
 export ra_commit_build_body(cb: ptr) -> string {
-    return ra_commit_build_body_impl(cb)
-}
-
-ra_commit_build_body_impl(cb: ptr) -> string {
     body = json_create_object()
     json.object_set(body, "base_rev", json.create_number(ra_cb_base_rev(cb)))
     json.object_set(body, "author", json_create_string(ra_cb_author(cb)))
@@ -298,6 +294,7 @@ ra_commit_build_body_impl(cb: ptr) -> string {
     json.free(body)
     return out
 }
+
 
 // Build the /copy POST body:
 //   { "base_rev": N, "from_path": "...", "to_path": "...",

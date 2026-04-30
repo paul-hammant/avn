@@ -42,10 +42,6 @@ extern rev_branch_response_json(rev: int, branch_name: string) -> string
 extern svnserver_respond_error(res: ptr, code: int, msg: string)
 
 export handler_branch_create(req: ptr, res: ptr) {
-    handler_branch_create_impl(req, res)
-}
-
-handler_branch_create_impl(req: ptr, res: ptr) {
     path = http.request_path(req)
 
     name = parse_repo_name_in(path)
@@ -115,6 +111,7 @@ handler_branch_create_impl(req: ptr, res: ptr) {
     http.response_set_status(res, 201)
     http.response_json(res, rev_branch_response_json(rv, branch_name))
 }
+
 
 main() {
     println("ae/svnserver/handler_branch_create.ae is a library; not meant to run standalone")

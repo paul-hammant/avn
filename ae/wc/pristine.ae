@@ -93,10 +93,6 @@ extern slice(s: string, s_len: int, start: int, end: int) -> string
 // Hash `data[0..length]` using the wc's configured algorithm. Returns
 // the hex digest, or "" on failure.
 export wc_hash_bytes(wc_root: string, data: string, length: int) -> string {
-    return wc_hash_bytes_impl(wc_root, data, length)
-}
-
-wc_hash_bytes_impl(wc_root: string, data: string, length: int) -> string {
     algo = wc_hash_algo(wc_root)
     if string.equals(algo, "sha256") == 1 {
         digest, err = cryptography.sha256_hex(data, length)
@@ -110,16 +106,14 @@ wc_hash_bytes_impl(wc_root: string, data: string, length: int) -> string {
     return digest
 }
 
+
 // Hash the contents of `path` on disk. "" on I/O or hash failure.
 export wc_hash_file(wc_root: string, path: string) -> string {
-    return wc_hash_file_impl(wc_root, path)
-}
-
-wc_hash_file_impl(wc_root: string, path: string) -> string {
     content, clen, err = fs.read_binary(path)
     if string.length(err) > 0 { return "" }
-    return wc_hash_bytes_impl(wc_root, content, clen)
+    return wc_hash_bytes(wc_root, content, clen)
 }
+
 
 // ---- pristine put --------------------------------------------------------
 
@@ -127,11 +121,7 @@ wc_hash_file_impl(wc_root: string, path: string) -> string {
 // hex string on success (or the existing sha if the blob is already
 // cached), "" on failure.
 export wc_pristine_put(wc_root: string, data: string, length: int) -> string {
-    return wc_pristine_put_impl(wc_root, data, length)
-}
-
-wc_pristine_put_impl(wc_root: string, data: string, length: int) -> string {
-    sha = wc_hash_bytes_impl(wc_root, data, length)
+    sha = wc_hash_bytes(wc_root, data, length)
     if string.length(sha) == 0 { return "" }
     sha = string.copy(sha)
 
@@ -179,16 +169,13 @@ wc_pristine_put_impl(wc_root: string, data: string, length: int) -> string {
     return sha
 }
 
+
 // ---- pristine get --------------------------------------------------------
 
 // Read the pristine blob for `sha`. Returns the bytes as an
 // AetherString (binary-safe via string_new_with_length). "" on miss
 // or corruption.
 export wc_pristine_get(wc_root: string, sha: string) -> string {
-    return wc_pristine_get_impl(wc_root, sha)
-}
-
-wc_pristine_get_impl(wc_root: string, sha: string) -> string {
     path = string.copy(pristine_path(wc_root, sha))
     file, fsize, err = fs.read_binary(path)
     if string.length(err) > 0 { return "" }
@@ -212,6 +199,7 @@ wc_pristine_get_impl(wc_root: string, sha: string) -> string {
     }
     return ""
 }
+
 
 // ---- has / size ---------------------------------------------------------
 

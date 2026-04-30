@@ -30,11 +30,6 @@ extern svnserver_respond_json_ok(res: ptr, body: string)
 
 export paths_handle(req: ptr, res: ptr, repo: string, rev: int,
                     user: string, is_super: int) {
-    paths_handle_impl(req, res, repo, rev, user, is_super)
-}
-
-paths_handle_impl(req: ptr, res: ptr, repo: string, rev: int,
-                  user: string, is_super: int) {
     paths = repos_paths_changed(repo, rev)
     if paths == null {
         svnserver_respond_error(res, 404, "no such rev")
@@ -44,6 +39,7 @@ paths_handle_impl(req: ptr, res: ptr, repo: string, rev: int,
     repos_paths_free(paths)
     svnserver_respond_json_ok(res, body)
 }
+
 
 main() {
     println("ae/svnserver/handler_rev_paths.ae is a library; not meant to run standalone")

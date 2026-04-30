@@ -35,10 +35,6 @@ const SQLITE_ROW = 100
 // default of 0. Returns 0 on success, non-zero on any sqlite
 // failure along the way (caller closes the handle and bails).
 export wc_db_install_schema(db: ptr) -> int {
-    return wc_db_install_schema_impl(db)
-}
-
-wc_db_install_schema_impl(db: ptr) -> int {
     err = sqlite.exec(db,
         "CREATE TABLE IF NOT EXISTS nodes (  path       TEXT PRIMARY KEY,  kind       INT NOT NULL,  base_rev   INT NOT NULL,  base_sha1  TEXT NOT NULL,  state      INT NOT NULL,  conflicted INT NOT NULL DEFAULT 0);CREATE TABLE IF NOT EXISTS info (  key   TEXT PRIMARY KEY,  value TEXT NOT NULL);")
     if string.length(err) > 0 { return 1 }
@@ -63,6 +59,7 @@ wc_db_install_schema_impl(db: ptr) -> int {
     }
     return 0
 }
+
 
 main() {
     println("ae/wc/db_schema.ae is a library; not meant to run standalone")

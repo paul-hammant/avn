@@ -35,10 +35,6 @@ extern paths_index_ancestor_nearest(body: string, target: string) -> string
 extern acl_response_json(rules_body: string, effective_from: string) -> string
 
 export acl_resolve_json(repo: string, rev: int, target: string) -> string {
-    return acl_resolve_json_impl(repo, rev, target)
-}
-
-acl_resolve_json_impl(repo: string, rev: int, target: string) -> string {
     acl_root = load_rev_blob_field(repo, rev, "acl")
     if string.length(acl_root) == 0 {
         return "{\"rules\":[],\"effective_from\":\"\"}"
@@ -75,6 +71,7 @@ acl_resolve_json_impl(repo: string, rev: int, target: string) -> string {
     return body
 }
 
+
 // /rev/N/props/<path> lookup. Returns "<per-path-sha>\x01<json body>"
 // on success, "\x01{}" when no props for target. The C caller splits
 // on \x01, sets the Merkle header from the sha half, and emits the
@@ -84,10 +81,6 @@ extern paths_index_lookup(body: string, path: string) -> string
 extern props_blob_to_json(body: string) -> string
 
 export props_resolve(repo: string, rev: int, target: string) -> string {
-    return props_resolve_impl(repo, rev, target)
-}
-
-props_resolve_impl(repo: string, rev: int, target: string) -> string {
     props_sha = load_rev_blob_field(repo, rev, "props")
     if string.length(props_sha) == 0 { return "\x01{}" }
 
@@ -110,6 +103,7 @@ props_resolve_impl(repo: string, rev: int, target: string) -> string {
     out = string.concat(per_path_sha, "\x01")
     return string.concat(out, json)
 }
+
 
 main() {
     println("ae/svnserver/acl_resolve.ae is a library; not meant to run standalone")

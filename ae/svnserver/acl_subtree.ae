@@ -33,11 +33,6 @@ extern repos_list_free(L: ptr)
 
 export acl_user_has_rw_subtree(repo: string, rev: int, user: string,
                                 path: string) -> int {
-    return acl_user_has_rw_subtree_impl(repo, rev, user, path)
-}
-
-acl_user_has_rw_subtree_impl(repo: string, rev: int, user: string,
-                              path: string) -> int {
     if acl_allows_mode(repo, rev, user, path, 0) == 0 { return 0 }
     if acl_allows_mode(repo, rev, user, path, 1) == 0 { return 0 }
 
@@ -68,7 +63,7 @@ acl_user_has_rw_subtree_impl(repo: string, rev: int, user: string,
             if string.length(path) == 0 {
                 child = name
             }
-            if acl_user_has_rw_subtree_impl(repo, rev, user, child) == 0 {
+            if acl_user_has_rw_subtree(repo, rev, user, child) == 0 {
                 ok = 0
             }
         }
@@ -77,6 +72,7 @@ acl_user_has_rw_subtree_impl(repo: string, rev: int, user: string,
     repos_list_free(L)
     return ok
 }
+
 
 main() {
     println("ae/svnserver/acl_subtree.ae is a library; not meant to run standalone")

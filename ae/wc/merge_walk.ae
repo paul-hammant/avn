@@ -44,13 +44,6 @@ export merge_walk_remote(wc_root: string,
                           base_url: string, repo: string, rev: int,
                           source_path: string, sub_prefix: string,
                           rt: ptr) -> int {
-    return merge_walk_remote_impl(wc_root, base_url, repo, rev, source_path, sub_prefix, rt)
-}
-
-merge_walk_remote_impl(wc_root: string,
-                        base_url: string, repo: string, rev: int,
-                        source_path: string, sub_prefix: string,
-                        rt: ptr) -> int {
     full = path_join_rel(source_path, sub_prefix)
     full = string.copy(full)
 
@@ -71,7 +64,7 @@ merge_walk_remote_impl(wc_root: string,
 
             if string.equals(kind, "dir") == 1 {
                 rtree_add_dir(rt, rel)
-                if merge_walk_remote_impl(wc_root, base_url, repo, rev,
+                if merge_walk_remote(wc_root, base_url, repo, rev,
                                            source_path, rel, rt) != 0 {
                     result = -1
                 }
@@ -94,6 +87,7 @@ merge_walk_remote_impl(wc_root: string,
     ra_list_free(L)
     return result
 }
+
 
 main() {
     println("ae/wc/merge_walk.ae is a library; not meant to run standalone")

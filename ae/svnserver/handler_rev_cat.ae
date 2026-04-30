@@ -39,11 +39,6 @@ extern svnserver_respond_error(res: ptr, code: int, msg: string)
 // emitted. The C handler just returns after us.
 export cat_handle(req: ptr, res: ptr, repo: string, rev: int,
                   file_path: string, user: string, is_super: int) -> int {
-    return cat_handle_impl(req, res, repo, rev, file_path, user, is_super)
-}
-
-cat_handle_impl(req: ptr, res: ptr, repo: string, rev: int,
-                file_path: string, user: string, is_super: int) -> int {
     if string.length(file_path) == 0 {
         svnserver_respond_error(res, 400, "cat requires a path")
         return 1
@@ -81,6 +76,7 @@ cat_handle_impl(req: ptr, res: ptr, repo: string, rev: int,
     rep_free(data)
     return 0
 }
+
 
 main() {
     println("ae/svnserver/handler_rev_cat.ae is a library; not meant to run standalone")

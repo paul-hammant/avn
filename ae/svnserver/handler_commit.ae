@@ -42,10 +42,6 @@ extern svnserver_respond_error(res: ptr, code: int, msg: string)
 extern svnserver_respond_json_ok(res: ptr, body: string)
 
 export handler_commit(req: ptr, res: ptr) {
-    handler_commit_impl(req, res)
-}
-
-handler_commit_impl(req: ptr, res: ptr) {
     path = http.request_path(req)
 
     name = parse_repo_name_in(path)
@@ -113,6 +109,7 @@ handler_commit_impl(req: ptr, res: ptr) {
 
     svnserver_respond_json_ok(res, rev_response_json(rv))
 }
+
 
 main() {
     println("ae/svnserver/handler_commit.ae is a library; not meant to run standalone")

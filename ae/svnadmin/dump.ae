@@ -121,7 +121,10 @@ export algos_token(spec: string, target: int) -> string {
 // follows. Returns 0 on mismatch.
 
 // Internal: does `line` start with `prefix` + space?
-line_starts_with_tag_impl(line: string, prefix: string) -> int {
+
+// Does `line` start with `prefix` followed by a single space? Returns
+// 1 / 0. `prefix` must not itself contain a space.
+export line_starts_with_tag(line: string, prefix: string) -> int {
     ln = string.length(line)
     pn = string.length(prefix)
     if ln < pn + 1 { return 0 }
@@ -134,12 +137,6 @@ line_starts_with_tag_impl(line: string, prefix: string) -> int {
     return 1
 }
 
-// Does `line` start with `prefix` followed by a single space? Returns
-// 1 / 0. `prefix` must not itself contain a space.
-export line_starts_with_tag(line: string, prefix: string) -> int {
-    return line_starts_with_tag_impl(line, prefix)
-}
-
 // Parse the integer argument of a tagged line: "<PREFIX> <int>". Returns
 // the int on success. Returns sentinel `fallback` when the line doesn't
 // match or the argument isn't a decimal integer. Callers pass a distinct
@@ -147,7 +144,7 @@ export line_starts_with_tag(line: string, prefix: string) -> int {
 // distinction (unusual — most callers treat any failure as a protocol
 // error and abort).
 export parse_tagged_int(line: string, prefix: string, fallback: int) -> int {
-    if line_starts_with_tag_impl(line, prefix) == 0 { return fallback }
+    if line_starts_with_tag(line, prefix) == 0 { return fallback }
     pn = string.length(prefix)
     ln = string.length(line)
     // Skip prefix + space.
@@ -181,7 +178,7 @@ export parse_tagged_int(line: string, prefix: string, fallback: int) -> int {
 // has no trailing whitespace in the dump format). Returns "" on
 // mismatch.
 export tagged_rest(line: string, prefix: string) -> string {
-    if line_starts_with_tag_impl(line, prefix) == 0 { return "" }
+    if line_starts_with_tag(line, prefix) == 0 { return "" }
     pn = string.length(prefix)
     ln = string.length(line)
     i = pn + 1

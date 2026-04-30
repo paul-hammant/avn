@@ -99,12 +99,6 @@ update_stderr_(s: string) {
 export update_apply_pass_a(wc_root: string, base_url: string, repo: string,
                            target_rev: int, rt: ptr, nodelist: ptr,
                            db: ptr) -> int {
-    return update_apply_pass_a_impl(wc_root, base_url, repo,
-                                    target_rev, rt, nodelist, db)
-}
-
-update_apply_pass_a_impl(wc_root: string, base_url: string, repo: string,
-                         target_rev: int, rt: ptr, nodelist: ptr, db: ptr) -> int {
     had_conflict = 0
     n_local = wc_nodelist_count(nodelist)
     i = 0
@@ -216,6 +210,7 @@ update_apply_pass_a_impl(wc_root: string, base_url: string, repo: string,
     return had_conflict
 }
 
+
 // =========================================================================
 // Pass B — remote paths not in local get added.
 // =========================================================================
@@ -223,11 +218,6 @@ update_apply_pass_a_impl(wc_root: string, base_url: string, repo: string,
 export update_apply_pass_b(wc_root: string, base_url: string, repo: string,
                            target_rev: int, rt: ptr, nodelist: ptr,
                            db: ptr) {
-    update_apply_pass_b_impl(wc_root, base_url, repo, target_rev, rt, nodelist, db)
-}
-
-update_apply_pass_b_impl(wc_root: string, base_url: string, repo: string,
-                         target_rev: int, rt: ptr, nodelist: ptr, db: ptr) {
     nr = rtree_count(rt)
     n_local = wc_nodelist_count(nodelist)
     i = 0
@@ -271,6 +261,7 @@ update_apply_pass_b_impl(wc_root: string, base_url: string, repo: string,
         i = i + 1
     }
 }
+
 
 main() {
     println("ae/wc/update_apply.ae is a library; not meant to run standalone")

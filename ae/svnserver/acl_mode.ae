@@ -32,11 +32,6 @@ extern acl_decide(body: string, user: string, want_write: int) -> int
 
 export acl_allows_mode(repo: string, rev: int, user: string,
                         target_path: string, want_write: int) -> int {
-    return acl_allows_mode_impl(repo, rev, user, target_path, want_write)
-}
-
-acl_allows_mode_impl(repo: string, rev: int, user: string,
-                      target_path: string, want_write: int) -> int {
     acl_root = load_rev_blob_field(repo, rev, "acl")
     if string.length(acl_root) == 0 { return 1 }
 
@@ -80,6 +75,7 @@ acl_allows_mode_impl(repo: string, rev: int, user: string,
     rep_free(paths_body)
     return result
 }
+
 
 main() {
     println("ae/svnserver/acl_mode.ae is a library; not meant to run standalone")

@@ -45,10 +45,6 @@ extern io_exists(path: string) -> int
 extern path_join_rel(prefix: string, name: string) -> string
 
 export info_json(repo: string, name: string, head: int, hash_algo: string) -> string {
-    return info_json_impl(repo, name, head, hash_algo)
-}
-
-info_json_impl(repo: string, name: string, head: int, hash_algo: string) -> string {
     branches_dir = path_join_rel(repo, "branches")
     out = info_prelude_json(head, name, hash_algo)
 
@@ -120,6 +116,7 @@ info_json_impl(repo: string, name: string, head: int, hash_algo: string) -> stri
     out = string.concat(out, "}")
     return out
 }
+
 
 main() {
     println("ae/svnserver/info_json.ae is a library; not meant to run standalone")

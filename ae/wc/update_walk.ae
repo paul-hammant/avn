@@ -43,12 +43,6 @@ extern rtree_add_file(rt: ptr, path: string, data: string, data_len: int,
 export update_walk_remote(wc_root: string,
                            base_url: string, repo: string, rev: int,
                            prefix: string, rt: ptr) -> int {
-    return update_walk_remote_impl(wc_root, base_url, repo, rev, prefix, rt)
-}
-
-update_walk_remote_impl(wc_root: string,
-                         base_url: string, repo: string, rev: int,
-                         prefix: string, rt: ptr) -> int {
     L = ra_list(base_url, repo, rev, prefix)
     if L == null { return -1 }
 
@@ -66,7 +60,7 @@ update_walk_remote_impl(wc_root: string,
 
             if string.equals(kind, "dir") == 1 {
                 rtree_add_dir(rt, rel)
-                if update_walk_remote_impl(wc_root, base_url, repo, rev, rel, rt) != 0 {
+                if update_walk_remote(wc_root, base_url, repo, rev, rel, rt) != 0 {
                     result = -1
                 }
             }
@@ -86,6 +80,7 @@ update_walk_remote_impl(wc_root: string,
     ra_list_free(L)
     return result
 }
+
 
 main() {
     println("ae/wc/update_walk.ae is a library; not meant to run standalone")

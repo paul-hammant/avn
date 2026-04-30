@@ -46,10 +46,6 @@ extern log_entry_json(rev: int, author: string, date: string,
                              msg: string) -> string
 
 export log_json(repo: string, lg: ptr, user: string, is_super: int) -> string {
-    return log_json_impl(repo, lg, user, is_super)
-}
-
-log_json_impl(repo: string, lg: ptr, user: string, is_super: int) -> string {
     out = "{\"entries\":["
     n = repos_log_count(lg)
     any = 0
@@ -94,6 +90,7 @@ log_json_impl(repo: string, lg: ptr, user: string, is_super: int) -> string {
     return string.concat(out, "]}")
 }
 
+
 // /rev/N/paths response body. ACL-filter the list of (action, path)
 // entries; super-user sees everything.
 extern repos_paths_action(p: ptr, i: int) -> string
@@ -101,11 +98,6 @@ extern path_change_entry_json(action: string, path: string) -> string
 
 export paths_changed_json(repo: string, rev: int, paths: ptr,
                           user: string, is_super: int) -> string {
-    return paths_changed_json_impl(repo, rev, paths, user, is_super)
-}
-
-paths_changed_json_impl(repo: string, rev: int, paths: ptr,
-                        user: string, is_super: int) -> string {
     out = "{\"entries\":["
     n = repos_paths_count(paths)
     any = 0
@@ -129,6 +121,7 @@ paths_changed_json_impl(repo: string, rev: int, paths: ptr,
     return string.concat(out, "]}")
 }
 
+
 // /rev/N/blame/<path> response body. Straight iteration, no filter —
 // ACL already checked at the path level by the caller.
 extern blame_count(b: ptr) -> int
@@ -138,10 +131,6 @@ extern blame_text(b: ptr, i: int) -> string
 extern blame_entry_json(rev: int, author: string, text: string) -> string
 
 export blame_json(blame: ptr) -> string {
-    return blame_json_impl(blame)
-}
-
-blame_json_impl(blame: ptr) -> string {
     out = "{\"lines\":["
     n = blame_count(blame)
     i = 0
@@ -156,6 +145,7 @@ blame_json_impl(blame: ptr) -> string {
     return string.concat(out, "]}")
 }
 
+
 // /rev/N/hashes response body. Assembles the prelude from
 // (primary algo, primary sha) plus the secondary entries by walking
 // a newline-separated "algo1 sha1\nalgo2 sha2\n..." string the C
@@ -164,10 +154,6 @@ extern hashes_prelude_json(algo: string, primary_hash: string) -> string
 extern secondary_entry_json(algo: string, hash: string) -> string
 
 export hashes_json(algo: string, primary_sha: string, secondary_pairs: string) -> string {
-    return hashes_json_impl(algo, primary_sha, secondary_pairs)
-}
-
-hashes_json_impl(algo: string, primary_sha: string, secondary_pairs: string) -> string {
     out = hashes_prelude_json(algo, primary_sha)
     n = string.length(secondary_pairs)
     any = 0
@@ -199,6 +185,7 @@ hashes_json_impl(algo: string, primary_sha: string, secondary_pairs: string) -> 
     }
     return string.concat(out, "]}")
 }
+
 
 main() {
     println("ae/svnserver/log_json.ae is a library; not meant to run standalone")

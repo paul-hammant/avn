@@ -34,12 +34,6 @@ extern svnserver_respond_error(res: ptr, code: int, msg: string)
 
 export based_on_check(req: ptr, res: ptr, repo: string, head_rev: int,
                       path: string, allow_missing_as_create: int) -> int {
-    return based_on_check_impl(req, res, repo, head_rev, path,
-                                allow_missing_as_create)
-}
-
-based_on_check_impl(req: ptr, res: ptr, repo: string, head_rev: int,
-                     path: string, allow_missing_as_create: int) -> int {
     based_on = svnserver_request_header(req, "Svn-Based-On")
 
     // repos_resolve_kind returns 0 on miss, else the kind byte.
@@ -81,6 +75,7 @@ based_on_check_impl(req: ptr, res: ptr, repo: string, head_rev: int,
     }
     return 1
 }
+
 
 main() {
     println("ae/svnserver/based_on_check.ae is a library; not meant to run standalone")

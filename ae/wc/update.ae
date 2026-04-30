@@ -75,10 +75,6 @@ extern update_apply_pass_b(wc_root: string, base_url: string,
 // success, -1 on error. Conflicts mark the conflicted flag on
 // affected nodes — callers check status to see what needs resolving.
 export wc_update(wc_root: string, target_rev: int) -> int {
-    return wc_update_impl(wc_root, target_rev)
-}
-
-wc_update_impl(wc_root: string, target_rev: int) -> int {
     db = wc_db_open(wc_root)
     if db == null { return 0 - 1 }
 
@@ -130,6 +126,7 @@ wc_update_impl(wc_root: string, target_rev: int) -> int {
     return target_rev
 }
 
+
 // svn switch: relocate the WC to a different branch (or repo) at
 // target_rev. Rewrite the url/base_url/repo info rows then call
 // wc_update — the update algorithm is exactly what switch
@@ -146,7 +143,7 @@ export wc_switch(wc_root: string,
     wc_db_set_info(db, "repo",     new_repo)
     wc_db_close(db)
 
-    return wc_update_impl(wc_root, target_rev)
+    return wc_update(wc_root, target_rev)
 }
 
 main() {

@@ -43,10 +43,6 @@ extern svnserver_respond_binary_ok(res: ptr, data: string, length: int,
 extern svnserver_set_merkle_headers(res: ptr, algo: string, kind: string, sha: string)
 
 export handler_path_get(req: ptr, res: ptr) {
-    handler_path_get_impl(req, res)
-}
-
-handler_path_get_impl(req: ptr, res: ptr) {
     path = http.request_path(req)
 
     name = parse_repo_name_in(path)
@@ -113,6 +109,7 @@ handler_path_get_impl(req: ptr, res: ptr) {
                                 "application/octet-stream")
     rep_free(data)
 }
+
 
 main() {
     println("ae/svnserver/handler_path_get.ae is a library; not meant to run standalone")

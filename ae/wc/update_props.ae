@@ -44,11 +44,6 @@ extern wc_propdel(wc_root: string, path: string, name: string) -> int
 
 export ingest_props(base_url: string, repo: string, rev: int,
                      wc_root: string, rel: string) {
-    ingest_props_impl(base_url, repo, rev, wc_root, rel)
-}
-
-ingest_props_impl(base_url: string, repo: string, rev: int,
-                   wc_root: string, rel: string) {
     P = ra_get_props(base_url, repo, rev, rel)
     rn = 0
     if P != null { rn = ra_props_count(P) }
@@ -93,6 +88,7 @@ ingest_props_impl(base_url: string, repo: string, rev: int,
 
     if P != null { ra_props_free(P) }
 }
+
 
 main() {
     println("ae/wc/update_props.ae is a library; not meant to run standalone")

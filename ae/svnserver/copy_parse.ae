@@ -54,10 +54,6 @@ extern commit_finalise_with_acl(repo: string, txn: ptr,
                                        props_sha: string, acl_sha: string) -> int
 
 export copy_from_body(req: ptr, repo: string) -> int {
-    return copy_from_body_impl(req, repo)
-}
-
-copy_from_body_impl(req: ptr, repo: string) -> int {
     body = http.request_body(req)
     body_len = http.request_body_length(req)
     if body_len == 0 { return -1 }
@@ -148,6 +144,7 @@ copy_from_body_impl(req: ptr, repo: string) -> int {
     if new_rev < 0 { return -7 }
     return new_rev
 }
+
 
 main() {
     println("ae/svnserver/copy_parse.ae is a library; not meant to run standalone")

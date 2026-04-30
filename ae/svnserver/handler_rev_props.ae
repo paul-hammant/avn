@@ -34,11 +34,6 @@ extern svnserver_respond_json_ok(res: ptr, body: string)
 
 export props_handle(req: ptr, res: ptr, repo: string, rev: int,
                     target: string, user: string, is_super: int) {
-    props_handle_impl(req, res, repo, rev, target, user, is_super)
-}
-
-props_handle_impl(req: ptr, res: ptr, repo: string, rev: int,
-                  target: string, user: string, is_super: int) {
     if is_super == 0 {
         if acl_allows_mode(repo, rev, user, target, 0) == 0 {
             svnserver_respond_json_ok(res, "{}")
@@ -69,6 +64,7 @@ props_handle_impl(req: ptr, res: ptr, repo: string, rev: int,
     }
     svnserver_respond_json_ok(res, "{}")
 }
+
 
 main() {
     println("ae/svnserver/handler_rev_props.ae is a library; not meant to run standalone")

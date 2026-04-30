@@ -47,10 +47,6 @@ extern rev_sha_response_json(rev: int, sha: string) -> string
 extern svnserver_respond_error(res: ptr, code: int, msg: string)
 
 export handler_path_put(req: ptr, res: ptr) {
-    handler_path_put_impl(req, res)
-}
-
-handler_path_put_impl(req: ptr, res: ptr) {
     path = http.request_path(req)
 
     name = parse_repo_name_in(path)
@@ -137,6 +133,7 @@ handler_path_put_impl(req: ptr, res: ptr) {
     http.response_set_status(res, 201)
     http.response_json(res, rev_sha_response_json(new_rev, new_sha))
 }
+
 
 main() {
     println("ae/svnserver/handler_path_put.ae is a library; not meant to run standalone")

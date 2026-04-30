@@ -47,10 +47,6 @@ extern svnserver_respond_error(res: ptr, code: int, msg: string)
 extern svnserver_respond_json_ok(res: ptr, body: string)
 
 export handler_path_delete(req: ptr, res: ptr) {
-    handler_path_delete_impl(req, res)
-}
-
-handler_path_delete_impl(req: ptr, res: ptr) {
     path = http.request_path(req)
 
     name = parse_repo_name_in(path)
@@ -133,6 +129,7 @@ handler_path_delete_impl(req: ptr, res: ptr) {
 
     svnserver_respond_json_ok(res, rev_response_json(new_rev))
 }
+
 
 main() {
     println("ae/svnserver/handler_path_delete.ae is a library; not meant to run standalone")

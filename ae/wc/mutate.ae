@@ -71,10 +71,6 @@ extern io_write_atomic(path: string, data: string, length: int) -> int
 // Return 0 on success, -1 if path already tracked, -2 if not on disk,
 // -3 on db error.
 export wc_add(wc_root: string, rel_path: string) -> int {
-    return wc_add_impl(wc_root, rel_path)
-}
-
-wc_add_impl(wc_root: string, rel_path: string) -> int {
     disk = "${wc_root}/${rel_path}"
     skind = io_stat_kind(disk)
     if skind == 0 { return 0 - 2 }
@@ -99,12 +95,9 @@ wc_add_impl(wc_root: string, rel_path: string) -> int {
     return 0 - 3
 }
 
+
 // Return 0 on success, -1 if not tracked, -2 on db error.
 export wc_rm(wc_root: string, rel_path: string) -> int {
-    return wc_rm_impl(wc_root, rel_path)
-}
-
-wc_rm_impl(wc_root: string, rel_path: string) -> int {
     db = wc_db_open(wc_root)
     if db == null { return 0 - 2 }
 
@@ -145,6 +138,7 @@ wc_rm_impl(wc_root: string, rel_path: string) -> int {
     return 0
 }
 
+
 // Binary-safe file copy via std.fs.read_binary + write_atomic.
 // Returns 0 on success, -1 on any failure.
 copy_file_(src: string, dst: string) -> int {
@@ -158,10 +152,6 @@ copy_file_(src: string, dst: string) -> int {
 // Return: 0 ok, -1 src not tracked, -2 dst already exists,
 //         -3 src not on disk, -4 other error.
 export wc_cp(wc_root: string, src: string, dst: string) -> int {
-    return wc_cp_impl(wc_root, src, dst)
-}
-
-wc_cp_impl(wc_root: string, src: string, dst: string) -> int {
     db = wc_db_open(wc_root)
     if db == null { return 0 - 4 }
 
@@ -209,12 +199,13 @@ wc_cp_impl(wc_root: string, src: string, dst: string) -> int {
     return 0 - 4
 }
 
+
 // mv = cp + rm. Phase 5.9 best-effort: a failed rm leaves a half-
 // finished state (dst copy with src still tracked).
 export wc_mv(wc_root: string, src: string, dst: string) -> int {
-    rc = wc_cp_impl(wc_root, src, dst)
+    rc = wc_cp(wc_root, src, dst)
     if rc != 0 { return rc }
-    rc = wc_rm_impl(wc_root, src)
+    rc = wc_rm(wc_root, src)
     if rc != 0 { return 0 - 4 }
     return 0
 }
