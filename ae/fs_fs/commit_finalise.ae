@@ -200,41 +200,22 @@ finalise_on_branch_(repo: string, txn: ptr,
     return next
 }
 
-// Branch-aware commit finalise. For every commit:
+// Commit finalise — single entry point. For every commit:
 //   - rev blob gets a `branch:` field identifying the branch advanced
 //   - legacy $repo/revs/NNNNNN and $repo/head pointers still written
 //   - new per-branch layout written too
 //   - path_rev index gets one row per touched path
 //
+// `branch` is typically "main"; pass another name for branch-aware
+// commits. `props_sha1` / `acl_sha1` are "" when the commit doesn't
+// touch props / ACLs.
+//
 // Returns the new rev number on success, -1 on failure.
-export commit_finalise_on_branch(repo: string, txn: ptr,
-                                        branch: string,
-                                        author: string, logmsg: string,
-                                        props_sha1: string, acl_sha1: string) -> int {
+export commit_finalise(repo: string, txn: ptr, branch: string,
+                       author: string, logmsg: string,
+                       props_sha1: string, acl_sha1: string) -> int {
     return finalise_on_branch_(repo, txn, branch, author, logmsg,
                                 props_sha1, acl_sha1)
-}
-
-// Wrappers for legacy entry points. Each one fills in defaults for
-// the trailing arguments and forwards to the on-branch core.
-
-export commit_finalise_with_acl(repo: string, txn: ptr,
-                                       author: string, logmsg: string,
-                                       props_sha1: string, acl_sha1: string) -> int {
-    return finalise_on_branch_(repo, txn, "main", author, logmsg,
-                                props_sha1, acl_sha1)
-}
-
-export commit_finalise_with_props(repo: string, txn: ptr,
-                                         author: string, logmsg: string,
-                                         props_sha1: string) -> int {
-    return finalise_on_branch_(repo, txn, "main", author, logmsg,
-                                props_sha1, "")
-}
-
-export commit_finalise(repo: string, txn: ptr,
-                              author: string, logmsg: string) -> int {
-    return finalise_on_branch_(repo, txn, "main", author, logmsg, "", "")
 }
 
 // Branch create: build a filtered copy of an existing branch's tree

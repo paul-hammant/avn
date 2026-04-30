@@ -164,7 +164,7 @@ export branch_head_rev(repo: string, base: string) -> int {
 //   $repo/head                                      (legacy: "<N>\n")
 //   $repo/branches/<branch>/head                    (per-branch: "rev=<N>\n")
 //
-// Both commit_finalise_on_branch and branch_create in
+// Both commit_finalise and branch_create in
 // fs_fs/commit_shim.c had essentially the same block inlined — with a
 // real latent bug in branch_create's copy: it hard-coded the
 // per-branch pointer's aa/bb directory to "00/00" instead of deriving

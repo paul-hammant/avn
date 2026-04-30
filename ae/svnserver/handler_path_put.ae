@@ -38,8 +38,9 @@ extern based_on_check(req: ptr, res: ptr, repo: string, head_rev: int, path: str
 extern txn_new(base_rev: int) -> ptr
 extern txn_add_file(txn: ptr, path: string, content: string, len: int) -> int
 extern txn_free(t: ptr)
-extern commit_finalise(repo: string, txn: ptr,
-                              author: string, log_msg: string) -> int
+extern commit_finalise(repo: string, txn: ptr, branch: string,
+                       author: string, log_msg: string,
+                       props_sha: string, acl_sha: string) -> int
 
 extern repos_resolve_sha(repo: string, rev: int, path: string) -> string
 extern rev_sha_response_json(rev: int, sha: string) -> string
@@ -122,7 +123,7 @@ export handler_path_put(req: ptr, res: ptr) {
         hdr_log = string.concat("PUT /", file_path)
     }
 
-    new_rev = commit_finalise(repo, txn, hdr_author, hdr_log)
+    new_rev = commit_finalise(repo, txn, "main", hdr_author, hdr_log, "", "")
     txn_free(txn)
     if new_rev < 0 {
         svnserver_respond_error(res, 500, "commit failed")

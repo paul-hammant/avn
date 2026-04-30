@@ -49,9 +49,9 @@ extern auto_follow_copy_acl(repo: string, base_rev: int,
 extern txn_new(base_rev: int) -> ptr
 extern txn_copy(t: ptr, path: string, from_sha1: string, from_kind: int) -> int
 extern txn_free(t: ptr)
-extern commit_finalise_with_acl(repo: string, txn: ptr,
-                                       author: string, log_msg: string,
-                                       props_sha: string, acl_sha: string) -> int
+extern commit_finalise(repo: string, txn: ptr, branch: string,
+                              author: string, log_msg: string,
+                              props_sha: string, acl_sha: string) -> int
 
 export copy_from_body(req: ptr, repo: string) -> int {
     body = http.request_body(req)
@@ -137,8 +137,8 @@ export copy_from_body(req: ptr, repo: string) -> int {
 
     txn = txn_new(base_rev)
     txn_copy(txn, to_path, from_sha, from_kind_int)
-    new_rev = commit_finalise_with_acl(repo, txn, author, logmsg,
-                                              "", new_acl_sha)
+    new_rev = commit_finalise(repo, txn, "main", author, logmsg,
+                                     "", new_acl_sha)
     txn_free(txn)
 
     if new_rev < 0 { return -7 }

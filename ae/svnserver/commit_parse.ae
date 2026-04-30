@@ -66,9 +66,9 @@ txn_add_b64_(txn: ptr, path: string, b64: string) -> int {
     if string.length(err) > 0 { return 0 - 1 }
     return txn_add_file(txn, path, raw, n)
 }
-extern commit_finalise_with_acl(repo: string, txn: ptr,
-                                       author: string, log_msg: string,
-                                       props_sha: string, acl_sha: string) -> int
+extern commit_finalise(repo: string, txn: ptr, branch: string,
+                              author: string, log_msg: string,
+                              props_sha: string, acl_sha: string) -> int
 
 // Blob builders. These produce "key=value\n" / "+user\n" /
 // "<sha> <path>\n" bodies directly from the "\n"-joined parallel
@@ -336,8 +336,8 @@ export commit_from_body(req: ptr, res: ptr, repo: string) -> int {
 
     json.free(root)
 
-    new_rev = commit_finalise_with_acl(repo, txn, author, logmsg,
-                                              use_props_sha, use_acl_sha)
+    new_rev = commit_finalise(repo, txn, "main", author, logmsg,
+                                     use_props_sha, use_acl_sha)
     txn_free(txn)
 
     if new_rev < 0 { return -11 }
