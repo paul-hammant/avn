@@ -29,8 +29,7 @@ import std.io
 extern aether_args_count() -> int
 extern aether_args_get(index: int) -> string
 
-extern svnadmin_create(repo: string) -> int
-extern svnadmin_create_with_algos(repo: string, algos_spec: string) -> int
+extern svnadmin_create(repo: string, algos_spec: string) -> int
 extern svnadmin_dump  (repo: string, out_fd: int) -> int
 extern svnadmin_load  (repo: string, in_fd: int) -> int
 
@@ -75,18 +74,13 @@ cmd_create(argv_start: int) {
         return 2
     }
     algos = find_flag("--algos", argv_start)
-    rc = 0
-    if string.length(algos) > 0 {
-        rc = svnadmin_create_with_algos(path, algos)
-        if rc != 0 {
-            println("svnadmin create: unsupported or invalid --algos '${algos}'")
-            return 1
-        }
-    } else {
-        rc = svnadmin_create(path)
-    }
+    rc = svnadmin_create(path, algos)
     if rc != 0 {
-        println("svnadmin create: failed (rc=${rc})")
+        if string.length(algos) > 0 {
+            println("svnadmin create: unsupported or invalid --algos '${algos}'")
+        } else {
+            println("svnadmin create: failed (rc=${rc})")
+        }
         return 1
     }
     return 0
