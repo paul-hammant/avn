@@ -52,10 +52,6 @@ extern handler_branch_create(req: ptr, res: ptr)
 // external-visibility symbol.
 @c_callback("svnserver_dispatch")
 svnserver_dispatch(req: ptr, res: ptr, _user_data: ptr) {
-    svnserver_dispatch_impl(req, res)
-}
-
-svnserver_dispatch_impl(req: ptr, res: ptr) {
     path = http.request_path(req)
     method = http.request_method(req)
 

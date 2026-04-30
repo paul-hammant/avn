@@ -399,10 +399,7 @@ verify_one_file_secondaries(base: string, repo: string, rev: int,
 }
 
 // Public entry. Prints a one-line summary on success.
-// Internal impl; the export below forwards to it so a sibling
-// export (client_verify) can call it without the export-call
-// gate Aether enforces.
-verify_full_impl(base_url: string, repo_name: string, rev: int, with_secondaries: int) -> int {
+export client_verify_full(base_url: string, repo_name: string, rev: int, with_secondaries: int) -> int {
     algo_raw = ra_hash_algo(base_url, repo_name)
     if algo_raw == null {
         verify_stderr_("verify: server info unavailable\n")
@@ -457,12 +454,8 @@ verify_full_impl(base_url: string, repo_name: string, rev: int, with_secondaries
     return 0
 }
 
-export client_verify_full(base_url: string, repo_name: string, rev: int, with_secondaries: int) -> int {
-    return verify_full_impl(base_url, repo_name, rev, with_secondaries)
-}
-
 export client_verify(base_url: string, repo_name: string, rev: int) -> int {
-    return verify_full_impl(base_url, repo_name, rev, 0)
+    return client_verify_full(base_url, repo_name, rev, 0)
 }
 
 main() {
