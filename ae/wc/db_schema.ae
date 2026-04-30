@@ -15,7 +15,7 @@
 
 // wc.db schema install + the Phase 5.13 conflicted-column migration.
 //
-// Called from svnae_wc_db_open (ae/wc/db_shim.c) immediately after
+// Called from wc_db_open (ae/wc/db_shim.c) immediately after
 // the sqlite handle is opened. Installing the schema from Aether
 // keeps the DDL and the migration rule in one readable place; the
 // C side is left with just sqlite3_open_v2 + handoff.

@@ -40,16 +40,16 @@ extern acl_user_has_rw_subtree(repo: string, rev: int,
 extern acl_allows_mode(repo: string, rev: int, user: string, target_path: string, want_write: int) -> int
 extern svnserver_spec_allows(repo: string, branch: string,
                               path: string, is_super: int) -> int
-extern svnae_repos_resolve_kind(repo: string, rev: int, path: string) -> int
-extern svnae_repos_resolve_sha(repo: string, rev: int, path: string) -> string
+extern repos_resolve_kind(repo: string, rev: int, path: string) -> int
+extern repos_resolve_sha(repo: string, rev: int, path: string) -> string
 
 extern auto_follow_copy_acl(repo: string, base_rev: int,
                              from_path: string, to_path: string) -> string
 
-extern svnae_txn_new(base_rev: int) -> ptr
-extern svnae_txn_copy(t: ptr, path: string, from_sha1: string, from_kind: int) -> int
-extern svnae_txn_free(t: ptr)
-extern svnae_commit_finalise_with_acl(repo: string, txn: ptr,
+extern txn_new(base_rev: int) -> ptr
+extern txn_copy(t: ptr, path: string, from_sha1: string, from_kind: int) -> int
+extern txn_free(t: ptr)
+extern commit_finalise_with_acl(repo: string, txn: ptr,
                                        author: string, log_msg: string,
                                        props_sha: string, acl_sha: string) -> int
 
@@ -125,9 +125,9 @@ copy_from_body_impl(req: ptr, repo: string) -> int {
         return -5
     }
 
-    kind = svnae_repos_resolve_kind(repo, base_rev, from_path)
+    kind = repos_resolve_kind(repo, base_rev, from_path)
     if kind == 0 { return -6 }
-    from_sha = svnae_repos_resolve_sha(repo, base_rev, from_path)
+    from_sha = repos_resolve_sha(repo, base_rev, from_path)
     from_sha = string.copy(from_sha)
     from_kind_int = 0
     if kind == 100 { from_kind_int = 1 }   // 'd'
@@ -139,11 +139,11 @@ copy_from_body_impl(req: ptr, repo: string) -> int {
     // before handing off to the txn machinery.
     new_acl_sha = string.copy(new_acl_sha)
 
-    txn = svnae_txn_new(base_rev)
-    svnae_txn_copy(txn, to_path, from_sha, from_kind_int)
-    new_rev = svnae_commit_finalise_with_acl(repo, txn, author, logmsg,
+    txn = txn_new(base_rev)
+    txn_copy(txn, to_path, from_sha, from_kind_int)
+    new_rev = commit_finalise_with_acl(repo, txn, author, logmsg,
                                               "", new_acl_sha)
-    svnae_txn_free(txn)
+    txn_free(txn)
 
     if new_rev < 0 { return -7 }
     return new_rev

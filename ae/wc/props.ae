@@ -15,15 +15,15 @@
 
 // WC-side properties — five operations over wc.db's `props` table:
 //
-//   svnae_wc_propset(wc_root, path, name, value) -> 0 ok, -2 untracked
-//   svnae_wc_propget(wc_root, path, name)        -> "" unset
-//   svnae_wc_propdel(wc_root, path, name)        -> 0 ok
-//   svnae_wc_proplist(wc_root, path)             -> handle (C-side)
-//   svnae_wc_props_free(s)                       -> trampoline to free()
+//   wc_propset(wc_root, path, name, value) -> 0 ok, -2 untracked
+//   wc_propget(wc_root, path, name)        -> "" unset
+//   wc_propdel(wc_root, path, name)        -> 0 ok
+//   wc_proplist(wc_root, path)             -> handle (C-side)
+//   wc_props_free(s)                       -> trampoline to free()
 //
 // Round 66 ports the SQL drive out of ae/wc/props_shim.c. The
 // proplist-handle struct + accessors stay in C (props_shim.c) — same
-// pattern as db_nodes.ae + svnae_wc_nodelist_*: Aether drives the
+// pattern as db_nodes.ae + wc_nodelist_*: Aether drives the
 // SELECT loop and calls a C-side _append per row.
 
 import std.string
@@ -32,15 +32,15 @@ import contrib.sqlite
 const SQLITE_ROW  = 100
 const SQLITE_DONE = 101
 
-extern svnae_wc_db_open(wc_root: string) -> ptr
-extern svnae_wc_db_close(db: ptr)
-extern svnae_wc_db_node_exists(db: ptr, path: string) -> int
+extern wc_db_open(wc_root: string) -> ptr
+extern wc_db_close(db: ptr)
+extern wc_db_node_exists(db: ptr, path: string) -> int
 
 // Storage primitives for the proplist handle (C-side, props_shim.c).
 // Proplist handle constructor (props_shim.c). Wraps a Aether-built
 // packed string "<n>\x02<name>\x01<value>\x02..." into the shared
-// svnae_packed_handle; field accessors live in ae/wc/props_packed.ae.
-extern svnae_wc_proplist_handle(packed: string) -> ptr
+// packed_handle; field accessors live in ae/wc/props_packed.ae.
+extern wc_proplist_handle(packed: string) -> ptr
 
 // Idempotent schema install. Round 66: previously each operation
 // (propset / propget / propdel / proplist) called ensure_schema
@@ -53,32 +53,32 @@ ensure_schema_(db: ptr) -> int {
     return 0
 }
 
-// Open the wc.db via the C-side svnae_wc_db_open (which installs
+// Open the wc.db via the C-side wc_db_open (which installs
 // the full schema — nodes, info, etc — and creates the .svn/pristine
 // hierarchy if missing). Then layer the props-table schema on top.
 // Returns null on failure.
 open_with_schema_(wc_root: string) -> ptr {
-    db = svnae_wc_db_open(wc_root)
+    db = wc_db_open(wc_root)
     if db == null { return null }
-    if ensure_schema_(db) != 0 { svnae_wc_db_close(db); return null }
+    if ensure_schema_(db) != 0 { wc_db_close(db); return null }
     return db
 }
 
 // Close via the C-side close (which handles the wc.db sqlite3
 // resource the same way the open did).
 close_(db: ptr) {
-    svnae_wc_db_close(db)
+    wc_db_close(db)
     return 0
 }
 
 // Set / overwrite a property. Returns 0 ok, -1 db error, -2 path
 // not tracked.
-export svnae_wc_propset(wc_root: string, path: string,
+export wc_propset(wc_root: string, path: string,
                          name: string, value: string) -> int {
     db = open_with_schema_(wc_root)
     if db == null { return 0 - 1 }
 
-    if svnae_wc_db_node_exists(db, path) == 0 {
+    if wc_db_node_exists(db, path) == 0 {
         close_(db)
         return 0 - 2
     }
@@ -102,10 +102,10 @@ export svnae_wc_propset(wc_root: string, path: string,
 // so the collapse to "" preserves observable behaviour.
 //
 // Exported as propget_value so the legacy C symbol
-// svnae_wc_propget can be a thin C-side wrapper that strdup's
+// wc_propget can be a thin C-side wrapper that strdup's
 // the Aether-owned string out of the refcounted runtime into
 // caller-owned heap, preserving the previous `char *` ABI +
-// svnae_wc_props_free contract.
+// wc_props_free contract.
 export propget_value(wc_root: string, path: string, name: string) -> string {
     db = open_with_schema_(wc_root)
     if db == null { return "" }
@@ -129,7 +129,7 @@ export propget_value(wc_root: string, path: string, name: string) -> string {
 
 // Delete a property. Returns 0 on success (including no-such-row,
 // which DELETE treats as a no-op), -1 on db error.
-export svnae_wc_propdel(wc_root: string, path: string, name: string) -> int {
+export wc_propdel(wc_root: string, path: string, name: string) -> int {
     db = open_with_schema_(wc_root)
     if db == null { return 0 - 1 }
 
@@ -146,11 +146,11 @@ export svnae_wc_propdel(wc_root: string, path: string, name: string) -> int {
 }
 
 // Sorted (name, value) listing for `path`. Returns a C-side handle
-// (struct svnae_wc_proplist *) the caller iterates via the
+// (struct wc_proplist *) the caller iterates via the
 // proplist_count / _name / _value / _free accessors that stay in
 // props_shim.c. Returns null when the open or prepare fails (caller
 // treats as "no props").
-export svnae_wc_proplist(wc_root: string, path: string) -> ptr {
+export wc_proplist(wc_root: string, path: string) -> ptr {
     db = open_with_schema_(wc_root)
     if db == null { return null }
 
@@ -172,7 +172,7 @@ export svnae_wc_proplist(wc_root: string, path: string) -> ptr {
     close_(db)
     head = "${n}\x02"
     packed = string.concat(head, body)
-    return svnae_wc_proplist_handle(packed)
+    return wc_proplist_handle(packed)
 }
 
 main() {

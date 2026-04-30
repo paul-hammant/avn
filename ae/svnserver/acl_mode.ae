@@ -25,8 +25,8 @@
 import std.string
 
 extern load_rev_blob_field(repo: string, rev: int, key: string) -> string
-extern svnae_rep_read_blob(repo: string, sha: string) -> string
-extern svnae_rep_free(body: string)
+extern rep_read_blob(repo: string, sha: string) -> string
+extern rep_free(body: string)
 extern paths_index_ancestor_shas(body: string, target: string) -> string
 extern acl_decide(body: string, user: string, want_write: int) -> int
 
@@ -40,7 +40,7 @@ acl_allows_mode_impl(repo: string, rev: int, user: string,
     acl_root = load_rev_blob_field(repo, rev, "acl")
     if string.length(acl_root) == 0 { return 1 }
 
-    paths_body = svnae_rep_read_blob(repo, acl_root)
+    paths_body = rep_read_blob(repo, acl_root)
     if string.length(paths_body) == 0 { return 1 }
 
     shas = paths_index_ancestor_shas(paths_body, target_path)
@@ -64,10 +64,10 @@ acl_allows_mode_impl(repo: string, rev: int, user: string,
             if slen > 0 {
                 if decided == 0 {
                     sha = string.substring(shas, line_start, i)
-                    rules = svnae_rep_read_blob(repo, sha)
+                    rules = rep_read_blob(repo, sha)
                     if string.length(rules) > 0 {
                         d = acl_decide(rules, user, want_write)
-                        svnae_rep_free(rules)
+                        rep_free(rules)
                         if d == 0 { result = 0; decided = 1 }
                         if d == 1 { result = 1; decided = 1 }
                     }
@@ -77,7 +77,7 @@ acl_allows_mode_impl(repo: string, rev: int, user: string,
         }
         i = i + 1
     }
-    svnae_rep_free(paths_body)
+    rep_free(paths_body)
     return result
 }
 

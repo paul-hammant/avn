@@ -35,18 +35,18 @@ import std.string
 
 // --- FFI: rep store + txn accessors + existing helpers --------------------
 
-extern svnae_rep_read_blob(repo: string, sha_hex: string) -> string
+extern rep_read_blob(repo: string, sha_hex: string) -> string
 extern rep_write_blob(repo: string, data: string, length: int) -> string
-extern svnae_rep_free(blob: string)
+extern rep_free(blob: string)
 
-// `struct svnae_txn *` on the C side — opaque here, we pass it through.
-extern svnae_txn_count(t: ptr) -> int
-extern svnae_txn_edit_kind(t: ptr, i: int) -> int
-extern svnae_txn_edit_path(t: ptr, i: int) -> string
-extern svnae_txn_edit_content_data(t: ptr, i: int) -> string
-extern svnae_txn_edit_content_len(t: ptr, i: int) -> int
-extern svnae_txn_edit_copy_sha(t: ptr, i: int) -> string
-extern svnae_txn_edit_copy_kind(t: ptr, i: int) -> int
+// `struct txn *` on the C side — opaque here, we pass it through.
+extern txn_count(t: ptr) -> int
+extern txn_edit_kind(t: ptr, i: int) -> int
+extern txn_edit_path(t: ptr, i: int) -> string
+extern txn_edit_content_data(t: ptr, i: int) -> string
+extern txn_edit_content_len(t: ptr, i: int) -> int
+extern txn_edit_copy_sha(t: ptr, i: int) -> string
+extern txn_edit_copy_kind(t: ptr, i: int) -> int
 
 extern dir_count_entries(body: string) -> int
 extern dir_entry_kind(body: string, i: int) -> int
@@ -69,10 +69,10 @@ const EDIT_COPY     = 4
 
 // Does this edit list touch `prefix` or any descendant?
 edits_touch_subtree(txn: ptr, prefix: string) -> int {
-    n = svnae_txn_count(txn)
+    n = txn_count(txn)
     i = 0
     while i < n {
-        p = svnae_txn_edit_path(txn, i)
+        p = txn_edit_path(txn, i)
         if path_covers(p, prefix) == 1 { return 1 }
         i = i + 1
     }
@@ -82,12 +82,12 @@ edits_touch_subtree(txn: ptr, prefix: string) -> int {
 // Find txn edit with exact path match. Returns kind, or 0 if not
 // present. -1 not used because 0 is not a valid kind.
 txn_find_edit_kind(txn: ptr, path: string) -> int {
-    n = svnae_txn_count(txn)
+    n = txn_count(txn)
     i = 0
     while i < n {
-        ep = svnae_txn_edit_path(txn, i)
+        ep = txn_edit_path(txn, i)
         if string.equals(ep, path) == 1 {
-            return svnae_txn_edit_kind(txn, i)
+            return txn_edit_kind(txn, i)
         }
         i = i + 1
     }
@@ -256,7 +256,7 @@ rebuild_dir_impl(repo: string, base_dir_sha: string, prefix: string, txn: ptr) -
     // base_body (either "blob missing" or "blob exists but is the
     // empty-dir blob") produces zero iterations — correct.
     if string.length(base_dir_sha) > 0 {
-        base_body = svnae_rep_read_blob(repo, base_dir_sha)
+        base_body = rep_read_blob(repo, base_dir_sha)
         n_entries = dir_count_entries(base_body)
         ei = 0
         while ei < n_entries {
@@ -292,20 +292,20 @@ rebuild_dir_impl(repo: string, base_dir_sha: string, prefix: string, txn: ptr) -
 
             ei = ei + 1
         }
-        svnae_rep_free(base_body)
+        rep_free(base_body)
     }
 
     // Step 2: apply edits whose immediate parent is this dir.
-    n_edits = svnae_txn_count(txn)
+    n_edits = txn_count(txn)
     ei = 0
     while ei < n_edits {
-        epath = svnae_txn_edit_path(txn, ei)
-        ekind = svnae_txn_edit_kind(txn, ei)
+        epath = txn_edit_path(txn, ei)
+        ekind = txn_edit_kind(txn, ei)
         if path_is_immediate_child(epath, prefix) == 1 {
             name = path_basename_after(epath, prefix)
             if ekind == EDIT_ADD_FILE {
-                content = svnae_txn_edit_content_data(txn, ei)
-                clen = svnae_txn_edit_content_len(txn, ei)
+                content = txn_edit_content_data(txn, ei)
+                clen = txn_edit_content_len(txn, ei)
                 new_sha = rep_write_blob(repo, content, clen)
                 if string.length(new_sha) > 0 {
                     rl = reclist_add(rl, name, 102, new_sha)   // 'f'
@@ -321,8 +321,8 @@ rebuild_dir_impl(repo: string, base_dir_sha: string, prefix: string, txn: ptr) -
                 rl = reclist_remove(rl, name)
             }
             if ekind == EDIT_COPY {
-                copy_sha = svnae_txn_edit_copy_sha(txn, ei)
-                copy_kind_int = svnae_txn_edit_copy_kind(txn, ei)
+                copy_sha = txn_edit_copy_sha(txn, ei)
+                copy_kind_int = txn_edit_copy_kind(txn, ei)
                 k_byte = 102                                    // 'f'
                 if copy_kind_int == 1 { k_byte = 100 }          // 'd'
                 rl = reclist_add(rl, name, k_byte, copy_sha)
@@ -359,7 +359,7 @@ rebuild_dir_impl(repo: string, base_dir_sha: string, prefix: string, txn: ptr) -
 }
 
 // Helper for the "empty base blob is legitimate" edge case. An empty
-// string returned from svnae_rep_read_blob could mean either "blob
+// string returned from rep_read_blob could mean either "blob
 // not found" or "blob exists and is empty" — and they're
 // indistinguishable through the string API. We assume "empty sha
 // means empty blob" by inspection of the sha (the all-zeros sha is

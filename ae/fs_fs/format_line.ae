@@ -14,7 +14,7 @@
 // permissions and limitations under the License.
 
 // $repo/format line parser. Was ported from C-side
-// svnae_repo_primary_hash + svnae_repo_secondary_hashes; both
+// repo_primary_hash + repo_secondary_hashes; both
 // retired (Rounds 132 / 136 respectively) once the .ae callers
 // switched to these accessors directly.
 //

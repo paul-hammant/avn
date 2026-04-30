@@ -15,7 +15,7 @@
 
 // Recursive Merkle-tree verification of a remote rev.
 //
-// `svnae_client_verify_full(base, repo, rev, with_secondaries)` walks
+// `client_verify_full(base, repo, rev, with_secondaries)` walks
 // the tree at `rev` top-down, re-hashes every file content and dir
 // blob locally using the server's advertised algorithm, and confirms:
 //
@@ -57,11 +57,11 @@ extern response_header(resp: ptr, name: string) -> string
 extern response_free(resp: ptr)
 
 // Server-info accessors (still C-side handle for now).
-extern svnae_ra_hash_algo(base_url: string, repo_name: string) -> string
-extern svnae_ra_info_rev(base_url: string, repo_name: string, rev: int) -> ptr
-extern svnae_ra_info_root(I: ptr) -> string
-extern svnae_ra_info_free(I: ptr)
-extern svnae_ra_free(p: string)
+extern ra_hash_algo(base_url: string, repo_name: string) -> string
+extern ra_info_rev(base_url: string, repo_name: string, rev: int) -> ptr
+extern ra_info_root(I: ptr) -> string
+extern ra_info_free(I: ptr)
+extern ra_free(p: string)
 
 // Path joiner: append `name` to `prefix` with a `/`, dropping the
 // separator when prefix is empty (so root-relative paths stay clean).
@@ -69,9 +69,9 @@ extern path_join_rel(prefix: string, name: string) -> string
 
 // List parser already lives in ae/client/parse.ae + ae/client/packed.ae.
 extern ra_parse_list(body: string) -> string
-extern ra_list_count(packed: string) -> int
-extern ra_list_name(packed: string, i: int) -> string
-extern ra_list_kind(packed: string, i: int) -> string
+extern packed_list_count(packed: string) -> int
+extern packed_list_name(packed: string, i: int) -> string
+extern packed_list_kind(packed: string, i: int) -> string
 
 // Secondary-hashes parser. Returns a packed
 // "N\x02<algo>\x01<hex>\x02..." string that the C helpers below
@@ -85,7 +85,7 @@ verify_stderr_(s: string) -> int {
 }
 
 // Counter is a 2-element std.intarr (slot 0 = files, slot 1 =
-// secondaries). Round 147 retired the C-side svnae_verify_counter
+// secondaries). Round 147 retired the C-side verify_counter
 // struct + 6 accessors; std.intarr's get_unchecked / set_unchecked
 // give the same semantics in Aether.
 
@@ -205,18 +205,18 @@ verify_dir(base: string, repo: string, rev: int, algo: string, rel: string) -> s
     if string.length(packed) == 0 { return "" }
     packed_owned = string.copy(packed)
 
-    n = ra_list_count(packed_owned)
+    n = packed_list_count(packed_owned)
     // Three parallel containers: names + shas in std.list, kinds in
     // a fixed-size std.intarr (size known up-front). Round 148
-    // ported these from the C-side svnae_verify_entries struct.
+    // ported these from the C-side verify_entries struct.
     names = list_new()
     shas  = list_new()
     kinds, _kerr = intarr.new(n)
 
     i = 0
     while i < n {
-        nm = ra_list_name(packed_owned, i)
-        kd = ra_list_kind(packed_owned, i)
+        nm = packed_list_name(packed_owned, i)
+        kd = packed_list_kind(packed_owned, i)
         kind_c = 102   // 'f'
         if string.equals(kd, "dir") == 1 { kind_c = 100 }   // 'd'
         list_add_raw(names, string.copy(nm))
@@ -304,13 +304,13 @@ verify_secondaries_in_dir(base: string, repo: string, rev: int,
     packed = ra_parse_list(body_owned)
     if string.length(packed) == 0 { return -1 }
     packed_owned = string.copy(packed)
-    n = ra_list_count(packed_owned)
+    n = packed_list_count(packed_owned)
 
     overall = 0
     i = 0
     while i < n {
-        name = ra_list_name(packed_owned, i)
-        kd   = ra_list_kind(packed_owned, i)
+        name = packed_list_name(packed_owned, i)
+        kd   = packed_list_kind(packed_owned, i)
         name_owned = string.copy(name)
         child_rel = path_join_rel(rel, name_owned)
 
@@ -400,29 +400,29 @@ verify_one_file_secondaries(base: string, repo: string, rev: int,
 
 // Public entry. Prints a one-line summary on success.
 // Internal impl; the export below forwards to it so a sibling
-// export (svnae_client_verify) can call it without the export-call
+// export (client_verify) can call it without the export-call
 // gate Aether enforces.
 verify_full_impl(base_url: string, repo_name: string, rev: int, with_secondaries: int) -> int {
-    algo_raw = svnae_ra_hash_algo(base_url, repo_name)
+    algo_raw = ra_hash_algo(base_url, repo_name)
     if algo_raw == null {
         verify_stderr_("verify: server info unavailable\n")
         return -1
     }
     algo = string.copy(algo_raw)
-    svnae_ra_free(algo_raw)
+    ra_free(algo_raw)
     if string.length(algo) == 0 {
         verify_stderr_("verify: server info unavailable\n")
         return -1
     }
 
-    info = svnae_ra_info_rev(base_url, repo_name, rev)
+    info = ra_info_rev(base_url, repo_name, rev)
     if info == null {
         verify_stderr_("verify: rev ${rev} info unavailable\n")
         return -1
     }
-    claimed_root = svnae_ra_info_root(info)
+    claimed_root = ra_info_root(info)
     claimed_root_owned = string.copy(claimed_root)
-    svnae_ra_info_free(info)
+    ra_info_free(info)
     if string.length(claimed_root_owned) == 0 {
         verify_stderr_("verify: rev ${rev} has no root sha in /info\n")
         return -1
@@ -457,11 +457,11 @@ verify_full_impl(base_url: string, repo_name: string, rev: int, with_secondaries
     return 0
 }
 
-export svnae_client_verify_full(base_url: string, repo_name: string, rev: int, with_secondaries: int) -> int {
+export client_verify_full(base_url: string, repo_name: string, rev: int, with_secondaries: int) -> int {
     return verify_full_impl(base_url, repo_name, rev, with_secondaries)
 }
 
-export svnae_client_verify(base_url: string, repo_name: string, rev: int) -> int {
+export client_verify(base_url: string, repo_name: string, rev: int) -> int {
     return verify_full_impl(base_url, repo_name, rev, 0)
 }
 

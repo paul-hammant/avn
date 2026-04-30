@@ -35,13 +35,13 @@ extern svnserver_spec_allows(repo: string, branch: string,
                               path: string, is_super: int) -> int
 extern based_on_check(req: ptr, res: ptr, repo: string, head_rev: int, path: string, allow_missing_as_create: int) -> int
 
-extern svnae_txn_new(base_rev: int) -> ptr
-extern svnae_txn_add_file(txn: ptr, path: string, content: string, len: int) -> int
-extern svnae_txn_free(t: ptr)
-extern svnae_commit_finalise(repo: string, txn: ptr,
+extern txn_new(base_rev: int) -> ptr
+extern txn_add_file(txn: ptr, path: string, content: string, len: int) -> int
+extern txn_free(t: ptr)
+extern commit_finalise(repo: string, txn: ptr,
                               author: string, log_msg: string) -> int
 
-extern svnae_repos_resolve_sha(repo: string, rev: int, path: string) -> string
+extern repos_resolve_sha(repo: string, rev: int, path: string) -> string
 extern rev_sha_response_json(rev: int, sha: string) -> string
 
 extern svnserver_respond_error(res: ptr, code: int, msg: string)
@@ -103,12 +103,12 @@ handler_path_put_impl(req: ptr, res: ptr) {
         return
     }
 
-    txn = svnae_txn_new(base_rev)
+    txn = txn_new(base_rev)
     if txn == null {
         svnserver_respond_error(res, 500, "oom")
         return
     }
-    svnae_txn_add_file(txn, file_path,
+    txn_add_file(txn, file_path,
                        http.request_body(req),
                        http.request_body_length(req))
 
@@ -126,14 +126,14 @@ handler_path_put_impl(req: ptr, res: ptr) {
         hdr_log = string.concat("PUT /", file_path)
     }
 
-    new_rev = svnae_commit_finalise(repo, txn, hdr_author, hdr_log)
-    svnae_txn_free(txn)
+    new_rev = commit_finalise(repo, txn, hdr_author, hdr_log)
+    txn_free(txn)
     if new_rev < 0 {
         svnserver_respond_error(res, 500, "commit failed")
         return
     }
 
-    new_sha = svnae_repos_resolve_sha(repo, new_rev, file_path)
+    new_sha = repos_resolve_sha(repo, new_rev, file_path)
     http.response_set_status(res, 201)
     http.response_json(res, rev_sha_response_json(new_rev, new_sha))
 }

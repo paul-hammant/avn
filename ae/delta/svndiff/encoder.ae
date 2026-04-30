@@ -19,9 +19,9 @@
 // Auto-grows via std.bytes' set semantics.
 //
 // _finish drives svndiff_encode.ae's window emitter (which reads
-// ops via svnae_encoder_count + _op_action / _length / _offset),
+// ops via encoder_count + _op_action / _length / _offset),
 // then hands the resulting AetherString to a tiny C-side malloc-
-// detach helper that converts it to an svnae_buf for back-compat
+// detach helper that converts it to an buf for back-compat
 // with downstream callers (test_svndiff, xdelta) that still expect
 // the buf handle shape.
 
@@ -42,7 +42,7 @@ struct Encoder {
     nops: int
 }
 
-export svnae_svndiff_encoder_new(source_len: int, target_len: int) -> ptr {
+export svndiff_encoder_new(source_len: int, target_len: int) -> ptr {
     raw = malloc(64)
     if raw == null { return null }
     e = raw as *Encoder
@@ -53,7 +53,7 @@ export svnae_svndiff_encoder_new(source_len: int, target_len: int) -> ptr {
     return raw
 }
 
-export svnae_svndiff_encoder_add_op(enc: ptr, action: int, length: int,
+export svndiff_encoder_add_op(enc: ptr, action: int, length: int,
                                      offset: int) -> int {
     if enc == null { return 0 - 1 }
     e = enc as *Encoder
@@ -66,15 +66,15 @@ export svnae_svndiff_encoder_add_op(enc: ptr, action: int, length: int,
 }
 
 // Aether-side accessors used by svndiff_encode.ae's window-emit walker.
-// Keep the historical svnae_encoder_* names so the encode walker's
+// Keep the historical encoder_* names so the encode walker's
 // extern decls stay stable.
-export svnae_encoder_count(enc: ptr) -> int {
+export encoder_count(enc: ptr) -> int {
     if enc == null { return 0 }
     e = enc as *Encoder
     return e.nops
 }
 
-export svnae_encoder_op_action(enc: ptr, i: int) -> int {
+export encoder_op_action(enc: ptr, i: int) -> int {
     if enc == null { return 0 - 1 }
     e = enc as *Encoder
     if i < 0 { return 0 - 1 }
@@ -82,7 +82,7 @@ export svnae_encoder_op_action(enc: ptr, i: int) -> int {
     return bytes.get_le32(e.ops, i * 12 + 0)
 }
 
-export svnae_encoder_op_length(enc: ptr, i: int) -> int {
+export encoder_op_length(enc: ptr, i: int) -> int {
     if enc == null { return 0 }
     e = enc as *Encoder
     if i < 0 { return 0 }
@@ -90,7 +90,7 @@ export svnae_encoder_op_length(enc: ptr, i: int) -> int {
     return bytes.get_le32(e.ops, i * 12 + 4)
 }
 
-export svnae_encoder_op_offset(enc: ptr, i: int) -> int {
+export encoder_op_offset(enc: ptr, i: int) -> int {
     if enc == null { return 0 }
     e = enc as *Encoder
     if i < 0 { return 0 }
@@ -98,10 +98,10 @@ export svnae_encoder_op_offset(enc: ptr, i: int) -> int {
     return bytes.get_le32(e.ops, i * 12 + 8)
 }
 
-// Round 184 changed the return shape from svnae_buf-via-malloc to a
+// Round 184 changed the return shape from buf-via-malloc to a
 // length-aware (string, int) tuple — the AetherString is refcounted
 // so the buf carrier is redundant. Tests pull the bytes directly.
-export svnae_svndiff_encoder_finish(enc: ptr, new_data: string,
+export svndiff_encoder_finish(enc: ptr, new_data: string,
                                      new_data_len: int) -> (string, int) {
     if enc == null { return "", 0 }
     e = enc as *Encoder
@@ -113,7 +113,7 @@ export svnae_svndiff_encoder_finish(enc: ptr, new_data: string,
     return out, string.length(out)
 }
 
-export svnae_svndiff_encoder_free(enc: ptr) {
+export svndiff_encoder_free(enc: ptr) {
     if enc == null { return }
     e = enc as *Encoder
     bytes.free(e.ops)

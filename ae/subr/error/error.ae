@@ -34,7 +34,7 @@ struct SvnaeError {
 
 // Layout: 5 fields × 8 bytes = 40 bytes; round up to 64 for alignment
 // safety on 64-bit (the canonical *Struct test uses 64).
-export svnae_error_create(code: int, msg: string, cause: ptr,
+export error_create(code: int, msg: string, cause: ptr,
                            file: string, line: int) -> ptr {
     raw = malloc(64)
     if raw == null { return null }
@@ -47,31 +47,31 @@ export svnae_error_create(code: int, msg: string, cause: ptr,
     return raw
 }
 
-export svnae_error_code(err: ptr) -> int {
+export error_code(err: ptr) -> int {
     if err == null { return 0 }
     e = err as *SvnaeError
     return e.code
 }
 
-export svnae_error_message(err: ptr) -> string {
+export error_message(err: ptr) -> string {
     if err == null { return "" }
     e = err as *SvnaeError
     return e.msg
 }
 
-export svnae_error_cause(err: ptr) -> ptr {
+export error_cause(err: ptr) -> ptr {
     if err == null { return null }
     e = err as *SvnaeError
     return e.cause
 }
 
-export svnae_error_file(err: ptr) -> string {
+export error_file(err: ptr) -> string {
     if err == null { return "" }
     e = err as *SvnaeError
     return e.file
 }
 
-export svnae_error_line(err: ptr) -> int {
+export error_line(err: ptr) -> int {
     if err == null { return 0 }
     e = err as *SvnaeError
     return e.line
@@ -81,7 +81,7 @@ export svnae_error_line(err: ptr) -> int {
 // C version strdup'd messages and free'd them too — see the
 // lifetime note at the top of the file for why this version
 // only frees the struct allocations.
-export svnae_error_free(err: ptr) {
+export error_free(err: ptr) {
     p = err
     while p != null {
         e = p as *SvnaeError

@@ -41,7 +41,7 @@
 //
 // Since both formats are line-oriented ASCII, they pass through Aether's
 // strlen-based string pipeline safely. File contents, which can be
-// arbitrary bytes, always travel through svnae_buf handles (ptr) —
+// arbitrary bytes, always travel through buf handles (ptr) —
 // never through Aether strings.
 
 import std.fs
@@ -51,9 +51,9 @@ import std.zlib
 
 // --- externs from subr shims ------------------------------------------------
 
-extern svnae_crypto_hash_hex(algo: string, data: string, length: int) -> string
+extern crypto_hash_hex(algo: string, data: string, length: int) -> string
 
-// Round 176: std.zlib retired the C-side svnae_zlib_*/svnae_buf_*
+// Round 176: std.zlib retired the C-side zlib_*/buf_*
 // shim. zlib.deflate / zlib.inflate return (string, int, error)
 // tuples; the previous opaque-buf handle dance is gone.
 
@@ -72,13 +72,13 @@ extern dir_exists(path: string) -> int
 
 extern io_read_file(path: string) -> string
 
-extern svnae_fsfs_tree_builder_new() -> ptr
-extern svnae_fsfs_tree_builder_add(tb: ptr, path: string, kind: int, content: string, content_len: int) -> int
-extern svnae_fsfs_tree_builder_count(tb: ptr) -> int
-extern svnae_fsfs_tree_builder_path(tb: ptr, i: int) -> string
-extern svnae_fsfs_tree_builder_kind(tb: ptr, i: int) -> int
-extern svnae_fsfs_tree_builder_content_data(tb: ptr, i: int) -> string
-extern svnae_fsfs_tree_builder_free(tb: ptr)
+extern fsfs_tree_builder_new() -> ptr
+extern fsfs_tree_builder_add(tb: ptr, path: string, kind: int, content: string, content_len: int) -> int
+extern fsfs_tree_builder_count(tb: ptr) -> int
+extern fsfs_tree_builder_path(tb: ptr, i: int) -> string
+extern fsfs_tree_builder_kind(tb: ptr, i: int) -> int
+extern fsfs_tree_builder_content_data(tb: ptr, i: int) -> string
+extern fsfs_tree_builder_free(tb: ptr)
 
 
 import contrib.sqlite
@@ -163,14 +163,14 @@ rep_cache_insert(repo: string, sha1: string, rel_path: string,
 }
 
 // Write bytes to the rep store. `data_for_hash` is the bytes to hash;
-// `buf_for_write` is an svnae_buf handle whose bytes will actually be
+// `buf_for_write` is an buf handle whose bytes will actually be
 // persisted. For strings they're the same content, accessed two ways:
 // we hash the string (strlen-unsafe not an issue for text payloads),
 // and write via the buf handle (which carries an explicit length, so
 // embedded NULs are fine). Returns the SHA-1 of the data.
 write_blob_text(repo: string, data: string) {
     n = string.length(data)
-    sha1_copy = svnae_crypto_hash_hex("sha1", data, n)
+    sha1_copy = crypto_hash_hex("sha1", data, n)
 
     if rep_cache_has(repo, sha1_copy) == 1 { return sha1_copy }
 
@@ -442,7 +442,7 @@ fsfs_read_file_at(repo: string, rev: int, path: string) {
 fsfs_commit_flat(repo: string, tb: ptr, author: string, logmsg: string) {
     // Step 1: write each file blob. Accumulate dir entries as "f <sha1> <name>\n"
     // strings, sorted by name via a simple selection loop.
-    count = svnae_fsfs_tree_builder_count(tb)
+    count = fsfs_tree_builder_count(tb)
 
     // Sort indices by path. In-place bubble sort over a local int list
     // would be nice; Aether doesn't give us dynamic int arrays. Use a
@@ -452,21 +452,21 @@ fsfs_commit_flat(repo: string, tb: ptr, author: string, logmsg: string) {
     // Assemble all entry records into a sorted sb.
 
     // Write each file blob; remember sha1s in a parallel "<line>\n…"
-    // accumulator. Round 110 retired the C-side svnae_fsfs_sb_*
+    // accumulator. Round 110 retired the C-side fsfs_sb_*
     // builder — for the small repos test_revisions.ae uses, the
     // O(n²) string.concat cost is invisible.
     sha1s_txt = ""
     names_txt = ""
     i = 0
     while i < count {
-        path = svnae_fsfs_tree_builder_path(tb, i)
-        kind = svnae_fsfs_tree_builder_kind(tb, i)
+        path = fsfs_tree_builder_path(tb, i)
+        kind = fsfs_tree_builder_kind(tb, i)
         if kind != 0 {
             // For Phase 3.2 we only commit files.
             i = i + 1
             continue
         }
-        bdata = svnae_fsfs_tree_builder_content_data(tb, i)
+        bdata = fsfs_tree_builder_content_data(tb, i)
         // write_blob_text: since we know content may be arbitrary bytes,
         // we should have a binary-safe variant. For tests we use text,
         // so this is fine.
@@ -609,7 +609,7 @@ extern system(cmd: string) -> int
 rmtree(path: string) { system("rm -rf '${path}'"); return 0 }
 
 count_rep_files(repo: string) {
-    count_file = "/tmp/svnae_count_${os_getpid_raw()}.txt"
+    count_file = "/tmp/count_${os_getpid_raw()}.txt"
     system("find '${repo}/reps' -name '*.rep' | wc -l > '${count_file}'")
     raw = io_read_file(count_file)
     if string.length(raw) == 0 { return -1 }
@@ -620,7 +620,7 @@ count_rep_files(repo: string) {
 main() {
     fails = 0
     pid = os_getpid_raw()
-    repo = "/tmp/svnae_test_revs_${pid}"
+    repo = "/tmp/test_revs_${pid}"
     rmtree(repo)
 
     // 1. init creates rev 0 with an empty root.
@@ -629,12 +629,12 @@ main() {
     fails = fails + expect_int("head after init", fsfs_head_rev(repo), 0)
 
     // 2. commit rev 1 with a few files.
-    tb = svnae_fsfs_tree_builder_new()
-    svnae_fsfs_tree_builder_add(tb, "README",  0, "Hello from Aether svn!\n", 23)
-    svnae_fsfs_tree_builder_add(tb, "main.c",  0, "int main(void) { return 0; }\n", 29)
-    svnae_fsfs_tree_builder_add(tb, "notes.txt", 0, "quick brown fox\n", 16)
+    tb = fsfs_tree_builder_new()
+    fsfs_tree_builder_add(tb, "README",  0, "Hello from Aether svn!\n", 23)
+    fsfs_tree_builder_add(tb, "main.c",  0, "int main(void) { return 0; }\n", 29)
+    fsfs_tree_builder_add(tb, "notes.txt", 0, "quick brown fox\n", 16)
     new_rev = fsfs_commit_flat(repo, tb, "paul", "initial commit")
-    svnae_fsfs_tree_builder_free(tb)
+    fsfs_tree_builder_free(tb)
     fails = fails + expect_int("commit rev 1", new_rev, 1)
     fails = fails + expect_int("head after commit 1", fsfs_head_rev(repo), 1)
 
@@ -654,12 +654,12 @@ main() {
     //    rep-shared (same sha1, no new .rep file written for them).
     before_count = count_rep_files(repo)
 
-    tb = svnae_fsfs_tree_builder_new()
-    svnae_fsfs_tree_builder_add(tb, "README",  0, "Hello from Aether svn!\n", 23)
-    svnae_fsfs_tree_builder_add(tb, "main.c",  0, "int main(void) { return 0; }\n", 29)
-    svnae_fsfs_tree_builder_add(tb, "notes.txt", 0, "the updated note\n", 17)
+    tb = fsfs_tree_builder_new()
+    fsfs_tree_builder_add(tb, "README",  0, "Hello from Aether svn!\n", 23)
+    fsfs_tree_builder_add(tb, "main.c",  0, "int main(void) { return 0; }\n", 29)
+    fsfs_tree_builder_add(tb, "notes.txt", 0, "the updated note\n", 17)
     new_rev = fsfs_commit_flat(repo, tb, "paul", "update notes")
-    svnae_fsfs_tree_builder_free(tb)
+    fsfs_tree_builder_free(tb)
     fails = fails + expect_int("commit rev 2", new_rev, 2)
 
     after_count = count_rep_files(repo)

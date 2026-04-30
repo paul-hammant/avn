@@ -38,11 +38,11 @@ const MIN_MATCH = 4
 // C-side svndiff encoder builder (defined in delta/svndiff/shim.c).
 // Stays C-side because per-add_op realloc growth fits naturally
 // there and the resulting encoder feeds into the also-C-side
-// svnae_svndiff_encoder_finish which produces the on-wire bytes.
-extern svnae_svndiff_encoder_new(source_len: int, target_len: int) -> ptr
-extern svnae_svndiff_encoder_add_op(enc: ptr, action: int, length: int, offset: int) -> int
-extern svnae_svndiff_encoder_finish(enc: ptr, new_data: string, new_data_len: int) -> (string, int)
-extern svnae_svndiff_encoder_free(enc: ptr)
+// svndiff_encoder_finish which produces the on-wire bytes.
+extern svndiff_encoder_new(source_len: int, target_len: int) -> ptr
+extern svndiff_encoder_add_op(enc: ptr, action: int, length: int, offset: int) -> int
+extern svndiff_encoder_finish(enc: ptr, new_data: string, new_data_len: int) -> (string, int)
+extern svndiff_encoder_free(enc: ptr)
 
 // Find the longest prefix of `target[tp..tp+max_match)` that
 // matches some position in `source`. Returns (best_len, best_sp);
@@ -101,18 +101,18 @@ find_best_match_(source: string, source_len: int,
 // Public: compute a delta from (source, target) and return the
 // completed svndiff envelope as a length-aware (bytes, length)
 // tuple. Round 184: matched the new (string, int) shape of
-// svnae_svndiff_encoder_finish — no buf carrier needed.
+// svndiff_encoder_finish — no buf carrier needed.
 //
 // Returns ("", 0) on failure (encoder OOM).
-export svnae_xdelta_compute(source: string, source_len: int,
+export xdelta_compute(source: string, source_len: int,
                              target: string, target_len: int) -> (string, int) {
-    enc = svnae_svndiff_encoder_new(source_len, target_len)
+    enc = svndiff_encoder_new(source_len, target_len)
     if enc == null { return "", 0 }
 
     // new-data accumulator: bytes the OP_NEW ops will reference.
     // std.bytes — random-access write, length-aware finish.
     nd = bytes.new(target_len + 64)
-    if nd == null { svnae_svndiff_encoder_free(enc); return "", 0 }
+    if nd == null { svndiff_encoder_free(enc); return "", 0 }
     nd_len = 0
 
     tp = 0
@@ -128,9 +128,9 @@ export svnae_xdelta_compute(source: string, source_len: int,
                 slice = string.substring(target, ndrun_start, tp)
                 bytes.copy_from_string(nd, nd_len, slice, run_len)
                 nd_len = nd_len + run_len
-                svnae_svndiff_encoder_add_op(enc, 2, run_len, 0)
+                svndiff_encoder_add_op(enc, 2, run_len, 0)
             }
-            svnae_svndiff_encoder_add_op(enc, 0, mlen, sp)
+            svndiff_encoder_add_op(enc, 0, mlen, sp)
             tp = tp + mlen
             ndrun_start = tp
         }
@@ -144,11 +144,11 @@ export svnae_xdelta_compute(source: string, source_len: int,
         slice = string.substring(target, ndrun_start, target_len)
         bytes.copy_from_string(nd, nd_len, slice, run_len)
         nd_len = nd_len + run_len
-        svnae_svndiff_encoder_add_op(enc, 2, run_len, 0)
+        svndiff_encoder_add_op(enc, 2, run_len, 0)
     }
 
     new_data = bytes.finish(nd, nd_len)
-    return svnae_svndiff_encoder_finish(enc, new_data, nd_len)
+    return svndiff_encoder_finish(enc, new_data, nd_len)
 }
 
 main() {

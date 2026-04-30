@@ -29,10 +29,10 @@ import std.io
 extern aether_args_count() -> int
 extern aether_args_get(index: int) -> string
 
-extern svnae_svnadmin_create(repo: string) -> int
-extern svnae_svnadmin_create_with_algos(repo: string, algos_spec: string) -> int
-extern svnae_svnadmin_dump  (repo: string, out_fd: int) -> int
-extern svnae_svnadmin_load  (repo: string, in_fd: int) -> int
+extern svnadmin_create(repo: string) -> int
+extern svnadmin_create_with_algos(repo: string, algos_spec: string) -> int
+extern svnadmin_dump  (repo: string, out_fd: int) -> int
+extern svnadmin_load  (repo: string, in_fd: int) -> int
 
 // Round 188: switched to std.io fd surface (Aether 0.110 follow-up
 // — Section 1 of nuther-ask-of-aether-team.md). io.fd_open_*
@@ -77,13 +77,13 @@ cmd_create(argv_start: int) {
     algos = find_flag("--algos", argv_start)
     rc = 0
     if string.length(algos) > 0 {
-        rc = svnae_svnadmin_create_with_algos(path, algos)
+        rc = svnadmin_create_with_algos(path, algos)
         if rc != 0 {
             println("svnadmin create: unsupported or invalid --algos '${algos}'")
             return 1
         }
     } else {
-        rc = svnae_svnadmin_create(path)
+        rc = svnadmin_create(path)
     }
     if rc != 0 {
         println("svnadmin create: failed (rc=${rc})")
@@ -111,7 +111,7 @@ cmd_dump(argv_start: int) {
         fd = new_fd
         opened = 1
     }
-    rc = svnae_svnadmin_dump(path, fd)
+    rc = svnadmin_dump(path, fd)
     if opened == 1 { io.fd_close(fd) }
     if rc != 0 {
         println("svnadmin dump: failed (rc=${rc})")
@@ -139,7 +139,7 @@ cmd_load(argv_start: int) {
         fd = new_fd
         opened = 1
     }
-    rc = svnae_svnadmin_load(path, fd)
+    rc = svnadmin_load(path, fd)
     if opened == 1 { io.fd_close(fd) }
     if rc != 0 {
         println("svnadmin load: failed (rc=${rc})")

@@ -17,7 +17,7 @@
 //   contents      std.list       AetherString per node (binary-safe)
 //   content_lens  std.gintarr    bytes in contents[i], 0 for dirs
 //
-// Used by the update walker (svnae_rtree_*) and the merge walker
+// Used by the update walker (rtree_*) and the merge walker
 // (rtree_* read-only accessors).
 
 import std.string
@@ -43,7 +43,7 @@ struct Rtree {
     content_lens: ptr
 }
 
-export svnae_rtree_new() -> ptr {
+export rtree_new() -> ptr {
     raw = malloc(64)
     if raw == null { return null }
     rt = raw as *Rtree
@@ -55,7 +55,7 @@ export svnae_rtree_new() -> ptr {
     return raw
 }
 
-export svnae_rtree_free(rt_ptr: ptr) {
+export rtree_free(rt_ptr: ptr) {
     if rt_ptr == null { return }
     rt = rt_ptr as *Rtree
     list_free(rt.paths)
@@ -69,7 +69,7 @@ export svnae_rtree_free(rt_ptr: ptr) {
 
 // ---- public add ops ------------------------------------------
 
-export svnae_rtree_add_dir(rt_ptr: ptr, path: string) {
+export rtree_add_dir(rt_ptr: ptr, path: string) {
     if rt_ptr == null { return 0 }
     rt = rt_ptr as *Rtree
     list_add_raw(rt.paths,    string.copy(path))
@@ -81,7 +81,7 @@ export svnae_rtree_add_dir(rt_ptr: ptr, path: string) {
     return 0
 }
 
-export svnae_rtree_add_file(rt_ptr: ptr, path: string,
+export rtree_add_file(rt_ptr: ptr, path: string,
                              data: string, data_len: int,
                              wc_root: string) {
     if rt_ptr == null { return 0 }

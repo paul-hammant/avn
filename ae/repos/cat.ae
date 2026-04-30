@@ -7,7 +7,7 @@
 //
 //     http://www.apache.org/licenses/LICENSE-2.0
 
-// svnae_repos_cat — read file content at (rev, path) from the
+// repos_cat — read file content at (rev, path) from the
 // repository. Round 174 retires the C-side wrapper in
 // ae/repos/shim.c (57 lines) once #297 auto-unwrap and refcounted
 // AetherString returns made the wrap-then-detach dance unnecessary.
@@ -21,11 +21,11 @@ import std.string
 extern repos_load_rev_blob_field(repo: string, rev: int, key: string) -> string
 extern resolve_kind(repo: string, root_sha: string, path: string) -> int
 extern resolve_sha (repo: string, root_sha: string, path: string) -> string
-extern svnae_rep_read_blob(repo: string, sha1_hex: string) -> string
+extern rep_read_blob(repo: string, sha1_hex: string) -> string
 
 const KIND_FILE = 102   // 'f'
 
-export svnae_repos_cat(repo: string, rev: int, path: string) -> string {
+export repos_cat(repo: string, rev: int, path: string) -> string {
     root = repos_load_rev_blob_field(repo, rev, "root")
     if string.length(root) == 0 { return "" }
 
@@ -38,7 +38,7 @@ export svnae_repos_cat(repo: string, rev: int, path: string) -> string {
 
     sha = resolve_sha(repo, root, path)
     if string.length(sha) == 0 { return "" }
-    return svnae_rep_read_blob(repo, sha)
+    return rep_read_blob(repo, sha)
 }
 
 main() {

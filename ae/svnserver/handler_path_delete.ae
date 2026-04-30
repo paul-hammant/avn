@@ -35,10 +35,10 @@ extern svnserver_spec_allows(repo: string, branch: string,
                               path: string, is_super: int) -> int
 extern based_on_check(req: ptr, res: ptr, repo: string, head_rev: int, path: string, allow_missing_as_create: int) -> int
 
-extern svnae_txn_new(base_rev: int) -> ptr
-extern svnae_txn_delete(t: ptr, path: string) -> int
-extern svnae_txn_free(t: ptr)
-extern svnae_commit_finalise(repo: string, txn: ptr,
+extern txn_new(base_rev: int) -> ptr
+extern txn_delete(t: ptr, path: string) -> int
+extern txn_free(t: ptr)
+extern commit_finalise(repo: string, txn: ptr,
                               author: string, log_msg: string) -> int
 
 extern rev_response_json(new_rev: int) -> string
@@ -103,12 +103,12 @@ handler_path_delete_impl(req: ptr, res: ptr) {
         return
     }
 
-    txn = svnae_txn_new(base_rev)
+    txn = txn_new(base_rev)
     if txn == null {
         svnserver_respond_error(res, 500, "oom")
         return
     }
-    svnae_txn_delete(txn, file_path)
+    txn_delete(txn, file_path)
 
     hdr_author = svnserver_request_header(req, "Svn-Author")
     if string.length(hdr_author) == 0 {
@@ -124,8 +124,8 @@ handler_path_delete_impl(req: ptr, res: ptr) {
         hdr_log = string.concat("DELETE /", file_path)
     }
 
-    new_rev = svnae_commit_finalise(repo, txn, hdr_author, hdr_log)
-    svnae_txn_free(txn)
+    new_rev = commit_finalise(repo, txn, hdr_author, hdr_log)
+    txn_free(txn)
     if new_rev < 0 {
         svnserver_respond_error(res, 500, "commit failed")
         return

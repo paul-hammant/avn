@@ -17,8 +17,8 @@
 // each row is "<path>\x01<kind>\x01<base_rev>\x01<base_sha1>\x01
 // <state>\x01<conflicted>"; lists are "<n>\x02<rec>\x02...". The C
 // side keeps the {packed, n, pins} struct from subr/packed_handle/
-// and one-line accessor wrappers using svnae_packed_pin_at /
-// svnae_packed_int_at.
+// and one-line accessor wrappers using packed_pin_at /
+// packed_int_at.
 
 import std.string
 

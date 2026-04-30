@@ -20,10 +20,10 @@
 
 import std.string
 
-extern svnae_xdelta_compute(source: string, source_len: int,
+extern xdelta_compute(source: string, source_len: int,
                             target: string, target_len: int) -> (string, int)
 
-extern svnae_svndiff_decode_apply(diff: string, diff_len: int,
+extern svndiff_decode_apply(diff: string, diff_len: int,
                                   source: string, source_len: int) -> (string, int)
 
 expect_str(label: string, got: string, want: string) {
@@ -40,12 +40,12 @@ expect_str(label: string, got: string, want: string) {
 round_trip(label: string, source: string, target: string) {
     slen = string.length(source)
     tlen = string.length(target)
-    ddata, dlen = svnae_xdelta_compute(source, slen, target, tlen)
+    ddata, dlen = xdelta_compute(source, slen, target, tlen)
     if dlen == 0 {
         println("FAIL ${label}: xdelta_compute returned empty")
         return 1
     }
-    got, got_len = svnae_svndiff_decode_apply(ddata, dlen, source, slen)
+    got, got_len = svndiff_decode_apply(ddata, dlen, source, slen)
 
     rc = 0
     if got_len != tlen {

@@ -16,7 +16,7 @@
 // svn update — pull remote state at target rev into a checked-out
 // WC. Returns target_rev on success, -1 on error.
 //
-//   svnae_wc_update(wc_root, target_rev)
+//   wc_update(wc_root, target_rev)
 //     target_rev == -1 means "use server's current head".
 //
 // Algorithm (non-incremental):
@@ -31,29 +31,29 @@
 //   5. Bump base_rev in info table.
 //
 // svn switch is the same algorithm with the wc.db url/base_url/repo
-// rows rewritten first; we reuse svnae_wc_update for the heavy lift.
+// rows rewritten first; we reuse wc_update for the heavy lift.
 
 import std.string
 
 // wc.db lifecycle + info access.
-extern svnae_wc_db_open(wc_root: string) -> ptr
-extern svnae_wc_db_close(db: ptr)
-extern svnae_wc_db_get_info(db: ptr, key: string) -> string
-extern svnae_wc_db_set_info(db: ptr, key: string, value: string) -> int
+extern wc_db_open(wc_root: string) -> ptr
+extern wc_db_close(db: ptr)
+extern wc_db_get_info(db: ptr, key: string) -> string
+extern wc_db_set_info(db: ptr, key: string, value: string) -> int
 
 // Nodelist (tracked WC nodes).
-extern svnae_wc_db_list_nodes(db: ptr) -> ptr
-extern svnae_wc_nodelist_count(L: ptr) -> int
-extern svnae_wc_nodelist_free(L: ptr)
+extern wc_db_list_nodes(db: ptr) -> ptr
+extern wc_nodelist_count(L: ptr) -> int
+extern wc_nodelist_free(L: ptr)
 
 // RA: server's current head.
-extern svnae_ra_head_rev(base_url: string, repo_name: string) -> int
+extern ra_head_rev(base_url: string, repo_name: string) -> int
 
 // Remote-tree opaque storage primitive (C-side, update_shim.c). The
 // recursive RA walk in ae/wc/update_walk.ae populates it via
-// svnae_rtree_add_dir / svnae_rtree_add_file.
-extern svnae_rtree_new() -> ptr
-extern svnae_rtree_free(rt: ptr)
+// rtree_add_dir / rtree_add_file.
+extern rtree_new() -> ptr
+extern rtree_free(rt: ptr)
 
 // Pass A / Pass B of the update apply. wc_root is now passed
 // through to walk_remote (Round 140 retired the C-side TLS
@@ -74,32 +74,32 @@ extern update_apply_pass_b(wc_root: string, base_url: string,
 // target_rev == -1 means "use server head". Returns target_rev on
 // success, -1 on error. Conflicts mark the conflicted flag on
 // affected nodes — callers check status to see what needs resolving.
-export svnae_wc_update(wc_root: string, target_rev: int) -> int {
-    return svnae_wc_update_impl(wc_root, target_rev)
+export wc_update(wc_root: string, target_rev: int) -> int {
+    return wc_update_impl(wc_root, target_rev)
 }
 
-svnae_wc_update_impl(wc_root: string, target_rev: int) -> int {
-    db = svnae_wc_db_open(wc_root)
+wc_update_impl(wc_root: string, target_rev: int) -> int {
+    db = wc_db_open(wc_root)
     if db == null { return 0 - 1 }
 
     // get_info returns refcounted AetherString (Round 143).
-    base_url = svnae_wc_db_get_info(db, "base_url")
-    repo     = svnae_wc_db_get_info(db, "repo")
+    base_url = wc_db_get_info(db, "base_url")
+    repo     = wc_db_get_info(db, "repo")
     if string.length(base_url) == 0 {
-        svnae_wc_db_close(db)
+        wc_db_close(db)
         return 0 - 1
     }
     if string.length(repo) == 0 {
-        svnae_wc_db_close(db)
+        wc_db_close(db)
         return 0 - 1
     }
     base_url = string.copy(base_url)
     repo     = string.copy(repo)
 
     if target_rev < 0 {
-        target_rev = svnae_ra_head_rev(base_url, repo)
+        target_rev = ra_head_rev(base_url, repo)
         if target_rev < 0 {
-            svnae_wc_db_close(db)
+            wc_db_close(db)
             return 0 - 1
         }
     }
@@ -107,46 +107,46 @@ svnae_wc_update_impl(wc_root: string, target_rev: int) -> int {
     // 1. Pull full remote tree at target_rev. wc_root is threaded
     // explicitly so rtree_add can compute per-file hashes during the
     // walk.
-    rt = svnae_rtree_new()
+    rt = rtree_new()
     if update_walk_remote(wc_root, base_url, repo, target_rev, "", rt) != 0 {
-        svnae_rtree_free(rt)
-        svnae_wc_db_close(db)
+        rtree_free(rt)
+        wc_db_close(db)
         return 0 - 1
     }
 
     // 2. Snapshot local nodes.
-    L = svnae_wc_db_list_nodes(db)
+    L = wc_db_list_nodes(db)
 
     // 3. + 4. Two-pass apply (Aether-side).
     update_apply_pass_a(wc_root, base_url, repo, target_rev, rt, L, db)
     update_apply_pass_b(wc_root, base_url, repo, target_rev, rt, L, db)
 
     // 5. Bump base_rev in info.
-    svnae_wc_db_set_info(db, "base_rev", "${target_rev}")
+    wc_db_set_info(db, "base_rev", "${target_rev}")
 
-    svnae_wc_nodelist_free(L)
-    svnae_rtree_free(rt)
-    svnae_wc_db_close(db)
+    wc_nodelist_free(L)
+    rtree_free(rt)
+    wc_db_close(db)
     return target_rev
 }
 
 // svn switch: relocate the WC to a different branch (or repo) at
 // target_rev. Rewrite the url/base_url/repo info rows then call
-// svnae_wc_update — the update algorithm is exactly what switch
+// wc_update — the update algorithm is exactly what switch
 // needs (fetch remote, diff against local, 3-way merge on overlap).
-export svnae_wc_switch(wc_root: string,
+export wc_switch(wc_root: string,
                         new_base_url: string, new_repo: string,
                         target_rev: int) -> int {
-    db = svnae_wc_db_open(wc_root)
+    db = wc_db_open(wc_root)
     if db == null { return 0 - 1 }
 
     full_url = "${new_base_url}/${new_repo}"
-    svnae_wc_db_set_info(db, "url",      full_url)
-    svnae_wc_db_set_info(db, "base_url", new_base_url)
-    svnae_wc_db_set_info(db, "repo",     new_repo)
-    svnae_wc_db_close(db)
+    wc_db_set_info(db, "url",      full_url)
+    wc_db_set_info(db, "base_url", new_base_url)
+    wc_db_set_info(db, "repo",     new_repo)
+    wc_db_close(db)
 
-    return svnae_wc_update_impl(wc_root, target_rev)
+    return wc_update_impl(wc_root, target_rev)
 }
 
 main() {

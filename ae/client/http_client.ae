@@ -16,7 +16,7 @@
 // ae/client/http_client.ae — Aether-side HTTP plumbing for the RA shim.
 //
 // Replaces ~200 lines of libcurl in ae/client/shim.c with std.http.client
-// v2 calls. The C side keeps its existing svnae_* / http_get* /
+// v2 calls. The C side keeps its existing * / http_get* /
 // http_post_json signatures so every downstream caller (tens of call
 // sites across handler shims, log/paths/blame builders, commit + copy
 // + branch_create code paths) links unchanged. The C bodies become
@@ -25,7 +25,7 @@
 // already use.
 //
 // Auth state (X-Svnae-User, X-Svnae-Superuser tokens) lives in C —
-// it's set via svnae_ra_set_user / svnae_ra_set_superuser_token and
+// it's set via ra_set_user / ra_set_superuser_token and
 // passed in to each of these calls.
 
 import std.string

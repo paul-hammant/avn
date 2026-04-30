@@ -54,7 +54,7 @@ expect_str(label: string, got: string, want: string) {
 main() {
     fails = 0
     pid = os_getpid_raw()
-    path = "/tmp/svnae_test_io_${pid}.dat"
+    path = "/tmp/test_io_${pid}.dat"
 
     // Make sure the file doesn't exist from a prior run.
     io_remove(path)

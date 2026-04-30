@@ -44,7 +44,7 @@ export branch_spec_allows(repo: string, branch: string, path: string) -> int {
 
 // ---- branch head resolution -------------------------------------------
 //
-// Find the current rev of `base` branch, for svnae_branch_create's
+// Find the current rev of `base` branch, for branch_create's
 // "fork a new branch off <base>" step. Phase 8.1 introduced the
 // per-branch $repo/branches/<base>/head file; legacy repos seeded
 // before 8.1 still have $repo/head only and need a fallback.
@@ -58,7 +58,7 @@ export branch_spec_allows(repo: string, branch: string, path: string) -> int {
 //
 // Returns the base rev on success, -1 on miss / malformed input.
 //
-// Ported from commit_shim.c's svnae_branch_create block.
+// Ported from commit_shim.c's branch_create block.
 
 extern io_listdir(path: string) -> ptr
 extern io_listdir_count(h: ptr) -> int
@@ -164,7 +164,7 @@ export branch_head_rev(repo: string, base: string) -> int {
 //   $repo/head                                      (legacy: "<N>\n")
 //   $repo/branches/<branch>/head                    (per-branch: "rev=<N>\n")
 //
-// Both svnae_commit_finalise_on_branch and svnae_branch_create in
+// Both commit_finalise_on_branch and branch_create in
 // fs_fs/commit_shim.c had essentially the same block inlined — with a
 // real latent bug in branch_create's copy: it hard-coded the
 // per-branch pointer's aa/bb directory to "00/00" instead of deriving

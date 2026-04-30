@@ -15,7 +15,7 @@
 
 // svn merge — linear rev-range forward / reverse merge.
 //
-//   svnae_wc_merge(wc_root, source_path, rev_a, rev_b, target_path)
+//   wc_merge(wc_root, source_path, rev_a, rev_b, target_path)
 //
 // Apply the file-tree diff between two source-path revisions onto the
 // WC. Records the merged range in svn:mergeinfo on the WC's root
@@ -33,21 +33,21 @@
 
 import std.string
 
-extern svnae_wc_db_open(wc_root: string) -> ptr
-extern svnae_wc_db_close(db: ptr)
-extern svnae_wc_db_upsert_node(db: ptr, path: string, kind: int, base_rev: int, base_sha1: string, node_state: int) -> int
-extern svnae_wc_db_node_exists(db: ptr, path: string) -> int
-extern svnae_wc_db_get_info(db: ptr, key: string) -> string
+extern wc_db_open(wc_root: string) -> ptr
+extern wc_db_close(db: ptr)
+extern wc_db_upsert_node(db: ptr, path: string, kind: int, base_rev: int, base_sha1: string, node_state: int) -> int
+extern wc_db_node_exists(db: ptr, path: string) -> int
+extern wc_db_get_info(db: ptr, key: string) -> string
 
-extern svnae_wc_propset(wc_root: string, path: string, name: string, value: string) -> int
-extern svnae_wc_propdel(wc_root: string, path: string, name: string) -> int
+extern wc_propset(wc_root: string, path: string, name: string, value: string) -> int
+extern wc_propdel(wc_root: string, path: string, name: string) -> int
 extern propget_value(wc_root: string, path: string, name: string) -> string
 
 // Opaque rtree storage in C (merge_shim.c). The recursive walk fills
-// it via svnae_rtree_add_dir / _add_file; apply passes read it via
+// it via rtree_add_dir / _add_file; apply passes read it via
 // the mergert_* accessors.
-extern svnae_rtree_new() -> ptr
-extern svnae_rtree_free(rt: ptr)
+extern rtree_new() -> ptr
+extern rtree_free(rt: ptr)
 
 // Walker + apply passes (Aether-side helpers). wc_root is passed
 // explicitly through the walker so add_file can hash files at
@@ -70,26 +70,26 @@ extern mergeinfo_add_range(existing: string, source: string,
 // (source, lo, hi, reverse). Ensures a tracked dir row exists at "".
 mergeinfo_add_range_(wc_root: string, source: string,
                      lo: int, hi: int, reverse: int) -> int {
-    db = svnae_wc_db_open(wc_root)
+    db = wc_db_open(wc_root)
     if db == null { return 0 - 1 }
-    if svnae_wc_db_node_exists(db, "") == 0 {
-        svnae_wc_db_upsert_node(db, "", 1, 0, "", 0)
+    if wc_db_node_exists(db, "") == 0 {
+        wc_db_upsert_node(db, "", 1, 0, "", 0)
     }
-    svnae_wc_db_close(db)
+    wc_db_close(db)
 
     existing = propget_value(wc_root, "", "svn:mergeinfo")
     existing = string.copy(existing)
     new_val = mergeinfo_add_range(existing, source, lo, hi, reverse)
     new_val = string.copy(new_val)
     if string.length(new_val) > 0 {
-        return svnae_wc_propset(wc_root, "", "svn:mergeinfo", new_val)
+        return wc_propset(wc_root, "", "svn:mergeinfo", new_val)
     }
     // Empty result — delete the property entirely.
-    svnae_wc_propdel(wc_root, "", "svn:mergeinfo")
+    wc_propdel(wc_root, "", "svn:mergeinfo")
     return 0
 }
 
-export svnae_wc_merge(wc_root: string, source_path: string,
+export wc_merge(wc_root: string, source_path: string,
                        rev_a: int, rev_b: int,
                        target_path: string) -> int {
     if rev_a == rev_b { return 0 }
@@ -107,12 +107,12 @@ export svnae_wc_merge(wc_root: string, source_path: string,
         rev_theirs = rev_a
     }
 
-    db = svnae_wc_db_open(wc_root)
+    db = wc_db_open(wc_root)
     if db == null { return 0 - 1 }
     // get_info returns refcounted AetherString (Round 143).
-    base_url = svnae_wc_db_get_info(db, "base_url")
-    repo     = svnae_wc_db_get_info(db, "repo")
-    svnae_wc_db_close(db)
+    base_url = wc_db_get_info(db, "base_url")
+    repo     = wc_db_get_info(db, "repo")
+    wc_db_close(db)
     if string.length(base_url) == 0 { return 0 - 1 }
     if string.length(repo) == 0 { return 0 - 1 }
     base_url = string.copy(base_url)
@@ -120,18 +120,18 @@ export svnae_wc_merge(wc_root: string, source_path: string,
 
     // Fetch the source tree at both endpoints. wc_root threads
     // through so add_file can hash files at add-time.
-    a = svnae_rtree_new()
-    b = svnae_rtree_new()
+    a = rtree_new()
+    b = rtree_new()
     arc = merge_walk_remote(wc_root, base_url, repo, rev_base, source_path, "", a)
     brc = merge_walk_remote(wc_root, base_url, repo, rev_theirs, source_path, "", b)
     if arc != 0 {
-        svnae_rtree_free(a)
-        svnae_rtree_free(b)
+        rtree_free(a)
+        rtree_free(b)
         return 0 - 1
     }
     if brc != 0 {
-        svnae_rtree_free(a)
-        svnae_rtree_free(b)
+        rtree_free(a)
+        rtree_free(b)
         return 0 - 1
     }
 
@@ -145,13 +145,13 @@ export svnae_wc_merge(wc_root: string, source_path: string,
     }
 
     // Two-pass apply.
-    db = svnae_wc_db_open(wc_root)
+    db = wc_db_open(wc_root)
     merge_apply_deletions(wc_root, target_path, a, b, db)
     merge_apply_adds_mods(wc_root, target_path, rev_a, rev_b, a, b, db)
-    svnae_wc_db_close(db)
+    wc_db_close(db)
 
-    svnae_rtree_free(a)
-    svnae_rtree_free(b)
+    rtree_free(a)
+    rtree_free(b)
 
     // Record merged range in svn:mergeinfo. The reverse flag turns
     // into the leading '-' on the emitted line.

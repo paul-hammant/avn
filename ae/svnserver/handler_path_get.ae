@@ -31,10 +31,10 @@ extern svnserver_request_is_super(req: ptr) -> int
 
 extern repos_head_rev(repo: string) -> int
 extern acl_allows_mode(repo: string, rev: int, user: string, target_path: string, want_write: int) -> int
-extern svnae_repos_cat(repo: string, rev: int, path: string) -> string
-extern svnae_rep_free(p: string)
-extern svnae_repos_resolve_kind(repo: string, rev: int, path: string) -> int
-extern svnae_repos_resolve_sha(repo: string, rev: int, path: string) -> string
+extern repos_cat(repo: string, rev: int, path: string) -> string
+extern rep_free(p: string)
+extern repos_resolve_kind(repo: string, rev: int, path: string) -> int
+extern repos_resolve_sha(repo: string, rev: int, path: string) -> string
 extern repo_primary_hash(repo: string) -> string
 
 extern svnserver_respond_error(res: ptr, code: int, msg: string)
@@ -90,7 +90,7 @@ handler_path_get_impl(req: ptr, res: ptr) {
         }
     }
 
-    data = svnae_repos_cat(repo, rev, file_path)
+    data = repos_cat(repo, rev, file_path)
     if string.length(data) == 0 {
         svnserver_respond_error(res, 404, "not found")
         return
@@ -98,8 +98,8 @@ handler_path_get_impl(req: ptr, res: ptr) {
 
     // Merkle headers. Fetch kind+sha independently; both must exist
     // to set the header (mirrors the original C guard).
-    kind = svnae_repos_resolve_kind(repo, rev, file_path)
-    sha = svnae_repos_resolve_sha(repo, rev, file_path)
+    kind = repos_resolve_kind(repo, rev, file_path)
+    sha = repos_resolve_sha(repo, rev, file_path)
     if kind != 0 {
         if string.length(sha) > 0 {
             algo = repo_primary_hash(repo)
@@ -111,7 +111,7 @@ handler_path_get_impl(req: ptr, res: ptr) {
 
     svnserver_respond_binary_ok(res, data, string.length(data),
                                 "application/octet-stream")
-    svnae_rep_free(data)
+    rep_free(data)
 }
 
 main() {

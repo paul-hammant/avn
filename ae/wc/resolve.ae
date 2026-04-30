@@ -16,7 +16,7 @@
 // svn resolve — clear the `conflicted` flag on a WC node, optionally
 // choosing which version becomes the working-copy content:
 //
-//   svnae_wc_resolve(wc_root, path, accept)
+//   wc_resolve(wc_root, path, accept)
 //     accept 0 = "working"      — keep WC file as-is (user hand-resolved)
 //     accept 1 = "mine-full"    — replace WC file with the `.mine` sidecar
 //     accept 2 = "theirs-full"  — replace WC file with `.r<theirs_rev>` sidecar
@@ -30,12 +30,12 @@ import std.fs
 import std.string
 
 // wc.db lifecycle + helpers.
-extern svnae_wc_db_open(wc_root: string) -> ptr
-extern svnae_wc_db_close(db: ptr)
-extern svnae_wc_db_set_conflicted(db: ptr, path: string, conflicted: int) -> int
-extern svnae_wc_db_get_node(db: ptr, path: string) -> ptr
-extern svnae_wc_node_conflicted(n: ptr) -> int
-extern svnae_wc_node_free(n: ptr)
+extern wc_db_open(wc_root: string) -> ptr
+extern wc_db_close(db: ptr)
+extern wc_db_set_conflicted(db: ptr, path: string, conflicted: int) -> int
+extern wc_db_get_node(db: ptr, path: string) -> ptr
+extern wc_node_conflicted(n: ptr) -> int
+extern wc_node_free(n: ptr)
 
 // Sidecar suffix probes (ae/wc/sidecar.ae).
 extern is_sidecar_suffix(s: string) -> int
@@ -141,16 +141,16 @@ find_theirs_sidecar_(dirpath: string, base: string) -> string {
     return "${dirpath}/${base}.r${best_rev}"
 }
 
-export svnae_wc_resolve(wc_root: string, rel_path: string, accept: int) -> int {
-    db = svnae_wc_db_open(wc_root)
+export wc_resolve(wc_root: string, rel_path: string, accept: int) -> int {
+    db = wc_db_open(wc_root)
     if db == null { return 0 - 1 }
 
-    n = svnae_wc_db_get_node(db, rel_path)
-    if n == null { svnae_wc_db_close(db); return 0 - 1 }
-    is_conflicted = svnae_wc_node_conflicted(n)
-    svnae_wc_node_free(n)
+    n = wc_db_get_node(db, rel_path)
+    if n == null { wc_db_close(db); return 0 - 1 }
+    is_conflicted = wc_node_conflicted(n)
+    wc_node_free(n)
     if is_conflicted == 0 {
-        svnae_wc_db_close(db)
+        wc_db_close(db)
         return 0 - 1
     }
 
@@ -167,7 +167,7 @@ export svnae_wc_resolve(wc_root: string, rel_path: string, accept: int) -> int {
         // mine-full: copy .mine over the file.
         mine = "${disk}.mine"
         if copy_overwrite_(mine, disk) != 0 {
-            svnae_wc_db_close(db)
+            wc_db_close(db)
             return 0 - 1
         }
     }
@@ -175,19 +175,19 @@ export svnae_wc_resolve(wc_root: string, rel_path: string, accept: int) -> int {
         // theirs-full: copy the highest-rev sidecar over the file.
         theirs = find_theirs_sidecar_(dirpath, base)
         if string.length(theirs) == 0 {
-            svnae_wc_db_close(db)
+            wc_db_close(db)
             return 0 - 1
         }
         if copy_overwrite_(theirs, disk) != 0 {
-            svnae_wc_db_close(db)
+            wc_db_close(db)
             return 0 - 1
         }
     }
     // accept == 0 (working): leave the file alone.
 
     remove_sidecars_(dirpath, base)
-    rc = svnae_wc_db_set_conflicted(db, rel_path, 0)
-    svnae_wc_db_close(db)
+    rc = wc_db_set_conflicted(db, rel_path, 0)
+    wc_db_close(db)
     if rc == 0 { return 0 }
     return 0 - 1
 }

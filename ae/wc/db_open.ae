@@ -19,7 +19,7 @@ import contrib.sqlite
 
 extern wc_db_install_schema(db: ptr) -> int
 
-export svnae_wc_db_open(wc_root: string) -> ptr {
+export wc_db_open(wc_root: string) -> ptr {
     // sqlite needs the .svn/ parent dir to exist; pristine/ at
     // the same time covers both this and the pristine-store init.
     pristine_dir = "${wc_root}/.svn/pristine"
@@ -37,7 +37,7 @@ export svnae_wc_db_open(wc_root: string) -> ptr {
     return db
 }
 
-export svnae_wc_db_close(db: ptr) {
+export wc_db_close(db: ptr) {
     if db == null { return }
     sqlite.close(db)
     return

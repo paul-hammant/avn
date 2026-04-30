@@ -28,10 +28,10 @@
 import std.string
 
 extern acl_allows_mode(repo: string, rev: int, user: string, target_path: string, want_write: int) -> int
-extern svnae_repos_resolve_kind(repo: string, rev: int, path: string) -> int
-extern svnae_repos_resolve_sha(repo: string, rev: int, path: string) -> string
-extern svnae_rep_read_blob(repo: string, sha: string) -> string
-extern svnae_rep_free(body: string)
+extern repos_resolve_kind(repo: string, rev: int, path: string) -> int
+extern repos_resolve_sha(repo: string, rev: int, path: string) -> string
+extern rep_read_blob(repo: string, sha: string) -> string
+extern rep_free(body: string)
 extern repo_primary_hash(repo: string) -> string
 
 extern list_build(repo: string, rev: int, user: string, is_super: int,
@@ -40,7 +40,7 @@ extern list_build(repo: string, rev: int, user: string, is_super: int,
 extern svnserver_respond_error(res: ptr, code: int, msg: string)
 extern svnserver_set_merkle_headers(res: ptr, algo: string, kind: string, sha: string)
 extern svnserver_respond_json_ok(res: ptr, body: string)
-extern svnae_crypto_hash_hex(algo: string, data: string, length: int) -> string
+extern crypto_hash_hex(algo: string, data: string, length: int) -> string
 
 export list_handle(req: ptr, res: ptr, repo: string, rev: int,
                    dir_path: string, user: string, is_super: int) {
@@ -58,21 +58,21 @@ list_handle_impl(req: ptr, res: ptr, repo: string, rev: int,
     }
 
     // Resolve.
-    kind = svnae_repos_resolve_kind(repo, rev, dir_path)
+    kind = repos_resolve_kind(repo, rev, dir_path)
     if kind != 100 {     // 'd'
         svnserver_respond_error(res, 404, "not a directory")
         return
     }
-    dir_sha = svnae_repos_resolve_sha(repo, rev, dir_path)
+    dir_sha = repos_resolve_sha(repo, rev, dir_path)
     dir_sha = string.copy(dir_sha)         // TLS snapshot
 
     // Empty body is legitimate — empty dirs have a 0-byte blob and
     // rep_read_blob returns "" (indistinguishable from "missing" via
     // string.length, but resolve_kind already told us it exists).
     // list_build handles 0 entries correctly.
-    dir_body = svnae_rep_read_blob(repo, dir_sha)
+    dir_body = rep_read_blob(repo, dir_sha)
     packed = list_build(repo, rev, user, is_super, dir_body, dir_path)
-    svnae_rep_free(dir_body)
+    rep_free(dir_body)
 
     // Find \x01 separator. packed = "<body>\x01<redact>".
     n = string.length(packed)
@@ -90,7 +90,7 @@ list_handle_impl(req: ptr, res: ptr, repo: string, rev: int,
     if is_super == 0 {
         if sep >= 0 {
             redact = string.substring(packed, sep + 1, n)
-            rehash = svnae_crypto_hash_hex(algo, redact, string.length(redact))
+            rehash = crypto_hash_hex(algo, redact, string.length(redact))
             svnserver_set_merkle_headers(res, algo, "dir", rehash)
         }
     }

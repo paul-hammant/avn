@@ -20,8 +20,8 @@ import std.string
 extern os_getpid_raw() -> int
 extern system(cmd: string) -> int
 
-extern svnae_wc_db_open(wc_root: string) -> ptr
-extern svnae_wc_db_close(db: ptr)
+extern wc_db_open(wc_root: string) -> ptr
+extern wc_db_close(db: ptr)
 
 extern wc_pristine_put(wc_root: string, data: string, len: int) -> string
 extern wc_pristine_get(wc_root: string, sha1: string) -> string
@@ -43,13 +43,13 @@ expect_str(label: string, got: string, want: string) {
 main() {
     fails = 0
     pid = os_getpid_raw()
-    wc = "/tmp/svnae_test_pristine_${pid}"
+    wc = "/tmp/test_pristine_${pid}"
     system("rm -rf ${wc}")
     system("mkdir -p ${wc}")
 
     // Open db so .svn dirs exist.
-    db = svnae_wc_db_open(wc)
-    svnae_wc_db_close(db)
+    db = wc_db_open(wc)
+    wc_db_close(db)
 
     // Small text blob — stored RAW (too small to benefit from zlib).
     small = "hello\n"

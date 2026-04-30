@@ -26,19 +26,19 @@
 // For action 2, `offset` is ignored (pass 0).
 //
 // The decoder takes the svndiff bytes and the source; returns the target
-// as an svnae_buf handle.
+// as an buf handle.
 
 import std.string
 
-extern svnae_svndiff_decode_apply(
+extern svndiff_decode_apply(
     diff: string, diff_len: int,
     source: string, source_len: int) -> (string, int)
 
-extern svnae_svndiff_encoder_new(source_len: int, target_len: int) -> ptr
-extern svnae_svndiff_encoder_add_op(enc: ptr, action: int, length: int, offset: int) -> int
-extern svnae_svndiff_encoder_finish(enc: ptr, new_data: string, new_data_len: int) -> (string, int)
-extern svnae_svndiff_encoder_free(enc: ptr)
+extern svndiff_encoder_new(source_len: int, target_len: int) -> ptr
+extern svndiff_encoder_add_op(enc: ptr, action: int, length: int, offset: int) -> int
+extern svndiff_encoder_finish(enc: ptr, new_data: string, new_data_len: int) -> (string, int)
+extern svndiff_encoder_free(enc: ptr)
 
 decode_apply(diff_data: string, diff_len: int, source: string) -> (string, int) {
-    return svnae_svndiff_decode_apply(diff_data, diff_len, source, string.length(source))
+    return svndiff_decode_apply(diff_data, diff_len, source, string.length(source))
 }

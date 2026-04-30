@@ -29,8 +29,8 @@ import std.string
 
 extern io_read_file(path: string) -> string
 extern io_file_size(path: string) -> int
-extern svnae_rep_read_blob(repo: string, sha: string) -> string
-extern svnae_rep_free(body: string)
+extern rep_read_blob(repo: string, sha: string) -> string
+extern rep_free(body: string)
 extern blobfield_get(body: string, key: string) -> string
 
 // Zero-pad `n` to six digits, matching $repo/revs/NNNNNN.
@@ -72,11 +72,11 @@ export load_rev_blob_field(repo: string, rev: int, key: string) -> string {
     sha = rtrim_ws(src)
     if string.length(sha) == 0 { return "" }
 
-    body = svnae_rep_read_blob(repo, sha)
+    body = rep_read_blob(repo, sha)
     if string.length(body) == 0 { return "" }
     v = blobfield_get(body, key)
     v = string.copy(v)         // copy before freeing body
-    svnae_rep_free(body)
+    rep_free(body)
     return v
 }
 

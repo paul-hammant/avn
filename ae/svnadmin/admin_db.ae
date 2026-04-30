@@ -26,7 +26,7 @@
 //     Walk rep_cache and return all (sha1, uncompressed_size) rows
 //     as a packed string in the same shape ra_parse_log etc. use:
 //       "<N>\x02<sha>\x01<size>\x02<sha>\x01<size>\x02..."
-//     The C side parses this into its existing svnae_rep_list shape
+//     The C side parses this into its existing rep_list shape
 //     for the dump walker. Empty result is "0\x02".
 
 import std.string

@@ -30,15 +30,15 @@ extern aether_args_count() -> int
 extern aether_args_get(index: int) -> string
 
 extern rep_write_blob(repo: string, data: string, len: int) -> string
-extern svnae_rep_read_blob(repo: string, sha1_hex: string) -> string
-extern svnae_rep_free(p: string)
+extern rep_read_blob(repo: string, sha1_hex: string) -> string
+extern rep_free(p: string)
 
-extern svnae_txn_new(base_rev: int) -> ptr
-extern svnae_txn_base_rev(t: ptr) -> int
-extern svnae_txn_add_file(t: ptr, path: string, content: string, len: int) -> int
-extern svnae_txn_mkdir(t: ptr, path: string) -> int
-extern svnae_txn_delete(t: ptr, path: string) -> int
-extern svnae_txn_free(t: ptr)
+extern txn_new(base_rev: int) -> ptr
+extern txn_base_rev(t: ptr) -> int
+extern txn_add_file(t: ptr, path: string, content: string, len: int) -> int
+extern txn_mkdir(t: ptr, path: string) -> int
+extern txn_delete(t: ptr, path: string) -> int
+extern txn_free(t: ptr)
 extern rebuild_dir(repo: string, base_dir_sha: string, prefix: string, t: ptr) -> string
 
 extern io_write_atomic(path: string, data: string, length: int) -> int
@@ -117,10 +117,10 @@ rev_root_sha1(repo: string, rev: int) {
     raw = io_read_file(rev_file_path(repo, rev))
     if string.length(raw) == 0 { return "" }
     rev_blob_sha1 = string.trim(raw)
-    rev_body = svnae_rep_read_blob(repo, rev_blob_sha1)
+    rev_body = rep_read_blob(repo, rev_blob_sha1)
     root = parse_line_value(rev_body, "root")
     root_copy = string.concat("", root)
-    svnae_rep_free(rev_body)
+    rep_free(rev_body)
     return root_copy
 }
 
@@ -133,7 +133,7 @@ fsfs_head_rev(repo: string) {
 }
 
 commit_txn(repo: string, txn: ptr, author: string, logmsg: string) {
-    base_rev = svnae_txn_base_rev(txn)
+    base_rev = txn_base_rev(txn)
     base_root = rev_root_sha1(repo, base_rev)
     if string.length(base_root) == 0 { return -1 }
     new_root = rebuild_dir(repo, base_root, "", txn)
@@ -162,29 +162,29 @@ main() {
     rc = fsfs_init(repo)
     if rc != 0 { println("init failed: ${rc}"); exit(1) }
 
-    txn = svnae_txn_new(0)
-    svnae_txn_mkdir(txn, "src")
-    svnae_txn_add_file(txn, "README",     "Hello\n",                     6)
-    svnae_txn_add_file(txn, "src/main.c", "int main() { return 0; }\n", 25)
-    svnae_txn_add_file(txn, "LICENSE",    "Apache-2.0\n",               11)
+    txn = txn_new(0)
+    txn_mkdir(txn, "src")
+    txn_add_file(txn, "README",     "Hello\n",                     6)
+    txn_add_file(txn, "src/main.c", "int main() { return 0; }\n", 25)
+    txn_add_file(txn, "LICENSE",    "Apache-2.0\n",               11)
     if commit_txn(repo, txn, "alice", "first commit") != 1 {
         println("commit 1 failed"); exit(1)
     }
-    svnae_txn_free(txn)
+    txn_free(txn)
 
-    txn = svnae_txn_new(1)
-    svnae_txn_add_file(txn, "src/main.c", "int main() { return 42; }\n", 26)
+    txn = txn_new(1)
+    txn_add_file(txn, "src/main.c", "int main() { return 42; }\n", 26)
     if commit_txn(repo, txn, "bob", "answer to everything") != 2 {
         println("commit 2 failed"); exit(1)
     }
-    svnae_txn_free(txn)
+    txn_free(txn)
 
-    txn = svnae_txn_new(2)
-    svnae_txn_delete(txn, "LICENSE")
+    txn = txn_new(2)
+    txn_delete(txn, "LICENSE")
     if commit_txn(repo, txn, "alice", "drop license") != 3 {
         println("commit 3 failed"); exit(1)
     }
-    svnae_txn_free(txn)
+    txn_free(txn)
 
     println("seeded ${repo} with 3 revisions")
 }

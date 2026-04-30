@@ -13,7 +13,7 @@
 // implied. See the License for the specific language governing
 // permissions and limitations under the License.
 
-// Tests for std.zlib. Round 176 retired the C-side svnae_zlib_*
+// Tests for std.zlib. Round 176 retired the C-side zlib_*
 // shim in favour of std.zlib (docs/stdlib-reference.md "std.zlib"),
 // which returns length-aware AetherStrings + explicit byte counts
 // instead of opaque buf handles. inflate auto-grows so callers no

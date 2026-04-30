@@ -75,7 +75,7 @@ export ra_parse_hash_algo(body: string) -> string {
 
 // Parse a rev-info JSON response into a packed string:
 //   "<rev_int>\x01<author>\x01<date>\x01<msg>\x01<root>"
-// The C caller splits on \x01 and populates its svnae_ra_info
+// The C caller splits on \x01 and populates its ra_info
 // struct. Returns "" on malformed JSON so the caller can fail
 // the whole request.
 //
@@ -291,7 +291,7 @@ export ra_parse_blame(body: string) -> string {
 // Parse a list JSON {"entries":[{name,kind}, ...]} into
 // "N\x02<name>\x01<kind-char>\x02..."
 // kind-char is 'd' for "dir", 'f' otherwise (the existing C
-// svnae_ra_list accessors only distinguish dir vs file).
+// ra_list accessors only distinguish dir vs file).
 export ra_parse_list(body: string) -> string {
     if string.length(body) == 0 { return "" }
     root, err = json.parse(body)

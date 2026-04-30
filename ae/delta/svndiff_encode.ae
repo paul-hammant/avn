@@ -14,8 +14,8 @@
 // permissions and limitations under the License.
 
 // svndiff1 encode — port of the C encoder in
-// ae/delta/svndiff/shim.c::svnae_svndiff_encode_window. The C side
-// keeps the svnae_encoder struct (a growable {action, length, offset}
+// ae/delta/svndiff/shim.c::svndiff_encode_window. The C side
+// keeps the encoder struct (a growable {action, length, offset}
 // triple list) because it owns the malloc/realloc lifecycle that
 // per-add_op grows. The encode-window body that walks those ops and
 // emits the wire-format bytes is what moves here.
@@ -40,14 +40,14 @@
 import std.string
 import std.bytes
 
-// C-side accessors over the svnae_encoder struct (defined in
+// C-side accessors over the encoder struct (defined in
 // ae/delta/svndiff/shim.c). The struct stays C-side because per-
 // add_op realloc growth is a natural fit there; this module just
 // reads from it.
-extern svnae_encoder_count(e: ptr) -> int
-extern svnae_encoder_op_action(e: ptr, i: int) -> int
-extern svnae_encoder_op_length(e: ptr, i: int) -> int
-extern svnae_encoder_op_offset(e: ptr, i: int) -> int
+extern encoder_count(e: ptr) -> int
+extern encoder_op_action(e: ptr, i: int) -> int
+extern encoder_op_length(e: ptr, i: int) -> int
+extern encoder_op_offset(e: ptr, i: int) -> int
 
 // Append the varint encoding of `v` to byte buffer `b`, starting at
 // the current logical length. Returns the new length, or -1 on
@@ -105,7 +105,7 @@ emit_inst_(b: ptr, pos: int, action: int, length: int, offset: int,
 // Returns the section bytes as a length-aware AetherString. "" on
 // invalid action.
 build_inst_section_(e: ptr) -> string {
-    n = svnae_encoder_count(e)
+    n = encoder_count(e)
     // Instruction sections are bounded by 8 + 10 + 10 bytes per op
     // (1 header + up to two 10-byte varints), so 30 per op is a
     // safe upper bound for the buffer.
@@ -115,9 +115,9 @@ build_inst_section_(e: ptr) -> string {
     pos = 0
     i = 0
     while i < n {
-        action = svnae_encoder_op_action(e, i)
-        length = svnae_encoder_op_length(e, i)
-        offset = svnae_encoder_op_offset(e, i)
+        action = encoder_op_action(e, i)
+        length = encoder_op_length(e, i)
+        offset = encoder_op_offset(e, i)
         if action < 0 { bytes.free(inst); return "" }
         if action > 2 { bytes.free(inst); return "" }
         has_offset = 1

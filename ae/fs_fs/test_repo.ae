@@ -23,9 +23,9 @@ import std.zlib
 
 // --- externs from subr shims ------------------------------------------------
 
-extern svnae_crypto_hash_hex(algo: string, data: string, length: int) -> string
+extern crypto_hash_hex(algo: string, data: string, length: int) -> string
 
-// Round 176: std.zlib retired the C-side svnae_zlib_*/svnae_buf_*
+// Round 176: std.zlib retired the C-side zlib_*/buf_*
 // shim. zlib.deflate / zlib.inflate return (string, int, error) tuples;
 // the previous opaque-buf handle dance is gone.
 
@@ -142,7 +142,7 @@ rep_cache_insert(repo: string, sha1: string, rel_path: string,
 
 write_blob(repo: string, data: string) {
     n = string.length(data)
-    sha1_copy = svnae_crypto_hash_hex("sha1", data, n)
+    sha1_copy = crypto_hash_hex("sha1", data, n)
 
     if rep_cache_has(repo, sha1_copy) == 1 { return sha1_copy }
 
@@ -229,7 +229,7 @@ rmtree(path: string) { system("rm -rf '${path}'"); return 0 }
 main() {
     fails = 0
     pid = os_getpid_raw()
-    repo = "/tmp/svnae_test_repo_${pid}"
+    repo = "/tmp/test_repo_${pid}"
     rmtree(repo)
 
     // 1. create_repo

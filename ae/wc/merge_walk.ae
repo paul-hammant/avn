@@ -24,18 +24,18 @@
 
 import std.string
 
-extern svnae_ra_list(base_url: string, repo_name: string, rev: int, path: string) -> ptr
-extern svnae_ra_list_count(L: ptr) -> int
-extern svnae_ra_list_name(L: ptr, i: int) -> string
-extern svnae_ra_list_kind(L: ptr, i: int) -> string
-extern svnae_ra_list_free(L: ptr)
-extern svnae_ra_cat(base_url: string, repo_name: string, rev: int, path: string) -> string
-extern svnae_ra_free(p: string)
+extern ra_list(base_url: string, repo_name: string, rev: int, path: string) -> ptr
+extern ra_list_count(L: ptr) -> int
+extern ra_list_name(L: ptr, i: int) -> string
+extern ra_list_kind(L: ptr, i: int) -> string
+extern ra_list_free(L: ptr)
+extern ra_cat(base_url: string, repo_name: string, rev: int, path: string) -> string
+extern ra_free(p: string)
 
 extern path_join_rel(prefix: string, name: string) -> string
 
-extern svnae_rtree_add_dir(rt: ptr, path: string)
-extern svnae_rtree_add_file(rt: ptr, path: string, data: string, data_len: int,
+extern rtree_add_dir(rt: ptr, path: string)
+extern rtree_add_file(rt: ptr, path: string, data: string, data_len: int,
                              wc_root: string)
 
 // Round 140: wc_root threaded through explicitly so add_file can
@@ -54,23 +54,23 @@ merge_walk_remote_impl(wc_root: string,
     full = path_join_rel(source_path, sub_prefix)
     full = string.copy(full)
 
-    L = svnae_ra_list(base_url, repo, rev, full)
+    L = ra_list(base_url, repo, rev, full)
     if L == null { return -1 }
 
-    n = svnae_ra_list_count(L)
+    n = ra_list_count(L)
     result = 0
     i = 0
     while i < n {
         if result == 0 {
-            name = svnae_ra_list_name(L, i)
+            name = ra_list_name(L, i)
             name = string.copy(name)
-            kind = svnae_ra_list_kind(L, i)
+            kind = ra_list_kind(L, i)
             kind = string.copy(kind)
             rel = path_join_rel(sub_prefix, name)
             rel = string.copy(rel)
 
             if string.equals(kind, "dir") == 1 {
-                svnae_rtree_add_dir(rt, rel)
+                rtree_add_dir(rt, rel)
                 if merge_walk_remote_impl(wc_root, base_url, repo, rev,
                                            source_path, rel, rt) != 0 {
                     result = -1
@@ -79,19 +79,19 @@ merge_walk_remote_impl(wc_root: string,
             if string.equals(kind, "dir") == 0 {
                 remote_full = path_join_rel(full, name)
                 remote_full = string.copy(remote_full)
-                data = svnae_ra_cat(base_url, repo, rev, remote_full)
+                data = ra_cat(base_url, repo, rev, remote_full)
                 if string.length(data) == 0 {
                     result = -1
                 }
                 if result == 0 {
-                    svnae_rtree_add_file(rt, rel, data, string.length(data), wc_root)
-                    svnae_ra_free(data)
+                    rtree_add_file(rt, rel, data, string.length(data), wc_root)
+                    ra_free(data)
                 }
             }
         }
         i = i + 1
     }
-    svnae_ra_list_free(L)
+    ra_list_free(L)
     return result
 }
 

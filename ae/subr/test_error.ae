@@ -19,13 +19,13 @@
 // site passes the location explicitly. `message` is still a reserved
 // keyword, so we use `msg` for the message-text parameter.
 
-extern svnae_error_create(code: int, msg: string, cause: ptr, file: string, line: int) -> ptr
-extern svnae_error_code(err: ptr) -> int
-extern svnae_error_message(err: ptr) -> string
-extern svnae_error_cause(err: ptr) -> ptr
-extern svnae_error_file(err: ptr) -> string
-extern svnae_error_line(err: ptr) -> int
-extern svnae_error_free(err: ptr)
+extern error_create(code: int, msg: string, cause: ptr, file: string, line: int) -> ptr
+extern error_code(err: ptr) -> int
+extern error_message(err: ptr) -> string
+extern error_cause(err: ptr) -> ptr
+extern error_file(err: ptr) -> string
+extern error_line(err: ptr) -> int
+extern error_free(err: ptr)
 
 const ERR_IO_OPEN     = 2001
 const ERR_WC_CORRUPT  = 4001
@@ -33,18 +33,18 @@ const ERR_BAD_ARG     = 1001
 const ERR_FS_CORRUPT  = 5001
 
 err_create(code: int, msg: string, file: string, line: int) {
-    return svnae_error_create(code, msg, 0, file, line)
+    return error_create(code, msg, 0, file, line)
 }
 
 err_wrap(cause: ptr, code: int, msg: string, file: string, line: int) {
-    return svnae_error_create(code, msg, cause, file, line)
+    return error_create(code, msg, cause, file, line)
 }
 
 err_has_code(err: ptr, c: int) {
     e = err
     while e != 0 {
-        if svnae_error_code(e) == c { return 1 }
-        e = svnae_error_cause(e)
+        if error_code(e) == c { return 1 }
+        e = error_cause(e)
     }
     return 0
 }
@@ -56,12 +56,12 @@ err_print_chain(err: ptr) {
     }
     e = err
     while e != 0 {
-        c = svnae_error_code(e)
-        m = svnae_error_message(e)
-        f = svnae_error_file(e)
-        l = svnae_error_line(e)
+        c = error_code(e)
+        m = error_message(e)
+        f = error_file(e)
+        l = error_line(e)
         println("svn-aether: E${c}: ${m}  [${f}:${l}]")
-        e = svnae_error_cause(e)
+        e = error_cause(e)
     }
     return
 }
@@ -87,11 +87,11 @@ main() {
         exit(1)
     }
 
-    svnae_error_free(top)
+    error_free(top)
 
     // Null-safety: free(0) and accessors on 0 must not crash.
-    svnae_error_free(0)
-    if svnae_error_code(0) != 0 {
+    error_free(0)
+    if error_code(0) != 0 {
         println("FAIL: code(null) should be 0")
         exit(1)
     }

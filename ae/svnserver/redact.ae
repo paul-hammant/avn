@@ -28,8 +28,8 @@
 
 import std.string
 
-extern svnae_rep_read_blob(repo: string, sha: string) -> string
-extern svnae_rep_free(body: string)
+extern rep_read_blob(repo: string, sha: string) -> string
+extern rep_free(body: string)
 
 extern dir_count_entries(body: string) -> int
 extern dir_entry_kind(body: string, i: int) -> int
@@ -40,10 +40,10 @@ extern path_join_rel(prefix: string, name: string) -> string
 
 // C-side ACL decision + Aether-side hash. Round 134 retired
 // svnserver_hash_hex (TLS-buf detour); this file now resolves the
-// repo's primary algo and calls the canonical svnae_crypto_hash_hex.
+// repo's primary algo and calls the canonical crypto_hash_hex.
 extern acl_allows_mode(repo: string, rev: int, user: string, target_path: string, want_write: int) -> int
 extern repo_primary_hash(repo: string) -> string
-extern svnae_crypto_hash_hex(algo: string, data: string, length: int) -> string
+extern crypto_hash_hex(algo: string, data: string, length: int) -> string
 
 // Recursive entry. Returns the hex digest of the redacted dir body,
 // or "" on failure.
@@ -54,7 +54,7 @@ export redacted_dir_sha(repo: string, rev: int, user: string,
 
 redacted_dir_sha_impl(repo: string, rev: int, user: string,
                       dir_sha: string, prefix: string) -> string {
-    body = svnae_rep_read_blob(repo, dir_sha)
+    body = rep_read_blob(repo, dir_sha)
     redact = ""
     n = dir_count_entries(body)
     i = 0
@@ -62,7 +62,7 @@ redacted_dir_sha_impl(repo: string, rev: int, user: string,
         kind = dir_entry_kind(body, i)
         sha = dir_entry_sha(body, i)
         name = dir_entry_name(body, i)
-        // Snapshot — recursion calls svnae_rep_read_blob which may
+        // Snapshot — recursion calls rep_read_blob which may
         // reuse shared buffers.
         sha = string.copy(sha)
         name = string.copy(name)
@@ -90,9 +90,9 @@ redacted_dir_sha_impl(repo: string, rev: int, user: string,
         }
         i = i + 1
     }
-    svnae_rep_free(body)
+    rep_free(body)
     algo = repo_primary_hash(repo)
-    return svnae_crypto_hash_hex(algo, redact, string.length(redact))
+    return crypto_hash_hex(algo, redact, string.length(redact))
 }
 
 main() {

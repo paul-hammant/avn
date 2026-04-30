@@ -30,13 +30,13 @@ const KEY_SUPER_TOKEN = "svnserver.super_token"
 const KEY_REPO_NAME   = "svnserver.repo_name"
 const KEY_REPO_PATH   = "svnserver.repo_path"
 
-export svnae_svnserver_set_superuser_token(token: string) {
+export svnserver_set_superuser_token(token: string) {
     if string.length(token) == 0 { return }
     config.put(KEY_SUPER_TOKEN, token)
     return
 }
 
-export svnae_svnserver_register_repo(name: string, path: string) {
+export svnserver_register_repo(name: string, path: string) {
     config.put(KEY_REPO_NAME, name)
     config.put(KEY_REPO_PATH, path)
     return

@@ -41,7 +41,7 @@ export io_write_atomic(path: string, data: string, length: int) -> int {
 
 // Concatenate `header` (a short ASCII tag like "R" / "Z") and `body`
 // (which may contain embedded NULs) into one std.bytes buffer and
-// write atomically. Replaces the C-side svnae_write_header_and_body
+// write atomically. Replaces the C-side write_header_and_body
 // shim that hand-rolled write()/fsync()/close() in a loop. Returns
 // 0 on success, 1 on failure.
 export io_write_header_and_body(path: string, header: string,

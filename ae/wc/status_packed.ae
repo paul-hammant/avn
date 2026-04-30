@@ -17,8 +17,8 @@
 // ae/wc/db_node_packed.ae — each row is "<path>\x01<code>"; the
 // list packs as "<n>\x02<rec>\x02<rec>\x02...". The C side keeps
 // the {packed, n, pins} struct from subr/packed_handle/ and one-
-// line accessor wrappers using svnae_packed_pin_at /
-// svnae_packed_int_at.
+// line accessor wrappers using packed_pin_at /
+// packed_int_at.
 
 import std.string
 

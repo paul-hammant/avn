@@ -22,14 +22,14 @@
 import std.string
 
 // Goes straight to the Aether-side wrapper over std.cryptography.
-// Round 106 retired the checksum/shim.c forwards (svnae_sha1_hex,
-// svnae_checksum_free_hex) — they were 1-line forwards onto
-// svnae_crypto_hash_hex with a malloc-detach trampoline that
+// Round 106 retired the checksum/shim.c forwards (sha1_hex,
+// checksum_free_hex) — they were 1-line forwards onto
+// crypto_hash_hex with a malloc-detach trampoline that
 // AetherString already gives us for free.
-extern svnae_crypto_hash_hex(algo: string, data: string, length: int) -> string
+extern crypto_hash_hex(algo: string, data: string, length: int) -> string
 
 sha1_hex(data: string) {
-    return svnae_crypto_hash_hex("sha1", data, string.length(data))
+    return crypto_hash_hex("sha1", data, string.length(data))
 }
 
 // --- harness ---------------------------------------------------------------

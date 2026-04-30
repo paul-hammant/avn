@@ -45,21 +45,21 @@ import std.fs
 import std.string
 
 // db lifecycle stays in C (db_shim.c sqlite3_open + close).
-extern svnae_wc_db_open(wc_root: string) -> ptr
-extern svnae_wc_db_close(db: ptr)
+extern wc_db_open(wc_root: string) -> ptr
+extern wc_db_close(db: ptr)
 
 // Node CRUD lives in db_nodes.ae (already an Aether export).
-extern svnae_wc_db_node_exists(db: ptr, path: string) -> int
-extern svnae_wc_db_get_node(db: ptr, path: string) -> ptr
-extern svnae_wc_db_upsert_node(db: ptr, path: string, kind: int, base_rev: int, base_sha1: string, node_state: int) -> int
-extern svnae_wc_db_delete_node(db: ptr, path: string) -> int
+extern wc_db_node_exists(db: ptr, path: string) -> int
+extern wc_db_get_node(db: ptr, path: string) -> ptr
+extern wc_db_upsert_node(db: ptr, path: string, kind: int, base_rev: int, base_sha1: string, node_state: int) -> int
+extern wc_db_delete_node(db: ptr, path: string) -> int
 
 // Node-handle accessors live in db_shim.c.
-extern svnae_wc_node_kind(n: ptr) -> int
-extern svnae_wc_node_state(n: ptr) -> int
-extern svnae_wc_node_base_rev(n: ptr) -> int
-extern svnae_wc_node_base_sha1(n: ptr) -> string
-extern svnae_wc_node_free(n: ptr)
+extern wc_node_kind(n: ptr) -> int
+extern wc_node_state(n: ptr) -> int
+extern wc_node_base_rev(n: ptr) -> int
+extern wc_node_base_sha1(n: ptr) -> string
+extern wc_node_free(n: ptr)
 
 // io helpers come from subr/io.ae.
 extern io_stat_kind(path: string) -> int
@@ -70,11 +70,11 @@ extern io_write_atomic(path: string, data: string, length: int) -> int
 
 // Return 0 on success, -1 if path already tracked, -2 if not on disk,
 // -3 on db error.
-export svnae_wc_add(wc_root: string, rel_path: string) -> int {
-    return svnae_wc_add_impl(wc_root, rel_path)
+export wc_add(wc_root: string, rel_path: string) -> int {
+    return wc_add_impl(wc_root, rel_path)
 }
 
-svnae_wc_add_impl(wc_root: string, rel_path: string) -> int {
+wc_add_impl(wc_root: string, rel_path: string) -> int {
     disk = "${wc_root}/${rel_path}"
     skind = io_stat_kind(disk)
     if skind == 0 { return 0 - 2 }
@@ -82,58 +82,58 @@ svnae_wc_add_impl(wc_root: string, rel_path: string) -> int {
     kind = 0
     if skind == 2 { kind = 1 }   // dir
 
-    db = svnae_wc_db_open(wc_root)
+    db = wc_db_open(wc_root)
     if db == null { return 0 - 3 }
 
-    if svnae_wc_db_node_exists(db, rel_path) == 1 {
+    if wc_db_node_exists(db, rel_path) == 1 {
         // Already tracked — could be a previously-scheduled delete
         // we're un-deleting. Phase 5 just rejects; user can `svn rm`
         // first to re-add.
-        svnae_wc_db_close(db)
+        wc_db_close(db)
         return 0 - 1
     }
 
-    rc = svnae_wc_db_upsert_node(db, rel_path, kind, 0, "", 1)   // 1 = added
-    svnae_wc_db_close(db)
+    rc = wc_db_upsert_node(db, rel_path, kind, 0, "", 1)   // 1 = added
+    wc_db_close(db)
     if rc == 0 { return 0 }
     return 0 - 3
 }
 
 // Return 0 on success, -1 if not tracked, -2 on db error.
-export svnae_wc_rm(wc_root: string, rel_path: string) -> int {
-    return svnae_wc_rm_impl(wc_root, rel_path)
+export wc_rm(wc_root: string, rel_path: string) -> int {
+    return wc_rm_impl(wc_root, rel_path)
 }
 
-svnae_wc_rm_impl(wc_root: string, rel_path: string) -> int {
-    db = svnae_wc_db_open(wc_root)
+wc_rm_impl(wc_root: string, rel_path: string) -> int {
+    db = wc_db_open(wc_root)
     if db == null { return 0 - 2 }
 
-    n = svnae_wc_db_get_node(db, rel_path)
+    n = wc_db_get_node(db, rel_path)
     if n == null {
-        svnae_wc_db_close(db)
+        wc_db_close(db)
         return 0 - 1
     }
 
-    state    = svnae_wc_node_state(n)
-    kind     = svnae_wc_node_kind(n)
-    base_rev = svnae_wc_node_base_rev(n)
-    base_sha = svnae_wc_node_base_sha1(n)
+    state    = wc_node_state(n)
+    kind     = wc_node_kind(n)
+    base_rev = wc_node_base_rev(n)
+    base_sha = wc_node_base_sha1(n)
     base_sha = string.copy(base_sha)
-    svnae_wc_node_free(n)
+    wc_node_free(n)
 
     if state == 1 {
         // Revert the add — drop the row. Keep the on-disk file; user
         // didn't intend to lose content they just added.
-        rc = svnae_wc_db_delete_node(db, rel_path)
-        svnae_wc_db_close(db)
+        rc = wc_db_delete_node(db, rel_path)
+        wc_db_close(db)
         if rc == 0 { return 0 }
         return 0 - 2
     }
 
     // Normal or already-deleted: mark deleted but keep base_rev /
     // base_sha so revert can restore from pristine later.
-    rc = svnae_wc_db_upsert_node(db, rel_path, kind, base_rev, base_sha, 2)   // 2 = deleted
-    svnae_wc_db_close(db)
+    rc = wc_db_upsert_node(db, rel_path, kind, base_rev, base_sha, 2)   // 2 = deleted
+    wc_db_close(db)
     if rc != 0 { return 0 - 2 }
 
     // Remove file/dir from disk best-effort. Reference svn keeps
@@ -157,29 +157,29 @@ copy_file_(src: string, dst: string) -> int {
 
 // Return: 0 ok, -1 src not tracked, -2 dst already exists,
 //         -3 src not on disk, -4 other error.
-export svnae_wc_cp(wc_root: string, src: string, dst: string) -> int {
-    return svnae_wc_cp_impl(wc_root, src, dst)
+export wc_cp(wc_root: string, src: string, dst: string) -> int {
+    return wc_cp_impl(wc_root, src, dst)
 }
 
-svnae_wc_cp_impl(wc_root: string, src: string, dst: string) -> int {
-    db = svnae_wc_db_open(wc_root)
+wc_cp_impl(wc_root: string, src: string, dst: string) -> int {
+    db = wc_db_open(wc_root)
     if db == null { return 0 - 4 }
 
-    sn = svnae_wc_db_get_node(db, src)
+    sn = wc_db_get_node(db, src)
     if sn == null {
-        svnae_wc_db_close(db)
+        wc_db_close(db)
         return 0 - 1
     }
-    src_kind = svnae_wc_node_kind(sn)
-    svnae_wc_node_free(sn)
+    src_kind = wc_node_kind(sn)
+    wc_node_free(sn)
     if src_kind != 0 {
         // Directory copy not supported in Phase 5.9.
-        svnae_wc_db_close(db)
+        wc_db_close(db)
         return 0 - 4
     }
 
-    if svnae_wc_db_node_exists(db, dst) == 1 {
-        svnae_wc_db_close(db)
+    if wc_db_node_exists(db, dst) == 1 {
+        wc_db_close(db)
         return 0 - 2
     }
 
@@ -187,34 +187,34 @@ svnae_wc_cp_impl(wc_root: string, src: string, dst: string) -> int {
     dst_disk = "${wc_root}/${dst}"
 
     if io_exists(src_disk) == 0 {
-        svnae_wc_db_close(db)
+        wc_db_close(db)
         return 0 - 3
     }
     if io_exists(dst_disk) == 1 {
-        svnae_wc_db_close(db)
+        wc_db_close(db)
         return 0 - 2
     }
 
     if copy_file_(src_disk, dst_disk) != 0 {
-        svnae_wc_db_close(db)
+        wc_db_close(db)
         return 0 - 4
     }
 
     // Register dst as state=added. Content sha1 unknown to the db
     // at this stage — leave empty; next commit will compute it from
     // the on-disk file (same path as any freshly-added node).
-    rc = svnae_wc_db_upsert_node(db, dst, 0, 0, "", 1)   // file, added
-    svnae_wc_db_close(db)
+    rc = wc_db_upsert_node(db, dst, 0, 0, "", 1)   // file, added
+    wc_db_close(db)
     if rc == 0 { return 0 }
     return 0 - 4
 }
 
 // mv = cp + rm. Phase 5.9 best-effort: a failed rm leaves a half-
 // finished state (dst copy with src still tracked).
-export svnae_wc_mv(wc_root: string, src: string, dst: string) -> int {
-    rc = svnae_wc_cp_impl(wc_root, src, dst)
+export wc_mv(wc_root: string, src: string, dst: string) -> int {
+    rc = wc_cp_impl(wc_root, src, dst)
     if rc != 0 { return rc }
-    rc = svnae_wc_rm_impl(wc_root, src)
+    rc = wc_rm_impl(wc_root, src)
     if rc != 0 { return 0 - 4 }
     return 0
 }

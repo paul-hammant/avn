@@ -16,7 +16,7 @@
 // svn checkout — recursive tree download from a remote URL into a
 // local working copy directory.
 //
-//   svnae_wc_checkout(base_url, repo_name, dest, rev) -> 0 on success
+//   wc_checkout(base_url, repo_name, dest, rev) -> 0 on success
 //
 // 1. mkdir -p dest; init wc.db; record url + repo_name + base_rev in info
 // 2. Walk the tree recursively via RA list(rev, path):
@@ -28,33 +28,33 @@
 import std.string
 
 // RA list/cat handles + accessors stay in C (ae/client/shim.c).
-extern svnae_ra_list(base_url: string, repo_name: string, rev: int, path: string) -> ptr
-extern svnae_ra_list_count(L: ptr) -> int
-extern svnae_ra_list_name(L: ptr, i: int) -> string
-extern svnae_ra_list_kind(L: ptr, i: int) -> string
-extern svnae_ra_list_free(L: ptr)
-extern svnae_ra_cat(base_url: string, repo_name: string, rev: int, path: string) -> string
-extern svnae_ra_free(p: string)
-extern svnae_ra_hash_algo(base_url: string, repo_name: string) -> string
+extern ra_list(base_url: string, repo_name: string, rev: int, path: string) -> ptr
+extern ra_list_count(L: ptr) -> int
+extern ra_list_name(L: ptr, i: int) -> string
+extern ra_list_kind(L: ptr, i: int) -> string
+extern ra_list_free(L: ptr)
+extern ra_cat(base_url: string, repo_name: string, rev: int, path: string) -> string
+extern ra_free(p: string)
+extern ra_hash_algo(base_url: string, repo_name: string) -> string
 
 // RA props handle + accessors.
-extern svnae_ra_get_props(base_url: string, repo_name: string, rev: int, path: string) -> ptr
-extern svnae_ra_props_count(P: ptr) -> int
-extern svnae_ra_props_name(P: ptr, i: int) -> string
-extern svnae_ra_props_value(P: ptr, i: int) -> string
-extern svnae_ra_props_free(P: ptr)
+extern ra_get_props(base_url: string, repo_name: string, rev: int, path: string) -> ptr
+extern ra_props_count(P: ptr) -> int
+extern ra_props_name(P: ptr, i: int) -> string
+extern ra_props_value(P: ptr, i: int) -> string
+extern ra_props_free(P: ptr)
 
 // wc.db lifecycle + helpers.
-extern svnae_wc_db_open(wc_root: string) -> ptr
-extern svnae_wc_db_close(db: ptr)
-extern svnae_wc_db_upsert_node(db: ptr, path: string, kind: int, base_rev: int, base_sha1: string, node_state: int) -> int
-extern svnae_wc_db_set_info(db: ptr, key: string, value: string) -> int
+extern wc_db_open(wc_root: string) -> ptr
+extern wc_db_close(db: ptr)
+extern wc_db_upsert_node(db: ptr, path: string, kind: int, base_rev: int, base_sha1: string, node_state: int) -> int
+extern wc_db_set_info(db: ptr, key: string, value: string) -> int
 
 // Pristine store.
 extern wc_pristine_put(wc_root: string, data: string, len: int) -> string
 
 // WC propset (per-path key=value persist).
-extern svnae_wc_propset(wc_root: string, path: string, name: string, value: string) -> int
+extern wc_propset(wc_root: string, path: string, name: string, value: string) -> int
 
 // IO helpers from subr/io.ae and fs_fs/pathutil.ae.
 extern io_mkdir_p(path: string) -> int
@@ -64,19 +64,19 @@ extern path_join_rel(prefix: string, name: string) -> string
 // Ingest every prop attached to (rev, rel) onto the working copy at dest.
 ingest_props_(base_url: string, repo: string, rev: int,
               dest: string, rel: string) {
-    P = svnae_ra_get_props(base_url, repo, rev, rel)
+    P = ra_get_props(base_url, repo, rev, rel)
     if P == null { return 0 }
-    pn = svnae_ra_props_count(P)
+    pn = ra_props_count(P)
     j = 0
     while j < pn {
-        nm  = svnae_ra_props_name(P, j)
-        val = svnae_ra_props_value(P, j)
+        nm  = ra_props_name(P, j)
+        val = ra_props_value(P, j)
         nm  = string.copy(nm)
         val = string.copy(val)
-        svnae_wc_propset(dest, rel, nm, val)
+        wc_propset(dest, rel, nm, val)
         j = j + 1
     }
-    svnae_ra_props_free(P)
+    ra_props_free(P)
     return 0
 }
 
@@ -84,14 +84,14 @@ ingest_props_(base_url: string, repo: string, rev: int,
 // recording each in db. Returns 0 on success, -1 on first failure.
 walk_(base_url: string, repo: string, rev: int,
       dest: string, prefix: string, db: ptr) -> int {
-    L = svnae_ra_list(base_url, repo, rev, prefix)
+    L = ra_list(base_url, repo, rev, prefix)
     if L == null { return 0 - 1 }
-    n = svnae_ra_list_count(L)
+    n = ra_list_count(L)
 
     i = 0
     while i < n {
-        name = svnae_ra_list_name(L, i)
-        kind = svnae_ra_list_kind(L, i)
+        name = ra_list_name(L, i)
+        kind = ra_list_kind(L, i)
         name = string.copy(name)
         kind = string.copy(kind)
 
@@ -101,69 +101,69 @@ walk_(base_url: string, repo: string, rev: int,
         disk = string.copy(disk_borrowed)
 
         if string.equals(kind, "dir") == 1 {
-            if io_mkdir_p(disk) != 0 { svnae_ra_list_free(L); return 0 - 1 }
-            svnae_wc_db_upsert_node(db, rel, 1, rev, "", 0)
+            if io_mkdir_p(disk) != 0 { ra_list_free(L); return 0 - 1 }
+            wc_db_upsert_node(db, rel, 1, rev, "", 0)
             ingest_props_(base_url, repo, rev, dest, rel)
             if walk_(base_url, repo, rev, dest, rel, db) != 0 {
-                svnae_ra_list_free(L)
+                ra_list_free(L)
                 return 0 - 1
             }
         } else {
-            data = svnae_ra_cat(base_url, repo, rev, rel)
+            data = ra_cat(base_url, repo, rev, rel)
             if string.length(data) == 0 {
                 // Empty cat is a real failure (every file has at least
                 // a NUL terminator, but ra_cat returns NULL→"" on miss).
-                svnae_ra_list_free(L)
+                ra_list_free(L)
                 return 0 - 1
             }
             len = string.length(data)
             if io_write_atomic(disk, data, len) != 0 {
-                svnae_ra_free(data)
-                svnae_ra_list_free(L)
+                ra_free(data)
+                ra_list_free(L)
                 return 0 - 1
             }
             sha = wc_pristine_put(dest, data, len)
             if string.length(sha) == 0 {
-                svnae_ra_free(data)
-                svnae_ra_list_free(L)
+                ra_free(data)
+                ra_list_free(L)
                 return 0 - 1
             }
             sha = string.copy(sha)
-            svnae_wc_db_upsert_node(db, rel, 0, rev, sha, 0)
-            svnae_ra_free(data)
+            wc_db_upsert_node(db, rel, 0, rev, sha, 0)
+            ra_free(data)
             ingest_props_(base_url, repo, rev, dest, rel)
         }
         i = i + 1
     }
-    svnae_ra_list_free(L)
+    ra_list_free(L)
     return 0
 }
 
 // Public entry point. Creates dest if needed, opens wc.db, records
 // connection info + hash algo, walks the server tree at `rev`.
-export svnae_wc_checkout(base_url: string, repo_name: string,
+export wc_checkout(base_url: string, repo_name: string,
                           dest: string, rev: int) -> int {
     if io_mkdir_p(dest) != 0 { return 0 - 1 }
 
-    db = svnae_wc_db_open(dest)
+    db = wc_db_open(dest)
     if db == null { return 0 - 1 }
 
     full_url = "${base_url}/${repo_name}"
-    svnae_wc_db_set_info(db, "url",      full_url)
-    svnae_wc_db_set_info(db, "base_url", base_url)
-    svnae_wc_db_set_info(db, "repo",     repo_name)
-    svnae_wc_db_set_info(db, "base_rev", "${rev}")
+    wc_db_set_info(db, "url",      full_url)
+    wc_db_set_info(db, "base_url", base_url)
+    wc_db_set_info(db, "repo",     repo_name)
+    wc_db_set_info(db, "base_rev", "${rev}")
 
     // Record the server's content-address algo so this WC's local
     // pristine store + modification-detection logic match. Defaults
     // to sha1 if the server doesn't advertise (pre-Phase-6.1).
-    algo = svnae_ra_hash_algo(base_url, repo_name)
+    algo = ra_hash_algo(base_url, repo_name)
     if string.length(algo) == 0 { algo = "sha1" }
     algo = string.copy(algo)
-    svnae_wc_db_set_info(db, "hash_algo", algo)
+    wc_db_set_info(db, "hash_algo", algo)
 
     rc = walk_(base_url, repo_name, rev, dest, "", db)
-    svnae_wc_db_close(db)
+    wc_db_close(db)
     return rc
 }
 

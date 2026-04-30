@@ -17,7 +17,7 @@
 // /usr/bin/diff -u with svn-style labels and let the diff tool's
 // stdout flow through ours.
 //
-//   svnae_wc_diff(wc_root, rel_path_or_empty)
+//   wc_diff(wc_root, rel_path_or_empty)
 //     "" rel_path → diff every changed node; otherwise just that one.
 //
 // Round 80 (Gordian) ports the orchestration off ae/wc/diff_shim.c.
@@ -29,20 +29,20 @@ import std.fs
 import std.string
 import std.collections
 
-extern svnae_wc_db_open(wc_root: string) -> ptr
-extern svnae_wc_db_close(db: ptr)
+extern wc_db_open(wc_root: string) -> ptr
+extern wc_db_close(db: ptr)
 
-extern svnae_wc_db_list_nodes(db: ptr) -> ptr
-extern svnae_wc_nodelist_count(L: ptr) -> int
-extern svnae_wc_nodelist_path(L: ptr, i: int) -> string
-extern svnae_wc_nodelist_kind(L: ptr, i: int) -> int
-extern svnae_wc_nodelist_state(L: ptr, i: int) -> int
-extern svnae_wc_nodelist_base_rev(L: ptr, i: int) -> int
-extern svnae_wc_nodelist_base_sha1(L: ptr, i: int) -> string
-extern svnae_wc_nodelist_free(L: ptr)
+extern wc_db_list_nodes(db: ptr) -> ptr
+extern wc_nodelist_count(L: ptr) -> int
+extern wc_nodelist_path(L: ptr, i: int) -> string
+extern wc_nodelist_kind(L: ptr, i: int) -> int
+extern wc_nodelist_state(L: ptr, i: int) -> int
+extern wc_nodelist_base_rev(L: ptr, i: int) -> int
+extern wc_nodelist_base_sha1(L: ptr, i: int) -> string
+extern wc_nodelist_free(L: ptr)
 
 // Pristine slurp + size. Round 113 retired the C-side
-// svnae_diff_tmp_write_pristine — the whole step (size lookup,
+// diff_tmp_write_pristine — the whole step (size lookup,
 // blob fetch, tmp write) is one Aether-native function now,
 // thanks to wc_pristine_get returning a length-aware AetherString
 // that std.fs.write_atomic unwraps correctly.
@@ -75,7 +75,7 @@ extern list_free(list: ptr)
 // running concurrently in the same process don't collide.
 tmp_seq_(prefix: string, seq: int) -> string {
     pid = os_getpid_raw()
-    return "/tmp/svnae_diff_${pid}_${seq}_${prefix}.tmp"
+    return "/tmp/diff_${pid}_${seq}_${prefix}.tmp"
 }
 
 // Write `data` to a fresh tmp file. Returns the path or "" on error.
@@ -114,11 +114,11 @@ emit_header_(rel: string) {
 // Diff a single nodelist row at index i. Returns the next seq value
 // so the caller can keep tmp-file names monotonic across rows.
 diff_one_(wc_root: string, L: ptr, i: int, target: string, seq: int) -> int {
-    rel      = svnae_wc_nodelist_path(L, i)
-    kind     = svnae_wc_nodelist_kind(L, i)
-    st       = svnae_wc_nodelist_state(L, i)
-    brev     = svnae_wc_nodelist_base_rev(L, i)
-    base_sha = svnae_wc_nodelist_base_sha1(L, i)
+    rel      = wc_nodelist_path(L, i)
+    kind     = wc_nodelist_kind(L, i)
+    st       = wc_nodelist_state(L, i)
+    brev     = wc_nodelist_base_rev(L, i)
+    base_sha = wc_nodelist_base_sha1(L, i)
 
     rel = string.copy(rel)
     base_sha = string.copy(base_sha)
@@ -193,11 +193,11 @@ diff_one_(wc_root: string, L: ptr, i: int, target: string, seq: int) -> int {
     return seq
 }
 
-export svnae_wc_diff(wc_root: string, rel_path_or_empty: string) -> int {
-    db = svnae_wc_db_open(wc_root)
+export wc_diff(wc_root: string, rel_path_or_empty: string) -> int {
+    db = wc_db_open(wc_root)
     if db == null { return 0 - 1 }
-    L = svnae_wc_db_list_nodes(db)
-    n = svnae_wc_nodelist_count(L)
+    L = wc_db_list_nodes(db)
+    n = wc_nodelist_count(L)
 
     target = ""
     if string.length(rel_path_or_empty) > 0 { target = rel_path_or_empty }
@@ -210,8 +210,8 @@ export svnae_wc_diff(wc_root: string, rel_path_or_empty: string) -> int {
         i = i + 1
     }
 
-    svnae_wc_nodelist_free(L)
-    svnae_wc_db_close(db)
+    wc_nodelist_free(L)
+    wc_db_close(db)
     return 0
 }
 

@@ -15,12 +15,12 @@
 
 // svnadmin dump + load orchestration.
 //
-//   svnae_svnadmin_dump(repo, out_fd) → 0 ok, -1 error
-//   svnae_svnadmin_load(repo, in_fd)  → 0 ok, -1 error
+//   svnadmin_dump(repo, out_fd) → 0 ok, -1 error
+//   svnadmin_load(repo, in_fd)  → 0 ok, -1 error
 //
 // Round 84 (Gordian) ports the dump/load orchestration out of
 // ae/svnadmin/shim.c. Raw read(2)/write(2) loops on the fd stay
-// in C (svnae_fd_* helpers below), but the line/tag parsing,
+// in C (fd_* helpers below), but the line/tag parsing,
 // rep enumeration, rev-pointer iteration, hash verification, and
 // path-construction all move here.
 
@@ -29,7 +29,7 @@ import std.io
 
 // Repo metadata.
 extern repos_head_rev(repo: string) -> int
-extern svnae_svnadmin_create_bare(repo: string, algos_spec: string) -> int
+extern svnadmin_create_bare(repo: string, algos_spec: string) -> int
 
 // Dump-format builders (ae/svnadmin/dump.ae).
 extern dump_prelude(head: int, rev_count: int, rep_count: int) -> string
@@ -58,7 +58,7 @@ extern io_write_atomic(path: string, data: string, length: int) -> int
 // looped read_n / write_n / read_line primitives moved out of the
 // port's C shim entirely.
 
-extern svnae_rep_read_blob(repo: string, sha1_hex: string) -> string
+extern rep_read_blob(repo: string, sha1_hex: string) -> string
 extern rep_write_blob(repo: string, data: string, len: int) -> string
 
 // Write a NUL-terminated literal/built string.
@@ -70,7 +70,7 @@ fd_write_str_(fd: int, s: string) -> int {
 // (size == 0) are valid — short-circuit without reading.
 fd_write_rep_body_(fd: int, repo: string, sha: string, size: int) -> int {
     if size == 0 { return 0 }
-    body = svnae_rep_read_blob(repo, sha)
+    body = rep_read_blob(repo, sha)
     if string.length(body) == 0 { return 0 - 1 }
     return io.fd_write_n(fd, body, size)
 }
@@ -97,7 +97,7 @@ const TAG_SENTINEL = 0 - 2147483647
 
 // ---- dump -----------------------------------------------------------
 
-export svnae_svnadmin_dump(repo: string, out_fd: int) -> int {
+export svnadmin_dump(repo: string, out_fd: int) -> int {
     head = repos_head_rev(repo)
     if head < 0 { return 0 - 1 }
 
@@ -142,7 +142,7 @@ export svnae_svnadmin_dump(repo: string, out_fd: int) -> int {
 
 // Wrap io.fd_read_line into a single-string return — the load path
 // here treats EOF / read error / empty line uniformly as "failure",
-// matching the previous svnae_fd_read_line shape.
+// matching the previous fd_read_line shape.
 read_line_(fd: int) -> string {
     line, _ = io.fd_read_line(fd)
     return line
@@ -176,7 +176,7 @@ expect_tagged_int_(in_fd: int, prefix: string) -> int {
     return parse_tagged_int(line, prefix, TAG_SENTINEL)
 }
 
-export svnae_svnadmin_load(repo: string, in_fd: int) -> int {
+export svnadmin_load(repo: string, in_fd: int) -> int {
     // Header.
     if expect_literal_(in_fd, "SVNAE-DUMP 1") != 0 { return 0 - 1 }
     fmt = expect_tagged_(in_fd, "FORMAT")
@@ -190,7 +190,7 @@ export svnae_svnadmin_load(repo: string, in_fd: int) -> int {
 
     // Initialise target repo as sha1 (current dump format only carries
     // sha1 blobs). The dump replays its own rev 0 below, so don't seed.
-    if svnae_svnadmin_create_bare(repo, "sha1") != 0 { return 0 - 1 }
+    if svnadmin_create_bare(repo, "sha1") != 0 { return 0 - 1 }
 
     // REP-COUNT blocks.
     i = 0

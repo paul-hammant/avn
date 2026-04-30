@@ -34,12 +34,12 @@ extern url_branches_create(base: string, repo: string,
 
 // POST body, expect HTTP <expected_status>, parse rev from response
 // (ae/client/fetch.ae). Round 102 hoisted this shared helper into fetch
-// so the C-side svnae_ra_commit_finish can reuse it too.
+// so the C-side ra_commit_finish can reuse it too.
 extern post_for_rev(url: string, body: string, expected_status: int) -> int
 
 // POST /repos/{r}/copy with { base_rev, from_path, to_path, author, log }.
 // Returns the new revision number on 200, -1 on any failure.
-export svnae_ra_server_copy(base_url: string, repo_name: string,
+export ra_server_copy(base_url: string, repo_name: string,
                              base_rev: int,
                              from_path: string, to_path: string,
                              author: string, logmsg: string) -> int {
@@ -54,7 +54,7 @@ export svnae_ra_server_copy(base_url: string, repo_name: string,
 // failure. `includes_joined` is a single newline-separated string
 // for ergonomic passage from Aether (Aether ptr-array types are
 // awkward across FFI).
-export svnae_ra_branch_create(base_url: string, repo_name: string,
+export ra_branch_create(base_url: string, repo_name: string,
                                name: string, base: string,
                                includes_joined: string) -> int {
     inc = includes_joined

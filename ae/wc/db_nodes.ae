@@ -21,7 +21,7 @@
 //
 // Aether callers (merge_apply.ae, update_apply.ae) already reach
 // these via extern; porting the implementation preserves the same
-// svnae_wc_db_* symbol names via `export`, so no downstream edits
+// wc_db_* symbol names via `export`, so no downstream edits
 // are needed.
 
 import std.string
@@ -31,14 +31,14 @@ const SQLITE_ROW  = 100
 const SQLITE_DONE = 101
 
 // Packed-string handle constructors (db_shim.c). Both wrap into the
-// shared svnae_packed_handle struct; field accessors are in
+// shared packed_handle struct; field accessors are in
 // ae/wc/db_node_packed.ae.
-extern svnae_wc_node_handle(packed: string) -> ptr
-extern svnae_wc_nodelist_handle(packed: string) -> ptr
+extern wc_node_handle(packed: string) -> ptr
+extern wc_nodelist_handle(packed: string) -> ptr
 
 // Malloc lifecycle helper for get_info — the sqlite-owned column
 // pointer goes stale after finalize(), so we hand the caller a
-// (svnae_wc_info_dup retired in Round 143 — string.copy on the
+// (wc_info_dup retired in Round 143 — string.copy on the
 // sqlite column does the same detach in pure Aether.)
 
 // Build a single packed record "<path>\x01<kind>\x01<base_rev>\x01
@@ -48,7 +48,7 @@ node_record_(path: string, kind: int, base_rev: int, base_sha1: string, node_sta
     return "${path}\x01${kind}\x01${base_rev}\x01${base_sha1}\x01${node_state}\x01${conflicted}"
 }
 
-export svnae_wc_db_node_exists(db: ptr, path: string) -> int {
+export wc_db_node_exists(db: ptr, path: string) -> int {
     stmt, perr = sqlite.prepare(db, "SELECT 1 FROM nodes WHERE path = ?")
     if string.length(perr) > 0 { return 0 }
     sqlite.bind_text(stmt, 1, path)
@@ -58,7 +58,7 @@ export svnae_wc_db_node_exists(db: ptr, path: string) -> int {
     return 0
 }
 
-export svnae_wc_db_delete_node(db: ptr, path: string) -> int {
+export wc_db_delete_node(db: ptr, path: string) -> int {
     stmt, perr = sqlite.prepare(db, "DELETE FROM nodes WHERE path = ?")
     if string.length(perr) > 0 { return -1 }
     sqlite.bind_text(stmt, 1, path)
@@ -68,7 +68,7 @@ export svnae_wc_db_delete_node(db: ptr, path: string) -> int {
     return -1
 }
 
-export svnae_wc_db_set_conflicted(db: ptr, path: string, conflicted: int) -> int {
+export wc_db_set_conflicted(db: ptr, path: string, conflicted: int) -> int {
     stmt, perr = sqlite.prepare(db, "UPDATE nodes SET conflicted = ? WHERE path = ?")
     if string.length(perr) > 0 { return -1 }
     sqlite.bind_int (stmt, 1, conflicted)
@@ -81,9 +81,9 @@ export svnae_wc_db_set_conflicted(db: ptr, path: string, conflicted: int) -> int
 
 // Insert or replace a node row. Returns 0 on success, non-zero on
 // failure. ON CONFLICT(path) updates every field except `conflicted`
-// — conflicted is maintained by svnae_wc_db_set_conflicted, so a
+// — conflicted is maintained by wc_db_set_conflicted, so a
 // routine upsert must not clear it.
-export svnae_wc_db_upsert_node(db: ptr, path: string, kind: int, base_rev: int, base_sha1: string, node_state: int) -> int {
+export wc_db_upsert_node(db: ptr, path: string, kind: int, base_rev: int, base_sha1: string, node_state: int) -> int {
     stmt, perr = sqlite.prepare(db,
         "INSERT INTO nodes (path, kind, base_rev, base_sha1, state) VALUES (?, ?, ?, ?, ?) ON CONFLICT(path) DO UPDATE SET kind=excluded.kind, base_rev=excluded.base_rev, base_sha1=excluded.base_sha1, state=excluded.state")
     if string.length(perr) > 0 { return -1 }
@@ -99,8 +99,8 @@ export svnae_wc_db_upsert_node(db: ptr, path: string, kind: int, base_rev: int, 
 }
 
 // Fetch one row by path. Returns a ptr the caller frees with
-// svnae_wc_node_free, or null when the row is missing.
-export svnae_wc_db_get_node(db: ptr, path: string) -> ptr {
+// wc_node_free, or null when the row is missing.
+export wc_db_get_node(db: ptr, path: string) -> ptr {
     stmt, perr = sqlite.prepare(db,
         "SELECT path, kind, base_rev, base_sha1, state, conflicted FROM nodes WHERE path = ?")
     if string.length(perr) > 0 { return null }
@@ -115,7 +115,7 @@ export svnae_wc_db_get_node(db: ptr, path: string) -> ptr {
         node_state = sqlite.column_int (stmt, 4)
         conflicted = sqlite.column_int (stmt, 5)
         rec = node_record_(p, kind, base_rev, base_sha1, node_state, conflicted)
-        out = svnae_wc_node_handle(rec)
+        out = wc_node_handle(rec)
     }
     sqlite.finalize(stmt)
     return out
@@ -123,7 +123,7 @@ export svnae_wc_db_get_node(db: ptr, path: string) -> ptr {
 
 // Upsert key/value into the `info` table. Returns 0 on success,
 // non-zero on failure.
-export svnae_wc_db_set_info(db: ptr, key: string, value: string) -> int {
+export wc_db_set_info(db: ptr, key: string, value: string) -> int {
     stmt, perr = sqlite.prepare(db,
         "INSERT INTO info (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
     if string.length(perr) > 0 { return -1 }
@@ -141,7 +141,7 @@ export svnae_wc_db_set_info(db: ptr, key: string, value: string) -> int {
 // detach through string.copy (refcounted AetherString) before the
 // finalize runs. Round 143 retired the C-side strdup-detach
 // helper; .ae callers no longer need an explicit free pair.
-export svnae_wc_db_get_info(db: ptr, key: string) -> string {
+export wc_db_get_info(db: ptr, key: string) -> string {
     stmt, perr = sqlite.prepare(db, "SELECT value FROM info WHERE key = ?")
     if string.length(perr) > 0 { return "" }
     sqlite.bind_text(stmt, 1, key)
@@ -157,9 +157,9 @@ export svnae_wc_db_get_info(db: ptr, key: string) -> string {
 
 // Snapshot every row in `nodes` into a growable C-backed struct
 // array. Ordered by path for deterministic iteration. Returns a
-// ptr to the nodelist (caller frees with svnae_wc_nodelist_free)
+// ptr to the nodelist (caller frees with wc_nodelist_free)
 // or null on prepare failure.
-export svnae_wc_db_list_nodes(db: ptr) -> ptr {
+export wc_db_list_nodes(db: ptr) -> ptr {
     stmt, perr = sqlite.prepare(db,
         "SELECT path, kind, base_rev, base_sha1, state, conflicted FROM nodes ORDER BY path")
     if string.length(perr) > 0 { return null }
@@ -180,7 +180,7 @@ export svnae_wc_db_list_nodes(db: ptr) -> ptr {
     sqlite.finalize(stmt)
     head = "${n}\x02"
     packed = string.concat(head, body)
-    return svnae_wc_nodelist_handle(packed)
+    return wc_nodelist_handle(packed)
 }
 
 main() {

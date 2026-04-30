@@ -48,25 +48,25 @@ extern acl_allows_mode(repo: string, rev: int, user: string, target_path: string
 extern svnserver_spec_allows(repo: string, branch: string,
                               path: string, is_super: int) -> int
 
-extern svnae_txn_new(base_rev: int) -> ptr
-extern svnae_txn_mkdir(t: ptr, path: string) -> int
-extern svnae_txn_delete(t: ptr, path: string) -> int
-extern svnae_txn_add_file(t: ptr, path: string, content: string, len: int) -> int
-extern svnae_txn_free(t: ptr)
+extern txn_new(base_rev: int) -> ptr
+extern txn_mkdir(t: ptr, path: string) -> int
+extern txn_delete(t: ptr, path: string) -> int
+extern txn_add_file(t: ptr, path: string, content: string, len: int) -> int
+extern txn_free(t: ptr)
 
-// b64-decode + txn_add_file. svnae_crypto_b64_decode returns the
+// b64-decode + txn_add_file. crypto_b64_decode returns the
 // (bytes, length, err) triple cleanly via export-tuple-return —
 // Round 159 dropped the prior TLS-pair workaround. AetherStrings
 // auto-unwrap at C extern boundaries declared `const char*` (#297),
-// so we call svnae_txn_add_file directly.
-extern svnae_crypto_b64_decode(b64: string) -> (string, int, string)
+// so we call txn_add_file directly.
+extern crypto_b64_decode(b64: string) -> (string, int, string)
 
 txn_add_b64_(txn: ptr, path: string, b64: string) -> int {
-    raw, n, err = svnae_crypto_b64_decode(b64)
+    raw, n, err = crypto_b64_decode(b64)
     if string.length(err) > 0 { return 0 - 1 }
-    return svnae_txn_add_file(txn, path, raw, n)
+    return txn_add_file(txn, path, raw, n)
 }
-extern svnae_commit_finalise_with_acl(repo: string, txn: ptr,
+extern commit_finalise_with_acl(repo: string, txn: ptr,
                                        author: string, log_msg: string,
                                        props_sha: string, acl_sha: string) -> int
 
@@ -74,7 +74,7 @@ extern svnae_commit_finalise_with_acl(repo: string, txn: ptr,
 // "<sha> <path>\n" bodies directly from the "\n"-joined parallel
 // strings the JSON parse loop below accumulates, then write to the
 // rep store via rep_write_blob. Used to bounce through C
-// (svnserver_build_*_joined + svnae_build_*_blob); all that round
+// (svnserver_build_*_joined + build_*_blob); all that round
 // trip is gone now.
 //
 // Kept as same-file helpers rather than a separate module because
@@ -185,43 +185,43 @@ commit_from_body_impl(req: ptr, res: ptr, repo: string) -> int {
     }
 
     // Build the txn.
-    txn = svnae_txn_new(base_rev)
+    txn = txn_new(base_rev)
     if txn == null { json.free(root); return -6 }
 
     i = 0
     while i < n_edits {
         entry, _ = json.array_get(jedits, i)
-        if entry == null { svnae_txn_free(txn); json.free(root); return -7 }
+        if entry == null { txn_free(txn); json.free(root); return -7 }
 
         jop, _ = json.object_get(entry, "op")
-        if jop == null { svnae_txn_free(txn); json.free(root); return -7 }
+        if jop == null { txn_free(txn); json.free(root); return -7 }
         op, oerr = json.get_string(jop)
-        if string.length(oerr) > 0 { svnae_txn_free(txn); json.free(root); return -7 }
+        if string.length(oerr) > 0 { txn_free(txn); json.free(root); return -7 }
 
         jpath, _ = json.object_get(entry, "path")
-        if jpath == null { svnae_txn_free(txn); json.free(root); return -7 }
+        if jpath == null { txn_free(txn); json.free(root); return -7 }
         epath, perr = json.get_string(jpath)
-        if string.length(perr) > 0 { svnae_txn_free(txn); json.free(root); return -7 }
+        if string.length(perr) > 0 { txn_free(txn); json.free(root); return -7 }
 
         if string.equals(op, "add-file") == 1 {
             jcontent, _ = json.object_get(entry, "content")
-            if jcontent == null { svnae_txn_free(txn); json.free(root); return -8 }
+            if jcontent == null { txn_free(txn); json.free(root); return -8 }
             b64, berr = json.get_string(jcontent)
-            if string.length(berr) > 0 { svnae_txn_free(txn); json.free(root); return -8 }
+            if string.length(berr) > 0 { txn_free(txn); json.free(root); return -8 }
             if txn_add_b64_(txn, epath, b64) != 0 {
-                svnae_txn_free(txn); json.free(root); return -9
+                txn_free(txn); json.free(root); return -9
             }
         }
         if string.equals(op, "mkdir") == 1 {
-            svnae_txn_mkdir(txn, epath)
+            txn_mkdir(txn, epath)
         }
         if string.equals(op, "delete") == 1 {
-            svnae_txn_delete(txn, epath)
+            txn_delete(txn, epath)
         }
         if string.equals(op, "add-file") == 0 {
             if string.equals(op, "mkdir") == 0 {
                 if string.equals(op, "delete") == 0 {
-                    svnae_txn_free(txn); json.free(root); return -10
+                    txn_free(txn); json.free(root); return -10
                 }
             }
         }
@@ -340,9 +340,9 @@ commit_from_body_impl(req: ptr, res: ptr, repo: string) -> int {
 
     json.free(root)
 
-    new_rev = svnae_commit_finalise_with_acl(repo, txn, author, logmsg,
+    new_rev = commit_finalise_with_acl(repo, txn, author, logmsg,
                                               use_props_sha, use_acl_sha)
-    svnae_txn_free(txn)
+    txn_free(txn)
 
     if new_rev < 0 { return -11 }
     return new_rev

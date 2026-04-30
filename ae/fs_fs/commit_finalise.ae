@@ -35,7 +35,7 @@ const SQLITE_DONE = 101
 // ---- C-side helpers we depend on -----------------------------------
 
 // Recursive tree rebuild stays in C (txn_shim.c) — bulk content walk.
-extern svnae_txn_base_rev(t: ptr) -> int
+extern txn_base_rev(t: ptr) -> int
 extern rebuild_dir(repo: string, base_dir_sha: string, prefix: string, t: ptr) -> string
 
 // Repository primitives.
@@ -59,10 +59,10 @@ extern io_exists(path: string) -> int
 // paths_changed handle from repos/shim.c — opaque ptr + count + path
 // accessor. Used to enumerate paths-changed-by-rev for the path_rev
 // secondary index.
-extern svnae_repos_paths_changed(repo: string, rev: int) -> ptr
-extern svnae_repos_paths_count(P: ptr) -> int
-extern svnae_repos_paths_path(P: ptr, i: int) -> string
-extern svnae_repos_paths_free(P: ptr)
+extern repos_paths_changed(repo: string, rev: int) -> ptr
+extern repos_paths_count(P: ptr) -> int
+extern repos_paths_path(P: ptr, i: int) -> string
+extern repos_paths_free(P: ptr)
 
 // ---- private helpers ------------------------------------------------
 
@@ -75,19 +75,19 @@ load_rev_root_sha1_(repo: string, rev: int) -> string {
 }
 
 // Populate path_rev index: one row per path this rev touched. Derived
-// from a tree-diff against base_rev's root, reusing svnae_repos_paths_
+// from a tree-diff against base_rev's root, reusing repos_paths_
 // changed (which itself diffs the new rev against its predecessor).
 //
 // Falls through silently if the table doesn't exist yet (very old
 // repos), so this stays safe during gradual schema migration.
 populate_path_rev_(repo: string, branch: string, rev: int) {
-    P = svnae_repos_paths_changed(repo, rev)
+    P = repos_paths_changed(repo, rev)
     if P == null { return 0 }
-    pn = svnae_repos_paths_count(P)
-    if pn == 0 { svnae_repos_paths_free(P); return 0 }
+    pn = repos_paths_count(P)
+    if pn == 0 { repos_paths_free(P); return 0 }
 
     db, oerr = sqlite.open("${repo}/rep-cache.db")
-    if string.length(oerr) > 0 { svnae_repos_paths_free(P); return 0 }
+    if string.length(oerr) > 0 { repos_paths_free(P); return 0 }
 
     // Schema retrofit: seeded-from-scratch repos (via seed.ae) didn't
     // go through svnadmin/create when the path_rev table was added,
@@ -102,7 +102,7 @@ populate_path_rev_(repo: string, branch: string, rev: int) {
         i = 0
         while i < pn {
             sqlite.bind_text(stmt, 1, branch)
-            sqlite.bind_text(stmt, 2, svnae_repos_paths_path(P, i))
+            sqlite.bind_text(stmt, 2, repos_paths_path(P, i))
             sqlite.bind_int (stmt, 3, rev)
             sqlite.step(stmt, db)
             sqlite.reset(stmt)
@@ -112,7 +112,7 @@ populate_path_rev_(repo: string, branch: string, rev: int) {
     }
     sqlite.exec(db, "COMMIT")
     sqlite.close(db)
-    svnae_repos_paths_free(P)
+    repos_paths_free(P)
     return 0
 }
 
@@ -167,7 +167,7 @@ finalise_on_branch_(repo: string, txn: ptr,
                      props_sha1: string, acl_sha1: string) -> int {
     if string.length(branch) == 0 { branch = "main" }
 
-    base_rev = svnae_txn_base_rev(txn)
+    base_rev = txn_base_rev(txn)
     if base_rev < 0 { return 0 - 1 }
     base_root = load_rev_root_sha1_(repo, base_rev)
     if string.length(base_root) == 0 { return 0 - 1 }
@@ -207,7 +207,7 @@ finalise_on_branch_(repo: string, txn: ptr,
 //   - path_rev index gets one row per touched path
 //
 // Returns the new rev number on success, -1 on failure.
-export svnae_commit_finalise_on_branch(repo: string, txn: ptr,
+export commit_finalise_on_branch(repo: string, txn: ptr,
                                         branch: string,
                                         author: string, logmsg: string,
                                         props_sha1: string, acl_sha1: string) -> int {
@@ -218,21 +218,21 @@ export svnae_commit_finalise_on_branch(repo: string, txn: ptr,
 // Wrappers for legacy entry points. Each one fills in defaults for
 // the trailing arguments and forwards to the on-branch core.
 
-export svnae_commit_finalise_with_acl(repo: string, txn: ptr,
+export commit_finalise_with_acl(repo: string, txn: ptr,
                                        author: string, logmsg: string,
                                        props_sha1: string, acl_sha1: string) -> int {
     return finalise_on_branch_(repo, txn, "main", author, logmsg,
                                 props_sha1, acl_sha1)
 }
 
-export svnae_commit_finalise_with_props(repo: string, txn: ptr,
+export commit_finalise_with_props(repo: string, txn: ptr,
                                          author: string, logmsg: string,
                                          props_sha1: string) -> int {
     return finalise_on_branch_(repo, txn, "main", author, logmsg,
                                 props_sha1, "")
 }
 
-export svnae_commit_finalise(repo: string, txn: ptr,
+export commit_finalise(repo: string, txn: ptr,
                               author: string, logmsg: string) -> int {
     return finalise_on_branch_(repo, txn, "main", author, logmsg, "", "")
 }
@@ -249,7 +249,7 @@ export svnae_commit_finalise(repo: string, txn: ptr,
 //   - `name` must not already exist as a branch
 //   - `base` must exist
 //   - `globs_joined` must be non-empty
-export svnae_branch_create(repo: string, name: string, base: string,
+export branch_create(repo: string, name: string, base: string,
                             globs_joined: string, author: string) -> int {
     if string.length(name) == 0 { return 0 - 1 }
     if string.length(base) == 0 { return 0 - 1 }

@@ -15,13 +15,13 @@
 
 // ae/client/fetch.ae — per-domain "fetch URL + parse body → packed string"
 // helpers. Each pairs one URL builder (urls.ae) with one JSON parser
-// (parse.ae). The C-side packed-handle constructors (svnae_ra_log
+// (parse.ae). The C-side packed-handle constructors (ra_log
 // etc. in ra/shim.c) call one of these and then wrap the returned
-// packed string in svnae_packed_handle_new — no more C-side
+// packed string in packed_handle_new — no more C-side
 // http_get_200 + parse indirection.
 //
 // Returning "" on any failure matches the C-side semantics: empty
-// packed string makes svnae_packed_handle_new return NULL, which
+// packed string makes packed_handle_new return NULL, which
 // every existing caller already treats as "miss / give up."
 
 import std.string
@@ -98,7 +98,7 @@ export fetch_list(base: string, repo: string, rev: int, path: string) -> string 
 // rev from response. Returns -1 on any failure (transport, wrong
 // status, parse error). Shared by:
 //   - copy_branch.ae   (server-side copy / branch_create POSTs)
-//   - svnae_ra_commit_finish  (commit POST, in ra/shim.c)
+//   - ra_commit_finish  (commit POST, in ra/shim.c)
 // Round 102 retired the C-side http_post_json + take_body helpers
 // in favour of this single shared post-and-parse-rev pipeline.
 export post_for_rev(url: string, body: string, expected_status: int) -> int {

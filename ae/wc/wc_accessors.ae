@@ -25,45 +25,45 @@ extern proplist_value_at(packed: string, i: int) -> string
 
 // ---- statuslist handle ---------------------------------------
 
-export svnae_wc_statuslist_handle(packed: string) -> ptr {
+export wc_statuslist_handle(packed: string) -> ptr {
     if string.length(packed) == 0 { return null }
     return string.copy(packed)
 }
 
-export svnae_wc_statuslist_count(L: ptr) -> int {
+export wc_statuslist_count(L: ptr) -> int {
     if L == null { return 0 }
     return statuslist_count(L)
 }
-export svnae_wc_statuslist_path (L: ptr, i: int) -> string {
+export wc_statuslist_path (L: ptr, i: int) -> string {
     if L == null { return "" }
     return statuslist_path_at(L, i)
 }
-export svnae_wc_statuslist_code (L: ptr, i: int) -> int {
+export wc_statuslist_code (L: ptr, i: int) -> int {
     if L == null { return 0 - 1 }
     return statuslist_code_at(L, i)
 }
-export svnae_wc_statuslist_free (L: ptr) { return 0 }
+export wc_statuslist_free (L: ptr) { return 0 }
 
 // ---- proplist handle -----------------------------------------
 
-export svnae_wc_proplist_handle(packed: string) -> ptr {
+export wc_proplist_handle(packed: string) -> ptr {
     if string.length(packed) == 0 { return null }
     return string.copy(packed)
 }
 
-export svnae_wc_proplist_count(L: ptr) -> int {
+export wc_proplist_count(L: ptr) -> int {
     if L == null { return 0 }
     return proplist_count(L)
 }
-export svnae_wc_proplist_name (L: ptr, i: int) -> string {
+export wc_proplist_name (L: ptr, i: int) -> string {
     if L == null { return "" }
     return proplist_name_at(L, i)
 }
-export svnae_wc_proplist_value(L: ptr, i: int) -> string {
+export wc_proplist_value(L: ptr, i: int) -> string {
     if L == null { return "" }
     return proplist_value_at(L, i)
 }
-export svnae_wc_proplist_free (L: ptr) { return 0 }
+export wc_proplist_free (L: ptr) { return 0 }
 
 main() {
     println("ae/wc/wc_accessors.ae is a library; not meant to run standalone")

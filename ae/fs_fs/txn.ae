@@ -48,7 +48,7 @@ struct Txn {
     copy_kinds: ptr
 }
 
-export svnae_txn_new(base_rev: int) -> ptr {
+export txn_new(base_rev: int) -> ptr {
     raw = malloc(64)
     if raw == null { return null }
     t = raw as *Txn
@@ -62,7 +62,7 @@ export svnae_txn_new(base_rev: int) -> ptr {
     return raw
 }
 
-export svnae_txn_free(t_ptr: ptr) {
+export txn_free(t_ptr: ptr) {
     if t_ptr == null { return }
     t = t_ptr as *Txn
     gintarr_free(t.kinds)
@@ -75,13 +75,13 @@ export svnae_txn_free(t_ptr: ptr) {
     return
 }
 
-export svnae_txn_base_rev(t_ptr: ptr) -> int {
+export txn_base_rev(t_ptr: ptr) -> int {
     if t_ptr == null { return 0 - 1 }
     t = t_ptr as *Txn
     return t.base_rev
 }
 
-export svnae_txn_count(t_ptr: ptr) -> int {
+export txn_count(t_ptr: ptr) -> int {
     if t_ptr == null { return 0 }
     t = t_ptr as *Txn
     return gintarr_count(t.kinds)
@@ -103,35 +103,35 @@ push_edit_(t_ptr: ptr,
     return 0
 }
 
-export svnae_txn_add_file(t_ptr: ptr, path: string, content: string, len: int) -> int {
+export txn_add_file(t_ptr: ptr, path: string, content: string, len: int) -> int {
     if t_ptr == null { return 0 - 1 }
     if len < 0 { len = 0 }
     return push_edit_(t_ptr, EDIT_ADD_FILE, path, content, len, "", 0)
 }
 
-export svnae_txn_mkdir(t_ptr: ptr, path: string) -> int {
+export txn_mkdir(t_ptr: ptr, path: string) -> int {
     if t_ptr == null { return 0 - 1 }
     return push_edit_(t_ptr, EDIT_MKDIR, path, "", 0, "", 0)
 }
 
-export svnae_txn_delete(t_ptr: ptr, path: string) -> int {
+export txn_delete(t_ptr: ptr, path: string) -> int {
     if t_ptr == null { return 0 - 1 }
     return push_edit_(t_ptr, EDIT_DELETE, path, "", 0, "", 0)
 }
 
-export svnae_txn_copy(t_ptr: ptr, path: string, from_sha1: string, from_kind: int) -> int {
+export txn_copy(t_ptr: ptr, path: string, from_sha1: string, from_kind: int) -> int {
     if t_ptr == null { return 0 - 1 }
     if string.length(from_sha1) != 40 { return 0 - 1 }
     return push_edit_(t_ptr, EDIT_COPY, path, "", 0, from_sha1, from_kind)
 }
 
-export svnae_txn_edit_kind(t_ptr: ptr, i: int) -> int {
+export txn_edit_kind(t_ptr: ptr, i: int) -> int {
     if t_ptr == null { return 0 - 1 }
     t = t_ptr as *Txn
     return gintarr_get(t.kinds, i)
 }
 
-export svnae_txn_edit_path(t_ptr: ptr, i: int) -> string {
+export txn_edit_path(t_ptr: ptr, i: int) -> string {
     if t_ptr == null { return "" }
     t = t_ptr as *Txn
     p = list_get_raw(t.paths, i)
@@ -139,7 +139,7 @@ export svnae_txn_edit_path(t_ptr: ptr, i: int) -> string {
     return p
 }
 
-export svnae_txn_edit_content_data(t_ptr: ptr, i: int) -> string {
+export txn_edit_content_data(t_ptr: ptr, i: int) -> string {
     if t_ptr == null { return "" }
     t = t_ptr as *Txn
     p = list_get_raw(t.contents, i)
@@ -147,13 +147,13 @@ export svnae_txn_edit_content_data(t_ptr: ptr, i: int) -> string {
     return p
 }
 
-export svnae_txn_edit_content_len(t_ptr: ptr, i: int) -> int {
+export txn_edit_content_len(t_ptr: ptr, i: int) -> int {
     if t_ptr == null { return 0 }
     t = t_ptr as *Txn
     return gintarr_get(t.content_lens, i)
 }
 
-export svnae_txn_edit_copy_sha(t_ptr: ptr, i: int) -> string {
+export txn_edit_copy_sha(t_ptr: ptr, i: int) -> string {
     if t_ptr == null { return "" }
     t = t_ptr as *Txn
     p = list_get_raw(t.copy_shas, i)
@@ -161,7 +161,7 @@ export svnae_txn_edit_copy_sha(t_ptr: ptr, i: int) -> string {
     return p
 }
 
-export svnae_txn_edit_copy_kind(t_ptr: ptr, i: int) -> int {
+export txn_edit_copy_kind(t_ptr: ptr, i: int) -> int {
     if t_ptr == null { return 0 }
     t = t_ptr as *Txn
     return gintarr_get(t.copy_kinds, i)

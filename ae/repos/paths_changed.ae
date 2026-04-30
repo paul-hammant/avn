@@ -13,7 +13,7 @@
 // implied. See the License for the specific language governing
 // permissions and limitations under the License.
 
-// Ported from svnae_repos_paths_changed and its flatten_tree helper in
+// Ported from repos_paths_changed and its flatten_tree helper in
 // ae/repos/shim.c. Given (rev) → list of {action, path} where action is
 // 'A', 'M', or 'D'.
 //
@@ -29,8 +29,8 @@
 
 import std.string
 
-extern svnae_rep_read_blob(repo: string, sha: string) -> string
-extern svnae_rep_free(body: string)
+extern rep_read_blob(repo: string, sha: string) -> string
+extern rep_free(body: string)
 extern dir_count_entries(body: string) -> int
 extern dir_entry_kind(body: string, i: int) -> int
 extern dir_entry_sha(body: string, i: int) -> string
@@ -42,7 +42,7 @@ extern path_join_rel(prefix: string, name: string) -> string
 // the *full* path (prefix + name), not just the basename. Returns
 // an unsorted concatenation (callers sort separately).
 flatten_tree(repo: string, dir_sha: string, prefix: string) -> string {
-    body = svnae_rep_read_blob(repo, dir_sha)
+    body = rep_read_blob(repo, dir_sha)
     out = ""
     n = dir_count_entries(body)
     i = 0
@@ -59,7 +59,7 @@ flatten_tree(repo: string, dir_sha: string, prefix: string) -> string {
         }
         i = i + 1
     }
-    svnae_rep_free(body)
+    rep_free(body)
     return out
 }
 

@@ -8,7 +8,7 @@
 //     http://www.apache.org/licenses/LICENSE-2.0
 
 // Tree builder — Aether port of ae/fs_fs/shim.c's
-// svnae_tree_builder. Round 167 retires the C holder using
+// tree_builder. Round 167 retires the C holder using
 // Aether 0.109's *StructName return-type fix (Section B of
 // fresh-aether-requests.md).
 //
@@ -41,7 +41,7 @@ struct TreeBuilder {
     content_lens: ptr
 }
 
-export svnae_fsfs_tree_builder_new() -> ptr {
+export fsfs_tree_builder_new() -> ptr {
     raw = malloc(64)
     if raw == null { return null }
     tb = raw as *TreeBuilder
@@ -52,7 +52,7 @@ export svnae_fsfs_tree_builder_new() -> ptr {
     return raw
 }
 
-export svnae_fsfs_tree_builder_free(tb_ptr: ptr) {
+export fsfs_tree_builder_free(tb_ptr: ptr) {
     if tb_ptr == null { return }
     tb = tb_ptr as *TreeBuilder
     list_free(tb.paths)
@@ -63,7 +63,7 @@ export svnae_fsfs_tree_builder_free(tb_ptr: ptr) {
     return
 }
 
-export svnae_fsfs_tree_builder_add(tb_ptr: ptr, path: string, kind: int,
+export fsfs_tree_builder_add(tb_ptr: ptr, path: string, kind: int,
                                     content: string, content_len: int) -> int {
     if tb_ptr == null { return 0 - 1 }
     tb = tb_ptr as *TreeBuilder
@@ -81,13 +81,13 @@ export svnae_fsfs_tree_builder_add(tb_ptr: ptr, path: string, kind: int,
     return 0
 }
 
-export svnae_fsfs_tree_builder_count(tb_ptr: ptr) -> int {
+export fsfs_tree_builder_count(tb_ptr: ptr) -> int {
     if tb_ptr == null { return 0 }
     tb = tb_ptr as *TreeBuilder
     return gintarr_count(tb.kinds)
 }
 
-export svnae_fsfs_tree_builder_path(tb_ptr: ptr, i: int) -> string {
+export fsfs_tree_builder_path(tb_ptr: ptr, i: int) -> string {
     if tb_ptr == null { return "" }
     tb = tb_ptr as *TreeBuilder
     p = list_get_raw(tb.paths, i)
@@ -95,7 +95,7 @@ export svnae_fsfs_tree_builder_path(tb_ptr: ptr, i: int) -> string {
     return p
 }
 
-export svnae_fsfs_tree_builder_kind(tb_ptr: ptr, i: int) -> int {
+export fsfs_tree_builder_kind(tb_ptr: ptr, i: int) -> int {
     if tb_ptr == null { return 0 - 1 }
     tb = tb_ptr as *TreeBuilder
     n = gintarr_count(tb.kinds)
@@ -104,7 +104,7 @@ export svnae_fsfs_tree_builder_kind(tb_ptr: ptr, i: int) -> int {
     return gintarr_get(tb.kinds, i)
 }
 
-export svnae_fsfs_tree_builder_content_data(tb_ptr: ptr, i: int) -> string {
+export fsfs_tree_builder_content_data(tb_ptr: ptr, i: int) -> string {
     if tb_ptr == null { return "" }
     tb = tb_ptr as *TreeBuilder
     p = list_get_raw(tb.contents, i)
@@ -112,7 +112,7 @@ export svnae_fsfs_tree_builder_content_data(tb_ptr: ptr, i: int) -> string {
     return p
 }
 
-export svnae_fsfs_tree_builder_content_len(tb_ptr: ptr, i: int) -> int {
+export fsfs_tree_builder_content_len(tb_ptr: ptr, i: int) -> int {
     if tb_ptr == null { return 0 }
     tb = tb_ptr as *TreeBuilder
     return gintarr_get(tb.content_lens, i)

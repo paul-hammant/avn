@@ -29,13 +29,13 @@ extern aether_args_get(index: int) -> string
 
 // --- repos shim externs our handler code calls back into ------------------
 
-extern svnae_svnserver_register_repo(name: string, path: string)
-extern svnae_svnserver_set_superuser_token(token: string)
+extern svnserver_register_repo(name: string, path: string)
+extern svnserver_set_superuser_token(token: string)
 
 // The Aether dispatcher is exported under a stable C symbol via
 // @c_callback in dispatch.ae; we declare it here as a plain extern
 // so std.http's route registration can take its address. Round 58
-// retired the svnae_svnserver_handler_dispatch C trampoline that
+// retired the svnserver_handler_dispatch C trampoline that
 // previously wrapped this.
 extern svnserver_dispatch(req: ptr, res: ptr, user_data: ptr)
 
@@ -67,13 +67,13 @@ main() {
         a = aether_args_get(i)
         if string.equals(a, "--superuser-token") == 1 {
             if i + 1 < argc {
-                svnae_svnserver_set_superuser_token(aether_args_get(i + 1))
+                svnserver_set_superuser_token(aether_args_get(i + 1))
             }
         }
         i = i + 1
     }
 
-    svnae_svnserver_register_repo(repo_name, repo_path)
+    svnserver_register_repo(repo_name, repo_path)
 
     server = http_server_create(port)
     if server == 0 {

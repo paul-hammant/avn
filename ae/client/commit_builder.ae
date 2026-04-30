@@ -8,7 +8,7 @@
 //     http://www.apache.org/licenses/LICENSE-2.0
 
 // Commit-builder state for libsvn_ra. Round 170 retires the
-// svnae_ra_commit struct + setters/getters from ae/client/shim.c
+// ra_commit struct + setters/getters from ae/client/shim.c
 // using Aether 0.109's *StructName return-type fix.
 //
 // Storage shape — all six packed-record buffers plus three count
@@ -16,8 +16,8 @@
 // live in this struct. ra_commit_build.ae walks the packed buffers
 // at build_body time.
 //
-// Lifecycle: svnae_ra_commit_begin → svnae_ra_commit_{add_file,
-// mkdir, delete, set_prop, acl_add} → svnae_ra_commit_finish
+// Lifecycle: ra_commit_begin → ra_commit_{add_file,
+// mkdir, delete, set_prop, acl_add} → ra_commit_finish
 // (which serialises + POSTs and frees the builder).
 
 import std.string
@@ -49,7 +49,7 @@ struct RaCommit {
     acls_packed: string
 }
 
-export svnae_ra_commit_begin(base_rev: int, author: string, logmsg: string) -> ptr {
+export ra_commit_begin(base_rev: int, author: string, logmsg: string) -> ptr {
     raw = malloc(128)
     if raw == null { return null }
     cb = raw as *RaCommit
@@ -65,7 +65,7 @@ export svnae_ra_commit_begin(base_rev: int, author: string, logmsg: string) -> p
     return raw
 }
 
-export svnae_ra_commit_finish(cb_ptr: ptr, base_url: string, repo_name: string) -> int {
+export ra_commit_finish(cb_ptr: ptr, base_url: string, repo_name: string) -> int {
     if cb_ptr == null { return 0 - 1 }
     body_json = ra_commit_build_body(cb_ptr)
     url = url_commit(base_url, repo_name)
@@ -76,55 +76,55 @@ export svnae_ra_commit_finish(cb_ptr: ptr, base_url: string, repo_name: string) 
 
 // ---- accessors ---------------------------------------------------
 
-export svnae_ra_cb_base_rev(cb_ptr: ptr) -> int {
+export ra_cb_base_rev(cb_ptr: ptr) -> int {
     if cb_ptr == null { return 0 }
     cb = cb_ptr as *RaCommit
     return cb.base_rev
 }
 
-export svnae_ra_cb_author(cb_ptr: ptr) -> string {
+export ra_cb_author(cb_ptr: ptr) -> string {
     if cb_ptr == null { return "" }
     cb = cb_ptr as *RaCommit
     return cb.author
 }
 
-export svnae_ra_cb_logmsg(cb_ptr: ptr) -> string {
+export ra_cb_logmsg(cb_ptr: ptr) -> string {
     if cb_ptr == null { return "" }
     cb = cb_ptr as *RaCommit
     return cb.logmsg
 }
 
-export svnae_ra_cb_edits_packed(cb_ptr: ptr) -> string {
+export ra_cb_edits_packed(cb_ptr: ptr) -> string {
     if cb_ptr == null { return "" }
     cb = cb_ptr as *RaCommit
     return cb.edits_packed
 }
 
-export svnae_ra_cb_props_packed(cb_ptr: ptr) -> string {
+export ra_cb_props_packed(cb_ptr: ptr) -> string {
     if cb_ptr == null { return "" }
     cb = cb_ptr as *RaCommit
     return cb.props_packed
 }
 
-export svnae_ra_cb_acls_packed(cb_ptr: ptr) -> string {
+export ra_cb_acls_packed(cb_ptr: ptr) -> string {
     if cb_ptr == null { return "" }
     cb = cb_ptr as *RaCommit
     return cb.acls_packed
 }
 
-export svnae_ra_cb_n_edits(cb_ptr: ptr) -> int {
+export ra_cb_n_edits(cb_ptr: ptr) -> int {
     if cb_ptr == null { return 0 }
     cb = cb_ptr as *RaCommit
     return cb.n_edits
 }
 
-export svnae_ra_cb_n_props(cb_ptr: ptr) -> int {
+export ra_cb_n_props(cb_ptr: ptr) -> int {
     if cb_ptr == null { return 0 }
     cb = cb_ptr as *RaCommit
     return cb.n_props
 }
 
-export svnae_ra_cb_n_acls(cb_ptr: ptr) -> int {
+export ra_cb_n_acls(cb_ptr: ptr) -> int {
     if cb_ptr == null { return 0 }
     cb = cb_ptr as *RaCommit
     return cb.n_acls
@@ -170,17 +170,17 @@ set_packed_(cb_ptr: ptr, slot_kind: int, str: string) {
     return
 }
 
-export svnae_ra_cb_set_edits_packed(cb_ptr: ptr, str: string) {
+export ra_cb_set_edits_packed(cb_ptr: ptr, str: string) {
     set_packed_(cb_ptr, 0, str)
     return
 }
 
-export svnae_ra_cb_set_props_packed(cb_ptr: ptr, str: string) {
+export ra_cb_set_props_packed(cb_ptr: ptr, str: string) {
     set_packed_(cb_ptr, 1, str)
     return
 }
 
-export svnae_ra_cb_set_acls_packed(cb_ptr: ptr, str: string) {
+export ra_cb_set_acls_packed(cb_ptr: ptr, str: string) {
     set_packed_(cb_ptr, 2, str)
     return
 }

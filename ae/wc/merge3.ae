@@ -13,8 +13,8 @@
 // implied. See the License for the specific language governing
 // permissions and limitations under the License.
 
-// Three-way text merge — port of ae/wc/merge3_shim.c::svnae_merge3
-// + svnae_merge3_apply to Aether, made possible by os.run_capture
+// Three-way text merge — port of ae/wc/merge3_shim.c::merge3
+// + merge3_apply to Aether, made possible by os.run_capture
 // returning (stdout, status, err) tuple as of aether 0.94+.
 //
 // Algorithm: write the three buffers (mine / base / theirs) to
@@ -25,9 +25,9 @@
 //   >1 -> diff3 itself errored
 //
 // The two public exports both keep their pre-Round-112 semantics:
-// svnae_merge3_apply takes a wc_path + base + theirs + revs, runs
+// merge3_apply takes a wc_path + base + theirs + revs, runs
 // the merge, writes merged back atomically, drops .mine / .r<rev>
-// sidecars on conflicts. svnae_merge3 takes raw buffers and returns
+// sidecars on conflicts. merge3 takes raw buffers and returns
 // (merged_string, status) via the leading-status-byte channel.
 
 import std.string
@@ -56,7 +56,7 @@ extern os_getpid_raw() -> int
 
 tmp_path_(kind: string) -> string {
     pid = os_getpid_raw()
-    return "/tmp/svnae_m3_${pid}_${kind}.tmp"
+    return "/tmp/m3_${pid}_${kind}.tmp"
 }
 
 write_three_(mine: string, mine_len: int,
@@ -127,7 +127,7 @@ export merge(mine: string, mine_len: int,
 // Public on-disk merge3. Reads wc_path as `mine`; writes merged
 // back atomically; drops sidecars on conflict. Returns 0 (clean),
 // 1 (conflicts), or -1 (error).
-export svnae_merge3_apply(wc_path: string,
+export merge3_apply(wc_path: string,
                             base: string, base_len: int, base_rev: int,
                             theirs: string, theirs_len: int, theirs_rev: int) -> int {
     if io_file_size(wc_path) < 0 { return 0 - 1 }

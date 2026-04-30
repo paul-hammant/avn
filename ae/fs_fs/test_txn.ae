@@ -35,17 +35,17 @@ import std.string
 // --- rep-store (C side; shared by Aether and the rebuild algorithm) ---------
 
 extern rep_write_blob(repo: string, data: string, len: int) -> string
-extern svnae_rep_read_blob(repo: string, sha1_hex: string) -> string
-extern svnae_rep_free(p: string)
+extern rep_read_blob(repo: string, sha1_hex: string) -> string
+extern rep_free(p: string)
 
 // --- txn / rebuild ---------------------------------------------------------
 
-extern svnae_txn_new(base_rev: int) -> ptr
-extern svnae_txn_base_rev(t: ptr) -> int
-extern svnae_txn_add_file(t: ptr, path: string, content: string, len: int) -> int
-extern svnae_txn_mkdir(t: ptr, path: string) -> int
-extern svnae_txn_delete(t: ptr, path: string) -> int
-extern svnae_txn_free(t: ptr)
+extern txn_new(base_rev: int) -> ptr
+extern txn_base_rev(t: ptr) -> int
+extern txn_add_file(t: ptr, path: string, content: string, len: int) -> int
+extern txn_mkdir(t: ptr, path: string) -> int
+extern txn_delete(t: ptr, path: string) -> int
+extern txn_free(t: ptr)
 extern rebuild_dir(repo: string, base_dir_sha: string, prefix: string, t: ptr) -> string
 
 // --- subr: FS + SQLite (for init + revision metadata) ---------------------
@@ -140,17 +140,17 @@ rev_root_sha1(repo: string, rev: int) {
     raw = io_read_file(rev_file_path(repo, rev))
     if string.length(raw) == 0 { return "" }
     rev_blob_sha1 = string.trim(raw)
-    rev_body = svnae_rep_read_blob(repo, rev_blob_sha1)
+    rev_body = rep_read_blob(repo, rev_blob_sha1)
     root = parse_line_value(rev_body, "root")
     root_copy = string.concat("", root)
-    svnae_rep_free(rev_body)
+    rep_free(rev_body)
     return root_copy
 }
 
 // --- commit ----------------------------------------------------------------
 
 commit_txn(repo: string, txn: ptr, author: string, logmsg: string) {
-    base_rev = svnae_txn_base_rev(txn)
+    base_rev = txn_base_rev(txn)
     base_root = rev_root_sha1(repo, base_rev)
     if string.length(base_root) == 0 { return -1 }
 
@@ -224,7 +224,7 @@ fsfs_read_file_at(repo: string, rev: int, path: string) {
     root = rev_root_sha1(repo, rev)
     if string.length(root) == 0 { return "" }
     cur_sha1 = root
-    cur_body = svnae_rep_read_blob(repo, cur_sha1)
+    cur_body = rep_read_blob(repo, cur_sha1)
     if string.length(cur_body) == 0 { return "" }
 
     p = path
@@ -250,11 +250,11 @@ fsfs_read_file_at(repo: string, rev: int, path: string) {
 
         if at_end == 1 {
             if string.equals(kind, "f") == 0 { return "" }
-            content = svnae_rep_read_blob(repo, sub_sha1)
+            content = rep_read_blob(repo, sub_sha1)
             return content  // owned by caller; leak is fine in test
         }
         if string.equals(kind, "d") == 0 { return "" }
-        cur_body = svnae_rep_read_blob(repo, sub_sha1)
+        cur_body = rep_read_blob(repo, sub_sha1)
         if string.length(cur_body) == 0 { return "" }
     }
     return ""
@@ -286,23 +286,23 @@ count_rep_files(repo: string) { return fs_count_rep_files(repo) }
 main() {
     fails = 0
     pid = os_getpid_raw()
-    repo = "/tmp/svnae_test_txn_${pid}"
+    repo = "/tmp/test_txn_${pid}"
     rmtree(repo)
 
     rc = fsfs_init(repo)
     fails = fails + expect_int("init rc", rc, 0)
 
     // Commit nested tree.
-    txn = svnae_txn_new(0)
-    svnae_txn_mkdir(txn, "src")
-    svnae_txn_mkdir(txn, "src/lib")
-    svnae_txn_mkdir(txn, "docs")
-    svnae_txn_add_file(txn, "src/main.c",     "int main(void) { return 0; }\n", 29)
-    svnae_txn_add_file(txn, "src/lib/util.c", "void util(void) {}\n",             19)
-    svnae_txn_add_file(txn, "docs/README.md", "# Hello\n",                         8)
-    svnae_txn_add_file(txn, "LICENSE",        "Apache-2.0\n",                     11)
+    txn = txn_new(0)
+    txn_mkdir(txn, "src")
+    txn_mkdir(txn, "src/lib")
+    txn_mkdir(txn, "docs")
+    txn_add_file(txn, "src/main.c",     "int main(void) { return 0; }\n", 29)
+    txn_add_file(txn, "src/lib/util.c", "void util(void) {}\n",             19)
+    txn_add_file(txn, "docs/README.md", "# Hello\n",                         8)
+    txn_add_file(txn, "LICENSE",        "Apache-2.0\n",                     11)
     new_rev = commit_txn(repo, txn, "paul", "first nested commit")
-    svnae_txn_free(txn)
+    txn_free(txn)
     fails = fails + expect_int("commit rev 1", new_rev, 1)
 
     // Read back.
@@ -315,10 +315,10 @@ main() {
     // Rev 2: modify one file deep in the tree.
     // Expect 5 new .rep files: new util.c blob + src/lib + src + root + rev blob.
     before = fs_count_rep_files(repo)
-    txn = svnae_txn_new(1)
-    svnae_txn_add_file(txn, "src/lib/util.c", "void util(void) { /* updated */ }\n", 34)
+    txn = txn_new(1)
+    txn_add_file(txn, "src/lib/util.c", "void util(void) { /* updated */ }\n", 34)
     new_rev = commit_txn(repo, txn, "paul", "tweak util")
-    svnae_txn_free(txn)
+    txn_free(txn)
     fails = fails + expect_int("commit rev 2", new_rev, 2)
     // (Used to need `0 + fs_count_rep_files(repo)` to force int
     // arithmetic — AETHER_ISSUES.md #14 worked around return-type
@@ -332,24 +332,24 @@ main() {
                                fsfs_read_file_at(repo, 2, "docs/README.md"), "# Hello\n")
 
     // Rev 3: delete LICENSE.
-    txn = svnae_txn_new(2)
-    svnae_txn_delete(txn, "LICENSE")
+    txn = txn_new(2)
+    txn_delete(txn, "LICENSE")
     new_rev = commit_txn(repo, txn, "paul", "drop LICENSE")
-    svnae_txn_free(txn)
+    txn_free(txn)
     fails = fails + expect_int("commit rev 3", new_rev, 3)
     fails = fails + expect_str("r3 LICENSE gone",       fsfs_read_file_at(repo, 3, "LICENSE"), "")
     fails = fails + expect_str("r2 LICENSE preserved",  fsfs_read_file_at(repo, 2, "LICENSE"), "Apache-2.0\n")
 
     // Rev 4: add a new top-level file.
-    txn = svnae_txn_new(3)
-    svnae_txn_add_file(txn, "CHANGELOG", "v1: initial\n", 12)
+    txn = txn_new(3)
+    txn_add_file(txn, "CHANGELOG", "v1: initial\n", 12)
     new_rev = commit_txn(repo, txn, "paul", "changelog")
-    svnae_txn_free(txn)
+    txn_free(txn)
     fails = fails + expect_int("commit rev 4", new_rev, 4)
     fails = fails + expect_str("r4 CHANGELOG", fsfs_read_file_at(repo, 4, "CHANGELOG"), "v1: initial\n")
 
     rmtree(repo)
-    system("rm -f /tmp/svnae_count_${pid}.txt")
+    system("rm -f /tmp/count_${pid}.txt")
 
     if fails > 0 {
         println("")

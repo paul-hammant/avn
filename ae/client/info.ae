@@ -15,7 +15,7 @@
 
 // RA endpoint helpers that just GET /repos/<r>/info, parse the JSON,
 // and return one scalar field. Round 88 ports them out of
-// ae/client/shim.c. Round 100 retires svnae_http_get_body in favour of
+// ae/client/shim.c. Round 100 retires http_get_body in favour of
 // get_200 (Aether-side, in http_client.ae).
 
 import std.string
@@ -27,7 +27,7 @@ extern get_200(url: string) -> string
 
 // Returns the server's current revision number, or -1 on failure
 // (transport error, non-200 status, or JSON parse failure).
-export svnae_ra_head_rev(base_url: string, repo_name: string) -> int {
+export ra_head_rev(base_url: string, repo_name: string) -> int {
     body = get_200(url_info(base_url, repo_name))
     if string.length(body) == 0 { return 0 - 1 }
     return ra_parse_head_rev(body)
@@ -36,7 +36,7 @@ export svnae_ra_head_rev(base_url: string, repo_name: string) -> int {
 // Returns the server's primary content-address algorithm, or "" on
 // failure. Pre-Phase-6.1 servers omit the field; the Aether parser
 // defaults to "sha1".
-export svnae_ra_hash_algo(base_url: string, repo_name: string) -> string {
+export ra_hash_algo(base_url: string, repo_name: string) -> string {
     body = get_200(url_info(base_url, repo_name))
     if string.length(body) == 0 { return "" }
     return ra_parse_hash_algo(body)

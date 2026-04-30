@@ -14,7 +14,7 @@
 // permissions and limitations under the License.
 
 // svndiff1 decode — port of the C decoder in
-// ae/delta/svndiff/shim.c::svnae_svndiff_decode_apply, made
+// ae/delta/svndiff/shim.c::svndiff_decode_apply, made
 // possible by std.bytes (issue #288, aether 0.94+).
 //
 // Reads a single-window svndiff stream and reconstructs the target
@@ -61,7 +61,7 @@ vi_decode_(buf: string, pos: int, end: int) -> {
 // target_bytes is "" but the caller must check status to
 // distinguish from a legitimate empty target.
 //
-export svnae_svndiff_decode_apply(diff: string, diff_len: int,
+export svndiff_decode_apply(diff: string, diff_len: int,
                                     source: string, source_len: int) -> (string, int) {
     if diff_len < 4 { return "", 0 }
     // Signature: 'S' 'V' 'N' 0x01

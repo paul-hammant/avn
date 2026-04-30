@@ -28,17 +28,17 @@
 import std.string
 
 // wc.db lifecycle + helpers.
-extern svnae_wc_db_open(wc_root: string) -> ptr
-extern svnae_wc_db_close(db: ptr)
-extern svnae_wc_db_get_node(db: ptr, path: string) -> ptr
-extern svnae_wc_db_upsert_node(db: ptr, path: string, kind: int, base_rev: int, base_sha1: string, node_state: int) -> int
-extern svnae_wc_db_delete_node(db: ptr, path: string) -> int
+extern wc_db_open(wc_root: string) -> ptr
+extern wc_db_close(db: ptr)
+extern wc_db_get_node(db: ptr, path: string) -> ptr
+extern wc_db_upsert_node(db: ptr, path: string, kind: int, base_rev: int, base_sha1: string, node_state: int) -> int
+extern wc_db_delete_node(db: ptr, path: string) -> int
 
-extern svnae_wc_node_kind(n: ptr) -> int
-extern svnae_wc_node_state(n: ptr) -> int
-extern svnae_wc_node_base_rev(n: ptr) -> int
-extern svnae_wc_node_base_sha1(n: ptr) -> string
-extern svnae_wc_node_free(n: ptr)
+extern wc_node_kind(n: ptr) -> int
+extern wc_node_state(n: ptr) -> int
+extern wc_node_base_rev(n: ptr) -> int
+extern wc_node_base_sha1(n: ptr) -> string
+extern wc_node_free(n: ptr)
 
 // Pristine store.
 extern wc_pristine_get(wc_root: string, sha1: string) -> string
@@ -58,29 +58,29 @@ extern io_is_regular_file(path: string) -> int
 
 // ---- revert ---------------------------------------------------------
 
-export svnae_wc_revert(wc_root: string, rel_path: string) -> int {
-    db = svnae_wc_db_open(wc_root)
+export wc_revert(wc_root: string, rel_path: string) -> int {
+    db = wc_db_open(wc_root)
     if db == null { return 0 - 2 }
 
-    n = svnae_wc_db_get_node(db, rel_path)
+    n = wc_db_get_node(db, rel_path)
     if n == null {
-        svnae_wc_db_close(db)
+        wc_db_close(db)
         return 0 - 1
     }
 
-    kind  = svnae_wc_node_kind(n)
-    state = svnae_wc_node_state(n)
-    brev  = svnae_wc_node_base_rev(n)
-    bsha  = svnae_wc_node_base_sha1(n)
+    kind  = wc_node_kind(n)
+    state = wc_node_state(n)
+    brev  = wc_node_base_rev(n)
+    bsha  = wc_node_base_sha1(n)
     bsha  = string.copy(bsha)
-    svnae_wc_node_free(n)
+    wc_node_free(n)
 
     disk = "${wc_root}/${rel_path}"
 
     if state == 1 {
         // Drop the row. Leave the file in place (becomes unversioned).
-        rc = svnae_wc_db_delete_node(db, rel_path)
-        svnae_wc_db_close(db)
+        rc = wc_db_delete_node(db, rel_path)
+        wc_db_close(db)
         if rc == 0 { return 0 }
         return 0 - 2
     }
@@ -89,8 +89,8 @@ export svnae_wc_revert(wc_root: string, rel_path: string) -> int {
         // Dir: nothing content-wise to restore; just clear any
         // pending-delete state. If state==2, recreate the dir on disk.
         if state == 2 { io_mkdir_p(disk) }
-        svnae_wc_db_upsert_node(db, rel_path, 1, brev, "", 0)
-        svnae_wc_db_close(db)
+        wc_db_upsert_node(db, rel_path, 1, brev, "", 0)
+        wc_db_close(db)
         return 0
     }
 
@@ -98,17 +98,17 @@ export svnae_wc_revert(wc_root: string, rel_path: string) -> int {
     psize = wc_pristine_size(wc_root, bsha)
     data  = wc_pristine_get(wc_root, bsha)
     if string.length(data) == 0 {
-        svnae_wc_db_close(db)
+        wc_db_close(db)
         return 0 - 2
     }
     rc = io_write_atomic(disk, data, psize)
     if rc != 0 {
-        svnae_wc_db_close(db)
+        wc_db_close(db)
         return 0 - 2
     }
 
-    svnae_wc_db_upsert_node(db, rel_path, 0, brev, bsha, 0)
-    svnae_wc_db_close(db)
+    wc_db_upsert_node(db, rel_path, 0, brev, bsha, 0)
+    wc_db_close(db)
     return 0
 }
 
@@ -160,7 +160,7 @@ walk_and_clean_(root: string) -> int {
     return count
 }
 
-export svnae_wc_cleanup(wc_root: string) -> int {
+export wc_cleanup(wc_root: string) -> int {
     if string.length(wc_root) == 0 { return 0 - 1 }
 
     // Verify this is a WC by checking for .svn/wc.db.

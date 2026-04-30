@@ -20,16 +20,16 @@
 // root sha. Recurses into subtrees; dirs with no surviving descendants
 // are dropped (except if the dir itself matches a glob literally).
 //
-// The rep store is owned by C (svnae_rep_read_blob / _write_blob /
+// The rep store is owned by C (rep_read_blob / _write_blob /
 // _free). This module is the pure recursion + decision logic.
 
 import std.string
 
 // --- C FFI into the rep store + line-level helpers ------------------------
 
-extern svnae_rep_read_blob(repo: string, sha_hex: string) -> string
+extern rep_read_blob(repo: string, sha_hex: string) -> string
 extern rep_write_blob(repo: string, data: string, length: int) -> string
-extern svnae_rep_free(p: string)
+extern rep_free(p: string)
 
 // Dir-blob parsers ported earlier in ae/fs_fs/dirblob.ae.
 extern dir_count_entries(body: string) -> int
@@ -53,7 +53,7 @@ extern spec_matches_any(path: string, globs_joined: string) -> int
 // `spec_matches_any` expects.
 export filter_dir(repo: string, src_sha: string, prefix: string,
                   globs_joined: string) -> string {
-    src_body = svnae_rep_read_blob(repo, src_sha)
+    src_body = rep_read_blob(repo, src_sha)
     if string.length(src_body) == 0 {
         // Empty-dir source blob is legitimate; NULL-ish return from
         // read_blob is the "missing" case — but the C wrapper returns
@@ -89,10 +89,10 @@ export filter_dir(repo: string, src_sha: string, prefix: string,
                 // empty-dir blob has length 0. Callers-above semantics:
                 // we include this dir if either (a) descendants
                 // survived OR (b) the dir path itself matches a glob.
-                sub_body = svnae_rep_read_blob(repo, sub)
+                sub_body = rep_read_blob(repo, sub)
                 sub_is_empty = 0
                 if string.length(sub_body) == 0 { sub_is_empty = 1 }
-                svnae_rep_free(sub_body)
+                rep_free(sub_body)
 
                 descendants = 0
                 if sub_is_empty == 0 { descendants = 1 }
@@ -116,7 +116,7 @@ export filter_dir(repo: string, src_sha: string, prefix: string,
         i = i + 1
     }
 
-    svnae_rep_free(src_body)
+    rep_free(src_body)
 
     new_sha = rep_write_blob(repo, body, string.length(body))
     return new_sha

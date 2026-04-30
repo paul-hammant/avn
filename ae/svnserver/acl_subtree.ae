@@ -24,12 +24,12 @@
 import std.string
 
 extern acl_allows_mode(repo: string, rev: int, user: string, target_path: string, want_write: int) -> int
-extern svnae_repos_resolve_kind(repo: string, rev: int, path: string) -> int
+extern repos_resolve_kind(repo: string, rev: int, path: string) -> int
 
-extern svnae_repos_list(repo: string, rev: int, path: string) -> ptr
-extern svnae_repos_list_count(L: ptr) -> int
-extern svnae_repos_list_name(L: ptr, i: int) -> string
-extern svnae_repos_list_free(L: ptr)
+extern repos_list(repo: string, rev: int, path: string) -> ptr
+extern repos_list_count(L: ptr) -> int
+extern repos_list_name(L: ptr, i: int) -> string
+extern repos_list_free(L: ptr)
 
 export acl_user_has_rw_subtree(repo: string, rev: int, user: string,
                                 path: string) -> int {
@@ -42,24 +42,24 @@ acl_user_has_rw_subtree_impl(repo: string, rev: int, user: string,
     if acl_allows_mode(repo, rev, user, path, 1) == 0 { return 0 }
 
     // Only dirs have descendants.
-    kind = svnae_repos_resolve_kind(repo, rev, path)
+    kind = repos_resolve_kind(repo, rev, path)
     if kind != 100 { return 1 }   // 'd' = 100
 
-    // svnae_repos_list wants "/" for the root; the C-side convention
+    // repos_list wants "/" for the root; the C-side convention
     // is an empty path means root in most places, but list() is the
     // exception.
     list_path = path
     if string.length(path) == 0 { list_path = "/" }
 
-    L = svnae_repos_list(repo, rev, list_path)
+    L = repos_list(repo, rev, list_path)
     if L == null { return 1 }
 
-    n = svnae_repos_list_count(L)
+    n = repos_list_count(L)
     ok = 1
     i = 0
     while i < n {
         if ok == 1 {
-            name = svnae_repos_list_name(L, i)
+            name = repos_list_name(L, i)
             name = string.copy(name)   // list's buffer reused on free
             child = ""
             if string.length(path) > 0 {
@@ -74,7 +74,7 @@ acl_user_has_rw_subtree_impl(repo: string, rev: int, user: string,
         }
         i = i + 1
     }
-    svnae_repos_list_free(L)
+    repos_list_free(L)
     return ok
 }
 

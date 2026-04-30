@@ -23,8 +23,8 @@
 
 import std.string
 
-extern svnae_rep_read_blob(repo: string, sha: string) -> string
-extern svnae_rep_free(body: string)
+extern rep_read_blob(repo: string, sha: string) -> string
+extern rep_free(body: string)
 
 // Round 57: load_rev_blob_field is the Aether-side helper from
 // rev_load.ae — round-tripping via the C shim's three
@@ -43,14 +43,14 @@ acl_resolve_json_impl(repo: string, rev: int, target: string) -> string {
     if string.length(acl_root) == 0 {
         return "{\"rules\":[],\"effective_from\":\"\"}"
     }
-    paths_body = svnae_rep_read_blob(repo, acl_root)
+    paths_body = rep_read_blob(repo, acl_root)
     if string.length(paths_body) == 0 {
         return "{\"rules\":[],\"effective_from\":\"\"}"
     }
 
     // Nearest ancestor is "sha\tpath". Empty means no match.
     nearest = paths_index_ancestor_nearest(paths_body, target)
-    svnae_rep_free(paths_body)
+    rep_free(paths_body)
     if string.length(nearest) == 0 {
         return "{\"rules\":[],\"effective_from\":\"\"}"
     }
@@ -69,9 +69,9 @@ acl_resolve_json_impl(repo: string, rev: int, target: string) -> string {
     eff_sha = string.substring(nearest, 0, tab_idx)
     eff_path = string.substring(nearest, tab_idx + 1, n)
 
-    rules_body = svnae_rep_read_blob(repo, eff_sha)
+    rules_body = rep_read_blob(repo, eff_sha)
     body = acl_response_json(rules_body, eff_path)
-    svnae_rep_free(rules_body)
+    rep_free(rules_body)
     return body
 }
 
@@ -91,22 +91,22 @@ props_resolve_impl(repo: string, rev: int, target: string) -> string {
     props_sha = load_rev_blob_field(repo, rev, "props")
     if string.length(props_sha) == 0 { return "\x01{}" }
 
-    paths_body = svnae_rep_read_blob(repo, props_sha)
+    paths_body = rep_read_blob(repo, props_sha)
     if string.length(paths_body) == 0 { return "\x01{}" }
 
     per_path_sha = paths_index_lookup(paths_body, target)
     per_path_sha = string.copy(per_path_sha)
-    svnae_rep_free(paths_body)
+    rep_free(paths_body)
     if string.length(per_path_sha) == 0 { return "\x01{}" }
 
-    props_body = svnae_rep_read_blob(repo, per_path_sha)
+    props_body = rep_read_blob(repo, per_path_sha)
     if string.length(props_body) == 0 {
         out = string.concat(per_path_sha, "\x01")
         return string.concat(out, "{}")
     }
 
     json = props_blob_to_json(props_body)
-    svnae_rep_free(props_body)
+    rep_free(props_body)
     out = string.concat(per_path_sha, "\x01")
     return string.concat(out, json)
 }

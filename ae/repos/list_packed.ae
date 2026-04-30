@@ -16,13 +16,13 @@
 // Server-side directory-listing in the same packed-string shape the
 // RA client side produces. Reuses the ra_list_* accessors from
 // ae/client/packed.ae so the repos shim can fold the fifth handle type
-// (svnae_list) onto the shared svnae_repos_handle struct from round
+// (list) onto the shared repos_handle struct from round
 // 53. Same record shape as ra_parse_list:
 //
 //   "<N>\x02<name>\x01<kind>\x02<name>\x01<kind>...\x02"
 //
 // where <kind> is the literal text "file" or "dir" (matching what
-// ra_list_kind returns).
+// packed_list_kind returns).
 
 import std.string
 
@@ -33,8 +33,8 @@ extern resolve_kind(repo: string, root_sha: string, path: string) -> int
 extern resolve_sha (repo: string, root_sha: string, path: string) -> string
 
 // Walk a dir blob via the existing per-entry accessors.
-extern svnae_rep_read_blob(repo: string, sha: string) -> string
-extern svnae_rep_free(body: string)
+extern rep_read_blob(repo: string, sha: string) -> string
+extern rep_free(body: string)
 extern dir_count_entries(body: string) -> int
 extern dir_entry_kind(body: string, i: int) -> int
 extern dir_entry_name(body: string, i: int) -> string
@@ -53,13 +53,13 @@ export repos_list_packed(repo: string, rev: int, path: string) -> string {
     if string.length(sha) == 0 { return "" }
     sha_owned = string.copy(sha)
 
-    body = svnae_rep_read_blob(repo, sha_owned)
+    body = rep_read_blob(repo, sha_owned)
     if string.length(body) == 0 {
         // Empty dir-blob is legitimate (empty directory).
         return "0\x02"
     }
     body_owned = string.copy(body)
-    svnae_rep_free(body)
+    rep_free(body)
 
     n = dir_count_entries(body_owned)
     out = "${n}\x02"

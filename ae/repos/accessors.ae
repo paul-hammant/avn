@@ -9,17 +9,17 @@
 
 // repos accessor families — Aether port of ae/repos/shim.c's
 // log/list/info/paths/blame handle wrappers. Round 154 retired
-// the C-side struct svnae_log/svnae_list/etc + their accessor
+// the C-side struct log/list/etc + their accessor
 // one-liners; this file replaces them.
 //
-// Handle shape: each "handle" (svnae_log, svnae_list, ...) is just
+// Handle shape: each "handle" (log, list, ...) is just
 // the underlying packed-record string the parser already produces
 // (ae/repos/log.ae, list_packed.ae, etc.). We surface it as `ptr`
 // to keep the existing C-ABI signatures stable across .ae callers.
 //
 // pin_str dropped: the per-call AetherString returned by every
 // parser is refcounted, so the stable-pointer contract is upheld
-// without needing an explicit pin_list. The svnae_*_free symbols
+// without needing an explicit pin_list. The *_free symbols
 // are now no-ops — Aether's refcount frees the packed buffer when
 // the last reference drops.
 
@@ -34,151 +34,151 @@ extern paths_changed_packed(repo: string, rev: int) -> string
 extern repos_blame_packed(repo: string, target_rev: int, path: string) -> string
 
 // Accessor parsers (defined in ae/client/packed.ae).
-extern ra_log_count(packed: string) -> int
-extern ra_log_rev(packed: string, i: int) -> int
-extern ra_log_author(packed: string, i: int) -> string
-extern ra_log_date(packed: string, i: int) -> string
-extern ra_log_msg(packed: string, i: int) -> string
+extern packed_log_count(packed: string) -> int
+extern packed_log_rev(packed: string, i: int) -> int
+extern packed_log_author(packed: string, i: int) -> string
+extern packed_log_date(packed: string, i: int) -> string
+extern packed_log_msg(packed: string, i: int) -> string
 
-extern ra_list_count(packed: string) -> int
-extern ra_list_name(packed: string, i: int) -> string
-extern ra_list_kind(packed: string, i: int) -> string
+extern packed_list_count(packed: string) -> int
+extern packed_list_name(packed: string, i: int) -> string
+extern packed_list_kind(packed: string, i: int) -> string
 
-extern ra_info_rev(packed: string) -> int
-extern ra_info_author(packed: string) -> string
-extern ra_info_date(packed: string) -> string
-extern ra_info_msg(packed: string) -> string
+extern packed_info_rev(packed: string) -> int
+extern packed_info_author(packed: string) -> string
+extern packed_info_date(packed: string) -> string
+extern packed_info_msg(packed: string) -> string
 
-extern ra_paths_count(packed: string) -> int
-extern ra_paths_action(packed: string, i: int) -> string
-extern ra_paths_path(packed: string, i: int) -> string
+extern packed_paths_count(packed: string) -> int
+extern packed_paths_action(packed: string, i: int) -> string
+extern packed_paths_path(packed: string, i: int) -> string
 
-extern ra_blame_count(packed: string) -> int
-extern ra_blame_rev(packed: string, i: int) -> int
-extern ra_blame_author(packed: string, i: int) -> string
-extern ra_blame_text(packed: string, i: int) -> string
+extern packed_blame_count(packed: string) -> int
+extern packed_blame_rev(packed: string, i: int) -> int
+extern packed_blame_author(packed: string, i: int) -> string
+extern packed_blame_text(packed: string, i: int) -> string
 
 // ---- log handle ----------------------------------------------
 
-export svnae_repos_log(repo: string) -> ptr {
+export repos_log(repo: string) -> ptr {
     p = repos_log_packed(repo)
     if string.length(p) == 0 { return null }
     return string.copy(p)
 }
-export svnae_repos_log_count (lg: ptr) -> int {
+export repos_log_count (lg: ptr) -> int {
     if lg == null { return 0 }
-    return ra_log_count(lg)
+    return packed_log_count(lg)
 }
-export svnae_repos_log_rev   (lg: ptr, i: int) -> int {
+export repos_log_rev   (lg: ptr, i: int) -> int {
     if lg == null { return 0 - 1 }
-    return ra_log_rev(lg, i)
+    return packed_log_rev(lg, i)
 }
-export svnae_repos_log_author(lg: ptr, i: int) -> string {
+export repos_log_author(lg: ptr, i: int) -> string {
     if lg == null { return "" }
-    return ra_log_author(lg, i)
+    return packed_log_author(lg, i)
 }
-export svnae_repos_log_date  (lg: ptr, i: int) -> string {
+export repos_log_date  (lg: ptr, i: int) -> string {
     if lg == null { return "" }
-    return ra_log_date(lg, i)
+    return packed_log_date(lg, i)
 }
-export svnae_repos_log_msg   (lg: ptr, i: int) -> string {
+export repos_log_msg   (lg: ptr, i: int) -> string {
     if lg == null { return "" }
-    return ra_log_msg(lg, i)
+    return packed_log_msg(lg, i)
 }
-export svnae_repos_log_free  (lg: ptr) { return 0 }
+export repos_log_free  (lg: ptr) { return 0 }
 
 // ---- list handle ---------------------------------------------
 
-export svnae_repos_list(repo: string, rev: int, path: string) -> ptr {
+export repos_list(repo: string, rev: int, path: string) -> ptr {
     p = repos_list_packed(repo, rev, path)
     if string.length(p) == 0 { return null }
     return string.copy(p)
 }
-export svnae_repos_list_count(L: ptr) -> int {
+export repos_list_count(L: ptr) -> int {
     if L == null { return 0 }
-    return ra_list_count(L)
+    return packed_list_count(L)
 }
-export svnae_repos_list_name (L: ptr, i: int) -> string {
+export repos_list_name (L: ptr, i: int) -> string {
     if L == null { return "" }
-    return ra_list_name(L, i)
+    return packed_list_name(L, i)
 }
-export svnae_repos_list_kind (L: ptr, i: int) -> string {
+export repos_list_kind (L: ptr, i: int) -> string {
     if L == null { return "" }
-    return ra_list_kind(L, i)
+    return packed_list_kind(L, i)
 }
-export svnae_repos_list_free (L: ptr) { return 0 }
+export repos_list_free (L: ptr) { return 0 }
 
 // ---- info handle (single-record) -----------------------------
 
-export svnae_repos_info_rev(repo: string, rev: int) -> ptr {
+export repos_info_rev(repo: string, rev: int) -> ptr {
     p = repos_info_packed(repo, rev)
     if string.length(p) == 0 { return null }
     return string.copy(p)
 }
-export svnae_repos_info_rev_num(I: ptr) -> int {
+export repos_info_rev_num(I: ptr) -> int {
     if I == null { return 0 - 1 }
-    return ra_info_rev(I)
+    return packed_info_rev(I)
 }
-export svnae_repos_info_author(I: ptr) -> string {
+export repos_info_author(I: ptr) -> string {
     if I == null { return "" }
-    return ra_info_author(I)
+    return packed_info_author(I)
 }
-export svnae_repos_info_date  (I: ptr) -> string {
+export repos_info_date  (I: ptr) -> string {
     if I == null { return "" }
-    return ra_info_date(I)
+    return packed_info_date(I)
 }
-export svnae_repos_info_msg   (I: ptr) -> string {
+export repos_info_msg   (I: ptr) -> string {
     if I == null { return "" }
-    return ra_info_msg(I)
+    return packed_info_msg(I)
 }
-export svnae_repos_info_free  (I: ptr) { return 0 }
+export repos_info_free  (I: ptr) { return 0 }
 
 // ---- paths-changed handle ------------------------------------
 
-export svnae_repos_paths_changed(repo: string, rev: int) -> ptr {
+export repos_paths_changed(repo: string, rev: int) -> ptr {
     if rev < 0 { return null }
     p = paths_changed_packed(repo, rev)
     if string.length(p) == 0 { return null }
     return string.copy(p)
 }
-export svnae_repos_paths_count (P: ptr) -> int {
+export repos_paths_count (P: ptr) -> int {
     if P == null { return 0 }
-    return ra_paths_count(P)
+    return packed_paths_count(P)
 }
-export svnae_repos_paths_path  (P: ptr, i: int) -> string {
+export repos_paths_path  (P: ptr, i: int) -> string {
     if P == null { return "" }
-    return ra_paths_path(P, i)
+    return packed_paths_path(P, i)
 }
-export svnae_repos_paths_action(P: ptr, i: int) -> string {
+export repos_paths_action(P: ptr, i: int) -> string {
     if P == null { return "" }
-    return ra_paths_action(P, i)
+    return packed_paths_action(P, i)
 }
-export svnae_repos_paths_free  (P: ptr) { return 0 }
+export repos_paths_free  (P: ptr) { return 0 }
 
 // ---- blame handle --------------------------------------------
 
-export svnae_repos_blame(repo: string, target_rev: int, path: string) -> ptr {
+export repos_blame(repo: string, target_rev: int, path: string) -> ptr {
     p = repos_blame_packed(repo, target_rev, path)
     if string.length(p) == 0 { return null }
     return string.copy(p)
 }
-export svnae_blame_count (B: ptr) -> int {
+export blame_count (B: ptr) -> int {
     if B == null { return 0 }
-    return ra_blame_count(B)
+    return packed_blame_count(B)
 }
-export svnae_blame_rev   (B: ptr, i: int) -> int {
+export blame_rev   (B: ptr, i: int) -> int {
     if B == null { return 0 - 1 }
-    return ra_blame_rev(B, i)
+    return packed_blame_rev(B, i)
 }
-export svnae_blame_author(B: ptr, i: int) -> string {
+export blame_author(B: ptr, i: int) -> string {
     if B == null { return "" }
-    return ra_blame_author(B, i)
+    return packed_blame_author(B, i)
 }
-export svnae_blame_text  (B: ptr, i: int) -> string {
+export blame_text  (B: ptr, i: int) -> string {
     if B == null { return "" }
-    return ra_blame_text(B, i)
+    return packed_blame_text(B, i)
 }
-export svnae_blame_free  (B: ptr) { return 0 }
+export blame_free  (B: ptr) { return 0 }
 
 main() {
     println("ae/repos/accessors.ae is a library; not meant to run standalone")

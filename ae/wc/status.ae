@@ -24,7 +24,7 @@
 // Round 68 (Gordian) ports the recursive filesystem walk +
 // hand-rolled strset (was 25 lines of linear-search-set in
 // status_shim.c) to a std.collections HashMap-backed tracked-set
-// for O(1) membership. Storage of the result list (svnae_wc_status_*)
+// for O(1) membership. Storage of the result list (wc_status_*)
 // stays in C — same shape as nodelist and proplist.
 
 import std.string
@@ -41,16 +41,16 @@ extern map_has(map: ptr, key: string) -> int
 extern map_free(map: ptr)
 
 // wc.db lifecycle + nodelist accessors.
-extern svnae_wc_db_open(wc_root: string) -> ptr
-extern svnae_wc_db_close(db: ptr)
-extern svnae_wc_db_list_nodes(db: ptr) -> ptr
-extern svnae_wc_nodelist_count(L: ptr) -> int
-extern svnae_wc_nodelist_path(L: ptr, i: int) -> string
-extern svnae_wc_nodelist_kind(L: ptr, i: int) -> int
-extern svnae_wc_nodelist_base_sha1(L: ptr, i: int) -> string
-extern svnae_wc_nodelist_state(L: ptr, i: int) -> int
-extern svnae_wc_nodelist_conflicted(L: ptr, i: int) -> int
-extern svnae_wc_nodelist_free(L: ptr)
+extern wc_db_open(wc_root: string) -> ptr
+extern wc_db_close(db: ptr)
+extern wc_db_list_nodes(db: ptr) -> ptr
+extern wc_nodelist_count(L: ptr) -> int
+extern wc_nodelist_path(L: ptr, i: int) -> string
+extern wc_nodelist_kind(L: ptr, i: int) -> int
+extern wc_nodelist_base_sha1(L: ptr, i: int) -> string
+extern wc_nodelist_state(L: ptr, i: int) -> int
+extern wc_nodelist_conflicted(L: ptr, i: int) -> int
+extern wc_nodelist_free(L: ptr)
 
 // Status code classifier — maps the (conflicted, state, kind, on_disk,
 // sha_read, sha_ok) tuple to a status char. Lives in
@@ -66,9 +66,9 @@ extern wc_hash_file(wc_root: string, path: string) -> string
 
 // Statuslist handle constructor (status_shim.c). Wraps a Aether-
 // built packed string "<n>\x02<path>\x01<code>\x02..." into the
-// shared svnae_packed_handle struct; field accessors live in
+// shared packed_handle struct; field accessors live in
 // ae/wc/status_packed.ae.
-extern svnae_wc_statuslist_handle(packed: string) -> ptr
+extern wc_statuslist_handle(packed: string) -> ptr
 
 // IO helpers.
 extern io_exists(path: string) -> int
@@ -224,26 +224,26 @@ walk_unversioned_(wc_root: string, rel: string, tracked: ptr) -> string {
 }
 
 // Public entry point. Returns a statuslist ptr (packed_handle-
-// backed); caller frees via svnae_wc_statuslist_free.
-export svnae_wc_status(wc_root: string) -> ptr {
-    db = svnae_wc_db_open(wc_root)
+// backed); caller frees via wc_statuslist_free.
+export wc_status(wc_root: string) -> ptr {
+    db = wc_db_open(wc_root)
     if db == null { return null }
 
     body = ""
     tracked = map_new()
 
     // Pass 1: every tracked node.
-    L = svnae_wc_db_list_nodes(db)
-    n = svnae_wc_nodelist_count(L)
+    L = wc_db_list_nodes(db)
+    n = wc_nodelist_count(L)
     i = 0
     sentinel = "1"
     while i < n {
-        rel        = svnae_wc_nodelist_path(L, i)
+        rel        = wc_nodelist_path(L, i)
         rel        = string.copy(rel)
-        kind       = svnae_wc_nodelist_kind(L, i)
-        state      = svnae_wc_nodelist_state(L, i)
-        conflicted = svnae_wc_nodelist_conflicted(L, i)
-        base_sha   = svnae_wc_nodelist_base_sha1(L, i)
+        kind       = wc_nodelist_kind(L, i)
+        state      = wc_nodelist_state(L, i)
+        conflicted = wc_nodelist_conflicted(L, i)
+        base_sha   = wc_nodelist_base_sha1(L, i)
         base_sha   = string.copy(base_sha)
 
         map_put_raw(tracked, rel, sentinel)
@@ -274,14 +274,14 @@ export svnae_wc_status(wc_root: string) -> ptr {
         }
         i = i + 1
     }
-    svnae_wc_nodelist_free(L)
+    wc_nodelist_free(L)
 
     // Pass 2: filesystem walk for '?' entries.
     walk_body = walk_unversioned_(wc_root, "", tracked)
     body = string.concat(body, walk_body)
 
     map_free(tracked)
-    svnae_wc_db_close(db)
+    wc_db_close(db)
 
     // Recount across full body (tracked + walker output) — every
     // record is terminated by \x02.
@@ -289,7 +289,7 @@ export svnae_wc_status(wc_root: string) -> ptr {
     final_n = count_records_(sorted)
     head = "${final_n}\x02"
     packed = string.concat(head, sorted)
-    return svnae_wc_statuslist_handle(packed)
+    return wc_statuslist_handle(packed)
 }
 
 count_records_(body: string) -> int {

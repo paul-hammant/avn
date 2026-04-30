@@ -19,7 +19,7 @@
 //
 // Compiled with `aetherc --emit=lib`, so:
 //   - No file I/O here (std.fs is banned under --emit=lib).
-//   - The caller (svnae_branch_spec_allows in commit_shim.c) reads the
+//   - The caller (branch_spec_allows in commit_shim.c) reads the
 //     spec file and passes its contents as `specs_joined` — globs
 //     separated by '\n'.
 //   - Exposed to C as `spec_matches_any(path, specs_joined)`.

@@ -123,7 +123,7 @@ array_count_(packed: string) -> int {
 
 // ---- log -----------------------------------------------------------------
 
-export ra_log_count(packed: string) -> int {
+export packed_log_count(packed: string) -> int {
     return ra_log_count_impl(packed)
 }
 
@@ -134,7 +134,7 @@ ra_log_count_impl(packed: string) -> int {
     return n
 }
 
-export ra_log_rev(packed: string, i: int) -> int {
+export packed_log_rev(packed: string, i: int) -> int {
     return ra_log_rev_impl(packed, i)
 }
 
@@ -147,7 +147,7 @@ ra_log_rev_impl(packed: string, i: int) -> int {
     return string.get_int(s)
 }
 
-export ra_log_author(packed: string, i: int) -> string {
+export packed_log_author(packed: string, i: int) -> string {
     return ra_log_author_impl(packed, i)
 }
 
@@ -158,7 +158,7 @@ ra_log_author_impl(packed: string, i: int) -> string {
     return record_field_(packed, start, end, 1)
 }
 
-export ra_log_date(packed: string, i: int) -> string {
+export packed_log_date(packed: string, i: int) -> string {
     return ra_log_date_impl(packed, i)
 }
 
@@ -169,7 +169,7 @@ ra_log_date_impl(packed: string, i: int) -> string {
     return record_field_(packed, start, end, 2)
 }
 
-export ra_log_msg(packed: string, i: int) -> string {
+export packed_log_msg(packed: string, i: int) -> string {
     return ra_log_msg_impl(packed, i)
 }
 
@@ -185,7 +185,7 @@ ra_log_msg_impl(packed: string, i: int) -> string {
 // Record shape: "<action>\x01<path>", where action is a single char
 // from {A,M,D,?}.
 
-export ra_paths_count(packed: string) -> int {
+export packed_paths_count(packed: string) -> int {
     return ra_paths_count_impl(packed)
 }
 
@@ -196,7 +196,7 @@ ra_paths_count_impl(packed: string) -> int {
     return n
 }
 
-export ra_paths_action(packed: string, i: int) -> string {
+export packed_paths_action(packed: string, i: int) -> string {
     return ra_paths_action_impl(packed, i)
 }
 
@@ -207,7 +207,7 @@ ra_paths_action_impl(packed: string, i: int) -> string {
     return record_field_(packed, start, end, 0)
 }
 
-export ra_paths_path(packed: string, i: int) -> string {
+export packed_paths_path(packed: string, i: int) -> string {
     return ra_paths_path_impl(packed, i)
 }
 
@@ -222,7 +222,7 @@ ra_paths_path_impl(packed: string, i: int) -> string {
 //
 // Record shape: "<rev>\x01<author>\x01<text>".
 
-export ra_blame_count(packed: string) -> int {
+export packed_blame_count(packed: string) -> int {
     return ra_blame_count_impl(packed)
 }
 
@@ -233,7 +233,7 @@ ra_blame_count_impl(packed: string) -> int {
     return n
 }
 
-export ra_blame_rev(packed: string, i: int) -> int {
+export packed_blame_rev(packed: string, i: int) -> int {
     return ra_blame_rev_impl(packed, i)
 }
 
@@ -246,7 +246,7 @@ ra_blame_rev_impl(packed: string, i: int) -> int {
     return string.get_int(s)
 }
 
-export ra_blame_author(packed: string, i: int) -> string {
+export packed_blame_author(packed: string, i: int) -> string {
     return ra_blame_author_impl(packed, i)
 }
 
@@ -257,7 +257,7 @@ ra_blame_author_impl(packed: string, i: int) -> string {
     return record_field_(packed, start, end, 1)
 }
 
-export ra_blame_text(packed: string, i: int) -> string {
+export packed_blame_text(packed: string, i: int) -> string {
     return ra_blame_text_impl(packed, i)
 }
 
@@ -273,7 +273,7 @@ ra_blame_text_impl(packed: string, i: int) -> string {
 // Record shape: "<name>\x01<value>". Produced by ra_parse_props over a
 // JSON {k:v,...} object.
 
-export ra_props_count(packed: string) -> int {
+export packed_props_count(packed: string) -> int {
     return ra_props_count_impl(packed)
 }
 
@@ -284,7 +284,7 @@ ra_props_count_impl(packed: string) -> int {
     return n
 }
 
-export ra_props_name(packed: string, i: int) -> string {
+export packed_props_name(packed: string, i: int) -> string {
     return ra_props_name_impl(packed, i)
 }
 
@@ -295,7 +295,7 @@ ra_props_name_impl(packed: string, i: int) -> string {
     return record_field_(packed, start, end, 0)
 }
 
-export ra_props_value(packed: string, i: int) -> string {
+export packed_props_value(packed: string, i: int) -> string {
     return ra_props_value_impl(packed, i)
 }
 
@@ -312,7 +312,7 @@ ra_props_value_impl(packed: string, i: int) -> string {
 // Accessors map kind-char to "dir" / "file" so C can return a stable
 // string without its own lookup.
 
-export ra_list_count(packed: string) -> int {
+export packed_list_count(packed: string) -> int {
     return ra_list_count_impl(packed)
 }
 
@@ -323,7 +323,7 @@ ra_list_count_impl(packed: string) -> int {
     return n
 }
 
-export ra_list_name(packed: string, i: int) -> string {
+export packed_list_name(packed: string, i: int) -> string {
     return ra_list_name_impl(packed, i)
 }
 
@@ -334,7 +334,7 @@ ra_list_name_impl(packed: string, i: int) -> string {
     return record_field_(packed, start, end, 0)
 }
 
-export ra_list_kind(packed: string, i: int) -> string {
+export packed_list_kind(packed: string, i: int) -> string {
     return ra_list_kind_impl(packed, i)
 }
 
@@ -351,7 +351,7 @@ ra_list_kind_impl(packed: string, i: int) -> string {
 //
 // Shape: "<rev>\x01<author>\x01<date>\x01<msg>\x01<root>".
 
-export ra_info_rev(packed: string) -> int {
+export packed_info_rev(packed: string) -> int {
     return ra_info_rev_impl(packed)
 }
 
@@ -363,7 +363,7 @@ ra_info_rev_impl(packed: string) -> int {
     return string.get_int(s)
 }
 
-export ra_info_author(packed: string) -> string {
+export packed_info_author(packed: string) -> string {
     return ra_info_author_impl(packed)
 }
 
@@ -372,7 +372,7 @@ ra_info_author_impl(packed: string) -> string {
     return record_field_(packed, 0, end, 1)
 }
 
-export ra_info_date(packed: string) -> string {
+export packed_info_date(packed: string) -> string {
     return ra_info_date_impl(packed)
 }
 
@@ -381,7 +381,7 @@ ra_info_date_impl(packed: string) -> string {
     return record_field_(packed, 0, end, 2)
 }
 
-export ra_info_msg(packed: string) -> string {
+export packed_info_msg(packed: string) -> string {
     return ra_info_msg_impl(packed)
 }
 
@@ -390,7 +390,7 @@ ra_info_msg_impl(packed: string) -> string {
     return record_field_(packed, 0, end, 3)
 }
 
-export ra_info_root(packed: string) -> string {
+export packed_info_root(packed: string) -> string {
     return ra_info_root_impl(packed)
 }
 
