@@ -31,7 +31,7 @@ extern repos_list_count(L: ptr) -> int
 extern repos_list_name(L: ptr, i: int) -> string
 extern repos_list_free(L: ptr)
 
-export acl_user_has_rw_subtree(repo: string, rev: int, user: string,
+export acl_subtree_rw(repo: string, rev: int, user: string,
                                 path: string) -> int {
     if acl_allows_mode(repo, rev, user, path, 0) == 0 { return 0 }
     if acl_allows_mode(repo, rev, user, path, 1) == 0 { return 0 }
@@ -63,7 +63,7 @@ export acl_user_has_rw_subtree(repo: string, rev: int, user: string,
             if string.length(path) == 0 {
                 child = name
             }
-            if acl_user_has_rw_subtree(repo, rev, user, child) == 0 {
+            if acl_subtree_rw(repo, rev, user, child) == 0 {
                 ok = 0
             }
         }

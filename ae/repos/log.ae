@@ -41,7 +41,7 @@ extern packed_paths_count(packed: string) -> int
 extern packed_paths_action(packed: string, i: int) -> string
 extern packed_paths_path(packed: string, i: int) -> string
 
-extern repos_load_rev_blob_field(repo: string, rev: int, key: string) -> string
+extern repos_rev_field(repo: string, rev: int, key: string) -> string
 extern resolve_kind(repo: string, root_sha: string, path: string) -> int
 extern resolve_sha(repo: string, root_sha: string, path: string) -> string
 
@@ -149,9 +149,9 @@ export repos_info_packed(repo: string, rev: int) -> string {
 // non-file.
 
 cat_rev_path(repo: string, rev: int, path: string) -> string {
-    root = repos_load_rev_blob_field(repo, rev, "root")
+    root = repos_rev_field(repo, rev, "root")
     if string.length(root) == 0 { return "" }
-    // Snapshot — repos_load_rev_blob_field returns into TLS.
+    // Snapshot — repos_rev_field returns into TLS.
     root_copy = string.copy(root)
     k = resolve_kind(repo, root_copy, path)
     if k != 102 { return "" }   // 102 = 'f'

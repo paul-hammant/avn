@@ -56,32 +56,30 @@ load into a fresh repo, dump that, assert byte-identical dumps.
 
 ## Naming follow-ups
 
-### N1. Compound `*_with_X` exports
-Three exports remain with the `with_X` overload-style suffix:
-- `commit_finalise_with_acl(repo, txn, author, log, props_sha, acl_sha)`
-- `commit_finalise_with_props(repo, txn, author, log, props_sha)`
-- `svnadmin_create_with_algos(repo, algos_spec)`
+### N1. Compound `*_with_X` exports — DONE (Rounds 208-209)
+All three `_with_X` overload-style exports collapsed into their
+non-`_with` siblings:
+- `commit_finalise(repo, txn, branch, author, log, props_sha, acl_sha)` — Round 208
+- `svnadmin_create(repo, algos_spec)` — Round 209
 
-Each is a sibling of a non-`_with` form. The pattern is C-style
-overload disambiguation. Cleaner: a single `commit_finalise(repo,
-txn, opts)` taking an options struct (Aether 0.109 `*StructName`
-heap structs make this ergonomic), with `acl_sha` / `props_sha`
-optional fields. Same for `svnadmin_create`.
+Empty strings stand in for unused optional args. An options-struct
+form is still cleaner once we want to grow the parameter list, but
+for the current arity (≤ 7) the positional form reads fine and
+removes the overload set.
 
 ### N2. Long compound names that feel German
-A few exports still read like Win32 APIs:
-- `repos_load_rev_blob_field(repo, rev, key)` → could be
-  `rev_blob.field(rev, key)` if we had per-file imports
-- `acl_user_has_rw_subtree(repo, rev, user, path)` → 5-token name
+- `repos_load_rev_blob_field` → `repos_rev_field` — DONE Round 210
+- `acl_user_has_rw_subtree` → `acl_subtree_rw` — DONE Round 210
 - `fsfs_tree_builder_content_data(tb, i)` /
   `fsfs_tree_builder_content_len(tb, i)` — 4-token names on the
   same heap struct. With `*StructName` method-style syntax these
-  could collapse.
+  could collapse. Still waiting on port-local module imports.
 
-These all wait for **port-local module imports** (filed and then
-retracted as `port-local-imports.md`; really it's the same
-underlying gap that `Card.add()` ergonomics needs). Until that
-lands the German shape is the link-symbol shape.
+The remaining `fsfs_tree_builder_*` family is really blocked on the
+same Aether ask underneath everything else (filed and then
+retracted as `port-local-imports.md`; same underlying gap that
+`Card.add()` ergonomics needs). Until that lands the German
+shape is the link-symbol shape.
 
 ### N3. `_handle` suffix family (5 functions in svnserver)
 `acl_handle`, `blame_handle`, `cat_handle`, `paths_handle`,

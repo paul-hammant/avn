@@ -188,17 +188,17 @@ export paths_changed_between(repo: string, prev_root_sha: string,
 // Returns "" on error (missing cur rev). Returns "0\x02" when rev
 // has no changed paths.
 
-extern repos_load_rev_blob_field(repo: string, rev: int, key: string) -> string
+extern repos_rev_field(repo: string, rev: int, key: string) -> string
 
 export paths_changed_packed(repo: string, rev: int) -> string {
     if rev < 0 { return "" }
 
-    cur_root = string.copy(repos_load_rev_blob_field(repo, rev, "root"))
+    cur_root = string.copy(repos_rev_field(repo, rev, "root"))
     if string.length(cur_root) == 0 { return "" }
 
     prev_root = ""
     if rev > 0 {
-        prev_root = string.copy(repos_load_rev_blob_field(repo, rev - 1, "root"))
+        prev_root = string.copy(repos_rev_field(repo, rev - 1, "root"))
         if string.length(prev_root) == 0 { return "" }
     }
 

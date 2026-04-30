@@ -43,7 +43,7 @@ extern rep_write_blob(repo: string, data: string, len: int) -> string
 extern repos_head_rev(repo: string) -> int
 
 // Aether-side helpers (already exported as aether_* aliases).
-extern repos_load_rev_blob_field(repo: string, rev: int, key: string) -> string
+extern repos_rev_field(repo: string, rev: int, key: string) -> string
 extern repos_inherit_rev_field(repo: string, prev: int, key: string, override: string) -> string
 extern rev_blob_body(root: string, branch: string, props: string, acl: string,
                              prev: int, author: string, date: string, log: string) -> string
@@ -69,7 +69,7 @@ extern repos_paths_free(P: ptr)
 // Load the root-dir sha1 for a given revision. "" on miss (caller
 // treats as failure).
 load_rev_root_sha1_(repo: string, rev: int) -> string {
-    v = repos_load_rev_blob_field(repo, rev, "root")
+    v = repos_rev_field(repo, rev, "root")
     if string.length(v) == 0 { return "" }
     return string.copy(v)
 }

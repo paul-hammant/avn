@@ -28,7 +28,7 @@ import std.string
 
 // Resolve (rev, path) → root sha → walked sha + kind. Reuses the
 // existing resolve.ae helpers.
-extern repos_load_rev_blob_field(repo: string, rev: int, key: string) -> string
+extern repos_rev_field(repo: string, rev: int, key: string) -> string
 extern resolve_kind(repo: string, root_sha: string, path: string) -> int
 extern resolve_sha (repo: string, root_sha: string, path: string) -> string
 
@@ -43,7 +43,7 @@ extern dir_entry_name(body: string, i: int) -> string
 // or "" on miss. Empty directories produce "0\x02" (count 0 + sentinel),
 // which the ra_list_* accessors interpret correctly.
 export repos_list_packed(repo: string, rev: int, path: string) -> string {
-    root_sha = repos_load_rev_blob_field(repo, rev, "root")
+    root_sha = repos_rev_field(repo, rev, "root")
     if string.length(root_sha) == 0 { return "" }
     root_owned = string.copy(root_sha)
 
