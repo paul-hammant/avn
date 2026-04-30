@@ -26,11 +26,11 @@
 // here is length-aware.
 //
 // The C side calls these in sequence:
-//   n = aether_dir_count_entries(body);
+//   n = dir_count_entries(body);
 //   for (i=0; i<n; i++) {
-//     k = aether_dir_entry_kind(body, i);
-//     sha = aether_dir_entry_sha(body, i);
-//     name = aether_dir_entry_name(body, i);
+//     k = dir_entry_kind(body, i);
+//     sha = dir_entry_sha(body, i);
+//     name = dir_entry_name(body, i);
 //   }
 // The three accessors rescan each time (O(n) per call, O(n²) total) —
 // but real directories are small and this avoids passing a cursor

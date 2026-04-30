@@ -60,8 +60,8 @@ extern svnae_wc_nodelist_conflicted(L: ptr, i: int) -> int
 extern svnae_wc_nodelist_free(L: ptr)
 
 // Pristine + hashing.
-extern aether_wc_pristine_put(wc_root: string, data: string, len: int) -> string
-extern aether_wc_hash_file(wc_root: string, path: string) -> string
+extern wc_pristine_put(wc_root: string, data: string, len: int) -> string
+extern wc_hash_file(wc_root: string, path: string) -> string
 
 // RA commit builder (C-side opaque).
 extern svnae_ra_commit_begin(base_rev: int, author: string, logmsg: string) -> ptr
@@ -89,7 +89,7 @@ read_file_(path: string) -> string {
 // error. wc_root threads through so the WC's configured algorithm
 // (sha1 by default, sha256 on Phase 6.1 repos) gets used.
 commit_sha_of_file_(wc_root: string, disk: string) -> string {
-    h = aether_wc_hash_file(wc_root, disk)
+    h = wc_hash_file(wc_root, disk)
     if string.length(h) == 0 { return "" }
     return string.copy(h)
 }
@@ -183,7 +183,7 @@ export svnae_wc_commit(wc_root: string, author: string, logmsg: string) -> int {
             if string.length(data) >= 0 {
                 len = string.length(data)
                 svnae_ra_commit_add_file(cb, rel, data, len)
-                aether_wc_pristine_put(wc_root, data, len)
+                wc_pristine_put(wc_root, data, len)
                 any_edits = 1
             }
         }

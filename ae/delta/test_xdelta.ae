@@ -21,14 +21,10 @@
 import std.string
 
 extern svnae_xdelta_compute(source: string, source_len: int,
-                            target: string, target_len: int) -> ptr
+                            target: string, target_len: int) -> (string, int)
 
 extern svnae_svndiff_decode_apply(diff: string, diff_len: int,
-                                  source: string, source_len: int) -> ptr
-
-extern svnae_svndiff_buf_length(b: ptr) -> int
-extern svnae_svndiff_buf_data(b: ptr) -> string
-extern svnae_svndiff_buf_free(b: ptr)
+                                  source: string, source_len: int) -> (string, int)
 
 expect_str(label: string, got: string, want: string) {
     if string.equals(got, want) == 1 {
@@ -44,22 +40,12 @@ expect_str(label: string, got: string, want: string) {
 round_trip(label: string, source: string, target: string) {
     slen = string.length(source)
     tlen = string.length(target)
-    diff = svnae_xdelta_compute(source, slen, target, tlen)
-    if diff == 0 {
-        println("FAIL ${label}: xdelta_compute returned null")
+    ddata, dlen = svnae_xdelta_compute(source, slen, target, tlen)
+    if dlen == 0 {
+        println("FAIL ${label}: xdelta_compute returned empty")
         return 1
     }
-    dlen = svnae_svndiff_buf_length(diff)
-    ddata = svnae_svndiff_buf_data(diff)
-
-    applied = svnae_svndiff_decode_apply(ddata, dlen, source, slen)
-    if applied == 0 {
-        svnae_svndiff_buf_free(diff)
-        println("FAIL ${label}: decode_apply returned null")
-        return 1
-    }
-    got = svnae_svndiff_buf_data(applied)
-    got_len = svnae_svndiff_buf_length(applied)
+    got, got_len = svnae_svndiff_decode_apply(ddata, dlen, source, slen)
 
     rc = 0
     if got_len != tlen {
@@ -76,8 +62,6 @@ round_trip(label: string, source: string, target: string) {
         println("ok   ${label} (src ${slen}B, tgt ${tlen}B, diff ${dlen}B = ${ratio}% of tgt)")
     }
 
-    svnae_svndiff_buf_free(diff)
-    svnae_svndiff_buf_free(applied)
     return rc
 }
 

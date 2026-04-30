@@ -23,20 +23,20 @@
 
 import std.string
 
-extern aether_wc_node_count       (packed: string) -> int
-extern aether_wc_node_path        (packed: string) -> string
-extern aether_wc_node_kind        (packed: string) -> int
-extern aether_wc_node_base_rev    (packed: string) -> int
-extern aether_wc_node_base_sha1   (packed: string) -> string
-extern aether_wc_node_state       (packed: string) -> int
-extern aether_wc_node_conflicted  (packed: string) -> int
+extern node_count       (packed: string) -> int
+extern node_path        (packed: string) -> string
+extern node_kind        (packed: string) -> int
+extern node_base_rev    (packed: string) -> int
+extern node_base_sha1   (packed: string) -> string
+extern node_state       (packed: string) -> int
+extern node_conflicted  (packed: string) -> int
 
-extern aether_wc_node_path_at     (packed: string, i: int) -> string
-extern aether_wc_node_kind_at     (packed: string, i: int) -> int
-extern aether_wc_node_base_rev_at (packed: string, i: int) -> int
-extern aether_wc_node_base_sha1_at(packed: string, i: int) -> string
-extern aether_wc_node_state_at    (packed: string, i: int) -> int
-extern aether_wc_node_conflicted_at(packed: string, i: int) -> int
+extern node_path_at     (packed: string, i: int) -> string
+extern node_kind_at     (packed: string, i: int) -> int
+extern node_base_rev_at (packed: string, i: int) -> int
+extern node_base_sha1_at(packed: string, i: int) -> string
+extern node_state_at    (packed: string, i: int) -> int
+extern node_conflicted_at(packed: string, i: int) -> int
 
 // ---- node handle (single-record) -------------------------------
 
@@ -47,27 +47,27 @@ export svnae_wc_node_handle(packed: string) -> ptr {
 
 export svnae_wc_node_path     (n: ptr) -> string {
     if n == null { return "" }
-    return aether_wc_node_path(n)
+    return node_path(n)
 }
 export svnae_wc_node_kind     (n: ptr) -> int {
     if n == null { return 0 - 1 }
-    return aether_wc_node_kind(n)
+    return node_kind(n)
 }
 export svnae_wc_node_base_rev (n: ptr) -> int {
     if n == null { return 0 - 1 }
-    return aether_wc_node_base_rev(n)
+    return node_base_rev(n)
 }
 export svnae_wc_node_base_sha1(n: ptr) -> string {
     if n == null { return "" }
-    return aether_wc_node_base_sha1(n)
+    return node_base_sha1(n)
 }
 export svnae_wc_node_state    (n: ptr) -> int {
     if n == null { return 0 - 1 }
-    return aether_wc_node_state(n)
+    return node_state(n)
 }
 export svnae_wc_node_conflicted(n: ptr) -> int {
     if n == null { return 0 }
-    return aether_wc_node_conflicted(n)
+    return node_conflicted(n)
 }
 export svnae_wc_node_free     (n: ptr) { return 0 }
 
@@ -80,31 +80,31 @@ export svnae_wc_nodelist_handle(packed: string) -> ptr {
 
 export svnae_wc_nodelist_count    (L: ptr) -> int {
     if L == null { return 0 }
-    return aether_wc_node_count(L)
+    return node_count(L)
 }
 export svnae_wc_nodelist_path     (L: ptr, i: int) -> string {
     if L == null { return "" }
-    return aether_wc_node_path_at(L, i)
+    return node_path_at(L, i)
 }
 export svnae_wc_nodelist_kind     (L: ptr, i: int) -> int {
     if L == null { return 0 - 1 }
-    return aether_wc_node_kind_at(L, i)
+    return node_kind_at(L, i)
 }
 export svnae_wc_nodelist_base_rev (L: ptr, i: int) -> int {
     if L == null { return 0 - 1 }
-    return aether_wc_node_base_rev_at(L, i)
+    return node_base_rev_at(L, i)
 }
 export svnae_wc_nodelist_base_sha1(L: ptr, i: int) -> string {
     if L == null { return "" }
-    return aether_wc_node_base_sha1_at(L, i)
+    return node_base_sha1_at(L, i)
 }
 export svnae_wc_nodelist_state    (L: ptr, i: int) -> int {
     if L == null { return 0 - 1 }
-    return aether_wc_node_state_at(L, i)
+    return node_state_at(L, i)
 }
 export svnae_wc_nodelist_conflicted(L: ptr, i: int) -> int {
     if L == null { return 0 }
-    return aether_wc_node_conflicted_at(L, i)
+    return node_conflicted_at(L, i)
 }
 export svnae_wc_nodelist_free     (L: ptr) { return 0 }
 

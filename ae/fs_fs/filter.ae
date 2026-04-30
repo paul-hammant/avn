@@ -28,19 +28,19 @@ import std.string
 // --- C FFI into the rep store + line-level helpers ------------------------
 
 extern svnae_rep_read_blob(repo: string, sha_hex: string) -> string
-extern aether_rep_write_blob(repo: string, data: string, length: int) -> string
+extern rep_write_blob(repo: string, data: string, length: int) -> string
 extern svnae_rep_free(p: string)
 
 // Dir-blob parsers ported earlier in ae/fs_fs/dirblob.ae.
-extern aether_dir_count_entries(body: string) -> int
-extern aether_dir_entry_kind(body: string, i: int) -> int
-extern aether_dir_entry_sha(body: string, i: int) -> string
-extern aether_dir_entry_name(body: string, i: int) -> string
-extern aether_dir_entry_line(kind: int, sha: string, name: string) -> string
+extern dir_count_entries(body: string) -> int
+extern dir_entry_kind(body: string, i: int) -> int
+extern dir_entry_sha(body: string, i: int) -> string
+extern dir_entry_name(body: string, i: int) -> string
+extern dir_entry_line(kind: int, sha: string, name: string) -> string
 
 // Repo-path + glob helpers.
-extern aether_path_join_rel(prefix: string, name: string) -> string
-extern aether_spec_matches_any(path: string, globs_joined: string) -> int
+extern path_join_rel(prefix: string, name: string) -> string
+extern spec_matches_any(path: string, globs_joined: string) -> int
 
 // --- exported entry point --------------------------------------------------
 
@@ -50,7 +50,7 @@ extern aether_spec_matches_any(path: string, globs_joined: string) -> int
 // detect by reading back the blob and checking length == 0.
 //
 // `globs_joined` is one include-glob per line. Pass the same format
-// `aether_spec_matches_any` expects.
+// `spec_matches_any` expects.
 export filter_dir(repo: string, src_sha: string, prefix: string,
                   globs_joined: string) -> string {
     src_body = svnae_rep_read_blob(repo, src_sha)
@@ -62,21 +62,21 @@ export filter_dir(repo: string, src_sha: string, prefix: string,
     }
 
     body = ""
-    n_entries = aether_dir_count_entries(src_body)
+    n_entries = dir_count_entries(src_body)
     i = 0
     while i < n_entries {
-        kind = aether_dir_entry_kind(src_body, i)
-        // Snapshot name/sha BEFORE any other aether_dir_* call
+        kind = dir_entry_kind(src_body, i)
+        // Snapshot name/sha BEFORE any other dir_* call
         // (thread-local buffers get overwritten).
-        child_sha = aether_dir_entry_sha(src_body, i)
-        child_name = aether_dir_entry_name(src_body, i)
-        child_path = aether_path_join_rel(prefix, child_name)
+        child_sha = dir_entry_sha(src_body, i)
+        child_name = dir_entry_name(src_body, i)
+        child_path = path_join_rel(prefix, child_name)
 
         include = 0
         emit_sha = ""
 
         if kind == 102 {              // 'f' (file)
-            if aether_spec_matches_any(child_path, globs_joined) == 1 {
+            if spec_matches_any(child_path, globs_joined) == 1 {
                 include = 1
                 emit_sha = child_sha
             }
@@ -96,7 +96,7 @@ export filter_dir(repo: string, src_sha: string, prefix: string,
 
                 descendants = 0
                 if sub_is_empty == 0 { descendants = 1 }
-                dir_matches = aether_spec_matches_any(child_path, globs_joined)
+                dir_matches = spec_matches_any(child_path, globs_joined)
 
                 if descendants == 1 {
                     include = 1
@@ -110,7 +110,7 @@ export filter_dir(repo: string, src_sha: string, prefix: string,
         }
 
         if include == 1 {
-            body = string.concat(body, aether_dir_entry_line(kind, emit_sha, child_name))
+            body = string.concat(body, dir_entry_line(kind, emit_sha, child_name))
         }
 
         i = i + 1
@@ -118,7 +118,7 @@ export filter_dir(repo: string, src_sha: string, prefix: string,
 
     svnae_rep_free(src_body)
 
-    new_sha = aether_rep_write_blob(repo, body, string.length(body))
+    new_sha = rep_write_blob(repo, body, string.length(body))
     return new_sha
 }
 

@@ -367,5 +367,5 @@ export ra_parse_hashes_secondaries(body: string) -> string {
 }
 
 main() {
-    println("ae/ra/parse.ae is a library; not meant to run standalone")
+    println("ae/client/parse.ae is a library; not meant to run standalone")
 }

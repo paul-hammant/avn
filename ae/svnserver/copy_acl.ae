@@ -26,11 +26,11 @@ import std.string
 
 // Externs hoisted to the top because Aether's resolver requires
 // them to be visible before any function that references them.
-extern aether_load_rev_blob_field(repo: string, rev: int, key: string) -> string
+extern load_rev_blob_field(repo: string, rev: int, key: string) -> string
 extern svnae_rep_read_blob(repo: string, sha: string) -> string
 extern svnae_rep_free(body: string)
-extern aether_rep_write_blob(repo: string, data: string, len: int) -> string
-extern aether_paths_index_sort_by_path(body: string) -> string
+extern rep_write_blob(repo: string, data: string, len: int) -> string
+extern paths_index_sort_by_path(body: string) -> string
 
 // Returns the augmented body. Empty input → empty output (caller keeps
 // the "inherit previous" default).
@@ -120,7 +120,7 @@ starts_with_same_bytes(hay: string, needle: string, n: int) -> int {
 // augmentation added no entries.
 export auto_follow_copy_acl(repo: string, base_rev: int,
                              from_path: string, to_path: string) -> string {
-    acl_root = aether_load_rev_blob_field(repo, base_rev, "acl")
+    acl_root = load_rev_blob_field(repo, base_rev, "acl")
     if string.length(acl_root) == 0 { return "" }
 
     body = svnae_rep_read_blob(repo, acl_root)
@@ -129,8 +129,8 @@ export auto_follow_copy_acl(repo: string, base_rev: int,
     svnae_rep_free(body)
     if string.length(augmented) == 0 { return "" }
 
-    sorted = aether_paths_index_sort_by_path(augmented)
-    return aether_rep_write_blob(repo, sorted, string.length(sorted))
+    sorted = paths_index_sort_by_path(augmented)
+    return rep_write_blob(repo, sorted, string.length(sorted))
 }
 
 main() {

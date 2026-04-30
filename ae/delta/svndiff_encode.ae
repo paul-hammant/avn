@@ -133,8 +133,8 @@ build_inst_section_(e: ptr) -> string {
 // accepts the `(string, int)` tuple-return syntax on `export`
 // (#285); pre-fix this used a leading-status-byte channel that
 // the C side stripped.
-export aether_svndiff_encode_window(e: ptr, source_len: int, target_len: int,
-                                     new_data: string, new_data_len: int) -> (string, int) {
+export encode_window(e: ptr, source_len: int, target_len: int,
+                      new_data: string, new_data_len: int) -> (string, int) {
     inst_section = build_inst_section_(e)
     inst_len = string.length(inst_section)
 

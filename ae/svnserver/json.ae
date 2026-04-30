@@ -54,7 +54,7 @@ json_escape_string_impl(v: string) -> string {
     return out
 }
 
-// Public wrappers — exported to C as aether_json_escape_string / aether_json_int_to_dec.
+// Public wrappers — exported to C as json_escape_string / json_int_to_dec.
 export json_escape_string(v: string) -> string {
     return json_escape_string_impl(v)
 }

@@ -19,7 +19,7 @@
 //   - ACL check (read) on the target path
 //   - resolve (rev, path) → sha (existence check)
 //   - fetch newline-separated "algo hash" pairs for secondary digests
-//   - aether_hashes_json builds the final {primary, secondaries} body
+//   - hashes_json builds the final {primary, secondaries} body
 //
 // Used by `svn verify --secondaries`: client fetches content bytes
 // separately (via /cat or /list child shas), rehashes under each
@@ -27,22 +27,22 @@
 
 import std.string
 
-extern aether_acl_allows_mode(repo: string, rev: int, user: string, target_path: string, want_write: int) -> int
+extern acl_allows_mode(repo: string, rev: int, user: string, target_path: string, want_write: int) -> int
 extern svnae_repos_resolve_kind(repo: string, rev: int, path: string) -> int
 extern svnae_repos_resolve_sha(repo: string, rev: int, path: string) -> string
-extern aether_repo_primary_hash(repo: string) -> string
+extern repo_primary_hash(repo: string) -> string
 
 // Round 136: secondary-pairs builder ported from C to Aether. The
 // underlying primitives (format_secondary_count / _hash and
 // rep_cache_sec_lookup) are all Aether-native already; the C
 // trampoline only existed because the prior shape required a
 // fixed-size char[4][32] array to land back on the C side.
-extern aether_format_secondary_count(format_line: string) -> int
-extern aether_format_secondary_hash(format_line: string, i: int) -> string
-extern aether_repos_format_line(repo: string) -> string
-extern aether_rep_cache_sec_lookup(repo: string, primary: string, algo: string) -> string
+extern format_secondary_count(format_line: string) -> int
+extern format_secondary_hash(format_line: string, i: int) -> string
+extern repos_format_line(repo: string) -> string
+extern rep_cache_sec_lookup(repo: string, primary: string, algo: string) -> string
 
-extern aether_hashes_json(algo: string, primary_sha: string,
+extern hashes_json(algo: string, primary_sha: string,
                           secondary_pairs: string) -> string
 
 extern svnserver_respond_error(res: ptr, code: int, msg: string)
@@ -52,15 +52,15 @@ extern svnserver_respond_json_ok(res: ptr, body: string)
 // repo has for `node_sha`. Returns "" if the repo has no secondaries
 // or none have a stored digest for this node.
 build_secondary_pairs_(repo: string, node_sha: string) -> string {
-    line = aether_repos_format_line(repo)
+    line = repos_format_line(repo)
     if string.length(line) == 0 { return "" }
-    n = aether_format_secondary_count(line)
+    n = format_secondary_count(line)
     if n == 0 { return "" }
     pairs = ""
     i = 0
     while i < n {
-        algo = aether_format_secondary_hash(line, i)
-        sec_hex = aether_rep_cache_sec_lookup(repo, node_sha, algo)
+        algo = format_secondary_hash(line, i)
+        sec_hex = rep_cache_sec_lookup(repo, node_sha, algo)
         if string.length(sec_hex) > 0 {
             pairs = string.concat(pairs, algo)
             pairs = string.concat(pairs, " ")
@@ -80,7 +80,7 @@ export hashes_handle(req: ptr, res: ptr, repo: string, rev: int,
 hashes_handle_impl(req: ptr, res: ptr, repo: string, rev: int,
                    target: string, user: string, is_super: int) {
     if is_super == 0 {
-        if aether_acl_allows_mode(repo, rev, user, target, 0) == 0 {
+        if acl_allows_mode(repo, rev, user, target, 0) == 0 {
             svnserver_respond_error(res, 404, "not found")
             return
         }
@@ -96,9 +96,9 @@ hashes_handle_impl(req: ptr, res: ptr, repo: string, rev: int,
     node_sha = svnae_repos_resolve_sha(repo, rev, target)
     node_sha = string.copy(node_sha)          // TLS snapshot
 
-    algo = aether_repo_primary_hash(repo)
+    algo = repo_primary_hash(repo)
     pairs = build_secondary_pairs_(repo, node_sha)
-    body = aether_hashes_json(algo, node_sha, pairs)
+    body = hashes_json(algo, node_sha, pairs)
 
     svnserver_respond_json_ok(res, body)
 }

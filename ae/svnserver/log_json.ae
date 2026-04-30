@@ -39,10 +39,10 @@ extern svnae_repos_paths_path(p: ptr, i: int) -> string
 extern svnae_repos_paths_free(p: ptr)
 
 // ACL decider (C-side).
-extern aether_acl_allows_mode(repo: string, rev: int, user: string, target_path: string, want_write: int) -> int
+extern acl_allows_mode(repo: string, rev: int, user: string, target_path: string, want_write: int) -> int
 
 // JSON entry builder already in Aether.
-extern aether_log_entry_json(rev: int, author: string, date: string,
+extern log_entry_json(rev: int, author: string, date: string,
                              msg: string) -> string
 
 export log_json(repo: string, lg: ptr, user: string, is_super: int) -> string {
@@ -70,7 +70,7 @@ log_json_impl(repo: string, lg: ptr, user: string, is_super: int) -> string {
                     j = 0
                     while j < pn {
                         path = svnae_repos_paths_path(paths, j)
-                        if aether_acl_allows_mode(repo, rev, user, path, 0) == 1 {
+                        if acl_allows_mode(repo, rev, user, path, 0) == 1 {
                             visible = 1
                             break
                         }
@@ -84,7 +84,7 @@ log_json_impl(repo: string, lg: ptr, user: string, is_super: int) -> string {
         if visible == 1 {
             if any == 1 { out = string.concat(out, ",") }
             any = 1
-            out = string.concat(out, aether_log_entry_json(rev,
+            out = string.concat(out, log_entry_json(rev,
                 svnae_repos_log_author(lg, i),
                 svnae_repos_log_date(lg, i),
                 svnae_repos_log_msg(lg, i)))
@@ -97,7 +97,7 @@ log_json_impl(repo: string, lg: ptr, user: string, is_super: int) -> string {
 // /rev/N/paths response body. ACL-filter the list of (action, path)
 // entries; super-user sees everything.
 extern svnae_repos_paths_action(p: ptr, i: int) -> string
-extern aether_path_change_entry_json(action: string, path: string) -> string
+extern path_change_entry_json(action: string, path: string) -> string
 
 export paths_changed_json(repo: string, rev: int, paths: ptr,
                           user: string, is_super: int) -> string {
@@ -114,7 +114,7 @@ paths_changed_json_impl(repo: string, rev: int, paths: ptr,
         path = svnae_repos_paths_path(paths, i)
         visible = 1
         if is_super == 0 {
-            if aether_acl_allows_mode(repo, rev, user, path, 0) == 0 {
+            if acl_allows_mode(repo, rev, user, path, 0) == 0 {
                 visible = 0
             }
         }
@@ -122,7 +122,7 @@ paths_changed_json_impl(repo: string, rev: int, paths: ptr,
             if any == 1 { out = string.concat(out, ",") }
             any = 1
             action = svnae_repos_paths_action(paths, i)
-            out = string.concat(out, aether_path_change_entry_json(action, path))
+            out = string.concat(out, path_change_entry_json(action, path))
         }
         i = i + 1
     }
@@ -135,7 +135,7 @@ extern svnae_blame_count(b: ptr) -> int
 extern svnae_blame_rev(b: ptr, i: int) -> int
 extern svnae_blame_author(b: ptr, i: int) -> string
 extern svnae_blame_text(b: ptr, i: int) -> string
-extern aether_blame_entry_json(rev: int, author: string, text: string) -> string
+extern blame_entry_json(rev: int, author: string, text: string) -> string
 
 export blame_json(blame: ptr) -> string {
     return blame_json_impl(blame)
@@ -147,7 +147,7 @@ blame_json_impl(blame: ptr) -> string {
     i = 0
     while i < n {
         if i > 0 { out = string.concat(out, ",") }
-        out = string.concat(out, aether_blame_entry_json(
+        out = string.concat(out, blame_entry_json(
             svnae_blame_rev(blame, i),
             svnae_blame_author(blame, i),
             svnae_blame_text(blame, i)))
@@ -160,15 +160,15 @@ blame_json_impl(blame: ptr) -> string {
 // (primary algo, primary sha) plus the secondary entries by walking
 // a newline-separated "algo1 sha1\nalgo2 sha2\n..." string the C
 // side collected.
-extern aether_hashes_prelude_json(algo: string, primary_hash: string) -> string
-extern aether_secondary_entry_json(algo: string, hash: string) -> string
+extern hashes_prelude_json(algo: string, primary_hash: string) -> string
+extern secondary_entry_json(algo: string, hash: string) -> string
 
 export hashes_json(algo: string, primary_sha: string, secondary_pairs: string) -> string {
     return hashes_json_impl(algo, primary_sha, secondary_pairs)
 }
 
 hashes_json_impl(algo: string, primary_sha: string, secondary_pairs: string) -> string {
-    out = aether_hashes_prelude_json(algo, primary_sha)
+    out = hashes_prelude_json(algo, primary_sha)
     n = string.length(secondary_pairs)
     any = 0
     line_start = 0
@@ -190,7 +190,7 @@ hashes_json_impl(algo: string, primary_sha: string, secondary_pairs: string) -> 
                     sec_sha = string.substring(secondary_pairs, sp + 1, i)
                     if any == 1 { out = string.concat(out, ",") }
                     any = 1
-                    out = string.concat(out, aether_secondary_entry_json(sec_algo, sec_sha))
+                    out = string.concat(out, secondary_entry_json(sec_algo, sec_sha))
                 }
             }
             line_start = i + 1

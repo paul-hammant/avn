@@ -135,7 +135,7 @@ sidesteps the question entirely by strdup'ing once.
 used by multiple call sites. Server-side log (`ae/repos/log.ae`),
 server-side paths-changed, server-side blame — all of them reuse
 the same `aether_ra_log_*` / `aether_ra_paths_*` / `aether_ra_blame_*`
-accessors from `ae/ra/packed.ae`. One set of walkers, many producers.
+accessors from `ae/client/packed.ae`. One set of walkers, many producers.
 
 
 ### 2. Drop the split-to-rejoin round trip
@@ -353,7 +353,7 @@ The patterns above needed each other:
 
 - The packed-handle pattern (round 21) depended on `std.intarr`
   existing (added mid-port in Aether 0.83).
-- Rounds 22, 26, 28 all reused `ae/ra/packed.ae`'s accessors —
+- Rounds 22, 26, 28 all reused `ae/client/packed.ae`'s accessors —
   none of them would have been clean ports without round 21's
   infrastructure.
 - Round 25 (drop the globs rejoin) depended on already having

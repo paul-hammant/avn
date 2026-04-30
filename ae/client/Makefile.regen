@@ -1,6 +1,6 @@
 AETHERC ?= $(abspath $(dir $(lastword $(MAKEFILE_LIST))))/../../.aether_binaries/build/aetherc
 
-GENERATED := urls_generated.c parse_generated.c commit_build_generated.c packed_generated.c http_client_generated.c verify_generated.c copy_branch_generated.c info_generated.c fetch_generated.c accessors_generated.c
+GENERATED := urls_generated.c parse_generated.c commit_build_generated.c commit_builder_generated.c packed_generated.c http_client_generated.c verify_generated.c copy_branch_generated.c info_generated.c fetch_generated.c accessors_generated.c cat_generated.c auth_state_generated.c
 
 all: $(GENERATED)
 
@@ -11,6 +11,18 @@ parse_generated.c: parse.ae
 	$(AETHERC) --emit=lib $< $@
 
 commit_build_generated.c: commit_build.ae
+	$(AETHERC) --emit=lib $< $@
+
+# Round 170: svnae_ra_commit struct + setters/getters/finish.
+commit_builder_generated.c: commit_builder.ae
+	$(AETHERC) --emit=lib $< $@
+
+# Round 177: svnae_ra_cat moved off libcurl onto std.http.client v2.
+cat_generated.c: cat.ae
+	$(AETHERC) --emit=lib $< $@
+
+# Round 189: ra/shim.c retired, auth state now lives in std.config.
+auth_state_generated.c: auth_state.ae
 	$(AETHERC) --emit=lib $< $@
 
 packed_generated.c: packed.ae
@@ -45,7 +57,7 @@ fetch_generated.c: fetch.ae
 	$(AETHERC) --emit=lib $< $@
 
 # Round 155: log/paths/blame/info/props/list handle accessors,
-# ported from C wrappers in ae/ra/shim.c.
+# ported from C wrappers in ae/client/shim.c.
 accessors_generated.c: accessors.ae
 	$(AETHERC) --emit=lib $< $@
 

@@ -61,11 +61,7 @@ vi_decode_(buf: string, pos: int, end: int) -> {
 // target_bytes is "" but the caller must check status to
 // distinguish from a legitimate empty target.
 //
-// Aether 0.99+ accepts the `(string, int)` tuple-return syntax on
-// `export` (#285 fix); pre-fix this function used a leading-status-
-// byte channel that the C side stripped. The C wrapper at
-// ae/delta/svndiff/shim.c was simplified accordingly.
-export aether_svndiff_decode_apply(diff: string, diff_len: int,
+export svnae_svndiff_decode_apply(diff: string, diff_len: int,
                                     source: string, source_len: int) -> (string, int) {
     if diff_len < 4 { return "", 0 }
     // Signature: 'S' 'V' 'N' 0x01

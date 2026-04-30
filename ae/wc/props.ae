@@ -101,12 +101,12 @@ export svnae_wc_propset(wc_root: string, path: string,
 // already treat both cases identically — `propget(...) ? : ""` —
 // so the collapse to "" preserves observable behaviour.
 //
-// Exported as aether_wc_propget_value so the legacy C symbol
+// Exported as propget_value so the legacy C symbol
 // svnae_wc_propget can be a thin C-side wrapper that strdup's
 // the Aether-owned string out of the refcounted runtime into
 // caller-owned heap, preserving the previous `char *` ABI +
 // svnae_wc_props_free contract.
-export aether_wc_propget_value(wc_root: string, path: string, name: string) -> string {
+export propget_value(wc_root: string, path: string, name: string) -> string {
     db = open_with_schema_(wc_root)
     if db == null { return "" }
 

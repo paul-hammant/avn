@@ -31,11 +31,12 @@
 // deferred. No auth.
 
 import std.string
+import std.io
 
 extern aether_args_count() -> int
 extern aether_args_get(index: int) -> string
 
-// --- RA externs (same as test_ra.ae) --------------------------------------
+// --- RA externs (same as test_client.ae) --------------------------------------
 
 extern svnae_ra_head_rev(base_url: string, repo_name: string) -> int
 
@@ -86,22 +87,17 @@ extern svnae_ra_commit_delete(cb: ptr, path: string) -> int
 extern svnae_ra_commit_finish(cb: ptr, base_url: string, repo_name: string) -> int
 extern svnae_ra_commit_acl_add(cb: ptr, path: string, rule: string) -> int
 
-extern svnae_ra_set_user(user: string)
-extern svnae_ra_set_superuser_token(token: string)
+extern set_user(user: string)
+extern set_super_token(token: string)
 extern os_getenv(name: string) -> string
-extern aether_http_get_200(url: string) -> string
+extern get_200(url: string) -> string
 
 env_get(name: string) {
     v = os_getenv(name)
     if v == null { return "" }
     return v
 }
-http_get_body(url: string) { return aether_http_get_200(url) }
-
-// Writer for binary-safe cat output (println would strlen-truncate
-// though our content is currently NUL-terminated text in all tests).
-extern svnae_stderr_write(buf: string, n: int) -> int
-extern svnae_stdout_write(buf: string, n: int) -> int
+http_get_body(url: string) { return get_200(url) }
 
 // WC operations (Phase 5+).
 extern svnae_wc_checkout(base_url: string, repo_name: string, dest: string, rev: int) -> int
@@ -121,7 +117,7 @@ extern svnae_wc_merge(wc_root: string, source_path: string, rev_a: int, rev_b: i
 extern svnae_wc_resolve(wc_root: string, rel_path: string, accept: int) -> int
 
 extern svnae_wc_propset(wc_root: string, path: string, name: string, value: string) -> int
-extern aether_wc_propget_value(wc_root: string, path: string, name: string) -> string
+extern propget_value(wc_root: string, path: string, name: string) -> string
 extern svnae_wc_propdel(wc_root: string, path: string, name: string) -> int
 extern svnae_wc_proplist(wc_root: string, path: string) -> ptr
 extern svnae_wc_proplist_count(L: ptr) -> int
@@ -759,7 +755,7 @@ cmd_cat(argv_start: int) {
     // as println minus the trailing newline; for binary bytes it's
     // correct. We don't append a newline — files already include their
     // own trailing newline when they want one.
-    svnae_stdout_write(data, string.length(data))
+    io.stdout_write(data, string.length(data))
     svnae_ra_free(data)
     return 0
 }
@@ -1117,7 +1113,7 @@ cmd_propget(argv_start: int) {
     }
     name = aether_args_get(argv_start)
     path = prop_path(aether_args_get(argv_start + 1))
-    v = aether_wc_propget_value(".", path, name)
+    v = propget_value(".", path, name)
     if string.length(v) == 0 {
         return 1
     }
@@ -1651,9 +1647,9 @@ main() {
     // Placeholder auth: the server trusts whatever we send. Real auth
     // (Basic / LDAP / AD) arrives later.
     user_env = env_get("SVN_USER")
-    if string.length(user_env) > 0 { svnae_ra_set_user(user_env) }
+    if string.length(user_env) > 0 { set_user(user_env) }
     tok_env  = env_get("SVN_SUPERUSER_TOKEN")
-    if string.length(tok_env) > 0 { svnae_ra_set_superuser_token(tok_env) }
+    if string.length(tok_env) > 0 { set_super_token(tok_env) }
 
     sub = aether_args_get(1)
     // Most subcommands have URL at argv[2]; status/add/rm don't.

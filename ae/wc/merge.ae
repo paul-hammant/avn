@@ -41,7 +41,7 @@ extern svnae_wc_db_get_info(db: ptr, key: string) -> string
 
 extern svnae_wc_propset(wc_root: string, path: string, name: string, value: string) -> int
 extern svnae_wc_propdel(wc_root: string, path: string, name: string) -> int
-extern aether_wc_propget_value(wc_root: string, path: string, name: string) -> string
+extern propget_value(wc_root: string, path: string, name: string) -> string
 
 // Opaque rtree storage in C (merge_shim.c). The recursive walk fills
 // it via svnae_rtree_add_dir / _add_file; apply passes read it via
@@ -52,18 +52,18 @@ extern svnae_rtree_free(rt: ptr)
 // Walker + apply passes (Aether-side helpers). wc_root is passed
 // explicitly through the walker so add_file can hash files at
 // add-time (Round 140 retired the C-side TLS pointer).
-extern aether_merge_walk_remote(wc_root: string,
+extern merge_walk_remote(wc_root: string,
                                  base_url: string, repo: string, rev: int,
                                  source_path: string, sub_prefix: string,
                                  rt: ptr) -> int
-extern aether_merge_apply_deletions(wc_root: string, target_path: string,
+extern merge_apply_deletions(wc_root: string, target_path: string,
                                      a_rt: ptr, b_rt: ptr, db: ptr)
-extern aether_merge_apply_adds_mods(wc_root: string, target_path: string,
+extern merge_apply_adds_mods(wc_root: string, target_path: string,
                                      rev_a: int, rev_b: int,
                                      a_rt: ptr, b_rt: ptr, db: ptr)
 
 // Mergeinfo helpers.
-extern aether_mergeinfo_add_range(existing: string, source: string,
+extern mergeinfo_add_range(existing: string, source: string,
                                    lo: int, hi: int, reverse: int) -> string
 
 // Update the WC root's svn:mergeinfo property to include
@@ -77,9 +77,9 @@ mergeinfo_add_range_(wc_root: string, source: string,
     }
     svnae_wc_db_close(db)
 
-    existing = aether_wc_propget_value(wc_root, "", "svn:mergeinfo")
+    existing = propget_value(wc_root, "", "svn:mergeinfo")
     existing = string.copy(existing)
-    new_val = aether_mergeinfo_add_range(existing, source, lo, hi, reverse)
+    new_val = mergeinfo_add_range(existing, source, lo, hi, reverse)
     new_val = string.copy(new_val)
     if string.length(new_val) > 0 {
         return svnae_wc_propset(wc_root, "", "svn:mergeinfo", new_val)
@@ -122,8 +122,8 @@ export svnae_wc_merge(wc_root: string, source_path: string,
     // through so add_file can hash files at add-time.
     a = svnae_rtree_new()
     b = svnae_rtree_new()
-    arc = aether_merge_walk_remote(wc_root, base_url, repo, rev_base, source_path, "", a)
-    brc = aether_merge_walk_remote(wc_root, base_url, repo, rev_theirs, source_path, "", b)
+    arc = merge_walk_remote(wc_root, base_url, repo, rev_base, source_path, "", a)
+    brc = merge_walk_remote(wc_root, base_url, repo, rev_theirs, source_path, "", b)
     if arc != 0 {
         svnae_rtree_free(a)
         svnae_rtree_free(b)
@@ -146,8 +146,8 @@ export svnae_wc_merge(wc_root: string, source_path: string,
 
     // Two-pass apply.
     db = svnae_wc_db_open(wc_root)
-    aether_merge_apply_deletions(wc_root, target_path, a, b, db)
-    aether_merge_apply_adds_mods(wc_root, target_path, rev_a, rev_b, a, b, db)
+    merge_apply_deletions(wc_root, target_path, a, b, db)
+    merge_apply_adds_mods(wc_root, target_path, rev_a, rev_b, a, b, db)
     svnae_wc_db_close(db)
 
     svnae_rtree_free(a)

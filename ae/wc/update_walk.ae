@@ -31,7 +31,7 @@ extern svnae_ra_list_free(L: ptr)
 extern svnae_ra_cat(base_url: string, repo_name: string, rev: int, path: string) -> string
 extern svnae_ra_free(p: string)
 
-extern aether_path_join_rel(prefix: string, name: string) -> string
+extern path_join_rel(prefix: string, name: string) -> string
 
 extern svnae_rtree_add_dir(rt: ptr, path: string)
 extern svnae_rtree_add_file(rt: ptr, path: string, data: string, data_len: int,
@@ -61,7 +61,7 @@ update_walk_remote_impl(wc_root: string,
             name = string.copy(name)
             kind = svnae_ra_list_kind(L, i)
             kind = string.copy(kind)
-            rel = aether_path_join_rel(prefix, name)
+            rel = path_join_rel(prefix, name)
             rel = string.copy(rel)
 
             if string.equals(kind, "dir") == 1 {

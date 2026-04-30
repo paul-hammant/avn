@@ -7,21 +7,9 @@
 //
 //     http://www.apache.org/licenses/LICENSE-2.0
 
-// Binary-safe concat + slice over AetherString.
-//
-// Pre-std.bytes the pristine_shim.c side hand-rolled malloc +
-// memcpy for these (the length-clamp hazard from #297 made the C
-// path tricky to keep correct on binary buffers). std.bytes
-// (#288, 0.94) made concat a one-liner. Slice was blocked until
-// std.string.substring_n (Aether [current], asked for in
-// std_remaining_gaps.md) gave us a length-aware substring that
-// doesn't strlen-truncate when the input arrives as a raw
-// char* (post-#297 auto-unwrap) — Round 163 picks it up.
-//
-// Names keep the historical `aether_pristine_` prefix so the
-// extern symbol the rep_store.ae / pristine.ae callers reference
-// stays stable across the C → Aether move; slice gets an `_n`
-// suffix to mark the new explicit-length shape.
+// Binary-safe concat + slice + le32-pack over AetherString.
+// Length parameters are explicit because inputs may carry embedded
+// NULs — we must not strlen them.
 
 import std.bytes
 import std.string
@@ -29,8 +17,8 @@ import std.string
 // Concatenate two byte ranges into a new length-aware AetherString.
 // `prefix_len` / `suf_len` are explicit because both inputs may be
 // raw binary (embedded NULs); we must not strlen them.
-export aether_pristine_concat_binary_n(prefix: string, prefix_len: int,
-                                        suf: string, suf_len: int) -> string {
+export concat(prefix: string, prefix_len: int,
+              suf: string, suf_len: int) -> string {
     if prefix_len < 0 { prefix_len = 0 }
     if suf_len < 0 { suf_len = 0 }
     total = prefix_len + suf_len
@@ -50,8 +38,8 @@ export aether_pristine_concat_binary_n(prefix: string, prefix_len: int,
 // don't have to strlen `s` (which would truncate at NUL on binary
 // content post-#297 auto-unwrap). The substring_n primitive in
 // std.string takes the same explicit-length contract.
-export aether_pristine_slice_binary_n(s: string, s_len: int,
-                                       start: int, end: int) -> string {
+export slice(s: string, s_len: int,
+             start: int, end: int) -> string {
     if start < 0 { start = 0 }
     if end < start { end = start }
     if end > s_len { end = s_len }
@@ -64,7 +52,7 @@ export aether_pristine_slice_binary_n(s: string, s_len: int,
 // through downstream concat. We build the bytes via std.bytes
 // `set` (single-byte writes), then bytes.finish to get a length-
 // aware return — same shape as concat above.
-export aether_pristine_pack_le32(v: int) -> string {
+export pack_le32(v: int) -> string {
     buf = bytes.new(5)
     if buf == null { return "" }
     bytes.set(buf, 0, v         & 255)

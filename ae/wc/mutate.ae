@@ -62,11 +62,11 @@ extern svnae_wc_node_base_sha1(n: ptr) -> string
 extern svnae_wc_node_free(n: ptr)
 
 // io helpers come from subr/io.ae.
-extern aether_io_stat_kind(path: string) -> int
-extern aether_io_exists(path: string) -> int
-extern aether_io_unlink(path: string) -> int
-extern aether_io_rmdir(path: string) -> int
-extern aether_io_write_atomic(path: string, data: string, length: int) -> int
+extern io_stat_kind(path: string) -> int
+extern io_exists(path: string) -> int
+extern io_unlink(path: string) -> int
+extern io_rmdir(path: string) -> int
+extern io_write_atomic(path: string, data: string, length: int) -> int
 
 // Return 0 on success, -1 if path already tracked, -2 if not on disk,
 // -3 on db error.
@@ -76,7 +76,7 @@ export svnae_wc_add(wc_root: string, rel_path: string) -> int {
 
 svnae_wc_add_impl(wc_root: string, rel_path: string) -> int {
     disk = "${wc_root}/${rel_path}"
-    skind = aether_io_stat_kind(disk)
+    skind = io_stat_kind(disk)
     if skind == 0 { return 0 - 2 }
 
     kind = 0
@@ -140,7 +140,7 @@ svnae_wc_rm_impl(wc_root: string, rel_path: string) -> int {
     // deleted files until commit in some cases; we remove now since
     // this CLI is scoped for "commit soon".
     disk = "${wc_root}/${rel_path}"
-    if kind == 0 { aether_io_unlink(disk) } else { aether_io_rmdir(disk) }
+    if kind == 0 { io_unlink(disk) } else { io_rmdir(disk) }
 
     return 0
 }
@@ -186,11 +186,11 @@ svnae_wc_cp_impl(wc_root: string, src: string, dst: string) -> int {
     src_disk = "${wc_root}/${src}"
     dst_disk = "${wc_root}/${dst}"
 
-    if aether_io_exists(src_disk) == 0 {
+    if io_exists(src_disk) == 0 {
         svnae_wc_db_close(db)
         return 0 - 3
     }
-    if aether_io_exists(dst_disk) == 1 {
+    if io_exists(dst_disk) == 1 {
         svnae_wc_db_close(db)
         return 0 - 2
     }

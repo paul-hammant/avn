@@ -23,7 +23,7 @@
 // Round 80 (Gordian) ports the orchestration off ae/wc/diff_shim.c.
 // fork + execl /usr/bin/diff goes through std.os.os_run; tmp-file
 // staging via fs.write_atomic; pristine fetch via the canonical
-// aether_wc_pristine_get (Round 129 retired the C wrapper).
+// wc_pristine_get (Round 129 retired the C wrapper).
 
 import std.fs
 import std.string
@@ -46,24 +46,24 @@ extern svnae_wc_nodelist_free(L: ptr)
 // blob fetch, tmp write) is one Aether-native function now,
 // thanks to wc_pristine_get returning a length-aware AetherString
 // that std.fs.write_atomic unwraps correctly.
-extern aether_wc_pristine_size(wc_root: string, sha: string) -> int
-extern aether_wc_pristine_get(wc_root: string, sha: string) -> string
-extern aether_io_write_atomic(path: string, data: string, length: int) -> int
+extern wc_pristine_size(wc_root: string, sha: string) -> int
+extern wc_pristine_get(wc_root: string, sha: string) -> string
+extern io_write_atomic(path: string, data: string, length: int) -> int
 
 diff_tmp_write_pristine_(wc_root: string, sha: string, path: string) -> int {
-    sz = aether_wc_pristine_size(wc_root, sha)
+    sz = wc_pristine_size(wc_root, sha)
     if sz < 0 { return 0 - 1 }
-    data = aether_wc_pristine_get(wc_root, sha)
+    data = wc_pristine_get(wc_root, sha)
     // wc_pristine_get returns "" on miss; even legitimate empty
     // blobs are size>=1 (svn never stores zero-length pristines),
     // so length-0 is unambiguously a miss.
     if string.length(data) == 0 { return 0 - 1 }
-    return aether_io_write_atomic(path, data, sz)
+    return io_write_atomic(path, data, sz)
 }
 
-extern aether_wc_hash_file(wc_root: string, path: string) -> string
+extern wc_hash_file(wc_root: string, path: string) -> string
 
-extern aether_io_unlink(path: string) -> int
+extern io_unlink(path: string) -> int
 extern os_getpid_raw() -> int
 
 extern os_run(prog: string, argv_list: ptr, env_list: ptr) -> int
@@ -153,7 +153,7 @@ diff_one_(wc_root: string, L: ptr, i: int, target: string, seq: int) -> int {
     }
     if st == 2 {
         // deleted: before = pristine, after = empty tmp
-        psize = aether_wc_pristine_size(wc_root, base_sha)
+        psize = wc_pristine_size(wc_root, base_sha)
         before = tmp_seq_("before", seq)
         seq = seq + 1
         rcw = diff_tmp_write_pristine_(wc_root, base_sha, before)
@@ -168,7 +168,7 @@ diff_one_(wc_root: string, L: ptr, i: int, target: string, seq: int) -> int {
     }
     if st == 0 {
         // normal: only diff if disk != pristine.
-        cur = aether_wc_hash_file(wc_root, disk)
+        cur = wc_hash_file(wc_root, disk)
         cur = string.copy(cur)
         if string.length(cur) == 0 { return seq }
         if string.equals(cur, base_sha) == 1 { return seq }
@@ -188,8 +188,8 @@ diff_one_(wc_root: string, L: ptr, i: int, target: string, seq: int) -> int {
     emit_header_(rel)
     run_diff_(label_before, label_after, before, after_p)
 
-    if cleanup_before == 1 { aether_io_unlink(before) }
-    if cleanup_after == 1 { aether_io_unlink(after_p) }
+    if cleanup_before == 1 { io_unlink(before) }
+    if cleanup_after == 1 { io_unlink(after_p) }
     return seq
 }
 

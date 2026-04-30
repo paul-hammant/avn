@@ -198,7 +198,7 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
     list: Aether produces "<N>\x02<name>\x01<value>\x02...", C
     rebuilt a struct-of-arrays with per-field accessors.
     Collapsed to the {packed, n, pin_list} pattern + new
-    ra_props_count/name/value accessors in ae/ra/packed.ae.
+    ra_props_count/name/value accessors in ae/client/packed.ae.
   - `verify_dir` inside the verify client had an inline copy
     of the same reparse (~20 LOC) to populate its local
     `struct entry[]`. Swapped it for ra_list_count/name/kind
@@ -242,7 +242,7 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
   - New `ae/repos/log.ae::repos_log_packed(repo)` does the whole
     rev walk in Aether, emitting the exact same "<N>\x02<rev>
     \x01<author>\x01<date>\x01<msg>\x02..." shape ra_parse_log
-    does. The C accessors reuse ra_log_* from ae/ra/packed.ae
+    does. The C accessors reuse ra_log_* from ae/client/packed.ae
     directly — same record shape, zero new walkers.
   - `ae/repos/paths_changed.ae` gained `paths_changed_packed`
     + `pack_amd_pairs` to produce the packed form from the
@@ -254,7 +254,7 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
     free machinery. Added the same {packed, n, pin_list}
     handle + pin_str helper pattern round 21 established for
     ra/shim.c.
-  - Packed-accessor reuse: ae/ra/packed_generated.c is now linked
+  - Packed-accessor reuse: ae/client/packed_generated.c is now linked
     by svnadmin, svnserver, and test_repos in addition to the
     existing RA consumers. One set of walkers serves both
     sides of the wire.
@@ -265,7 +265,7 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
   blame, list) plus a 28-line single-record parser (info) all
   disappeared in favour of typed accessors over the packed
   string itself.
-  - New `ae/ra/packed.ae` (366 LOC Aether) exposes
+  - New `ae/client/packed.ae` (366 LOC Aether) exposes
     `ra_{log,paths,blame,list}_{count,rev,author,...}` and the
     five `ra_info_*` accessors. Each one walks the packed
     `<N>\x02<entry>\x02<entry>...` string on demand.
@@ -400,7 +400,7 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
 - **Round 14**: **43.40% C, 56.59% Aether.** Focus
   shifts to the RA client side + repos helpers:
   - `svnae_ra_commit_finish`: 140 LOC of cJSON-heavy body
-    serialisation moves up to ae/ra/commit_build.ae. std.json
+    serialisation moves up to ae/client/commit_build.ae. std.json
     for construction; C-side accessors expose struct svnae_ra_commit.
   - `svnae_ra_server_copy` + `svnae_ra_branch_create` bodies:
     small cJSON builders, also Aether via std.json.
@@ -430,7 +430,7 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
     map. Four new "joined" C wrappers split newline-joined
     strings back into char** arrays for the blob builders that
     don't have an Aether-friendly signature.
-  - RA client (ae/ra/shim.c) also got parse-side ports for
+  - RA client (ae/client/shim.c) also got parse-side ports for
     head_rev, hash_algo, info_rev, log, paths_changed, props,
     blame, and list. C still owns curl + auth headers + struct
     allocation; std.json does the JSON walk.
@@ -788,7 +788,7 @@ for t in server ra svn wc_checkout wc_status wc_mutate wc_commit \
   printf '%-27s ' "test_$t"
   case $t in
     server)   s=ae/svnserver/test_server.sh ;;
-    ra)       s=ae/ra/test_ra.sh ;;
+    ra)       s=ae/client/test_client.sh ;;
     svn)      s=ae/svn/test_svn.sh ;;
     wc_*)     s=ae/wc/test_${t#wc_}.sh ;;
     svnadmin) s=ae/svnadmin/test_svnadmin.sh ;;

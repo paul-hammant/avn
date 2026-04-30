@@ -13,9 +13,9 @@
 // implied. See the License for the specific language governing
 // permissions and limitations under the License.
 
-// ae/ra/http_client.ae — Aether-side HTTP plumbing for the RA shim.
+// ae/client/http_client.ae — Aether-side HTTP plumbing for the RA shim.
 //
-// Replaces ~200 lines of libcurl in ae/ra/shim.c with std.http.client
+// Replaces ~200 lines of libcurl in ae/client/shim.c with std.http.client
 // v2 calls. The C side keeps its existing svnae_* / http_get* /
 // http_post_json signatures so every downstream caller (tens of call
 // sites across handler shims, log/paths/blame builders, commit + copy
@@ -41,21 +41,20 @@ import std.http.client
 // ordering issues with the response_body length (round 46 first
 // draft — fix preserved as a comment-only note in the journal).
 //
-// Auth state lives on the C side (set via svnae_ra_set_user etc.);
-// these getters bring it across to attach as request headers.
-
-extern aether_ra_get_user() -> string
-extern aether_ra_get_super_token() -> string
+// Auth state lives in std.config — set via set_user / set_super_token
+// in ae/client/auth_state.ae at CLI startup.
+extern get_user() -> string
+extern get_super_token() -> string
 
 // Build a request, attach auth headers, send it, return the
 // std.http.client response handle the C side reads through accessors.
 // On transport failure returns null — the C wrapper treats that as -1.
 send_with_auth(req: ptr) -> ptr {
-    user = aether_ra_get_user()
+    user = get_user()
     if string.length(user) > 0 {
         client.set_header(req, "X-Svnae-User", user)
     }
-    super_token = aether_ra_get_super_token()
+    super_token = get_super_token()
     if string.length(super_token) > 0 {
         client.set_header(req, "X-Svnae-Superuser", super_token)
     }
@@ -71,14 +70,14 @@ send_with_auth(req: ptr) -> ptr {
 
 // GET. Returns std.http.client response handle (ptr) or null on
 // transport failure. Caller owns the response — must call
-// aether_ra_http_response_free when done.
-export aether_ra_http_get(url: string) -> ptr {
+// response_free when done.
+export get(url: string) -> ptr {
     req = client.request("GET", url)
     return send_with_auth(req)
 }
 
 // POST application/json with the given body bytes. Same return shape.
-export aether_ra_http_post_json(url: string, body: string, body_len: int) -> ptr {
+export post_json(url: string, body: string, body_len: int) -> ptr {
     req = client.request("POST", url)
     client.set_body(req, body, body_len, "application/json")
     return send_with_auth(req)
@@ -89,19 +88,19 @@ export aether_ra_http_post_json(url: string, body: string, body_len: int) -> ptr
 // cleanly isolated, which fixed an AetherString length-shadowing
 // issue we hit in the first draft.
 
-export aether_ra_http_response_status(resp: ptr) -> int {
+export response_status(resp: ptr) -> int {
     return client.response_status(resp)
 }
 
-export aether_ra_http_response_body(resp: ptr) -> string {
+export response_body(resp: ptr) -> string {
     return client.response_body(resp)
 }
 
-export aether_ra_http_response_header(resp: ptr, name: string) -> string {
+export response_header(resp: ptr, name: string) -> string {
     return client.response_header(resp, name)
 }
 
-export aether_ra_http_response_free(resp: ptr) {
+export response_free(resp: ptr) {
     client.response_free(resp)
 }
 
@@ -112,7 +111,7 @@ export aether_ra_http_response_free(resp: ptr) {
 // the per-domain "fetch + parse + return packed" callers in fetch.ae
 // and by info.ae (head_rev / hash_algo) — saves each from open-coding
 // the same six-line dance.
-export aether_http_get_200(url: string) -> string {
+export get_200(url: string) -> string {
     req = client.request("GET", url)
     resp = send_with_auth(req)
     if resp == null { return "" }
@@ -128,5 +127,5 @@ export aether_http_get_200(url: string) -> string {
 }
 
 main() {
-    println("ae/ra/http_client.ae is a library; not meant to run standalone")
+    println("ae/client/http_client.ae is a library; not meant to run standalone")
 }

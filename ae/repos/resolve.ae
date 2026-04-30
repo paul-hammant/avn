@@ -32,8 +32,8 @@ import std.string
 
 extern svnae_rep_read_blob(repo: string, sha: string) -> string
 extern svnae_rep_free(body: string)
-extern aether_dir_find_kind(body: string, name: string) -> int
-extern aether_dir_find_sha(body: string, name: string) -> string
+extern dir_find_kind(body: string, name: string) -> int
+extern dir_find_sha(body: string, name: string) -> string
 
 // Walks the path and returns the final (kind, sha) pair via
 // newline-separated encoding: "<kind_byte>\n<sha>\n". On miss
@@ -74,12 +74,12 @@ resolve_pair(repo: string, root_sha: string, path: string) -> string {
         if i < n { i = i + 1 }   // skip the '/'
 
         // Lookup seg in cur_body.
-        found_kind = aether_dir_find_kind(cur_body, seg)
+        found_kind = dir_find_kind(cur_body, seg)
         if found_kind == 0 {
             svnae_rep_free(cur_body)
             return ""
         }
-        found_sha = aether_dir_find_sha(cur_body, seg)
+        found_sha = dir_find_sha(cur_body, seg)
         // Snapshot the sha before the next read_blob clobbers any
         // shared buffer.
         found_sha = string.concat(found_sha, "")
@@ -157,10 +157,10 @@ export resolve_sha(repo: string, root_sha: string, path: string) -> string {
 // have the rev's root_sha looked up (svnserver handlers, copy_parse,
 // acl_subtree). Round 76 retired the C-side svnae_repos_resolve in
 // favour of these two exports — same name, same shape.
-extern aether_repos_load_rev_blob_field(repo: string, rev: int, key: string) -> string
+extern repos_load_rev_blob_field(repo: string, rev: int, key: string) -> string
 
 resolve_root_for_rev_(repo: string, rev: int) -> string {
-    v = aether_repos_load_rev_blob_field(repo, rev, "root")
+    v = repos_load_rev_blob_field(repo, rev, "root")
     if string.length(v) == 0 { return "" }
     return string.copy(v)
 }

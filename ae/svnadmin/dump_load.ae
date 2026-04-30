@@ -25,66 +25,100 @@
 // path-construction all move here.
 
 import std.string
+import std.io
 
 // Repo metadata.
-extern aether_repos_head_rev(repo: string) -> int
+extern repos_head_rev(repo: string) -> int
 extern svnae_svnadmin_create_bare(repo: string, algos_spec: string) -> int
 
 // Dump-format builders (ae/svnadmin/dump.ae).
-extern aether_dump_prelude(head: int, rev_count: int, rep_count: int) -> string
-extern aether_rep_header(sha: string, size: int) -> string
-extern aether_rev_pointer_block(rev: int, sha: string) -> string
+extern dump_prelude(head: int, rev_count: int, rep_count: int) -> string
+extern rep_header(sha: string, size: int) -> string
+extern rev_pointer_block(rev: int, sha: string) -> string
 
 // Tag-line helpers (ae/svnadmin/dump.ae).
-extern aether_line_starts_with_tag(line: string, prefix: string) -> int
-extern aether_parse_tagged_int(line: string, prefix: string, fallback: int) -> int
-extern aether_tagged_rest(line: string, prefix: string) -> string
+extern line_starts_with_tag(line: string, prefix: string) -> int
+extern parse_tagged_int(line: string, prefix: string, fallback: int) -> int
+extern tagged_rest(line: string, prefix: string) -> string
 
 // Rep cache enumeration (ae/svnadmin/admin_db.ae).
 extern admin_db_list_reps_packed(repo: string) -> string
-extern aether_admin_reps_count(packed: string) -> int
-extern aether_admin_reps_sha_at(packed: string, i: int) -> string
-extern aether_admin_reps_size_at(packed: string, i: int) -> int
+extern admin_reps_count(packed: string) -> int
+extern admin_reps_sha_at(packed: string, i: int) -> string
+extern admin_reps_size_at(packed: string, i: int) -> int
 
 // Rev pointer reader (ae/repos/rev_io.ae).
-extern aether_repos_rev_blob_sha(repo: string, rev: int) -> string
+extern repos_rev_blob_sha(repo: string, rev: int) -> string
 
 // Atomic file write (ae/subr/io.ae).
-extern aether_io_write_atomic(path: string, data: string, length: int) -> int
+extern io_write_atomic(path: string, data: string, length: int) -> int
 
-// fd I/O — C-side wrappers (svnadmin/shim.c). All return 0 on success
-// or -1 on failure.
-extern svnae_fd_write_str(fd: int, s: string) -> int
-extern svnae_fd_write_rep_body(fd: int, repo: string, sha: string, size: int) -> int
-extern svnae_fd_read_line(fd: int) -> string
-extern svnae_fd_load_rep_block(fd: int, repo: string, expected_sha: string, size: int) -> int
+// Round 188: switched to std.io's full fd surface (Aether 0.110
+// follow-up — Section 1 of nuther-ask-of-aether-team.md). The
+// looped read_n / write_n / read_line primitives moved out of the
+// port's C shim entirely.
+
+extern svnae_rep_read_blob(repo: string, sha1_hex: string) -> string
+extern rep_write_blob(repo: string, data: string, len: int) -> string
+
+// Write a NUL-terminated literal/built string.
+fd_write_str_(fd: int, s: string) -> int {
+    return io.fd_write_n(fd, s, string.length(s))
+}
+
+// Write `size` bytes of the blob at `sha` to fd. Empty blobs
+// (size == 0) are valid — short-circuit without reading.
+fd_write_rep_body_(fd: int, repo: string, sha: string, size: int) -> int {
+    if size == 0 { return 0 }
+    body = svnae_rep_read_blob(repo, sha)
+    if string.length(body) == 0 { return 0 - 1 }
+    return io.fd_write_n(fd, body, size)
+}
+
+// Read `size` bytes + the trailing newline from fd, write the blob,
+// verify the returned hex matches `expected_sha`. Returns 0/-1.
+fd_load_rep_block_(fd: int, repo: string, expected_sha: string, size: int) -> int {
+    data, got, rerr = io.fd_read_n(fd, size)
+    if string.length(rerr) > 0 { return 0 - 1 }
+    if got != size { return 0 - 1 }
+
+    nl, nl_got, nlerr = io.fd_read_n(fd, 1)
+    if string.length(nlerr) > 0 { return 0 - 1 }
+    if nl_got != 1 { return 0 - 1 }
+    if string.char_at(nl, 0) != 10 { return 0 - 1 }   // '\n'
+
+    written = rep_write_blob(repo, data, size)
+    if string.length(written) == 0 { return 0 - 1 }
+    if string.equals(written, expected_sha) == 0 { return 0 - 1 }
+    return 0
+}
 
 const TAG_SENTINEL = 0 - 2147483647
 
 // ---- dump -----------------------------------------------------------
 
 export svnae_svnadmin_dump(repo: string, out_fd: int) -> int {
-    head = aether_repos_head_rev(repo)
+    head = repos_head_rev(repo)
     if head < 0 { return 0 - 1 }
 
     reps_packed = admin_db_list_reps_packed(repo)
     if string.length(reps_packed) == 0 { return 0 - 1 }
-    n_reps = aether_admin_reps_count(reps_packed)
+    n_reps = admin_reps_count(reps_packed)
 
-    prelude = aether_dump_prelude(head, head + 1, n_reps)
-    if svnae_fd_write_str(out_fd, prelude) != 0 { return 0 - 1 }
+    prelude = dump_prelude(head, head + 1, n_reps)
+    if fd_write_str_(out_fd, prelude) != 0 { return 0 - 1 }
 
     // Rep blocks.
     i = 0
     while i < n_reps {
-        sha = aether_admin_reps_sha_at(reps_packed, i)
+        sha = admin_reps_sha_at(reps_packed, i)
         sha = string.copy(sha)
-        size = aether_admin_reps_size_at(reps_packed, i)
+        size = admin_reps_size_at(reps_packed, i)
 
-        rep_hdr = aether_rep_header(sha, size)
-        if svnae_fd_write_str(out_fd, rep_hdr) != 0 { return 0 - 1 }
-        if svnae_fd_write_rep_body(out_fd, repo, sha, size) != 0 { return 0 - 1 }
-        if svnae_fd_write_str(out_fd, "\n") != 0 { return 0 - 1 }
+        rep_hdr = rep_header(sha, size)
+        if fd_write_str_(out_fd, rep_hdr) != 0 { return 0 - 1 }
+        if fd_write_rep_body_(out_fd, repo, sha, size) != 0 { return 0 - 1 }
+        if fd_write_str_(out_fd, "\n") != 0 { return 0 - 1 }
 
         i = i + 1
     }
@@ -92,24 +126,32 @@ export svnae_svnadmin_dump(repo: string, out_fd: int) -> int {
     // Rev pointers.
     r = 0
     while r <= head {
-        sha = aether_repos_rev_blob_sha(repo, r)
+        sha = repos_rev_blob_sha(repo, r)
         if string.length(sha) == 0 { return 0 - 1 }
         sha = string.copy(sha)
-        block = aether_rev_pointer_block(r, sha)
-        if svnae_fd_write_str(out_fd, block) != 0 { return 0 - 1 }
+        block = rev_pointer_block(r, sha)
+        if fd_write_str_(out_fd,block) != 0 { return 0 - 1 }
         r = r + 1
     }
 
-    if svnae_fd_write_str(out_fd, "END\n") != 0 { return 0 - 1 }
+    if fd_write_str_(out_fd,"END\n") != 0 { return 0 - 1 }
     return 0
 }
 
 // ---- load -----------------------------------------------------------
 
+// Wrap io.fd_read_line into a single-string return — the load path
+// here treats EOF / read error / empty line uniformly as "failure",
+// matching the previous svnae_fd_read_line shape.
+read_line_(fd: int) -> string {
+    line, _ = io.fd_read_line(fd)
+    return line
+}
+
 // Read a line that should match an exact literal. Returns 0 on match,
 // -1 on read failure or mismatch.
 expect_literal_(in_fd: int, expected: string) -> int {
-    line = svnae_fd_read_line(in_fd)
+    line = read_line_(in_fd)
     if string.length(line) == 0 {
         if string.length(expected) > 0 { return 0 - 1 }
     }
@@ -120,18 +162,18 @@ expect_literal_(in_fd: int, expected: string) -> int {
 // Read a line that should start with `prefix`; returns the line on
 // success, "" on failure.
 expect_tagged_(in_fd: int, prefix: string) -> string {
-    line = svnae_fd_read_line(in_fd)
+    line = read_line_(in_fd)
     if string.length(line) == 0 { return "" }
-    if aether_line_starts_with_tag(line, prefix) == 0 { return "" }
+    if line_starts_with_tag(line, prefix) == 0 { return "" }
     return string.copy(line)
 }
 
 // Read a "<TAG> <int>" line and return the int. Returns TAG_SENTINEL
 // on read failure or parse failure.
 expect_tagged_int_(in_fd: int, prefix: string) -> int {
-    line = svnae_fd_read_line(in_fd)
+    line = read_line_(in_fd)
     if string.length(line) == 0 { return TAG_SENTINEL }
-    return aether_parse_tagged_int(line, prefix, TAG_SENTINEL)
+    return parse_tagged_int(line, prefix, TAG_SENTINEL)
 }
 
 export svnae_svnadmin_load(repo: string, in_fd: int) -> int {
@@ -153,16 +195,16 @@ export svnae_svnadmin_load(repo: string, in_fd: int) -> int {
     // REP-COUNT blocks.
     i = 0
     while i < rep_count {
-        rep_line = svnae_fd_read_line(in_fd)
+        rep_line = read_line_(in_fd)
         if string.length(rep_line) == 0 { return 0 - 1 }
-        sha_ref = aether_tagged_rest(rep_line, "REP")
+        sha_ref = tagged_rest(rep_line, "REP")
         if string.length(sha_ref) == 0 { return 0 - 1 }
         sha = string.copy(sha_ref)
 
         size = expect_tagged_int_(in_fd, "SIZE")
         if size == TAG_SENTINEL { return 0 - 1 }
 
-        if svnae_fd_load_rep_block(in_fd, repo, sha, size) != 0 { return 0 - 1 }
+        if fd_load_rep_block_(in_fd, repo, sha, size) != 0 { return 0 - 1 }
         i = i + 1
     }
 
@@ -172,15 +214,15 @@ export svnae_svnadmin_load(repo: string, in_fd: int) -> int {
         rev = expect_tagged_int_(in_fd, "REV")
         if rev == TAG_SENTINEL { return 0 - 1 }
 
-        ptr_line = svnae_fd_read_line(in_fd)
+        ptr_line = read_line_(in_fd)
         if string.length(ptr_line) == 0 { return 0 - 1 }
-        ptr_sha_ref = aether_tagged_rest(ptr_line, "POINTER")
+        ptr_sha_ref = tagged_rest(ptr_line, "POINTER")
         if string.length(ptr_sha_ref) == 0 { return 0 - 1 }
         ptr_sha = string.copy(ptr_sha_ref)
 
         ptr_body = "${ptr_sha}\n"
         ptr_path = "${repo}/revs/${zpad6_(rev)}"
-        if aether_io_write_atomic(ptr_path, ptr_body, string.length(ptr_body)) != 0 {
+        if io_write_atomic(ptr_path, ptr_body, string.length(ptr_body)) != 0 {
             return 0 - 1
         }
         j = j + 1
@@ -191,7 +233,7 @@ export svnae_svnadmin_load(repo: string, in_fd: int) -> int {
     // Head.
     head_body = "${head}\n"
     head_path = "${repo}/head"
-    if aether_io_write_atomic(head_path, head_body, string.length(head_body)) != 0 {
+    if io_write_atomic(head_path, head_body, string.length(head_body)) != 0 {
         return 0 - 1
     }
     return 0

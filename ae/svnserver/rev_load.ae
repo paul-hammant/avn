@@ -27,11 +27,11 @@
 
 import std.string
 
-extern aether_io_read_file(path: string) -> string
-extern aether_io_file_size(path: string) -> int
+extern io_read_file(path: string) -> string
+extern io_file_size(path: string) -> int
 extern svnae_rep_read_blob(repo: string, sha: string) -> string
 extern svnae_rep_free(body: string)
-extern aether_blobfield_get(body: string, key: string) -> string
+extern blobfield_get(body: string, key: string) -> string
 
 // Zero-pad `n` to six digits, matching $repo/revs/NNNNNN.
 pad6(n: int) -> string {
@@ -67,14 +67,14 @@ rtrim_ws(s: string) -> string {
 
 export load_rev_blob_field(repo: string, rev: int, key: string) -> string {
     path = rev_file_path(repo, rev)
-    if aether_io_file_size(path) < 0 { return "" }
-    src = aether_io_read_file(path)
+    if io_file_size(path) < 0 { return "" }
+    src = io_read_file(path)
     sha = rtrim_ws(src)
     if string.length(sha) == 0 { return "" }
 
     body = svnae_rep_read_blob(repo, sha)
     if string.length(body) == 0 { return "" }
-    v = aether_blobfield_get(body, key)
+    v = blobfield_get(body, key)
     v = string.copy(v)         // copy before freeing body
     svnae_rep_free(body)
     return v

@@ -16,7 +16,7 @@
 // Round 64 (Gordian knot): port the orchestration of commit finalise
 // and branch create out of ae/fs_fs/commit_shim.c. The recursive
 // tree-rebuild lives in ae/fs_fs/rebuild.ae (called as
-// aether_rebuild_dir); everything around it — load base root sha,
+// rebuild_dir); everything around it — load base root sha,
 // inherit props/acl, write rev blob, the 4-file pointer set,
 // path_rev index population — is pure orchestration here.
 //
@@ -36,25 +36,25 @@ const SQLITE_DONE = 101
 
 // Recursive tree rebuild stays in C (txn_shim.c) — bulk content walk.
 extern svnae_txn_base_rev(t: ptr) -> int
-extern aether_rebuild_dir(repo: string, base_dir_sha: string, prefix: string, t: ptr) -> string
+extern rebuild_dir(repo: string, base_dir_sha: string, prefix: string, t: ptr) -> string
 
 // Repository primitives.
-extern aether_rep_write_blob(repo: string, data: string, len: int) -> string
-extern aether_repos_head_rev(repo: string) -> int
+extern rep_write_blob(repo: string, data: string, len: int) -> string
+extern repos_head_rev(repo: string) -> int
 
 // Aether-side helpers (already exported as aether_* aliases).
-extern aether_repos_load_rev_blob_field(repo: string, rev: int, key: string) -> string
-extern aether_repos_inherit_rev_field(repo: string, prev: int, key: string, override: string) -> string
-extern aether_rev_blob_body(root: string, branch: string, props: string, acl: string,
+extern repos_load_rev_blob_field(repo: string, rev: int, key: string) -> string
+extern repos_inherit_rev_field(repo: string, prev: int, key: string, override: string) -> string
+extern rev_blob_body(root: string, branch: string, props: string, acl: string,
                              prev: int, author: string, date: string, log: string) -> string
-extern aether_write_rev_pointer_set(repo: string, branch: string, next_rev: int,
+extern write_rev_pointer_set(repo: string, branch: string, next_rev: int,
                                      rev_sha: string) -> int
-extern aether_branch_head_rev(repo: string, base: string) -> int
-extern aether_filter_dir(repo: string, src_sha: string, prefix: string,
+extern branch_head_rev(repo: string, base: string) -> int
+extern filter_dir(repo: string, src_sha: string, prefix: string,
                           globs_joined: string) -> string
-extern aether_io_mkdir_p(path: string) -> int
-extern aether_io_write_atomic(path: string, data: string, length: int) -> int
-extern aether_io_exists(path: string) -> int
+extern io_mkdir_p(path: string) -> int
+extern io_write_atomic(path: string, data: string, length: int) -> int
+extern io_exists(path: string) -> int
 
 // paths_changed handle from repos/shim.c — opaque ptr + count + path
 // accessor. Used to enumerate paths-changed-by-rev for the path_rev
@@ -69,7 +69,7 @@ extern svnae_repos_paths_free(P: ptr)
 // Load the root-dir sha1 for a given revision. "" on miss (caller
 // treats as failure).
 load_rev_root_sha1_(repo: string, rev: int) -> string {
-    v = aether_repos_load_rev_blob_field(repo, rev, "root")
+    v = repos_load_rev_blob_field(repo, rev, "root")
     if string.length(v) == 0 { return "" }
     return string.copy(v)
 }
@@ -122,16 +122,16 @@ populate_path_rev_(repo: string, branch: string, rev: int) {
 write_spec_file_(spec_path: string, globs_joined: string) -> int {
     glen = string.length(globs_joined)
     if glen == 0 {
-        if aether_io_write_atomic(spec_path, "", 0) != 0 { return 0 - 1 }
+        if io_write_atomic(spec_path, "", 0) != 0 { return 0 - 1 }
         return 0
     }
     last = string.char_at(globs_joined, glen - 1)
     if last == 10 {   // '\n'
-        if aether_io_write_atomic(spec_path, globs_joined, glen) != 0 { return 0 - 1 }
+        if io_write_atomic(spec_path, globs_joined, glen) != 0 { return 0 - 1 }
         return 0
     }
     with_nl = string.concat(globs_joined, "\n")
-    if aether_io_write_atomic(spec_path, with_nl, glen + 1) != 0 { return 0 - 1 }
+    if io_write_atomic(spec_path, with_nl, glen + 1) != 0 { return 0 - 1 }
     return 0
 }
 
@@ -172,28 +172,28 @@ finalise_on_branch_(repo: string, txn: ptr,
     base_root = load_rev_root_sha1_(repo, base_rev)
     if string.length(base_root) == 0 { return 0 - 1 }
 
-    new_root = aether_rebuild_dir(repo, base_root, "", txn)
+    new_root = rebuild_dir(repo, base_root, "", txn)
     if string.length(new_root) == 0 { return 0 - 1 }
     new_root = string.copy(new_root)
 
-    prev = aether_repos_head_rev(repo)
+    prev = repos_head_rev(repo)
     if prev < 0 { return 0 - 1 }
     next = prev + 1
 
     // Inherit props / acl from the previous rev when caller passes "".
-    ps = aether_repos_inherit_rev_field(repo, prev, "props", props_sha1)
-    as_ = aether_repos_inherit_rev_field(repo, prev, "acl", acl_sha1)
+    ps = repos_inherit_rev_field(repo, prev, "props", props_sha1)
+    as_ = repos_inherit_rev_field(repo, prev, "acl", acl_sha1)
     ps = string.copy(ps)
     as_ = string.copy(as_)
 
-    rev_body = aether_rev_blob_body(new_root, branch, ps, as_, prev, author,
+    rev_body = rev_blob_body(new_root, branch, ps, as_, prev, author,
                                      os.now_utc_iso8601(), logmsg)
-    rev_sha_borrowed = aether_rep_write_blob(repo, rev_body, string.length(rev_body))
+    rev_sha_borrowed = rep_write_blob(repo, rev_body, string.length(rev_body))
     if string.length(rev_sha_borrowed) == 0 { return 0 - 1 }
     rev_sha = string.copy(rev_sha_borrowed)
 
     // Write the 4-file pointer set (legacy + per-branch).
-    if aether_write_rev_pointer_set(repo, branch, next, rev_sha) != 0 { return 0 - 1 }
+    if write_rev_pointer_set(repo, branch, next, rev_sha) != 0 { return 0 - 1 }
 
     populate_path_rev_(repo, branch, next)
 
@@ -256,9 +256,9 @@ export svnae_branch_create(repo: string, name: string, base: string,
     if string.length(globs_joined) == 0 { return 0 - 1 }
 
     br_dir = "${repo}/branches/${name}"
-    if aether_io_exists(br_dir) == 1 { return 0 - 1 }
+    if io_exists(br_dir) == 1 { return 0 - 1 }
 
-    base_rev = aether_branch_head_rev(repo, base)
+    base_rev = branch_head_rev(repo, base)
     if base_rev < 0 { return 0 - 1 }
 
     base_root = load_rev_root_sha1_(repo, base_rev)
@@ -266,27 +266,27 @@ export svnae_branch_create(repo: string, name: string, base: string,
 
     // Filter base's tree via the recursive Aether filter. Takes the
     // same newline-joined globs we'll write to the spec file below.
-    new_root_borrowed = aether_filter_dir(repo, base_root, "", globs_joined)
+    new_root_borrowed = filter_dir(repo, base_root, "", globs_joined)
     if string.length(new_root_borrowed) == 0 { return 0 - 1 }
     new_root = string.copy(new_root_borrowed)
 
-    if aether_io_mkdir_p(br_dir) != 0 { return 0 - 1 }
+    if io_mkdir_p(br_dir) != 0 { return 0 - 1 }
     if write_spec_file_("${br_dir}/spec", globs_joined) != 0 { return 0 - 1 }
 
     // Cross-branch rev numbering: rev numbers are per-repo, not
     // per-branch. (See commit message on the original C version.)
-    new_rev = aether_repos_head_rev(repo) + 1
+    new_rev = repos_head_rev(repo) + 1
 
     n_globs = count_globs_(globs_joined)
     logmsg = "create branch ${name} from ${base} with ${n_globs} include(s)"
 
-    rev_body = aether_rev_blob_body(new_root, name, "", "", base_rev, author,
+    rev_body = rev_blob_body(new_root, name, "", "", base_rev, author,
                                      os.now_utc_iso8601(), logmsg)
-    rev_sha_borrowed = aether_rep_write_blob(repo, rev_body, string.length(rev_body))
+    rev_sha_borrowed = rep_write_blob(repo, rev_body, string.length(rev_body))
     if string.length(rev_sha_borrowed) == 0 { return 0 - 1 }
     rev_sha = string.copy(rev_sha_borrowed)
 
-    if aether_write_rev_pointer_set(repo, name, new_rev, rev_sha) != 0 { return 0 - 1 }
+    if write_rev_pointer_set(repo, name, new_rev, rev_sha) != 0 { return 0 - 1 }
     return new_rev
 }
 

@@ -14,9 +14,9 @@
 // permissions and limitations under the License.
 
 // Accessors over the packed "N\x02<entry>\x02<entry>\x02..." and
-// "<f0>\x01<f1>\x01..." record shapes produced by ae/ra/parse.ae.
+// "<f0>\x01<f1>\x01..." record shapes produced by ae/client/parse.ae.
 //
-// The existing C side of ae/ra/shim.c used to re-parse these strings
+// The existing C side of ae/client/shim.c used to re-parse these strings
 // into struct-of-arrays and hand out per-field accessors. That was
 // ~150 LOC of near-duplicated tokenising across four entry points
 // (log, paths, blame, list) plus a one-off five-field record (info).
@@ -400,5 +400,5 @@ ra_info_root_impl(packed: string) -> string {
 }
 
 main() {
-    println("ae/ra/packed.ae is a library; not meant to run standalone")
+    println("ae/client/packed.ae is a library; not meant to run standalone")
 }

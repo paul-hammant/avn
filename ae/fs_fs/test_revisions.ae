@@ -47,34 +47,30 @@
 import std.fs
 import std.os
 import std.string
+import std.zlib
 
 // --- externs from subr shims ------------------------------------------------
 
 extern svnae_crypto_hash_hex(algo: string, data: string, length: int) -> string
 
-extern svnae_zlib_deflate(data: string, data_len: int, level: int) -> ptr
-extern svnae_zlib_inflate_offset(base: string, offset: int, data_len: int, expected_out: int) -> ptr
-extern svnae_buf_length(b: ptr) -> int
-extern svnae_buf_data(b: ptr) -> string
-extern svnae_buf_free(b: ptr)
+// Round 176: std.zlib retired the C-side svnae_zlib_*/svnae_buf_*
+// shim. zlib.deflate / zlib.inflate return (string, int, error)
+// tuples; the previous opaque-buf handle dance is gone.
 
-extern aether_io_write_atomic(path: string, data: string, length: int) -> int
-extern aether_io_write_header_and_body(path: string, header: string, body: string, body_len: int) -> int
-extern aether_io_rename(from: string, to: string) -> int
-extern aether_io_is_regular_file(path: string) -> int
-extern aether_io_remove(path: string) -> int
+extern io_write_atomic(path: string, data: string, length: int) -> int
+extern io_write_header_and_body(path: string, header: string, body: string, body_len: int) -> int
+extern io_rename(from: string, to: string) -> int
+extern io_is_regular_file(path: string) -> int
+extern io_remove(path: string) -> int
 extern os_getpid_raw() -> int
-extern svnae_read_file(path: string, out_len: ptr) -> ptr
-extern svnae_read_file_length(b: ptr) -> int
-extern svnae_read_file_data(b: ptr) -> string
-extern svnae_read_file_free(b: ptr)
+// Round 185: switched to fs.read_binary.
 
 extern file_exists(path: string) -> int
 extern dir_exists(path: string) -> int
 
 // --- externs from fs_fs/shim.c ---------------------------------------------
 
-extern aether_io_read_file(path: string) -> string
+extern io_read_file(path: string) -> string
 
 extern svnae_fsfs_tree_builder_new() -> ptr
 extern svnae_fsfs_tree_builder_add(tb: ptr, path: string, kind: int, content: string, content_len: int) -> int
@@ -179,10 +175,9 @@ write_blob_text(repo: string, data: string) {
     if rep_cache_has(repo, sha1_copy) == 1 { return sha1_copy }
 
     storage = STORAGE_RAW
-    comp = svnae_zlib_deflate(data, n, 6)
+    comp, clen, cerr = zlib.deflate(data, n, 6)
     use_zlib = 0
-    if comp != 0 {
-        clen = svnae_buf_length(comp)
+    if string.length(cerr) == 0 {
         if clen + 16 < n {
             storage = STORAGE_ZLIB
             use_zlib = 1
@@ -199,16 +194,13 @@ write_blob_text(repo: string, data: string) {
     tmp = "${full}.tmp.${os_getpid_raw()}.0"
     wrc = 0
     if use_zlib == 1 {
-        wrc = aether_io_write_header_and_body(tmp, storage_hdr,
-                                              svnae_buf_data(comp),
-                                              svnae_buf_length(comp))
+        wrc = io_write_header_and_body(tmp, storage_hdr, comp, clen)
     } else {
-        wrc = aether_io_write_header_and_body(tmp, storage_hdr, data, n)
+        wrc = io_write_header_and_body(tmp, storage_hdr, data, n)
     }
-    if comp != 0 { svnae_buf_free(comp) }
-    if wrc != 0 { aether_io_remove(tmp); return "" }
-    rc = aether_io_rename(tmp, full)
-    if rc != 0 { aether_io_remove(tmp); return "" }
+    if wrc != 0 { io_remove(tmp); return "" }
+    rc = io_rename(tmp, full)
+    if rc != 0 { io_remove(tmp); return "" }
 
     rc = rep_cache_insert(repo, sha1_copy, rel, n, storage)
     if rc != 0 { return "" }
@@ -221,20 +213,17 @@ read_blob(repo: string, sha1_hex: string) {
     uncompressed = rep_cache_lookup_uncompressed_size(repo, sha1_hex)
     rel = rel_path_for_hash(sha1_hex)
     full = "${repo}/reps/${rel}"
-    raw_buf = svnae_read_file(full, 0)
-    if raw_buf == 0 { return "" }
-    total_len = svnae_read_file_length(raw_buf)
-    raw_ptr = svnae_read_file_data(raw_buf)
-    if total_len < 1 { svnae_read_file_free(raw_buf); return "" }
+    raw_ptr, total_len, rerr = fs.read_binary(full)
+    if string.length(rerr) > 0 { return "" }
+    if total_len < 1 { return "" }
     if storage == STORAGE_RAW {
-        body_str = string.substring(raw_ptr, 1, total_len)
-        svnae_read_file_free(raw_buf)
-        return body_str
+        return string.substring_n(raw_ptr, total_len, 1, total_len)
     }
-    inf = svnae_zlib_inflate_offset(raw_ptr, 1, total_len - 1, uncompressed)
-    svnae_read_file_free(raw_buf)
-    if inf == 0 { return "" }
-    return svnae_buf_data(inf)
+    body_compressed = string.substring_n(raw_ptr, total_len, 1, total_len)
+    out, _, ierr = zlib.inflate(body_compressed, total_len - 1)
+    if string.length(ierr) > 0 { return "" }
+    uncompressed = uncompressed
+    return out
 }
 
 // --- fs_fs init -------------------------------------------------------------
@@ -248,7 +237,7 @@ fsfs_init(path: string) {
     merr = fs.mkdir_p("${path}/revs")
     if string.length(merr) != 0 { return 12 }
 
-    rc = aether_io_write_atomic("${path}/format", "svnae-fsfs-1\n", 13)
+    rc = io_write_atomic("${path}/format", "svnae-fsfs-1\n", 13)
     if rc != 0 { return rc }
 
     db, oerr = sqlite.open("${path}/rep-cache.db")
@@ -263,16 +252,16 @@ fsfs_init(path: string) {
     rev0_body = "root: ${empty_dir_sha1}\nprev: 0\nauthor: (init)\ndate: ${os.now_utc_iso8601()}\nlog: initial empty revision\n"
     rev0_sha1 = write_blob_text(path, rev0_body)
 
-    rc = aether_io_write_atomic("${path}/revs/000000", "${rev0_sha1}\n", string.length(rev0_sha1) + 1)
+    rc = io_write_atomic("${path}/revs/000000", "${rev0_sha1}\n", string.length(rev0_sha1) + 1)
     if rc != 0 { return rc }
-    rc = aether_io_write_atomic("${path}/head", "0\n", 2)
+    rc = io_write_atomic("${path}/head", "0\n", 2)
     if rc != 0 { return rc }
     return 0
 }
 
 // Read the current head revision number (as int).
 fsfs_head_rev(repo: string) {
-    raw = aether_io_read_file("${repo}/head")
+    raw = io_read_file("${repo}/head")
     if string.length(raw) == 0 { return -1 }
     t = string.trim(raw)
     ok = string.try_int(t)
@@ -295,7 +284,7 @@ rev_file_path(repo: string, rev: int) {
 
 // Read the revision blob for rev `N`. Returns "" on failure.
 fsfs_load_rev_blob(repo: string, rev: int) {
-    raw = aether_io_read_file(rev_file_path(repo, rev))
+    raw = io_read_file(rev_file_path(repo, rev))
     if string.length(raw) == 0 { return "" }
     sha1_line = string.trim(raw)
     return read_blob(repo, sha1_line)
@@ -546,11 +535,11 @@ fsfs_commit_flat(repo: string, tb: ptr, author: string, logmsg: string) {
     // Persist revs/<N> pointing at rev_sha1 and bump head.
     rev_path = rev_file_path(repo, next)
     ptr_body = "${rev_sha1}\n"
-    rc = aether_io_write_atomic(rev_path, ptr_body, string.length(ptr_body))
+    rc = io_write_atomic(rev_path, ptr_body, string.length(ptr_body))
     if rc != 0 { return -1 }
 
     head_body = "${next}\n"
-    rc = aether_io_write_atomic("${repo}/head", head_body, string.length(head_body))
+    rc = io_write_atomic("${repo}/head", head_body, string.length(head_body))
     if rc != 0 { return -1 }
 
     return next
@@ -622,7 +611,7 @@ rmtree(path: string) { system("rm -rf '${path}'"); return 0 }
 count_rep_files(repo: string) {
     count_file = "/tmp/svnae_count_${os_getpid_raw()}.txt"
     system("find '${repo}/reps' -name '*.rep' | wc -l > '${count_file}'")
-    raw = aether_io_read_file(count_file)
+    raw = io_read_file(count_file)
     if string.length(raw) == 0 { return -1 }
     t = string.trim(raw)
     return string.get_int(t)

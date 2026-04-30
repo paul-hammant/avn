@@ -38,15 +38,15 @@ extern svnae_wc_node_conflicted(n: ptr) -> int
 extern svnae_wc_node_free(n: ptr)
 
 // Sidecar suffix probes (ae/wc/sidecar.ae).
-extern aether_is_sidecar_suffix(s: string) -> int
-extern aether_sidecar_rev(suffix: string) -> int
+extern is_sidecar_suffix(s: string) -> int
+extern sidecar_rev(suffix: string) -> int
 
 // Listdir + io.
-extern aether_io_listdir(path: string) -> ptr
-extern aether_io_listdir_count(handle: ptr) -> int
-extern aether_io_listdir_name(handle: ptr, index: int) -> string
-extern aether_io_listdir_free(handle: ptr)
-extern aether_io_unlink(path: string) -> int
+extern io_listdir(path: string) -> ptr
+extern io_listdir_count(handle: ptr) -> int
+extern io_listdir_name(handle: ptr, index: int) -> string
+extern io_listdir_free(handle: ptr)
+extern io_unlink(path: string) -> int
 
 // Split rel_path at the last '/'. Returns (dir-part-relative-to-wc-root,
 // basename). If rel_path has no '/', dir-part is "" so caller composes
@@ -85,27 +85,27 @@ copy_overwrite_(src: string, dst: string) -> int {
 // whose stem matches `base`.
 remove_sidecars_(dirpath: string, base: string) {
     blen = string.length(base)
-    d = aether_io_listdir(dirpath)
+    d = io_listdir(dirpath)
     if d == null { return 0 }
-    n_entries = aether_io_listdir_count(d)
+    n_entries = io_listdir_count(d)
     i = 0
     while i < n_entries {
-        name = aether_io_listdir_name(d, i)
+        name = io_listdir_name(d, i)
         nlen = string.length(name)
         if nlen > blen + 1 {
             stem = string.substring(name, 0, blen)
             if string.equals(stem, base) == 1 {
                 if string.char_at(name, blen) == 46 {   // '.'
                     suffix = string.substring(name, blen + 1, nlen)
-                    if aether_is_sidecar_suffix(suffix) == 1 {
-                        aether_io_unlink("${dirpath}/${name}")
+                    if is_sidecar_suffix(suffix) == 1 {
+                        io_unlink("${dirpath}/${name}")
                     }
                 }
             }
         }
         i = i + 1
     }
-    aether_io_listdir_free(d)
+    io_listdir_free(d)
     return 0
 }
 
@@ -117,26 +117,26 @@ remove_sidecars_(dirpath: string, base: string) {
 find_theirs_sidecar_(dirpath: string, base: string) -> string {
     blen = string.length(base)
     best_rev = 0 - 1
-    d = aether_io_listdir(dirpath)
+    d = io_listdir(dirpath)
     if d == null { return "" }
-    n_entries = aether_io_listdir_count(d)
+    n_entries = io_listdir_count(d)
     i = 0
     while i < n_entries {
-        name = aether_io_listdir_name(d, i)
+        name = io_listdir_name(d, i)
         nlen = string.length(name)
         if nlen > blen + 1 {
             stem = string.substring(name, 0, blen)
             if string.equals(stem, base) == 1 {
                 if string.char_at(name, blen) == 46 {
                     suffix = string.substring(name, blen + 1, nlen)
-                    nv = aether_sidecar_rev(suffix)
+                    nv = sidecar_rev(suffix)
                     if nv > best_rev { best_rev = nv }
                 }
             }
         }
         i = i + 1
     }
-    aether_io_listdir_free(d)
+    io_listdir_free(d)
     if best_rev < 0 { return "" }
     return "${dirpath}/${base}.r${best_rev}"
 }

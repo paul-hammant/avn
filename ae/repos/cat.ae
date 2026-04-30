@@ -1,0 +1,46 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+
+// svnae_repos_cat — read file content at (rev, path) from the
+// repository. Round 174 retires the C-side wrapper in
+// ae/repos/shim.c (57 lines) once #297 auto-unwrap and refcounted
+// AetherString returns made the wrap-then-detach dance unnecessary.
+//
+// Round 174 also leans on the resolve helpers being Aether-side
+// (Round 154 family) — there's no longer any C-side rebuild
+// pressure that needed a synchronous plain-char* return.
+
+import std.string
+
+extern repos_load_rev_blob_field(repo: string, rev: int, key: string) -> string
+extern resolve_kind(repo: string, root_sha: string, path: string) -> int
+extern resolve_sha (repo: string, root_sha: string, path: string) -> string
+extern svnae_rep_read_blob(repo: string, sha1_hex: string) -> string
+
+const KIND_FILE = 102   // 'f'
+
+export svnae_repos_cat(repo: string, rev: int, path: string) -> string {
+    root = repos_load_rev_blob_field(repo, rev, "root")
+    if string.length(root) == 0 { return "" }
+
+    // Detach: the resolve helpers may return pointers into a
+    // runtime-reused buffer.
+    root = string.copy(root)
+
+    k = resolve_kind(repo, root, path)
+    if k != KIND_FILE { return "" }
+
+    sha = resolve_sha(repo, root, path)
+    if string.length(sha) == 0 { return "" }
+    return svnae_rep_read_blob(repo, sha)
+}
+
+main() {
+    println("ae/repos/cat.ae is a library; not meant to run standalone")
+}

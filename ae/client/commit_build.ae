@@ -54,7 +54,7 @@ extern svnae_crypto_b64_encode(data: string, length: int) -> string
 // Append `record` to the "<count>\x02<recs...>\x02" packed string
 // `cur`. count is passed in (caller stores it C-side); returns the
 // new packed string. The new record gets a trailing \x02 separator
-// — same shape ae/ra/parse.ae expects on the read side.
+// — same shape ae/client/parse.ae expects on the read side.
 pack_append_(cur: string, count: int, record: string) -> string {
     new_count = count + 1
     if string.length(cur) == 0 {
@@ -139,7 +139,7 @@ export svnae_ra_commit_set_prop(cb: ptr, path: string, key: string, value: strin
 }
 
 // Round 62: the C builder accumulates each collection (edits / props /
-// acls) as a single packed string in the same shape ae/ra/parse.ae
+// acls) as a single packed string in the same shape ae/client/parse.ae
 // produces on the read side:
 //   "<count>\x02<rec0>\x02<rec1>\x02..."   with records joined by \x01
 // Walking the buffer with split is one pass per buffer instead of 5
@@ -352,5 +352,5 @@ export ra_branch_create_build_body(base: string, includes_joined: string) -> str
 }
 
 main() {
-    println("ae/ra/commit_build.ae is a library; not meant to run standalone")
+    println("ae/client/commit_build.ae is a library; not meant to run standalone")
 }

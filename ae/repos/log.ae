@@ -15,18 +15,18 @@
 
 // Server-side log enumeration: read every rev blob from rev 0 to HEAD,
 // pack author/date/msg into the same "<N>\x02<rev>\x01<author>\x01
-// <date>\x01<msg>\x02..." string shape that ae/ra/parse.ae::ra_parse_log
+// <date>\x01<msg>\x02..." string shape that ae/client/parse.ae::ra_parse_log
 // produces for the client side. The C accessors in ae/repos/shim.c
-// consume it via the `ra_log_*` accessor family in ae/ra/packed.ae
+// consume it via the `ra_log_*` accessor family in ae/client/packed.ae
 // (the record shapes are identical, so we reuse those rather than
 // duplicate the walkers here).
 
 import std.string
 import std.intarr
 
-extern aether_repos_head_rev(repo: string) -> int
-extern aether_repos_rev_blob_sha(repo: string, rev: int) -> string
-extern aether_blobfield_get(body: string, key: string) -> string
+extern repos_head_rev(repo: string) -> int
+extern repos_rev_blob_sha(repo: string, rev: int) -> string
+extern blobfield_get(body: string, key: string) -> string
 
 // Borrowed from fs_fs/rep_store_shim.c.
 extern svnae_rep_read_blob(repo: string, sha1_hex: string) -> string
@@ -36,33 +36,33 @@ extern svnae_rep_free(p: string)
 // revs and detect deletes), resolve_path + rep_read_blob for content,
 // and repos_info_packed for the author attribution. All already
 // ported in sibling modules.
-extern aether_paths_changed_packed(repo: string, rev: int) -> string
-extern aether_ra_paths_count(packed: string) -> int
-extern aether_ra_paths_action(packed: string, i: int) -> string
-extern aether_ra_paths_path(packed: string, i: int) -> string
+extern paths_changed_packed(repo: string, rev: int) -> string
+extern ra_paths_count(packed: string) -> int
+extern ra_paths_action(packed: string, i: int) -> string
+extern ra_paths_path(packed: string, i: int) -> string
 
-extern aether_repos_load_rev_blob_field(repo: string, rev: int, key: string) -> string
-extern aether_resolve_kind(repo: string, root_sha: string, path: string) -> int
-extern aether_resolve_sha(repo: string, root_sha: string, path: string) -> string
+extern repos_load_rev_blob_field(repo: string, rev: int, key: string) -> string
+extern resolve_kind(repo: string, root_sha: string, path: string) -> int
+extern resolve_sha(repo: string, root_sha: string, path: string) -> string
 
 export repos_log_packed(repo: string) -> string {
-    head = aether_repos_head_rev(repo)
+    head = repos_head_rev(repo)
     if head < 0 { return "" }
 
     n = head + 1
     out = ""
     r = 0
     while r <= head {
-        sha = aether_repos_rev_blob_sha(repo, r)
+        sha = repos_rev_blob_sha(repo, r)
         author = ""
         date   = ""
         msg    = ""
         if string.length(sha) > 0 {
             body = svnae_rep_read_blob(repo, sha)
             if string.length(body) > 0 {
-                author = string.copy(aether_blobfield_get(body, "author"))
-                date   = string.copy(aether_blobfield_get(body, "date"))
-                msg    = string.copy(aether_blobfield_get(body, "log"))
+                author = string.copy(blobfield_get(body, "author"))
+                date   = string.copy(blobfield_get(body, "date"))
+                msg    = string.copy(blobfield_get(body, "log"))
                 svnae_rep_free(body)
             }
         }
@@ -91,11 +91,11 @@ export repos_log_packed(repo: string) -> string {
 // Single-revision metadata. Returns a "\x01"-separated 4-field record
 // "<rev>\x01<author>\x01<date>\x01<msg>" matching the first four
 // fields of ra_parse_info_rev's output, so the C side can reuse
-// ra_info_rev/author/date/msg accessors from ae/ra/packed.ae.
+// ra_info_rev/author/date/msg accessors from ae/client/packed.ae.
 // Empty string on miss (no rev pointer, or rev blob missing "root").
 
 export repos_info_packed(repo: string, rev: int) -> string {
-    sha = aether_repos_rev_blob_sha(repo, rev)
+    sha = repos_rev_blob_sha(repo, rev)
     if string.length(sha) == 0 { return "" }
     body = svnae_rep_read_blob(repo, sha)
     if string.length(body) == 0 { return "" }
@@ -103,15 +103,15 @@ export repos_info_packed(repo: string, rev: int) -> string {
     // "root" field acts as existence sentinel — every valid rev
     // blob carries one. Field-absent vs rev-absent matter to the
     // C caller who returns NULL for both, so treat both as miss.
-    root = aether_blobfield_get(body, "root")
+    root = blobfield_get(body, "root")
     if string.length(root) == 0 {
         svnae_rep_free(body)
         return ""
     }
 
-    author = string.copy(aether_blobfield_get(body, "author"))
-    date   = string.copy(aether_blobfield_get(body, "date"))
-    msg    = string.copy(aether_blobfield_get(body, "log"))
+    author = string.copy(blobfield_get(body, "author"))
+    date   = string.copy(blobfield_get(body, "date"))
+    msg    = string.copy(blobfield_get(body, "log"))
     svnae_rep_free(body)
 
     out = string.concat(string.from_int(rev), "\x01")
@@ -141,7 +141,7 @@ export repos_info_packed(repo: string, rev: int) -> string {
 //
 // Returns a packed "N\x02<rev>\x01<author>\x01<text>\x02..." string
 // matching ra_parse_blame's output, so the C side reuses the
-// ra_blame_* accessors from ae/ra/packed.ae.
+// ra_blame_* accessors from ae/client/packed.ae.
 
 // ----------------------------------------------------------------------------
 // Content fetch: resolve (rev, path) to a file sha, then read its blob.
@@ -149,13 +149,13 @@ export repos_info_packed(repo: string, rev: int) -> string {
 // non-file.
 
 cat_rev_path(repo: string, rev: int, path: string) -> string {
-    root = aether_repos_load_rev_blob_field(repo, rev, "root")
+    root = repos_load_rev_blob_field(repo, rev, "root")
     if string.length(root) == 0 { return "" }
-    // Snapshot — aether_repos_load_rev_blob_field returns into TLS.
+    // Snapshot — repos_load_rev_blob_field returns into TLS.
     root_copy = string.copy(root)
-    k = aether_resolve_kind(repo, root_copy, path)
+    k = resolve_kind(repo, root_copy, path)
     if k != 102 { return "" }   // 102 = 'f'
-    sha = aether_resolve_sha(repo, root_copy, path)
+    sha = resolve_sha(repo, root_copy, path)
     if string.length(sha) == 0 { return "" }
     sha_copy = string.copy(sha)
     return svnae_rep_read_blob(repo, sha_copy)
@@ -427,7 +427,7 @@ step_rev(rev: int, author: string,
 
 export repos_blame_packed(repo: string, target_rev: int, path: string) -> string {
     if target_rev < 0 {
-        target_rev = aether_repos_head_rev(repo)
+        target_rev = repos_head_rev(repo)
     }
     if target_rev < 1 { return "" }
 
@@ -441,15 +441,15 @@ export repos_blame_packed(repo: string, target_rev: int, path: string) -> string
         // Did this rev touch `path`?
         touches = 0
         action = ""
-        paths = aether_paths_changed_packed(repo, r)
+        paths = paths_changed_packed(repo, r)
         if string.length(paths) > 0 {
-            pn = aether_ra_paths_count(paths)
+            pn = ra_paths_count(paths)
             pi = 0
             while pi < pn {
-                p = aether_ra_paths_path(paths, pi)
+                p = ra_paths_path(paths, pi)
                 if string.equals(p, path) == 1 {
                     touches = 1
-                    a = aether_ra_paths_action(paths, pi)
+                    a = ra_paths_action(paths, pi)
                     action = string.copy(a)
                     break
                 }

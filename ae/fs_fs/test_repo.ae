@@ -19,27 +19,24 @@
 
 import std.fs
 import std.string
+import std.zlib
 
 // --- externs from subr shims ------------------------------------------------
 
 extern svnae_crypto_hash_hex(algo: string, data: string, length: int) -> string
 
-extern svnae_zlib_deflate(data: string, data_len: int, level: int) -> ptr
-extern svnae_zlib_inflate_offset(base: string, offset: int, data_len: int, expected_out: int) -> ptr
-extern svnae_buf_length(b: ptr) -> int
-extern svnae_buf_data(b: ptr) -> string
-extern svnae_buf_free(b: ptr)
+// Round 176: std.zlib retired the C-side svnae_zlib_*/svnae_buf_*
+// shim. zlib.deflate / zlib.inflate return (string, int, error) tuples;
+// the previous opaque-buf handle dance is gone.
 
-extern aether_io_write_atomic(path: string, data: string, length: int) -> int
-extern aether_io_write_header_and_body(path: string, header: string, body: string, body_len: int) -> int
-extern aether_io_rename(from: string, to: string) -> int
-extern aether_io_is_regular_file(path: string) -> int
-extern aether_io_remove(path: string) -> int
+extern io_write_atomic(path: string, data: string, length: int) -> int
+extern io_write_header_and_body(path: string, header: string, body: string, body_len: int) -> int
+extern io_rename(from: string, to: string) -> int
+extern io_is_regular_file(path: string) -> int
+extern io_remove(path: string) -> int
 extern os_getpid_raw() -> int
-extern svnae_read_file(path: string, out_len: ptr) -> ptr
-extern svnae_read_file_length(b: ptr) -> int
-extern svnae_read_file_data(b: ptr) -> string
-extern svnae_read_file_free(b: ptr)
+// Round 185: switched to fs.read_binary (already shipped) — no
+// more buf carrier, no manual free, length-aware return.
 
 extern file_exists(path: string) -> int
 extern dir_exists(path: string) -> int
@@ -60,7 +57,7 @@ create_repo(path: string) {
     reps = "${path}/reps"
     merr = fs.mkdir_p(reps)
     if string.length(merr) != 0 { return 11 }
-    rc = aether_io_write_atomic("${path}/format", "svnae-fsfs-1\n", 13)
+    rc = io_write_atomic("${path}/format", "svnae-fsfs-1\n", 13)
     if rc != 0 { return rc }
     db, oerr = sqlite.open("${path}/rep-cache.db")
     if string.length(oerr) > 0 { return 3 }
@@ -150,10 +147,9 @@ write_blob(repo: string, data: string) {
     if rep_cache_has(repo, sha1_copy) == 1 { return sha1_copy }
 
     storage = STORAGE_RAW
-    comp = svnae_zlib_deflate(data, n, 6)
+    comp, clen, cerr = zlib.deflate(data, n, 6)
     use_zlib = 0
-    if comp != 0 {
-        clen = svnae_buf_length(comp)
+    if string.length(cerr) == 0 {
         if clen + 16 < n {
             storage = STORAGE_ZLIB
             use_zlib = 1
@@ -169,22 +165,14 @@ write_blob(repo: string, data: string) {
 
     tmp = "${full}.tmp.${os_getpid_raw()}.0"
     wrc = 0
-    // ZLIB payloads can contain NULs but the explicit-length write path
-    // is binary-safe: svnae_buf_data hands us a plain char*, the .ae
-    // extern auto-unwrap (#297) is a no-op on plain pointers, and
-    // io_write_header_and_body's std.bytes path uses the caller's
-    // length end-to-end (no strlen).
     if use_zlib == 1 {
-        wrc = aether_io_write_header_and_body(tmp, storage_hdr,
-                                              svnae_buf_data(comp),
-                                              svnae_buf_length(comp))
+        wrc = io_write_header_and_body(tmp, storage_hdr, comp, clen)
     } else {
-        wrc = aether_io_write_header_and_body(tmp, storage_hdr, data, n)
+        wrc = io_write_header_and_body(tmp, storage_hdr, data, n)
     }
-    if comp != 0 { svnae_buf_free(comp) }
-    if wrc != 0 { aether_io_remove(tmp); return "" }
-    rc = aether_io_rename(tmp, full)
-    if rc != 0 { aether_io_remove(tmp); return "" }
+    if wrc != 0 { io_remove(tmp); return "" }
+    rc = io_rename(tmp, full)
+    if rc != 0 { io_remove(tmp); return "" }
 
     rc = rep_cache_insert(repo, sha1_copy, rel, n, storage)
     if rc != 0 { return "" }
@@ -198,28 +186,21 @@ read_blob(repo: string, sha1_hex: string) {
     rel = rel_path_for_hash(sha1_hex)
     full = "${repo}/reps/${rel}"
 
-    // Binary-safe read: fs.read's strlen-based copy breaks on zlib blobs.
-    raw_buf = svnae_read_file(full, 0)
-    if raw_buf == 0 { return "" }
-    total_len = svnae_read_file_length(raw_buf)
-    raw_ptr = svnae_read_file_data(raw_buf)
-    if total_len < 1 { svnae_read_file_free(raw_buf); return "" }
+    raw_ptr, total_len, rerr = fs.read_binary(full)
+    if string.length(rerr) > 0 { return "" }
+    if total_len < 1 { return "" }
 
     if storage == STORAGE_RAW {
-        body_str = string.substring(raw_ptr, 1, total_len)
-        svnae_read_file_free(raw_buf)
-        return body_str
+        return string.substring_n(raw_ptr, total_len, 1, total_len)
     }
 
-    inf = svnae_zlib_inflate_offset(raw_ptr, 1, total_len - 1, uncompressed)
-    svnae_read_file_free(raw_buf)
-    if inf == 0 { return "" }
-    // Return the buf's data pointer. The buf struct itself leaks (~16 bytes
-    // per read). A proper owned-string return type will come when Aether's
-    // cross-module `ptr` typing is fixed and we can hoist this into the
-    // module boundary. Bytes are NUL-terminated by buf_new so strlen-based
-    // operations on the result are safe.
-    return svnae_buf_data(inf)
+    body_compressed = string.substring_n(raw_ptr, total_len, 1, total_len)
+    out, _, ierr = zlib.inflate(body_compressed, total_len - 1)
+    if string.length(ierr) > 0 { return "" }
+    // Silence the unused-warning for `uncompressed` — kept as the
+    // historical sanity check on the rep-cache size column.
+    uncompressed = uncompressed
+    return out
 }
 
 // --- test harness ----------------------------------------------------------

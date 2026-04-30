@@ -25,7 +25,7 @@ import std.string
 
 // --- Phase 3.x plumbing (init + txn commit) -------------------------------
 
-extern aether_rep_write_blob(repo: string, data: string, len: int) -> string
+extern rep_write_blob(repo: string, data: string, len: int) -> string
 extern svnae_rep_read_blob(repo: string, sha1_hex: string) -> string
 extern svnae_rep_free(p: string)
 
@@ -35,19 +35,19 @@ extern svnae_txn_add_file(t: ptr, path: string, content: string, len: int) -> in
 extern svnae_txn_mkdir(t: ptr, path: string) -> int
 extern svnae_txn_delete(t: ptr, path: string) -> int
 extern svnae_txn_free(t: ptr)
-extern aether_rebuild_dir(repo: string, base_dir_sha: string, prefix: string, t: ptr) -> string
+extern rebuild_dir(repo: string, base_dir_sha: string, prefix: string, t: ptr) -> string
 
-extern aether_io_write_atomic(path: string, data: string, length: int) -> int
+extern io_write_atomic(path: string, data: string, length: int) -> int
 extern os_getpid_raw() -> int
 extern dir_exists(path: string) -> int
 
-extern aether_io_read_file(path: string) -> string
+extern io_read_file(path: string) -> string
 
 import contrib.sqlite
 
 // --- repos shim externs ----------------------------------------------------
 
-extern aether_repos_head_rev(repo: string) -> int
+extern repos_head_rev(repo: string) -> int
 
 extern svnae_repos_log(repo: string) -> ptr
 extern svnae_repos_log_count(lg: ptr) -> int
@@ -83,7 +83,7 @@ fsfs_init(path: string) {
     if string.length(merr) != 0 { return 11 }
     merr = fs.mkdir_p("${path}/revs")
     if string.length(merr) != 0 { return 12 }
-    rc = aether_io_write_atomic("${path}/format", "svnae-fsfs-1\n", 13)
+    rc = io_write_atomic("${path}/format", "svnae-fsfs-1\n", 13)
     if rc != 0 { return rc }
     db, oerr = sqlite.open("${path}/rep-cache.db")
     if string.length(oerr) > 0 { return 3 }
@@ -92,14 +92,14 @@ fsfs_init(path: string) {
     sqlite.close(db)
     if string.length(err) > 0 { return 4 }
 
-    empty_sha = aether_rep_write_blob(path, "", 0)
+    empty_sha = rep_write_blob(path, "", 0)
     empty_copy = string.concat("", empty_sha)
     rev0 = "root: ${empty_copy}\nprev: 0\nauthor: (init)\ndate: ${os.now_utc_iso8601()}\nlog: initial empty revision\n"
-    rev0_sha = aether_rep_write_blob(path, rev0, string.length(rev0))
+    rev0_sha = rep_write_blob(path, rev0, string.length(rev0))
     rev0_copy = string.concat("", rev0_sha)
-    rc = aether_io_write_atomic("${path}/revs/000000", "${rev0_copy}\n", string.length(rev0_copy) + 1)
+    rc = io_write_atomic("${path}/revs/000000", "${rev0_copy}\n", string.length(rev0_copy) + 1)
     if rc != 0 { return rc }
-    rc = aether_io_write_atomic("${path}/head", "0\n", 2)
+    rc = io_write_atomic("${path}/head", "0\n", 2)
     if rc != 0 { return rc }
     return 0
 }
@@ -142,7 +142,7 @@ parse_line_value(body: string, key: string) {
 }
 
 rev_root_sha1(repo: string, rev: int) {
-    raw = aether_io_read_file(rev_file_path(repo, rev))
+    raw = io_read_file(rev_file_path(repo, rev))
     if string.length(raw) == 0 { return "" }
     rev_blob_sha1 = string.trim(raw)
     rev_body = svnae_rep_read_blob(repo, rev_blob_sha1)
@@ -153,7 +153,7 @@ rev_root_sha1(repo: string, rev: int) {
 }
 
 fsfs_head_rev(repo: string) {
-    raw = aether_io_read_file("${repo}/head")
+    raw = io_read_file("${repo}/head")
     if string.length(raw) == 0 { return -1 }
     t = string.trim(raw)
     if string.try_int(t) == 0 { return -1 }
@@ -164,18 +164,18 @@ commit_txn(repo: string, txn: ptr, author: string, logmsg: string) {
     base_rev = svnae_txn_base_rev(txn)
     base_root = rev_root_sha1(repo, base_rev)
     if string.length(base_root) == 0 { return -1 }
-    new_root = aether_rebuild_dir(repo, base_root, "", txn)
+    new_root = rebuild_dir(repo, base_root, "", txn)
     if string.length(new_root) == 0 { return -1 }
     new_root = string.copy(new_root)
     prev = fsfs_head_rev(repo)
     next = prev + 1
     rev_body = "root: ${new_root}\nprev: ${prev}\nauthor: ${author}\ndate: ${os.now_utc_iso8601()}\nlog: ${logmsg}\n"
-    rev_sha_raw = aether_rep_write_blob(repo, rev_body, string.length(rev_body))
+    rev_sha_raw = rep_write_blob(repo, rev_body, string.length(rev_body))
     rev_sha = string.concat("", rev_sha_raw)
     ptr_body = "${rev_sha}\n"
-    rc = aether_io_write_atomic(rev_file_path(repo, next), ptr_body, string.length(ptr_body))
+    rc = io_write_atomic(rev_file_path(repo, next), ptr_body, string.length(ptr_body))
     if rc != 0 { return -1 }
-    rc = aether_io_write_atomic("${repo}/head", "${next}\n", string.length("${next}\n"))
+    rc = io_write_atomic("${repo}/head", "${next}\n", string.length("${next}\n"))
     if rc != 0 { return -1 }
     return next
 }
@@ -233,7 +233,7 @@ main() {
     fails = fails + expect_int("commit 3 rev", r3, 3)
 
     // --- head_rev ---
-    fails = fails + expect_int("head rev", aether_repos_head_rev(repo), 3)
+    fails = fails + expect_int("head rev", repos_head_rev(repo), 3)
 
     // --- log ---
     lg = svnae_repos_log(repo)

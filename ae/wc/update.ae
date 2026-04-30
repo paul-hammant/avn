@@ -59,13 +59,13 @@ extern svnae_rtree_free(rt: ptr)
 // through to walk_remote (Round 140 retired the C-side TLS
 // pointer); add_file uses it to compute per-file sha1 at
 // add-time.
-extern aether_update_walk_remote(wc_root: string,
+extern update_walk_remote(wc_root: string,
                                   base_url: string, repo: string,
                                   rev: int, prefix: string, rt: ptr) -> int
-extern aether_update_apply_pass_a(wc_root: string, base_url: string,
+extern update_apply_pass_a(wc_root: string, base_url: string,
                                    repo: string, target_rev: int,
                                    rt: ptr, L: ptr, db: ptr) -> int
-extern aether_update_apply_pass_b(wc_root: string, base_url: string,
+extern update_apply_pass_b(wc_root: string, base_url: string,
                                    repo: string, target_rev: int,
                                    rt: ptr, L: ptr, db: ptr)
 
@@ -108,7 +108,7 @@ svnae_wc_update_impl(wc_root: string, target_rev: int) -> int {
     // explicitly so rtree_add can compute per-file hashes during the
     // walk.
     rt = svnae_rtree_new()
-    if aether_update_walk_remote(wc_root, base_url, repo, target_rev, "", rt) != 0 {
+    if update_walk_remote(wc_root, base_url, repo, target_rev, "", rt) != 0 {
         svnae_rtree_free(rt)
         svnae_wc_db_close(db)
         return 0 - 1
@@ -118,8 +118,8 @@ svnae_wc_update_impl(wc_root: string, target_rev: int) -> int {
     L = svnae_wc_db_list_nodes(db)
 
     // 3. + 4. Two-pass apply (Aether-side).
-    aether_update_apply_pass_a(wc_root, base_url, repo, target_rev, rt, L, db)
-    aether_update_apply_pass_b(wc_root, base_url, repo, target_rev, rt, L, db)
+    update_apply_pass_a(wc_root, base_url, repo, target_rev, rt, L, db)
+    update_apply_pass_b(wc_root, base_url, repo, target_rev, rt, L, db)
 
     // 5. Bump base_rev in info.
     svnae_wc_db_set_info(db, "base_rev", "${target_rev}")

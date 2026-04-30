@@ -25,110 +25,111 @@
 
 import std.string
 
-// Aether-side packed-record producers (already exist).
-extern aether_repos_log_packed(repo: string) -> string
-extern aether_repos_list_packed(repo: string, rev: int, path: string) -> string
-extern aether_repos_info_packed(repo: string, rev: int) -> string
-extern aether_paths_changed_packed(repo: string, rev: int) -> string
-extern aether_repos_blame_packed(repo: string, target_rev: int, path: string) -> string
+// Aether-side packed-record producers (defined in repos/{log,
+// list_packed,paths_changed}.ae).
+extern repos_log_packed(repo: string) -> string
+extern repos_list_packed(repo: string, rev: int, path: string) -> string
+extern repos_info_packed(repo: string, rev: int) -> string
+extern paths_changed_packed(repo: string, rev: int) -> string
+extern repos_blame_packed(repo: string, target_rev: int, path: string) -> string
 
-// Accessor parsers (defined in ae/ra/packed.ae).
-extern aether_ra_log_count(packed: string) -> int
-extern aether_ra_log_rev(packed: string, i: int) -> int
-extern aether_ra_log_author(packed: string, i: int) -> string
-extern aether_ra_log_date(packed: string, i: int) -> string
-extern aether_ra_log_msg(packed: string, i: int) -> string
+// Accessor parsers (defined in ae/client/packed.ae).
+extern ra_log_count(packed: string) -> int
+extern ra_log_rev(packed: string, i: int) -> int
+extern ra_log_author(packed: string, i: int) -> string
+extern ra_log_date(packed: string, i: int) -> string
+extern ra_log_msg(packed: string, i: int) -> string
 
-extern aether_ra_list_count(packed: string) -> int
-extern aether_ra_list_name(packed: string, i: int) -> string
-extern aether_ra_list_kind(packed: string, i: int) -> string
+extern ra_list_count(packed: string) -> int
+extern ra_list_name(packed: string, i: int) -> string
+extern ra_list_kind(packed: string, i: int) -> string
 
-extern aether_ra_info_rev(packed: string) -> int
-extern aether_ra_info_author(packed: string) -> string
-extern aether_ra_info_date(packed: string) -> string
-extern aether_ra_info_msg(packed: string) -> string
+extern ra_info_rev(packed: string) -> int
+extern ra_info_author(packed: string) -> string
+extern ra_info_date(packed: string) -> string
+extern ra_info_msg(packed: string) -> string
 
-extern aether_ra_paths_count(packed: string) -> int
-extern aether_ra_paths_action(packed: string, i: int) -> string
-extern aether_ra_paths_path(packed: string, i: int) -> string
+extern ra_paths_count(packed: string) -> int
+extern ra_paths_action(packed: string, i: int) -> string
+extern ra_paths_path(packed: string, i: int) -> string
 
-extern aether_ra_blame_count(packed: string) -> int
-extern aether_ra_blame_rev(packed: string, i: int) -> int
-extern aether_ra_blame_author(packed: string, i: int) -> string
-extern aether_ra_blame_text(packed: string, i: int) -> string
+extern ra_blame_count(packed: string) -> int
+extern ra_blame_rev(packed: string, i: int) -> int
+extern ra_blame_author(packed: string, i: int) -> string
+extern ra_blame_text(packed: string, i: int) -> string
 
 // ---- log handle ----------------------------------------------
 
 export svnae_repos_log(repo: string) -> ptr {
-    p = aether_repos_log_packed(repo)
+    p = repos_log_packed(repo)
     if string.length(p) == 0 { return null }
     return string.copy(p)
 }
 export svnae_repos_log_count (lg: ptr) -> int {
     if lg == null { return 0 }
-    return aether_ra_log_count(lg)
+    return ra_log_count(lg)
 }
 export svnae_repos_log_rev   (lg: ptr, i: int) -> int {
     if lg == null { return 0 - 1 }
-    return aether_ra_log_rev(lg, i)
+    return ra_log_rev(lg, i)
 }
 export svnae_repos_log_author(lg: ptr, i: int) -> string {
     if lg == null { return "" }
-    return aether_ra_log_author(lg, i)
+    return ra_log_author(lg, i)
 }
 export svnae_repos_log_date  (lg: ptr, i: int) -> string {
     if lg == null { return "" }
-    return aether_ra_log_date(lg, i)
+    return ra_log_date(lg, i)
 }
 export svnae_repos_log_msg   (lg: ptr, i: int) -> string {
     if lg == null { return "" }
-    return aether_ra_log_msg(lg, i)
+    return ra_log_msg(lg, i)
 }
 export svnae_repos_log_free  (lg: ptr) { return 0 }
 
 // ---- list handle ---------------------------------------------
 
 export svnae_repos_list(repo: string, rev: int, path: string) -> ptr {
-    p = aether_repos_list_packed(repo, rev, path)
+    p = repos_list_packed(repo, rev, path)
     if string.length(p) == 0 { return null }
     return string.copy(p)
 }
 export svnae_repos_list_count(L: ptr) -> int {
     if L == null { return 0 }
-    return aether_ra_list_count(L)
+    return ra_list_count(L)
 }
 export svnae_repos_list_name (L: ptr, i: int) -> string {
     if L == null { return "" }
-    return aether_ra_list_name(L, i)
+    return ra_list_name(L, i)
 }
 export svnae_repos_list_kind (L: ptr, i: int) -> string {
     if L == null { return "" }
-    return aether_ra_list_kind(L, i)
+    return ra_list_kind(L, i)
 }
 export svnae_repos_list_free (L: ptr) { return 0 }
 
 // ---- info handle (single-record) -----------------------------
 
 export svnae_repos_info_rev(repo: string, rev: int) -> ptr {
-    p = aether_repos_info_packed(repo, rev)
+    p = repos_info_packed(repo, rev)
     if string.length(p) == 0 { return null }
     return string.copy(p)
 }
 export svnae_repos_info_rev_num(I: ptr) -> int {
     if I == null { return 0 - 1 }
-    return aether_ra_info_rev(I)
+    return ra_info_rev(I)
 }
 export svnae_repos_info_author(I: ptr) -> string {
     if I == null { return "" }
-    return aether_ra_info_author(I)
+    return ra_info_author(I)
 }
 export svnae_repos_info_date  (I: ptr) -> string {
     if I == null { return "" }
-    return aether_ra_info_date(I)
+    return ra_info_date(I)
 }
 export svnae_repos_info_msg   (I: ptr) -> string {
     if I == null { return "" }
-    return aether_ra_info_msg(I)
+    return ra_info_msg(I)
 }
 export svnae_repos_info_free  (I: ptr) { return 0 }
 
@@ -136,46 +137,46 @@ export svnae_repos_info_free  (I: ptr) { return 0 }
 
 export svnae_repos_paths_changed(repo: string, rev: int) -> ptr {
     if rev < 0 { return null }
-    p = aether_paths_changed_packed(repo, rev)
+    p = paths_changed_packed(repo, rev)
     if string.length(p) == 0 { return null }
     return string.copy(p)
 }
 export svnae_repos_paths_count (P: ptr) -> int {
     if P == null { return 0 }
-    return aether_ra_paths_count(P)
+    return ra_paths_count(P)
 }
 export svnae_repos_paths_path  (P: ptr, i: int) -> string {
     if P == null { return "" }
-    return aether_ra_paths_path(P, i)
+    return ra_paths_path(P, i)
 }
 export svnae_repos_paths_action(P: ptr, i: int) -> string {
     if P == null { return "" }
-    return aether_ra_paths_action(P, i)
+    return ra_paths_action(P, i)
 }
 export svnae_repos_paths_free  (P: ptr) { return 0 }
 
 // ---- blame handle --------------------------------------------
 
 export svnae_repos_blame(repo: string, target_rev: int, path: string) -> ptr {
-    p = aether_repos_blame_packed(repo, target_rev, path)
+    p = repos_blame_packed(repo, target_rev, path)
     if string.length(p) == 0 { return null }
     return string.copy(p)
 }
 export svnae_blame_count (B: ptr) -> int {
     if B == null { return 0 }
-    return aether_ra_blame_count(B)
+    return ra_blame_count(B)
 }
 export svnae_blame_rev   (B: ptr, i: int) -> int {
     if B == null { return 0 - 1 }
-    return aether_ra_blame_rev(B, i)
+    return ra_blame_rev(B, i)
 }
 export svnae_blame_author(B: ptr, i: int) -> string {
     if B == null { return "" }
-    return aether_ra_blame_author(B, i)
+    return ra_blame_author(B, i)
 }
 export svnae_blame_text  (B: ptr, i: int) -> string {
     if B == null { return "" }
-    return aether_ra_blame_text(B, i)
+    return ra_blame_text(B, i)
 }
 export svnae_blame_free  (B: ptr) { return 0 }
 

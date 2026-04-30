@@ -13,7 +13,7 @@
 // implied. See the License for the specific language governing
 // permissions and limitations under the License.
 
-// wc_node packed-record accessors. Same shape as ae/ra/packed.ae —
+// wc_node packed-record accessors. Same shape as ae/client/packed.ae —
 // each row is "<path>\x01<kind>\x01<base_rev>\x01<base_sha1>\x01
 // <state>\x01<conflicted>"; lists are "<n>\x02<rec>\x02...". The C
 // side keeps the {packed, n, pins} struct from subr/packed_handle/
@@ -98,7 +98,7 @@ list_field_int_(packed: string, i: int, fi: int) -> int {
 
 // ---- list count ----
 
-export aether_wc_node_count(packed: string) -> int {
+export node_count(packed: string) -> int {
     if string.length(packed) == 0 { return 0 }
     sep = string.index_of(packed, "\x02")
     if sep < 0 { return 0 }
@@ -108,21 +108,21 @@ export aether_wc_node_count(packed: string) -> int {
 
 // ---- single-record (info-style) field accessors ----
 
-export aether_wc_node_path(packed: string) -> string         { return field_(packed, 0) }
-export aether_wc_node_kind(packed: string) -> int            { return field_int_(packed, 1) }
-export aether_wc_node_base_rev(packed: string) -> int        { return field_int_(packed, 2) }
-export aether_wc_node_base_sha1(packed: string) -> string    { return field_(packed, 3) }
-export aether_wc_node_state(packed: string) -> int           { return field_int_(packed, 4) }
-export aether_wc_node_conflicted(packed: string) -> int      { return field_int_(packed, 5) }
+export node_path(packed: string) -> string         { return field_(packed, 0) }
+export node_kind(packed: string) -> int            { return field_int_(packed, 1) }
+export node_base_rev(packed: string) -> int        { return field_int_(packed, 2) }
+export node_base_sha1(packed: string) -> string    { return field_(packed, 3) }
+export node_state(packed: string) -> int           { return field_int_(packed, 4) }
+export node_conflicted(packed: string) -> int      { return field_int_(packed, 5) }
 
 // ---- per-row accessors for the list shape ----
 
-export aether_wc_node_path_at(packed: string, i: int) -> string         { return list_field_(packed, i, 0) }
-export aether_wc_node_kind_at(packed: string, i: int) -> int            { return list_field_int_(packed, i, 1) }
-export aether_wc_node_base_rev_at(packed: string, i: int) -> int        { return list_field_int_(packed, i, 2) }
-export aether_wc_node_base_sha1_at(packed: string, i: int) -> string    { return list_field_(packed, i, 3) }
-export aether_wc_node_state_at(packed: string, i: int) -> int           { return list_field_int_(packed, i, 4) }
-export aether_wc_node_conflicted_at(packed: string, i: int) -> int      { return list_field_int_(packed, i, 5) }
+export node_path_at(packed: string, i: int) -> string         { return list_field_(packed, i, 0) }
+export node_kind_at(packed: string, i: int) -> int            { return list_field_int_(packed, i, 1) }
+export node_base_rev_at(packed: string, i: int) -> int        { return list_field_int_(packed, i, 2) }
+export node_base_sha1_at(packed: string, i: int) -> string    { return list_field_(packed, i, 3) }
+export node_state_at(packed: string, i: int) -> int           { return list_field_int_(packed, i, 4) }
+export node_conflicted_at(packed: string, i: int) -> int      { return list_field_int_(packed, i, 5) }
 
 main() {
     println("ae/wc/db_node_packed.ae is a library; not meant to run standalone")

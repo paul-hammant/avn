@@ -13,7 +13,7 @@
 // implied. See the License for the specific language governing
 // permissions and limitations under the License.
 
-// URL builders for the REST client. Every call site in ae/ra/shim.c
+// URL builders for the REST client. Every call site in ae/client/shim.c
 // snprintf's something like "<base>/repos/<repo>/rev/<N>/..." — these
 // helpers centralise the shape.
 
@@ -114,5 +114,5 @@ rev_prefix(base: string, repo: string, rev: int) -> string {
 }
 
 main() {
-    println("ae/ra/urls.ae is a library; not meant to run standalone")
+    println("ae/client/urls.ae is a library; not meant to run standalone")
 }

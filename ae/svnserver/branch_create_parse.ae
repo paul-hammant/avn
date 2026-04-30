@@ -20,7 +20,7 @@
 // separated string, and hands them straight to
 // svnae_branch_create. The C side used to split the string back
 // into a char** array only to rejoin it before passing to
-// aether_filter_dir; that round trip is gone.
+// filter_dir; that round trip is gone.
 //
 // Return-value contract (matches the old C function):
 //   >= 0 : new_rev

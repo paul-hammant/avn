@@ -28,17 +28,17 @@
 
 import std.string
 
-extern aether_dir_count_entries(body: string) -> int
-extern aether_dir_entry_kind(body: string, i: int) -> int
-extern aether_dir_entry_sha(body: string, i: int) -> string
-extern aether_dir_entry_name(body: string, i: int) -> string
-extern aether_path_join_rel(prefix: string, name: string) -> string
-extern aether_list_entry_visible_json(name: string, kind: int) -> string
-extern aether_list_entry_hidden_json(sha: string) -> string
-extern aether_redact_line_visible(kind: int, sha: string, name: string) -> string
-extern aether_redact_line_hidden(sha: string) -> string
+extern dir_count_entries(body: string) -> int
+extern dir_entry_kind(body: string, i: int) -> int
+extern dir_entry_sha(body: string, i: int) -> string
+extern dir_entry_name(body: string, i: int) -> string
+extern path_join_rel(prefix: string, name: string) -> string
+extern list_entry_visible_json(name: string, kind: int) -> string
+extern list_entry_hidden_json(sha: string) -> string
+extern redact_line_visible(kind: int, sha: string, name: string) -> string
+extern redact_line_hidden(sha: string) -> string
 
-extern aether_acl_allows_mode(repo: string, rev: int, user: string, target_path: string, want_write: int) -> int
+extern acl_allows_mode(repo: string, rev: int, user: string, target_path: string, want_write: int) -> int
 
 // TLS-backed pair via a pack encoding. We concat body + "\x01" +
 // redact and parse back on the C side. \x01 is a single control byte
@@ -53,31 +53,31 @@ list_build_impl(repo: string, rev: int, user: string, is_super: int,
     body = "{\"entries\":["
     redact = ""
     any = 0
-    n = aether_dir_count_entries(dir_body)
+    n = dir_count_entries(dir_body)
     i = 0
     while i < n {
-        kind = aether_dir_entry_kind(dir_body, i)
-        sha = aether_dir_entry_sha(dir_body, i)
-        name = aether_dir_entry_name(dir_body, i)
+        kind = dir_entry_kind(dir_body, i)
+        sha = dir_entry_sha(dir_body, i)
+        name = dir_entry_name(dir_body, i)
         // Snapshot — we're going to concat and reuse across loop.
         sha = string.copy(sha)
         name = string.copy(name)
-        child_path = aether_path_join_rel(dir_path, name)
+        child_path = path_join_rel(dir_path, name)
 
         allowed = is_super
         if allowed == 0 {
-            allowed = aether_acl_allows_mode(repo, rev, user, child_path, 0)
+            allowed = acl_allows_mode(repo, rev, user, child_path, 0)
         }
 
         if any == 1 { body = string.concat(body, ",") }
         any = 1
         if allowed == 1 {
-            body = string.concat(body, aether_list_entry_visible_json(name, kind))
-            redact = string.concat(redact, aether_redact_line_visible(kind, sha, name))
+            body = string.concat(body, list_entry_visible_json(name, kind))
+            redact = string.concat(redact, redact_line_visible(kind, sha, name))
         }
         if allowed == 0 {
-            body = string.concat(body, aether_list_entry_hidden_json(sha))
-            redact = string.concat(redact, aether_redact_line_hidden(sha))
+            body = string.concat(body, list_entry_hidden_json(sha))
+            redact = string.concat(redact, redact_line_hidden(sha))
         }
         i = i + 1
     }

@@ -31,74 +31,74 @@
 
 import std.string
 
-extern aether_info_prelude_json(head: int, name: string, hash_algo: string) -> string
-extern aether_specs_to_json_array(body: string) -> string
-extern aether_json_escape_string(s: string) -> string
+extern info_prelude_json(head: int, name: string, hash_algo: string) -> string
+extern specs_to_json_array(body: string) -> string
+extern json_escape_string(s: string) -> string
 
-extern aether_io_listdir(path: string) -> ptr
-extern aether_io_listdir_count(handle: ptr) -> int
-extern aether_io_listdir_name(handle: ptr, i: int) -> string
-extern aether_io_listdir_free(handle: ptr)
-extern aether_io_read_file(path: string) -> string
-extern aether_io_file_size(path: string) -> int
-extern aether_io_exists(path: string) -> int
-extern aether_path_join_rel(prefix: string, name: string) -> string
+extern io_listdir(path: string) -> ptr
+extern io_listdir_count(handle: ptr) -> int
+extern io_listdir_name(handle: ptr, i: int) -> string
+extern io_listdir_free(handle: ptr)
+extern io_read_file(path: string) -> string
+extern io_file_size(path: string) -> int
+extern io_exists(path: string) -> int
+extern path_join_rel(prefix: string, name: string) -> string
 
 export info_json(repo: string, name: string, head: int, hash_algo: string) -> string {
     return info_json_impl(repo, name, head, hash_algo)
 }
 
 info_json_impl(repo: string, name: string, head: int, hash_algo: string) -> string {
-    branches_dir = aether_path_join_rel(repo, "branches")
-    out = aether_info_prelude_json(head, name, hash_algo)
+    branches_dir = path_join_rel(repo, "branches")
+    out = info_prelude_json(head, name, hash_algo)
 
     // --- branches array -------------------------------------------------
     out = string.concat(out, ",\"branches\":[")
-    out = string.concat(out, aether_json_escape_string("main"))
+    out = string.concat(out, json_escape_string("main"))
 
-    d = aether_io_listdir(branches_dir)
+    d = io_listdir(branches_dir)
     if d != null {
-        n = aether_io_listdir_count(d)
+        n = io_listdir_count(d)
         i = 0
         while i < n {
-            nm = aether_io_listdir_name(d, i)
+            nm = io_listdir_name(d, i)
             if string.equals(nm, "main") == 0 {
                 out = string.concat(out, ",")
-                out = string.concat(out, aether_json_escape_string(nm))
+                out = string.concat(out, json_escape_string(nm))
             }
             i = i + 1
         }
-        aether_io_listdir_free(d)
+        io_listdir_free(d)
     }
     out = string.concat(out, "]")
 
     // --- specs object ---------------------------------------------------
     out = string.concat(out, ",\"specs\":{")
     first = 1
-    d2 = aether_io_listdir(branches_dir)
+    d2 = io_listdir(branches_dir)
     if d2 != null {
-        n = aether_io_listdir_count(d2)
+        n = io_listdir_count(d2)
         i = 0
         while i < n {
-            nm = aether_io_listdir_name(d2, i)
-            // Snapshot — aether_path_join_rel allocs, but
-            // aether_io_listdir_name returns into the list's buffer.
+            nm = io_listdir_name(d2, i)
+            // Snapshot — path_join_rel allocs, but
+            // io_listdir_name returns into the list's buffer.
             nm = string.copy(nm)
-            spec_path = aether_path_join_rel(branches_dir, nm)
-            spec_path = aether_path_join_rel(spec_path, "spec")
+            spec_path = path_join_rel(branches_dir, nm)
+            spec_path = path_join_rel(spec_path, "spec")
 
             if first == 0 { out = string.concat(out, ",") }
             first = 0
-            out = string.concat(out, aether_json_escape_string(nm))
+            out = string.concat(out, json_escape_string(nm))
             out = string.concat(out, ":")
 
-            spec_sz = aether_io_file_size(spec_path)
+            spec_sz = io_file_size(spec_path)
             emitted = 0
             if spec_sz > 0 {
                 if spec_sz < 65536 {
-                    spec_buf = aether_io_read_file(spec_path)
+                    spec_buf = io_read_file(spec_path)
                     if string.length(spec_buf) > 0 {
-                        out = string.concat(out, aether_specs_to_json_array(spec_buf))
+                        out = string.concat(out, specs_to_json_array(spec_buf))
                         emitted = 1
                     }
                 }
@@ -108,11 +108,11 @@ info_json_impl(repo: string, name: string, head: int, hash_algo: string) -> stri
             }
             i = i + 1
         }
-        aether_io_listdir_free(d2)
+        io_listdir_free(d2)
     }
     // If main wasn't already listed (no on-disk dir), emit [] for it.
-    main_spec = aether_path_join_rel(branches_dir, "main")
-    if aether_io_exists(main_spec) == 0 {
+    main_spec = path_join_rel(branches_dir, "main")
+    if io_exists(main_spec) == 0 {
         if first == 0 { out = string.concat(out, ",") }
         out = string.concat(out, "\"main\":[]")
     }

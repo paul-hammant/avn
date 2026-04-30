@@ -27,7 +27,7 @@
 
 import std.string
 
-// RA list/cat handles + accessors stay in C (ae/ra/shim.c).
+// RA list/cat handles + accessors stay in C (ae/client/shim.c).
 extern svnae_ra_list(base_url: string, repo_name: string, rev: int, path: string) -> ptr
 extern svnae_ra_list_count(L: ptr) -> int
 extern svnae_ra_list_name(L: ptr, i: int) -> string
@@ -51,15 +51,15 @@ extern svnae_wc_db_upsert_node(db: ptr, path: string, kind: int, base_rev: int, 
 extern svnae_wc_db_set_info(db: ptr, key: string, value: string) -> int
 
 // Pristine store.
-extern aether_wc_pristine_put(wc_root: string, data: string, len: int) -> string
+extern wc_pristine_put(wc_root: string, data: string, len: int) -> string
 
 // WC propset (per-path key=value persist).
 extern svnae_wc_propset(wc_root: string, path: string, name: string, value: string) -> int
 
 // IO helpers from subr/io.ae and fs_fs/pathutil.ae.
-extern aether_io_mkdir_p(path: string) -> int
-extern aether_io_write_atomic(path: string, data: string, length: int) -> int
-extern aether_path_join_rel(prefix: string, name: string) -> string
+extern io_mkdir_p(path: string) -> int
+extern io_write_atomic(path: string, data: string, length: int) -> int
+extern path_join_rel(prefix: string, name: string) -> string
 
 // Ingest every prop attached to (rev, rel) onto the working copy at dest.
 ingest_props_(base_url: string, repo: string, rev: int,
@@ -95,13 +95,13 @@ walk_(base_url: string, repo: string, rev: int,
         name = string.copy(name)
         kind = string.copy(kind)
 
-        rel_borrowed  = aether_path_join_rel(prefix, name)
+        rel_borrowed  = path_join_rel(prefix, name)
         rel  = string.copy(rel_borrowed)
-        disk_borrowed = aether_path_join_rel(dest, rel)
+        disk_borrowed = path_join_rel(dest, rel)
         disk = string.copy(disk_borrowed)
 
         if string.equals(kind, "dir") == 1 {
-            if aether_io_mkdir_p(disk) != 0 { svnae_ra_list_free(L); return 0 - 1 }
+            if io_mkdir_p(disk) != 0 { svnae_ra_list_free(L); return 0 - 1 }
             svnae_wc_db_upsert_node(db, rel, 1, rev, "", 0)
             ingest_props_(base_url, repo, rev, dest, rel)
             if walk_(base_url, repo, rev, dest, rel, db) != 0 {
@@ -117,12 +117,12 @@ walk_(base_url: string, repo: string, rev: int,
                 return 0 - 1
             }
             len = string.length(data)
-            if aether_io_write_atomic(disk, data, len) != 0 {
+            if io_write_atomic(disk, data, len) != 0 {
                 svnae_ra_free(data)
                 svnae_ra_list_free(L)
                 return 0 - 1
             }
-            sha = aether_wc_pristine_put(dest, data, len)
+            sha = wc_pristine_put(dest, data, len)
             if string.length(sha) == 0 {
                 svnae_ra_free(data)
                 svnae_ra_list_free(L)
@@ -143,7 +143,7 @@ walk_(base_url: string, repo: string, rev: int,
 // connection info + hash algo, walks the server tree at `rev`.
 export svnae_wc_checkout(base_url: string, repo_name: string,
                           dest: string, rev: int) -> int {
-    if aether_io_mkdir_p(dest) != 0 { return 0 - 1 }
+    if io_mkdir_p(dest) != 0 { return 0 - 1 }
 
     db = svnae_wc_db_open(dest)
     if db == null { return 0 - 1 }

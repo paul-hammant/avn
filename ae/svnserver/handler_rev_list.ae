@@ -21,20 +21,20 @@
 //   - ACL check on the dir itself
 //   - resolve (rev, dir_path) → sha, kind
 //   - read the dir blob
-//   - build body + redacted-blob (aether_list_build pack "<body>\x01<redact>")
+//   - build body + redacted-blob (list_build pack "<body>\x01<redact>")
 //   - set Merkle header from hash of redact half (super-user bypasses)
 //   - emit body half as JSON response
 
 import std.string
 
-extern aether_acl_allows_mode(repo: string, rev: int, user: string, target_path: string, want_write: int) -> int
+extern acl_allows_mode(repo: string, rev: int, user: string, target_path: string, want_write: int) -> int
 extern svnae_repos_resolve_kind(repo: string, rev: int, path: string) -> int
 extern svnae_repos_resolve_sha(repo: string, rev: int, path: string) -> string
 extern svnae_rep_read_blob(repo: string, sha: string) -> string
 extern svnae_rep_free(body: string)
-extern aether_repo_primary_hash(repo: string) -> string
+extern repo_primary_hash(repo: string) -> string
 
-extern aether_list_build(repo: string, rev: int, user: string, is_super: int,
+extern list_build(repo: string, rev: int, user: string, is_super: int,
                          dir_body: string, dir_path: string) -> string
 
 extern svnserver_respond_error(res: ptr, code: int, msg: string)
@@ -51,7 +51,7 @@ list_handle_impl(req: ptr, res: ptr, repo: string, rev: int,
                  dir_path: string, user: string, is_super: int) {
     // ACL.
     if is_super == 0 {
-        if aether_acl_allows_mode(repo, rev, user, dir_path, 0) == 0 {
+        if acl_allows_mode(repo, rev, user, dir_path, 0) == 0 {
             svnserver_respond_error(res, 404, "not a directory")
             return
         }
@@ -69,9 +69,9 @@ list_handle_impl(req: ptr, res: ptr, repo: string, rev: int,
     // Empty body is legitimate — empty dirs have a 0-byte blob and
     // rep_read_blob returns "" (indistinguishable from "missing" via
     // string.length, but resolve_kind already told us it exists).
-    // aether_list_build handles 0 entries correctly.
+    // list_build handles 0 entries correctly.
     dir_body = svnae_rep_read_blob(repo, dir_sha)
-    packed = aether_list_build(repo, rev, user, is_super, dir_body, dir_path)
+    packed = list_build(repo, rev, user, is_super, dir_body, dir_path)
     svnae_rep_free(dir_body)
 
     // Find \x01 separator. packed = "<body>\x01<redact>".
@@ -83,7 +83,7 @@ list_handle_impl(req: ptr, res: ptr, repo: string, rev: int,
         i = i + 1
     }
 
-    algo = aether_repo_primary_hash(repo)
+    algo = repo_primary_hash(repo)
     if is_super == 1 {
         svnserver_set_merkle_headers(res, algo, "dir", dir_sha)
     }

@@ -18,14 +18,14 @@
 // This test assumes the caller has already spawned aether-svnserver with
 // a seeded repo. It takes (base_url, repo_name) via argv, exercises every
 // public RA function, and exits nonzero on mismatch. The companion shell
-// wrapper ae/ra/test_ra.sh handles the server lifecycle.
+// wrapper ae/client/test_client.sh handles the server lifecycle.
 
 import std.string
 
 extern aether_args_count() -> int
 extern aether_args_get(index: int) -> string
 
-// RA externs — one per function we built in ae/ra/shim.c.
+// RA externs — one per function we built in ae/client/shim.c.
 
 extern svnae_ra_head_rev(base_url: string, repo_name: string) -> int
 

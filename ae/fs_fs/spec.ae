@@ -22,21 +22,16 @@
 //   - The caller (svnae_branch_spec_allows in commit_shim.c) reads the
 //     spec file and passes its contents as `specs_joined` — globs
 //     separated by '\n'.
-//   - Exposed to C as `aether_spec_matches_any(path, specs_joined)`.
+//   - Exposed to C as `spec_matches_any(path, specs_joined)`.
 //
 // Glob grammar (kept compatible with the C version's contract):
 //   "prefix/**"  → subtree include; matches prefix and anything under it.
 //   "a/b/c.txt"  → literal path; also matches ancestor dirs (so the
 //                  filtered tree can hold the file).
-//   "a/*.txt"    → fnmatch-style pattern. Delegated to a tiny C
-//                  primitive (svnae_fnmatch_pathname) since Aether has
-//                  no fnmatch(3) binding.
+//   "a/*.txt"    → fnmatch-style pattern. Round 179 switched to
+//                  std.string.glob_match_pathname (Aether 0.110).
 
 import std.string
-
-// fnmatch(3) with FNM_PATHNAME. Provided by a thin C shim in
-// ae/fs_fs/commit_shim.c. Returns 1 on match, 0 otherwise.
-extern svnae_fnmatch_pathname(glob: string, path: string) -> int
 
 // Is `path` an exact prefix of `glob` such that glob[len(path)] == '/'?
 // Used to decide "include `src/foo/bar.txt` implicitly keeps `src` and
@@ -83,7 +78,7 @@ path_matches_glob(path: string, glob: string) {
     // Subtree form first.
     if subtree_glob_matches(path, glob) == 1 { return 1 }
     // Exact fnmatch.
-    if svnae_fnmatch_pathname(glob, path) == 1 { return 1 }
+    if string.glob_match_pathname(glob, path) == 1 { return 1 }
     // Path is an ancestor of this exact glob (implicit parent-dir keep).
     if path_is_ancestor_of_glob(path, glob) == 1 { return 1 }
     return 0

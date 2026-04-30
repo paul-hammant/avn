@@ -32,6 +32,7 @@
 //       - tracked → 3-way merge (mine=disk, base=A, theirs=B)
 
 import std.string
+import std.io
 
 // --- rtree accessors (C-side opaque handle; shared with update_shim's
 //     but named uniquely so both can link into the same binary) ----------
@@ -55,26 +56,30 @@ extern svnae_wc_node_base_sha1(n: ptr) -> string
 extern svnae_wc_node_free(n: ptr)
 
 // --- pristine + merge3 ---------------------------------------------------
-extern aether_wc_pristine_put(wc_root: string, data: string, length: int) -> string
+extern wc_pristine_put(wc_root: string, data: string, length: int) -> string
 extern svnae_merge3_apply(wc_path: string,
                           base_data: string, base_len: int, base_rev: int,
                           theirs_data: string, theirs_len: int, theirs_rev: int) -> int
 
 // --- io helpers ----------------------------------------------------------
-extern aether_io_mkdir_p(path: string) -> int
-extern aether_io_write_atomic(path: string, data: string, length: int) -> int
-extern aether_io_unlink(path: string) -> int
-extern aether_io_rmdir(path: string) -> int
-extern aether_io_exists(path: string) -> int
-extern aether_path_join_rel(prefix: string, name: string) -> string
+extern io_mkdir_p(path: string) -> int
+extern io_write_atomic(path: string, data: string, length: int) -> int
+extern io_unlink(path: string) -> int
+extern io_rmdir(path: string) -> int
+extern io_exists(path: string) -> int
+extern path_join_rel(prefix: string, name: string) -> string
 
 // --- stderr trace --------------------------------------------------------
-extern svnae_stderr_puts(s: string)
+// Round 180: switched to std.io.stderr_write (Aether 0.110).
+merge_stderr_(s: string) {
+    io.stderr_write(s, string.length(s))
+    return
+}
 
 // Map a source-relative path `p` into the WC under `target_path` (may
 // be empty, meaning apply at WC root).
 map_wc_rel(target_path: string, p: string) -> string {
-    return aether_path_join_rel(target_path, p)
+    return path_join_rel(target_path, p)
 }
 
 // =========================================================================
@@ -95,7 +100,7 @@ merge_apply_deletions_impl(wc_root: string, target_path: string,
         ra_kind = rtree_kind_at(a_rt, i)
         if rtree_find_by_path(b_rt, ra_path) < 0 {
             wc_rel = map_wc_rel(target_path, ra_path)
-            disk = aether_path_join_rel(wc_root, wc_rel)
+            disk = path_join_rel(wc_root, wc_rel)
             if svnae_wc_db_node_exists(db, wc_rel) == 1 {
                 n = svnae_wc_db_get_node(db, wc_rel)
                 if string.length(svnae_wc_node_base_sha1(n)) >= 0 {
@@ -107,8 +112,8 @@ merge_apply_deletions_impl(wc_root: string, target_path: string,
                     svnae_wc_node_free(n)
                     svnae_wc_db_upsert_node(db, wc_rel, kind, brev, bsha_copy, 2)
                 }
-                if ra_kind == 0 { aether_io_unlink(disk) }
-                if ra_kind == 1 { aether_io_rmdir(disk) }
+                if ra_kind == 0 { io_unlink(disk) }
+                if ra_kind == 1 { io_rmdir(disk) }
             }
         }
         i = i + 1
@@ -138,11 +143,11 @@ merge_apply_adds_mods_impl(wc_root: string, target_path: string,
         rb_len  = rtree_data_len_at(b_rt, i)
 
         wc_rel = map_wc_rel(target_path, rb_path)
-        disk = aether_path_join_rel(wc_root, wc_rel)
+        disk = path_join_rel(wc_root, wc_rel)
 
         if rb_kind == 1 {
             // Dir.
-            if aether_io_mkdir_p(disk) == 0 {
+            if io_mkdir_p(disk) == 0 {
                 if svnae_wc_db_node_exists(db, wc_rel) == 0 {
                     svnae_wc_db_upsert_node(db, wc_rel, 1, 0, "", 1)
                 }
@@ -160,12 +165,12 @@ merge_apply_adds_mods_impl(wc_root: string, target_path: string,
                 }
             }
             if skip == 0 {
-                exists_on_disk = aether_io_exists(disk)
+                exists_on_disk = io_exists(disk)
                 tracked = svnae_wc_db_node_exists(db, wc_rel)
                 if exists_on_disk == 0 {
                     // Not on disk — new add.
-                    if aether_io_write_atomic(disk, rb_data, rb_len) == 0 {
-                        aether_wc_pristine_put(wc_root, rb_data, rb_len)
+                    if io_write_atomic(disk, rb_data, rb_len) == 0 {
+                        wc_pristine_put(wc_root, rb_data, rb_len)
                         if tracked == 0 {
                             svnae_wc_db_upsert_node(db, wc_rel, 0, 0, "", 1)
                         }
@@ -174,8 +179,8 @@ merge_apply_adds_mods_impl(wc_root: string, target_path: string,
                 if exists_on_disk == 1 {
                     if tracked == 0 {
                         // On disk but untracked — same new-add path.
-                        if aether_io_write_atomic(disk, rb_data, rb_len) == 0 {
-                            aether_wc_pristine_put(wc_root, rb_data, rb_len)
+                        if io_write_atomic(disk, rb_data, rb_len) == 0 {
+                            wc_pristine_put(wc_root, rb_data, rb_len)
                             svnae_wc_db_upsert_node(db, wc_rel, 0, 0, "", 1)
                         }
                     }
@@ -192,14 +197,14 @@ merge_apply_adds_mods_impl(wc_root: string, target_path: string,
                                                   rb_data, rb_len, rev_b)
                         if m3rc == 1 {
                             svnae_wc_db_set_conflicted(db, wc_rel, 1)
-                            svnae_stderr_puts("C    ")
-                            svnae_stderr_puts(wc_rel)
-                            svnae_stderr_puts("\n")
+                            merge_stderr_("C    ")
+                            merge_stderr_(wc_rel)
+                            merge_stderr_("\n")
                         }
                         if m3rc < 0 {
-                            svnae_stderr_puts("error merging ")
-                            svnae_stderr_puts(wc_rel)
-                            svnae_stderr_puts("; left alone\n")
+                            merge_stderr_("error merging ")
+                            merge_stderr_(wc_rel)
+                            merge_stderr_("; left alone\n")
                         }
                         // m3rc == 0: clean merge; pristine stays as is
                         // (the WC's original head), commit picks it up

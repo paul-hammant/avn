@@ -24,48 +24,48 @@
 // Round 77 (Gordian) ports the orchestration out of svnadmin/shim.c.
 // What was 90 lines of C with PATH_MAX snprintf bookkeeping becomes
 // ~70 lines of Aether using ${} interpolation; the helper calls
-// (aether_io_mkdir_p, aether_io_write_atomic, admin_db_init_schema,
-// aether_rep_write_blob, aether_rev_blob_body) are unchanged.
+// (io_mkdir_p, io_write_atomic, admin_db_init_schema,
+// rep_write_blob, rev_blob_body) are unchanged.
 
 import std.string
 import std.os
 
-extern aether_io_mkdir_p(path: string) -> int
-extern aether_io_write_atomic(path: string, data: string, length: int) -> int
+extern io_mkdir_p(path: string) -> int
+extern io_write_atomic(path: string, data: string, length: int) -> int
 
-extern aether_algos_count(spec: string) -> int
-extern aether_algos_token(spec: string, i: int) -> string
+extern algos_count(spec: string) -> int
+extern algos_token(spec: string, i: int) -> string
 extern svnae_openssl_hash_supported(algo: string) -> int
 
 extern admin_db_init_schema(repo: string) -> string
 
-extern aether_rep_write_blob(repo: string, data: string, len: int) -> string
-extern aether_rev_blob_body(root: string, branch: string, props: string, acl: string, prev: int, author: string, date: string, log: string) -> string
+extern rep_write_blob(repo: string, data: string, len: int) -> string
+extern rev_blob_body(root: string, branch: string, props: string, acl: string, prev: int, author: string, date: string, log: string) -> string
 
 // Lay down the empty disk layout: dirs, format file, rep-cache schema.
 // No rev 0, no head — shared by `create` (which seeds rev 0 below)
 // and `load` (which replays revs from a dump). algos_spec defaults to
 // "sha1" when empty.
 create_bare_(repo: string, algos_spec: string) -> int {
-    if aether_io_mkdir_p(repo) != 0 { return 0 - 1 }
-    if aether_io_mkdir_p("${repo}/reps") != 0 { return 0 - 1 }
-    if aether_io_mkdir_p("${repo}/revs") != 0 { return 0 - 1 }
+    if io_mkdir_p(repo) != 0 { return 0 - 1 }
+    if io_mkdir_p("${repo}/reps") != 0 { return 0 - 1 }
+    if io_mkdir_p("${repo}/revs") != 0 { return 0 - 1 }
 
     spec = algos_spec
     if string.length(spec) == 0 { spec = "sha1" }
 
     // Validate every algorithm against the openssl golden list.
-    n = aether_algos_count(spec)
+    n = algos_count(spec)
     i = 0
     while i < n {
-        if svnae_openssl_hash_supported(aether_algos_token(spec, i)) == 0 {
+        if svnae_openssl_hash_supported(algos_token(spec, i)) == 0 {
             return 0 - 1
         }
         i = i + 1
     }
 
     fmt_line = "svnae-fsfs-1 ${spec}\n"
-    if aether_io_write_atomic("${repo}/format", fmt_line, string.length(fmt_line)) != 0 {
+    if io_write_atomic("${repo}/format", fmt_line, string.length(fmt_line)) != 0 {
         return 0 - 1
     }
 
@@ -85,12 +85,12 @@ export svnae_svnadmin_create_bare(repo: string, algos_spec: string) -> int {
 // Phase 8.1 layout: $repo/branches/main/{head, spec, revs/aa/bb/...}
 // in parallel with the legacy $repo/{head, revs/NNNNNN}.
 write_main_branch_layout_(repo: string) -> int {
-    if aether_io_mkdir_p("${repo}/branches") != 0 { return 0 - 1 }
-    if aether_io_mkdir_p("${repo}/branches/main") != 0 { return 0 - 1 }
-    if aether_io_mkdir_p("${repo}/branches/main/revs") != 0 { return 0 - 1 }
-    if aether_io_mkdir_p("${repo}/branches/main/revs/00/00") != 0 { return 0 - 1 }
+    if io_mkdir_p("${repo}/branches") != 0 { return 0 - 1 }
+    if io_mkdir_p("${repo}/branches/main") != 0 { return 0 - 1 }
+    if io_mkdir_p("${repo}/branches/main/revs") != 0 { return 0 - 1 }
+    if io_mkdir_p("${repo}/branches/main/revs/00/00") != 0 { return 0 - 1 }
     // Empty spec file — main has no parent, so it means "full tree."
-    if aether_io_write_atomic("${repo}/branches/main/spec", "", 0) != 0 {
+    if io_write_atomic("${repo}/branches/main/spec", "", 0) != 0 {
         return 0 - 1
     }
     return 0
@@ -98,31 +98,31 @@ write_main_branch_layout_(repo: string) -> int {
 
 // Seed rev 0: empty root dir + rev-blob pointing at it.
 seed_rev0_(repo: string) -> int {
-    empty_sha = aether_rep_write_blob(repo, "", 0)
+    empty_sha = rep_write_blob(repo, "", 0)
     if string.length(empty_sha) == 0 { return 0 - 1 }
     empty_sha = string.copy(empty_sha)
 
-    rev0 = aether_rev_blob_body(empty_sha, "main", "", "", 0,
+    rev0 = rev_blob_body(empty_sha, "main", "", "", 0,
                                  "(init)", os.now_utc_iso8601(),
                                  "initial empty revision")
-    rev0_sha = aether_rep_write_blob(repo, rev0, string.length(rev0))
+    rev0_sha = rep_write_blob(repo, rev0, string.length(rev0))
     if string.length(rev0_sha) == 0 { return 0 - 1 }
     rev0_sha = string.copy(rev0_sha)
 
     ptr_body = "${rev0_sha}\n"
 
     // Legacy rev pointer (Phase 8.1 keeps this for unmodified readers).
-    if aether_io_write_atomic("${repo}/revs/000000", ptr_body, string.length(ptr_body)) != 0 {
+    if io_write_atomic("${repo}/revs/000000", ptr_body, string.length(ptr_body)) != 0 {
         return 0 - 1
     }
     // Per-branch rev pointer (aa/bb fanout — rev 0 = 00/00).
-    if aether_io_write_atomic("${repo}/branches/main/revs/00/00/000000", ptr_body, string.length(ptr_body)) != 0 {
+    if io_write_atomic("${repo}/branches/main/revs/00/00/000000", ptr_body, string.length(ptr_body)) != 0 {
         return 0 - 1
     }
     // Legacy head.
-    if aether_io_write_atomic("${repo}/head", "0\n", 2) != 0 { return 0 - 1 }
+    if io_write_atomic("${repo}/head", "0\n", 2) != 0 { return 0 - 1 }
     // Per-branch head ("rev=N\n" — Phase 8.2 may add tree-sha cache here).
-    if aether_io_write_atomic("${repo}/branches/main/head", "rev=0\n", 6) != 0 {
+    if io_write_atomic("${repo}/branches/main/head", "rev=0\n", 6) != 0 {
         return 0 - 1
     }
     return 0

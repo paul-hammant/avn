@@ -41,20 +41,20 @@ extern svnae_wc_node_base_sha1(n: ptr) -> string
 extern svnae_wc_node_free(n: ptr)
 
 // Pristine store.
-extern aether_wc_pristine_get(wc_root: string, sha1: string) -> string
-extern aether_wc_pristine_size(wc_root: string, sha1: string) -> int
+extern wc_pristine_get(wc_root: string, sha1: string) -> string
+extern wc_pristine_size(wc_root: string, sha1: string) -> int
 
 // IO helpers.
-extern aether_io_mkdir_p(path: string) -> int
-extern aether_io_write_atomic(path: string, data: string, length: int) -> int
-extern aether_io_listdir(path: string) -> ptr
-extern aether_io_listdir_count(handle: ptr) -> int
-extern aether_io_listdir_name(handle: ptr, index: int) -> string
-extern aether_io_listdir_free(handle: ptr)
-extern aether_io_stat_kind(path: string) -> int
-extern aether_io_unlink(path: string) -> int
-extern aether_io_exists(path: string) -> int
-extern aether_io_is_regular_file(path: string) -> int
+extern io_mkdir_p(path: string) -> int
+extern io_write_atomic(path: string, data: string, length: int) -> int
+extern io_listdir(path: string) -> ptr
+extern io_listdir_count(handle: ptr) -> int
+extern io_listdir_name(handle: ptr, index: int) -> string
+extern io_listdir_free(handle: ptr)
+extern io_stat_kind(path: string) -> int
+extern io_unlink(path: string) -> int
+extern io_exists(path: string) -> int
+extern io_is_regular_file(path: string) -> int
 
 // ---- revert ---------------------------------------------------------
 
@@ -88,20 +88,20 @@ export svnae_wc_revert(wc_root: string, rel_path: string) -> int {
     if kind == 1 {
         // Dir: nothing content-wise to restore; just clear any
         // pending-delete state. If state==2, recreate the dir on disk.
-        if state == 2 { aether_io_mkdir_p(disk) }
+        if state == 2 { io_mkdir_p(disk) }
         svnae_wc_db_upsert_node(db, rel_path, 1, brev, "", 0)
         svnae_wc_db_close(db)
         return 0
     }
 
     // File. Restore content from pristine, reset state to normal.
-    psize = aether_wc_pristine_size(wc_root, bsha)
-    data  = aether_wc_pristine_get(wc_root, bsha)
+    psize = wc_pristine_size(wc_root, bsha)
+    data  = wc_pristine_get(wc_root, bsha)
     if string.length(data) == 0 {
         svnae_wc_db_close(db)
         return 0 - 2
     }
-    rc = aether_io_write_atomic(disk, data, psize)
+    rc = io_write_atomic(disk, data, psize)
     if rc != 0 {
         svnae_wc_db_close(db)
         return 0 - 2
@@ -136,27 +136,27 @@ is_stale_tmp_(name: string) -> int {
 // Walk the directory recursively, deleting every is_stale_tmp_ file.
 // Returns the count of files deleted.
 walk_and_clean_(root: string) -> int {
-    d = aether_io_listdir(root)
+    d = io_listdir(root)
     if d == null { return 0 }
     count = 0
-    n_entries = aether_io_listdir_count(d)
+    n_entries = io_listdir_count(d)
     i = 0
     while i < n_entries {
-        name = aether_io_listdir_name(d, i)
+        name = io_listdir_name(d, i)
         name = string.copy(name)
         full = "${root}/${name}"
-        kind = aether_io_stat_kind(full)
+        kind = io_stat_kind(full)
         if kind == 2 {
             count = count + walk_and_clean_(full)
         }
         if kind == 1 {
             if is_stale_tmp_(name) == 1 {
-                if aether_io_unlink(full) == 0 { count = count + 1 }
+                if io_unlink(full) == 0 { count = count + 1 }
             }
         }
         i = i + 1
     }
-    aether_io_listdir_free(d)
+    io_listdir_free(d)
     return count
 }
 
@@ -165,7 +165,7 @@ export svnae_wc_cleanup(wc_root: string) -> int {
 
     // Verify this is a WC by checking for .svn/wc.db.
     wc_db = "${wc_root}/.svn/wc.db"
-    if aether_io_exists(wc_db) == 0 { return 0 - 1 }
+    if io_exists(wc_db) == 0 { return 0 - 1 }
 
     // is_stale_tmp_ gates what walk_and_clean_ deletes, so we never
     // accidentally touch real wc.db / format / pristine blob files.
@@ -176,8 +176,8 @@ export svnae_wc_cleanup(wc_root: string) -> int {
     // files is the normal-operation signal. Conservative cleanup:
     // just delete if it's a regular file.
     journal = "${wc_root}/.svn/wc.db-journal"
-    if aether_io_is_regular_file(journal) == 1 {
-        if aether_io_unlink(journal) == 0 { count = count + 1 }
+    if io_is_regular_file(journal) == 1 {
+        if io_unlink(journal) == 0 { count = count + 1 }
     }
 
     return count

@@ -18,9 +18,8 @@ admin_db_generated.c: admin_db.ae
 create_generated.c: create.ae
 	$(AETHERC) --emit=lib --with=os $< $@
 
-# dump_load.ae is pure orchestration — fd I/O goes through the C-side
-# svnae_fd_* helpers, so no fresh capability deps.
+# dump_load.ae imports std.io for the full fd surface (Round 188).
 dump_load_generated.c: dump_load.ae
-	$(AETHERC) --emit=lib $< $@
+	$(AETHERC) --emit=lib --with=fs $< $@
 
 .PHONY: all

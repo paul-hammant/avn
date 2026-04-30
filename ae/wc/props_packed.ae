@@ -69,7 +69,7 @@ list_field_(packed: string, i: int, fi: int) -> string {
 
 // ---- exports ----
 
-export aether_wc_proplist_count(packed: string) -> int {
+export proplist_count(packed: string) -> int {
     if string.length(packed) == 0 { return 0 }
     sep = string.index_of(packed, "\x02")
     if sep < 0 { return 0 }
@@ -77,8 +77,8 @@ export aether_wc_proplist_count(packed: string) -> int {
     return string.get_int(nstr)
 }
 
-export aether_wc_proplist_name_at (packed: string, i: int) -> string { return list_field_(packed, i, 0) }
-export aether_wc_proplist_value_at(packed: string, i: int) -> string { return list_field_(packed, i, 1) }
+export proplist_name_at (packed: string, i: int) -> string { return list_field_(packed, i, 0) }
+export proplist_value_at(packed: string, i: int) -> string { return list_field_(packed, i, 1) }
 
 main() {
     println("ae/wc/props_packed.ae is a library; not meant to run standalone")

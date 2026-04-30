@@ -39,17 +39,15 @@ import std.zlib
 
 // C-side byte helpers, shared with ae/wc/pristine.ae — same binary-
 // safe concat / slice over AetherString buffers. Defined once in
-// pristine_shim.c and reached from here via rep_store_shim.c's
-// linked copy (they're both pulled into every binary that uses
-// either pristine_generated.c or rep_store_generated.c).
-extern aether_pristine_concat_binary_n(prefix: string, prefix_len: int, suf: string, suf_len: int) -> string
-extern aether_pristine_slice_binary_n(s: string, s_len: int, start: int, end: int) -> string
+// Binary-safe byte ops live in ae/subr/binbuf.ae.
+extern concat(prefix: string, prefix_len: int, suf: string, suf_len: int) -> string
+extern slice(s: string, s_len: int, start: int, end: int) -> string
 
 // Path builder already lives in ae/fs_fs/reppath.ae.
-extern aether_rep_path(repo: string, sha: string) -> string
-extern aether_rep_dir(repo: string, sha: string) -> string
-extern aether_rep_rel_path(sha: string) -> string
-extern aether_io_mkdir_p(path: string) -> int
+extern rep_path(repo: string, sha: string) -> string
+extern rep_dir(repo: string, sha: string) -> string
+extern rep_rel_path(sha: string) -> string
+extern io_mkdir_p(path: string) -> int
 
 // sqlite — for rep-cache.db index access. Goes through contrib.sqlite v2.
 import contrib.sqlite
@@ -85,14 +83,14 @@ export rep_encode_blob(data: string, length: int) -> string {
 
     tag = "R"
     if use_zlib == 1 { tag = "Z" }
-    payload = aether_pristine_concat_binary_n(tag, 1, body, body_len)
+    payload = concat(tag, 1, body, body_len)
     payload_len = 1 + body_len
 
     header = string.concat(string.from_int(use_zlib), "\x01")
     // header is "0\x01" or "1\x01" — 2 ASCII bytes built via plain
     // string.concat, so its strlen would be safe, but we pass the
     // explicit length anyway for symmetry.
-    return aether_pristine_concat_binary_n(header, 2, payload, payload_len)
+    return concat(header, 2, payload, payload_len)
 }
 
 // Accessors the C caller uses on the encoded envelope.
@@ -107,7 +105,7 @@ export rep_encoded_use_zlib(encoded: string) -> int {
 export rep_encoded_bytes(encoded: string) -> string {
     n = string.length(encoded)
     if n < 2 { return "" }
-    return aether_pristine_slice_binary_n(encoded, n, 2, n)
+    return slice(encoded, n, 2, n)
 }
 
 export rep_encoded_length(encoded: string) -> int {
@@ -123,10 +121,10 @@ export rep_encoded_length(encoded: string) -> int {
 // success, error message otherwise.
 
 export rep_write_encoded(repo: string, sha: string, encoded: string) -> string {
-    dir = string.copy(aether_rep_dir(repo, sha))
-    if aether_io_mkdir_p(dir) != 0 { return "mkdir_p failed" }
+    dir = string.copy(rep_dir(repo, sha))
+    if io_mkdir_p(dir) != 0 { return "mkdir_p failed" }
 
-    path = string.copy(aether_rep_path(repo, sha))
+    path = string.copy(rep_path(repo, sha))
     body = rep_encoded_bytes(encoded)
     body_len = rep_encoded_length(encoded)
     return fs.write_binary(path, body, body_len)
@@ -139,14 +137,14 @@ export rep_write_encoded(repo: string, sha: string, encoded: string) -> string {
 // decoded payload, or "" on miss / decompression failure.
 
 export rep_read_decoded(repo: string, sha: string, uncompressed_size: int) -> string {
-    path = string.copy(aether_rep_path(repo, sha))
+    path = string.copy(rep_path(repo, sha))
     file, fsize, err = fs.read_binary(path)
     if string.length(err) > 0 { return "" }
     if fsize < 1 { return "" }
 
     header = string.char_at(file, 0)
     payload_len = fsize - 1
-    payload = aether_pristine_slice_binary_n(file, fsize, 1, fsize)
+    payload = slice(file, fsize, 1, fsize)
 
     if header == 82 {          // 'R'
         return payload
@@ -158,6 +156,23 @@ export rep_read_decoded(repo: string, sha: string, uncompressed_size: int) -> st
         return bytes
     }
     return ""
+}
+
+// Public C-ABI: cache lookup + decoded read in one shot. Round 183
+// retired the C-side wrap-then-call adapter (rep_store_shim.c)
+// using this helper. Returns the decoded blob bytes as a refcounted
+// AetherString, or "" on miss / corruption.
+export svnae_rep_read_blob(repo: string, sha1_hex: string) -> string {
+    uncompressed = rep_cache_lookup_uncompressed(repo, sha1_hex)
+    if uncompressed < 0 { return "" }
+    return rep_read_decoded(repo, sha1_hex, uncompressed)
+}
+
+// Backward-compat no-op for callers that bracket their read with a
+// free. AetherString refcounting handles the lifetime.
+export svnae_rep_free(p: string) {
+    p = p
+    return
 }
 
 // ---- rep-cache.db access --------------------------------------------
@@ -236,11 +251,11 @@ export rep_cache_insert(repo: string, sha: string, rel_path: string,
 const STORAGE_RAW  = 1
 const STORAGE_ZLIB = 2
 
-extern aether_repo_primary_hash(repo: string) -> string
-extern aether_repo_secondary_hashes_joined(repo: string) -> string
+extern repo_primary_hash(repo: string) -> string
+extern repo_secondary_hashes_joined(repo: string) -> string
 extern svnae_crypto_hash_hex(algo: string, data: string, length: int) -> string
-extern aether_rep_cache_sec_ensure(repo: string) -> string
-extern aether_rep_cache_sec_insert(repo: string, primary: string,
+extern rep_cache_sec_ensure(repo: string) -> string
+extern rep_cache_sec_insert(repo: string, primary: string,
                                     algo: string, secondary: string) -> string
 
 // Compute and persist secondary-hash rows. `joined` is the \n-
@@ -250,7 +265,7 @@ extern aether_rep_cache_sec_insert(repo: string, primary: string,
 write_secondary_hashes_(repo: string, primary_sha: string,
                          data: string, length: int, joined: string) {
     if string.length(joined) == 0 { return 0 }
-    aether_rep_cache_sec_ensure(repo)
+    rep_cache_sec_ensure(repo)
 
     n = string.length(joined)
     pos = 0
@@ -262,7 +277,7 @@ write_secondary_hashes_(repo: string, primary_sha: string,
             algo = string.substring(joined, pos, end)
             sec_hex = svnae_crypto_hash_hex(algo, data, length)
             if string.length(sec_hex) > 0 {
-                aether_rep_cache_sec_insert(repo, primary_sha, algo, sec_hex)
+                rep_cache_sec_insert(repo, primary_sha, algo, sec_hex)
             }
         }
         if eol < 0 { return 0 }
@@ -276,7 +291,7 @@ write_secondary_hashes_(repo: string, primary_sha: string,
 // cache insert). Idempotent: if the primary hash is already in the
 // cache we short-circuit without writing or re-inserting.
 export rep_write_blob(repo: string, data: string, length: int) -> string {
-    primary = aether_repo_primary_hash(repo)
+    primary = repo_primary_hash(repo)
     sha = svnae_crypto_hash_hex(primary, data, length)
     if string.length(sha) == 0 { return "" }
 
@@ -294,14 +309,14 @@ export rep_write_blob(repo: string, data: string, length: int) -> string {
     werr = rep_write_encoded(repo, sha_owned, encoded)
     if string.length(werr) > 0 { return "" }
 
-    rel_path = string.copy(aether_rep_rel_path(sha_owned))
+    rel_path = string.copy(rep_rel_path(sha_owned))
     storage = STORAGE_RAW
     if use_zlib == 1 { storage = STORAGE_ZLIB }
     if rep_cache_insert(repo, sha_owned, rel_path, length, storage) != 0 {
         return ""
     }
 
-    joined = aether_repo_secondary_hashes_joined(repo)
+    joined = repo_secondary_hashes_joined(repo)
     write_secondary_hashes_(repo, sha_owned, data, length, joined)
 
     return sha_owned

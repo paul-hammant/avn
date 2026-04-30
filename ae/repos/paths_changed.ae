@@ -31,12 +31,12 @@ import std.string
 
 extern svnae_rep_read_blob(repo: string, sha: string) -> string
 extern svnae_rep_free(body: string)
-extern aether_dir_count_entries(body: string) -> int
-extern aether_dir_entry_kind(body: string, i: int) -> int
-extern aether_dir_entry_sha(body: string, i: int) -> string
-extern aether_dir_entry_name(body: string, i: int) -> string
-extern aether_dir_entry_line(kind: int, sha: string, name: string) -> string
-extern aether_path_join_rel(prefix: string, name: string) -> string
+extern dir_count_entries(body: string) -> int
+extern dir_entry_kind(body: string, i: int) -> int
+extern dir_entry_sha(body: string, i: int) -> string
+extern dir_entry_name(body: string, i: int) -> string
+extern dir_entry_line(kind: int, sha: string, name: string) -> string
+extern path_join_rel(prefix: string, name: string) -> string
 
 // Depth-first flatten. Each entry is "K SHA PATH\n" with PATH being
 // the *full* path (prefix + name), not just the basename. Returns
@@ -44,16 +44,16 @@ extern aether_path_join_rel(prefix: string, name: string) -> string
 flatten_tree(repo: string, dir_sha: string, prefix: string) -> string {
     body = svnae_rep_read_blob(repo, dir_sha)
     out = ""
-    n = aether_dir_count_entries(body)
+    n = dir_count_entries(body)
     i = 0
     while i < n {
-        kind = aether_dir_entry_kind(body, i)
-        sha = aether_dir_entry_sha(body, i)
-        name = aether_dir_entry_name(body, i)
+        kind = dir_entry_kind(body, i)
+        sha = dir_entry_sha(body, i)
+        name = dir_entry_name(body, i)
         // Snapshot sha and name before recursing (thread-local bufs).
         sha = string.concat(sha, "")
-        full_path = aether_path_join_rel(prefix, name)
-        out = string.concat(out, aether_dir_entry_line(kind, sha, full_path))
+        full_path = path_join_rel(prefix, name)
+        out = string.concat(out, dir_entry_line(kind, sha, full_path))
         if kind == 100 {    // 'd'
             out = string.concat(out, flatten_tree(repo, sha, full_path))
         }
@@ -67,37 +67,37 @@ flatten_tree(repo: string, dir_sha: string, prefix: string) -> string {
 // format, which here holds the full path). Same O(N^2) helper
 // shape as rebuild_dir's reclist_sort.
 sort_by_path(body: string) -> string {
-    n = aether_dir_count_entries(body)
+    n = dir_count_entries(body)
     if n <= 1 { return body }
 
     sorted = ""
     i = 0
     while i < n {
-        this_name = aether_dir_entry_name(body, i)
-        this_kind = aether_dir_entry_kind(body, i)
-        this_sha = aether_dir_entry_sha(body, i)
+        this_name = dir_entry_name(body, i)
+        this_kind = dir_entry_kind(body, i)
+        this_sha = dir_entry_sha(body, i)
 
-        sn = aether_dir_count_entries(sorted)
+        sn = dir_count_entries(sorted)
         new_sorted = ""
         placed = 0
         j = 0
         while j < sn {
-            jname = aether_dir_entry_name(sorted, j)
+            jname = dir_entry_name(sorted, j)
             if placed == 0 {
                 if string.compare(this_name, jname) < 0 {
                     new_sorted = string.concat(new_sorted,
-                        aether_dir_entry_line(this_kind, this_sha, this_name))
+                        dir_entry_line(this_kind, this_sha, this_name))
                     placed = 1
                 }
             }
             new_sorted = string.concat(new_sorted,
-                aether_dir_entry_line(aether_dir_entry_kind(sorted, j),
-                                      aether_dir_entry_sha(sorted, j), jname))
+                dir_entry_line(dir_entry_kind(sorted, j),
+                                      dir_entry_sha(sorted, j), jname))
             j = j + 1
         }
         if placed == 0 {
             new_sorted = string.concat(new_sorted,
-                aether_dir_entry_line(this_kind, this_sha, this_name))
+                dir_entry_line(this_kind, this_sha, this_name))
         }
         sorted = new_sorted
         i = i + 1
@@ -119,8 +119,8 @@ export paths_changed_between(repo: string, prev_root_sha: string,
         prev_flat = sort_by_path(flatten_tree(repo, prev_root_sha, ""))
     }
 
-    cn = aether_dir_count_entries(cur_flat)
-    pn = aether_dir_count_entries(prev_flat)
+    cn = dir_count_entries(cur_flat)
+    pn = dir_count_entries(prev_flat)
 
     out = ""
     i = 0
@@ -128,7 +128,7 @@ export paths_changed_between(repo: string, prev_root_sha: string,
     while i < cn {
         if j >= pn {
             // Everything remaining in cur is an add.
-            cur_path = aether_dir_entry_name(cur_flat, i)
+            cur_path = dir_entry_name(cur_flat, i)
             out = string.concat(out, "A\n")
             out = string.concat(out, cur_path)
             out = string.concat(out, "\n")
@@ -136,13 +136,13 @@ export paths_changed_between(repo: string, prev_root_sha: string,
         }
         if j < pn {
             if i < cn {
-                cur_path = aether_dir_entry_name(cur_flat, i)
-                prev_path = aether_dir_entry_name(prev_flat, j)
+                cur_path = dir_entry_name(cur_flat, i)
+                prev_path = dir_entry_name(prev_flat, j)
                 cmp_val = string.compare(cur_path, prev_path)
                 if cmp_val == 0 {
                     // Same path on both sides — modified if sha differs.
-                    cur_sha = aether_dir_entry_sha(cur_flat, i)
-                    prev_sha = aether_dir_entry_sha(prev_flat, j)
+                    cur_sha = dir_entry_sha(cur_flat, i)
+                    prev_sha = dir_entry_sha(prev_flat, j)
                     if string.equals(cur_sha, prev_sha) == 0 {
                         out = string.concat(out, "M\n")
                         out = string.concat(out, cur_path)
@@ -170,7 +170,7 @@ export paths_changed_between(repo: string, prev_root_sha: string,
     }
     // Anything remaining in prev is a delete.
     while j < pn {
-        prev_path = aether_dir_entry_name(prev_flat, j)
+        prev_path = dir_entry_name(prev_flat, j)
         out = string.concat(out, "D\n")
         out = string.concat(out, prev_path)
         out = string.concat(out, "\n")
@@ -181,24 +181,24 @@ export paths_changed_between(repo: string, prev_root_sha: string,
 
 // Higher-level entry that does the two root-sha lookups itself and
 // repacks the "<action>\n<path>\n" output into the "<N>\x02<action>
-// \x01<path>\x02..." shape ae/ra/packed.ae exposes accessors for.
+// \x01<path>\x02..." shape ae/client/packed.ae exposes accessors for.
 // Lets C callers collapse their handle struct + split loop to the
 // same {packed, n, pin_list} pattern the ra client uses.
 //
 // Returns "" on error (missing cur rev). Returns "0\x02" when rev
 // has no changed paths.
 
-extern aether_repos_load_rev_blob_field(repo: string, rev: int, key: string) -> string
+extern repos_load_rev_blob_field(repo: string, rev: int, key: string) -> string
 
 export paths_changed_packed(repo: string, rev: int) -> string {
     if rev < 0 { return "" }
 
-    cur_root = string.copy(aether_repos_load_rev_blob_field(repo, rev, "root"))
+    cur_root = string.copy(repos_load_rev_blob_field(repo, rev, "root"))
     if string.length(cur_root) == 0 { return "" }
 
     prev_root = ""
     if rev > 0 {
-        prev_root = string.copy(aether_repos_load_rev_blob_field(repo, rev - 1, "root"))
+        prev_root = string.copy(repos_load_rev_blob_field(repo, rev - 1, "root"))
         if string.length(prev_root) == 0 { return "" }
     }
 

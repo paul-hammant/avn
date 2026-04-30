@@ -27,11 +27,11 @@
 import std.http
 import std.string
 
-extern aether_parse_repo_name_in(path: string) -> string
+extern parse_repo_name_in(path: string) -> string
 extern svnserver_find_repo_path(name: string) -> string
-extern aether_copy_from_body(req: ptr, repo: string) -> int
+extern copy_from_body(req: ptr, repo: string) -> int
 
-extern aether_rev_response_json(rev: int) -> string
+extern rev_response_json(rev: int) -> string
 
 extern svnserver_respond_error(res: ptr, code: int, msg: string)
 extern svnserver_respond_json_ok(res: ptr, body: string)
@@ -43,7 +43,7 @@ export handler_copy(req: ptr, res: ptr) {
 handler_copy_impl(req: ptr, res: ptr) {
     path = http.request_path(req)
 
-    name = aether_parse_repo_name_in(path)
+    name = parse_repo_name_in(path)
     if string.length(name) == 0 {
         svnserver_respond_error(res, 404, "not found")
         return
@@ -60,7 +60,7 @@ handler_copy_impl(req: ptr, res: ptr) {
         return
     }
 
-    rv = aether_copy_from_body(req, repo)
+    rv = copy_from_body(req, repo)
     if rv == -1 {
         svnserver_respond_error(res, 400, "empty body")
         return
@@ -90,7 +90,7 @@ handler_copy_impl(req: ptr, res: ptr) {
         return
     }
 
-    svnserver_respond_json_ok(res, aether_rev_response_json(rv))
+    svnserver_respond_json_ok(res, rev_response_json(rv))
 }
 
 main() {

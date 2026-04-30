@@ -24,6 +24,7 @@
 // compatible with reference svn's svnadmin dump.
 
 import std.string
+import std.io
 
 extern aether_args_count() -> int
 extern aether_args_get(index: int) -> string
@@ -33,10 +34,9 @@ extern svnae_svnadmin_create_with_algos(repo: string, algos_spec: string) -> int
 extern svnae_svnadmin_dump  (repo: string, out_fd: int) -> int
 extern svnae_svnadmin_load  (repo: string, in_fd: int) -> int
 
-// File I/O for --file flag.
-extern open_file_for_write(path: string) -> int
-extern open_file_for_read (path: string) -> int
-extern close_fd(fd: int) -> int
+// Round 188: switched to std.io fd surface (Aether 0.110 follow-up
+// — Section 1 of nuther-ask-of-aether-team.md). io.fd_open_*
+// returns (fd, err) tuples; io.fd_close returns "" / err.
 
 find_flag(flag: string, from_idx: int) {
     n = aether_args_count()
@@ -101,15 +101,18 @@ cmd_dump(argv_start: int) {
     out_file = find_flag("--file", argv_start)
 
     fd = 1
+    opened = 0
     if string.length(out_file) > 0 {
-        fd = open_file_for_write(out_file)
-        if fd < 0 {
-            println("svnadmin dump: cannot open ${out_file}")
+        new_fd, oerr = io.fd_open_write(out_file)
+        if string.length(oerr) > 0 {
+            println("svnadmin dump: cannot open ${out_file}: ${oerr}")
             return 1
         }
+        fd = new_fd
+        opened = 1
     }
     rc = svnae_svnadmin_dump(path, fd)
-    if fd != 1 { close_fd(fd) }
+    if opened == 1 { io.fd_close(fd) }
     if rc != 0 {
         println("svnadmin dump: failed (rc=${rc})")
         return 1
@@ -126,15 +129,18 @@ cmd_load(argv_start: int) {
     in_file = find_flag("--file", argv_start)
 
     fd = 0
+    opened = 0
     if string.length(in_file) > 0 {
-        fd = open_file_for_read(in_file)
-        if fd < 0 {
-            println("svnadmin load: cannot open ${in_file}")
+        new_fd, oerr = io.fd_open_read(in_file)
+        if string.length(oerr) > 0 {
+            println("svnadmin load: cannot open ${in_file}: ${oerr}")
             return 1
         }
+        fd = new_fd
+        opened = 1
     }
     rc = svnae_svnadmin_load(path, fd)
-    if fd != 0 { close_fd(fd) }
+    if opened == 1 { io.fd_close(fd) }
     if rc != 0 {
         println("svnadmin load: failed (rc=${rc})")
         return 1

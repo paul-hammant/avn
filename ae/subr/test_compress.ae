@@ -13,15 +13,14 @@
 // implied. See the License for the specific language governing
 // permissions and limitations under the License.
 
-// Tests for ae/subr/compress.ae. Logic inlined (AETHER_ISSUES.md #2).
+// Tests for std.zlib. Round 176 retired the C-side svnae_zlib_*
+// shim in favour of std.zlib (docs/stdlib-reference.md "std.zlib"),
+// which returns length-aware AetherStrings + explicit byte counts
+// instead of opaque buf handles. inflate auto-grows so callers no
+// longer need to know the decompressed size in advance.
 
 import std.string
-
-extern svnae_zlib_deflate(data: string, data_len: int, level: int) -> ptr
-extern svnae_zlib_inflate(data: string, data_len: int, expected_out: int) -> ptr
-extern svnae_buf_length(b: ptr) -> int
-extern svnae_buf_data(b: ptr) -> string
-extern svnae_buf_free(b: ptr)
+import std.zlib
 
 expect_true(label: string, cond: int) {
     if cond == 1 {
@@ -35,9 +34,7 @@ expect_true(label: string, cond: int) {
 main() {
     fails = 0
 
-    // A highly compressible ASCII payload — "aaaa...xxxx" repeats. Using
-    // only ASCII lets us verify the round-trip via string.equals (no NUL
-    // worries on the decoded side).
+    // A highly compressible ASCII payload — "aaaa...xxxx" repeats.
     src = ""
     i = 0
     while i < 200 {
@@ -46,31 +43,16 @@ main() {
     }
     orig_len = string.length(src)
 
-    // Sanity: source length.
     fails = fails + expect_true("source is 2000 bytes", orig_len == 2000)
 
-    // Deflate.
-    comp = svnae_zlib_deflate(src, orig_len, 6)
-    fails = fails + expect_true("deflate handle not null", comp != 0)
-
-    comp_len = svnae_buf_length(comp)
-    // Must compress at least 2x for 200 repeats of the same 10-byte seq.
+    comp, comp_len, cerr = zlib.deflate(src, orig_len, 6)
+    fails = fails + expect_true("deflate ok", string.length(cerr) == 0)
     fails = fails + expect_true("compressed smaller than source", comp_len < orig_len / 2)
 
-    // Inflate back.
-    round = svnae_zlib_inflate(svnae_buf_data(comp), comp_len, orig_len)
-    fails = fails + expect_true("inflate handle not null", round != 0)
-
-    round_len = svnae_buf_length(round)
+    round, round_len, ierr = zlib.inflate(comp, comp_len)
+    fails = fails + expect_true("inflate ok", string.length(ierr) == 0)
     fails = fails + expect_true("round-trip length matches", round_len == orig_len)
-
-    // Content equality — buf_data gives us a C string (NUL-terminated here
-    // because our payload is ASCII with no embedded NULs).
-    round_str = svnae_buf_data(round)
-    fails = fails + expect_true("round-trip bytes match", string.equals(round_str, src))
-
-    svnae_buf_free(comp)
-    svnae_buf_free(round)
+    fails = fails + expect_true("round-trip bytes match", string.equals(round, src))
 
     println("  source:      ${orig_len} bytes")
     println("  compressed:  ${comp_len} bytes (${(comp_len * 100) / orig_len}%)")

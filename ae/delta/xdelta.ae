@@ -41,7 +41,7 @@ const MIN_MATCH = 4
 // svnae_svndiff_encoder_finish which produces the on-wire bytes.
 extern svnae_svndiff_encoder_new(source_len: int, target_len: int) -> ptr
 extern svnae_svndiff_encoder_add_op(enc: ptr, action: int, length: int, offset: int) -> int
-extern svnae_svndiff_encoder_finish(enc: ptr, new_data: string, new_data_len: int) -> ptr
+extern svnae_svndiff_encoder_finish(enc: ptr, new_data: string, new_data_len: int) -> (string, int)
 extern svnae_svndiff_encoder_free(enc: ptr)
 
 // Find the longest prefix of `target[tp..tp+max_match)` that
@@ -99,21 +99,20 @@ find_best_match_(source: string, source_len: int,
 }
 
 // Public: compute a delta from (source, target) and return the
-// completed svndiff envelope as an opaque ptr (the
-// svnae_svndiff_encoder_finish handle). The C wrapper at
-// ae/delta/xdelta/shim.c::svnae_xdelta_compute will pull bytes
-// out via svnae_svndiff_buf_data / _length.
+// completed svndiff envelope as a length-aware (bytes, length)
+// tuple. Round 184: matched the new (string, int) shape of
+// svnae_svndiff_encoder_finish — no buf carrier needed.
 //
-// Returns null on failure (encoder OOM).
-export aether_xdelta_compute(source: string, source_len: int,
-                              target: string, target_len: int) -> ptr {
+// Returns ("", 0) on failure (encoder OOM).
+export svnae_xdelta_compute(source: string, source_len: int,
+                             target: string, target_len: int) -> (string, int) {
     enc = svnae_svndiff_encoder_new(source_len, target_len)
-    if enc == null { return null }
+    if enc == null { return "", 0 }
 
     // new-data accumulator: bytes the OP_NEW ops will reference.
     // std.bytes — random-access write, length-aware finish.
     nd = bytes.new(target_len + 64)
-    if nd == null { svnae_svndiff_encoder_free(enc); return null }
+    if nd == null { svnae_svndiff_encoder_free(enc); return "", 0 }
     nd_len = 0
 
     tp = 0

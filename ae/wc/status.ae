@@ -55,14 +55,14 @@ extern svnae_wc_nodelist_free(L: ptr)
 // Status code classifier — maps the (conflicted, state, kind, on_disk,
 // sha_read, sha_ok) tuple to a status char. Lives in
 // ae/wc/status_code.ae.
-extern aether_status_code(conflicted: int, st: int, kind: int,
+extern status_code(conflicted: int, st: int, kind: int,
                            on_disk: int, sha_read: int, sha_ok: int) -> int
 
 // Hash a file via the WC's configured algorithm. Returns 0 on success
 // (with hex written into the C-allocated output buffer); we only need
 // the result strings here, so we wrap with a side-effect-free Aether
 // helper from the pristine module.
-extern aether_wc_hash_file(wc_root: string, path: string) -> string
+extern wc_hash_file(wc_root: string, path: string) -> string
 
 // Statuslist handle constructor (status_shim.c). Wraps a Aether-
 // built packed string "<n>\x02<path>\x01<code>\x02..." into the
@@ -71,22 +71,22 @@ extern aether_wc_hash_file(wc_root: string, path: string) -> string
 extern svnae_wc_statuslist_handle(packed: string) -> ptr
 
 // IO helpers.
-extern aether_io_exists(path: string) -> int
-extern aether_io_listdir(path: string) -> ptr
-extern aether_io_listdir_count(handle: ptr) -> int
-extern aether_io_listdir_name(handle: ptr, index: int) -> string
-extern aether_io_listdir_free(handle: ptr)
-extern aether_io_stat_kind(path: string) -> int
-extern aether_path_join_rel(prefix: string, name: string) -> string
-extern aether_is_sidecar_name(name: string) -> int
+extern io_exists(path: string) -> int
+extern io_listdir(path: string) -> ptr
+extern io_listdir_count(handle: ptr) -> int
+extern io_listdir_name(handle: ptr, index: int) -> string
+extern io_listdir_free(handle: ptr)
+extern io_stat_kind(path: string) -> int
+extern path_join_rel(prefix: string, name: string) -> string
+extern is_sidecar_name(name: string) -> int
 
 // svn:ignore handling.
-extern aether_wc_propget_value(wc_root: string, path: string, name: string) -> string
-extern aether_ignore_matches(patterns: string, name: string) -> int
+extern propget_value(wc_root: string, path: string, name: string) -> string
+extern ignore_matches(patterns: string, name: string) -> int
 
 // SHA-of-file as hex. Returns "" on error.
 sha_of_file_(wc_root: string, path: string) -> string {
-    h = aether_wc_hash_file(wc_root, path)
+    h = wc_hash_file(wc_root, path)
     if string.length(h) == 0 { return "" }
     return string.copy(h)
 }
@@ -163,42 +163,42 @@ sort_body_(body: string) -> string {
 // caller to fold into its own running accumulator.
 walk_unversioned_(wc_root: string, rel: string, tracked: ptr) -> string {
     out = ""
-    dir_path_borrowed = aether_path_join_rel(wc_root, rel)
+    dir_path_borrowed = path_join_rel(wc_root, rel)
     dir_path = string.copy(dir_path_borrowed)
 
     // Fetch svn:ignore for this directory. propget returns "" both on
     // miss and on set-to-empty; either way no patterns apply.
-    ignore_prop = aether_wc_propget_value(wc_root, rel, "svn:ignore")
+    ignore_prop = propget_value(wc_root, rel, "svn:ignore")
     ignore_prop = string.copy(ignore_prop)
     have_ignores = 0
     if string.length(ignore_prop) > 0 { have_ignores = 1 }
 
-    d = aether_io_listdir(dir_path)
+    d = io_listdir(dir_path)
     if d == null { return out }
-    n_entries = aether_io_listdir_count(d)
+    n_entries = io_listdir_count(d)
     i = 0
     while i < n_entries {
-        name = aether_io_listdir_name(d, i)
+        name = io_listdir_name(d, i)
         name = string.copy(name)
         skip = 0
         if string.equals(name, ".svn") == 1 { skip = 1 }
         // Skip conflict sidecars — .mine and .r<N>. They'll be cleaned
         // up by `svn resolve`.
         if skip == 0 {
-            if aether_is_sidecar_name(name) == 1 { skip = 1 }
+            if is_sidecar_name(name) == 1 { skip = 1 }
         }
         if skip == 0 {
-            child_rel_borrowed = aether_path_join_rel(rel, name)
+            child_rel_borrowed = path_join_rel(rel, name)
             child_rel = string.copy(child_rel_borrowed)
-            child_fs_borrowed = aether_path_join_rel(wc_root, child_rel)
+            child_fs_borrowed = path_join_rel(wc_root, child_rel)
             child_fs = string.copy(child_fs_borrowed)
-            kind = aether_io_stat_kind(child_fs)   // 1=file 2=dir, 0=missing
+            kind = io_stat_kind(child_fs)   // 1=file 2=dir, 0=missing
             if kind != 0 {
                 is_tracked = map_has(tracked, child_rel)
                 ignored = 0
                 if is_tracked == 0 {
                     if have_ignores == 1 {
-                        ignored = aether_ignore_matches(ignore_prop, name)
+                        ignored = ignore_matches(ignore_prop, name)
                     }
                 }
                 if kind == 2 {
@@ -219,7 +219,7 @@ walk_unversioned_(wc_root: string, rel: string, tracked: ptr) -> string {
         }
         i = i + 1
     }
-    aether_io_listdir_free(d)
+    io_listdir_free(d)
     return out
 }
 
@@ -249,7 +249,7 @@ export svnae_wc_status(wc_root: string) -> ptr {
         map_put_raw(tracked, rel, sentinel)
 
         disk = "${wc_root}/${rel}"
-        on_disk = aether_io_exists(disk)
+        on_disk = io_exists(disk)
 
         // Hash the file only when the classifier needs it: normal-
         // state file nodes that are on disk and not conflicted.
@@ -268,7 +268,7 @@ export svnae_wc_status(wc_root: string) -> ptr {
                 }
             }
         }
-        code = aether_status_code(conflicted, state, kind, on_disk, sha_read, sha_ok)
+        code = status_code(conflicted, state, kind, on_disk, sha_read, sha_ok)
         if code != 32 {   // not space
             body = append_record_(body, rel, code)
         }
