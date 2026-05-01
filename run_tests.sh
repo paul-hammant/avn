@@ -1,34 +1,27 @@
 #!/bin/bash
-# Parallel sweep of every test_*.sh under ae/. Each test uses its own
-# REPO path (/tmp/svnae_test_<tag>_repo) and PORT, so they're safe to
-# run concurrently.
+# run_tests.sh — delegate to unified test runner
+#
+# Maintained for backward compatibility. Delegates to tests/run.sh which
+# provides aetherBuild-style test discovery and execution.
 #
 # Usage:
 #   ./run_tests.sh               # auto: nproc / 2 jobs
 #   ./run_tests.sh 4             # explicit job count
-#   ./run_tests.sh 1             # serial (debug; matches old loop)
+#   ./run_tests.sh 1             # serial (debug)
+#   ./run_tests.sh test_svn      # pattern match
 #
-# Output: one "ok <path>" or "FAIL <path>" line per test plus a final
-# pass/fail summary. Exit 0 on all-green, 1 if anything failed.
+# See BUILD.md for details.
 
 set -e
 cd "$(dirname "$0")"
 
-JOBS="${1:-$(( $(nproc) / 2 ))}"
-[ "$JOBS" -lt 1 ] && JOBS=1
+# Parse arguments: first arg could be jobs count or pattern
+first_arg="${1:-}"
 
-mapfile -t tests < <(find ae -name "test_*.sh" | sort)
-
-# xargs -P + -I{} together: -I disables -n; pass tests one-per-line.
-results=$(printf '%s\n' "${tests[@]}" | \
-    xargs -P "$JOBS" -I{} bash -c 'bash "{}" >/dev/null 2>&1 && echo "ok {}" || echo "FAIL {}"')
-
-echo "$results" | sort
-
-pass=$(echo "$results" | grep -c "^ok " || true)
-fail=$(echo "$results" | grep -c "^FAIL " || true)
-
-echo "---"
-echo "PASS: $pass / ${#tests[@]}   FAIL: $fail   (jobs=$JOBS)"
-
-[ "$fail" -eq 0 ]
+if [ -n "$first_arg" ] && [ "$first_arg" -eq "$first_arg" ] 2>/dev/null; then
+    # It's a number (job count)
+    exec ./tests/run.sh --jobs "$first_arg" "${2:-}"
+else
+    # It's a pattern or empty
+    exec ./tests/run.sh "$first_arg"
+fi
