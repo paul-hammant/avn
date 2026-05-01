@@ -3,5 +3,7 @@ import bash
 
 main() {
     b = build.start()
-    bash.test(b)
+    bash.test(b) {
+        jobs(8)
+    }
 }
