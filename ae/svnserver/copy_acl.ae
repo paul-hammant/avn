@@ -34,7 +34,7 @@ extern paths_index_sort(body: string) -> string
 
 // Returns the augmented body. Empty input → empty output (caller keeps
 // the "inherit previous" default).
-export copy_acl_follow(body: string, from_path: string, to_path: string) -> string {
+copy_acl_follow(body: string, from_path: string, to_path: string) -> string {
     n = string.length(body)
     if n == 0 { return "" }
     from_len = string.length(from_path)

@@ -111,7 +111,7 @@ sort_by_path(body: string) -> string {
 //
 // `prev_root_sha` may be "" — meaning "no previous rev", and every
 // path in cur_root becomes an add.
-export paths_changed_between(repo: string, prev_root_sha: string,
+paths_changed_between(repo: string, prev_root_sha: string,
                              cur_root_sha: string) -> string {
     cur_flat = sort_by_path(flatten_tree(repo, cur_root_sha, ""))
     prev_flat = ""

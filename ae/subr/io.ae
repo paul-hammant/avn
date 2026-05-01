@@ -97,7 +97,7 @@ export io_is_regular_file(path: string) -> int {
 }
 
 // 1 if `path` exists and is a directory, 0 otherwise.
-export io_is_directory(path: string) -> int {
+io_is_directory(path: string) -> int {
     kind, _s, _m, err = fs.file_stat(path)
     if string.length(err) > 0 { return 0 }
     if kind == 2 { return 1 }

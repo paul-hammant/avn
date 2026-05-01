@@ -112,12 +112,6 @@ export fsfs_tree_builder_content_data(tb_ptr: ptr, i: int) -> string {
     return p
 }
 
-export fsfs_tree_builder_content_len(tb_ptr: ptr, i: int) -> int {
-    if tb_ptr == null { return 0 }
-    tb = tb_ptr as *TreeBuilder
-    return gintarr_get(tb.content_lens, i)
-}
-
 main() {
     println("ae/fs_fs/tree_builder.ae is a library; not meant to run standalone")
 }

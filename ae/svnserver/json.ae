@@ -56,7 +56,7 @@ export json_escape_string(v: string) -> string {
     return out
 }
 
-export json_int_to_dec(v: int) -> string {
+json_int_to_dec(v: int) -> string {
     return string.from_int(v)
 }
 

@@ -90,15 +90,6 @@ export gintarr_add(a: ptr, value: int) -> ptr {
     return fresh
 }
 
-// In-place set at index i. No-op on OOB.
-export gintarr_set(a: ptr, i: int, value: int) {
-    if a == null { return 0 }
-    n = intarr_get_unchecked(a, 0)
-    if i < 0 { return 0 }
-    if i >= n { return 0 }
-    intarr_set_unchecked(a, i + HEADER_SLOTS, value)
-    return 0
-}
 
 // Release.
 export gintarr_free(a: ptr) {

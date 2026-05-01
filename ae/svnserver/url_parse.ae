@@ -58,7 +58,7 @@ rev_prefix_len(tail: string) -> int {
 }
 
 // Parse the rev number from "/rev/N...". -1 on malformed.
-export parse_rev_prefix(tail: string) -> int {
+parse_rev_prefix(tail: string) -> int {
     end = rev_prefix_len(tail)
     if end < 0 { return -1 }
     // Accumulate digits from index 5 to end-1.
@@ -73,7 +73,7 @@ export parse_rev_prefix(tail: string) -> int {
 
 // Index of first char after the "/rev/N" run. -1 on malformed.
 // Callers use tail + this to get the remainder string.
-export parse_rev_prefix_end(tail: string) -> int {
+parse_rev_prefix_end(tail: string) -> int {
     return rev_prefix_len(tail)
 }
 

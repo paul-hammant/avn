@@ -44,7 +44,7 @@ extern svnserver_respond_json_ok(res: ptr, body: string)
 // Named `_full` to distinguish from the field-emit-only helper
 // rev_info_json in ae/svnserver/json.ae (which just builds
 // the inner {rev, author, ...} object from already-known fields).
-export rev_info_json_full(repo: string, rev: int, user: string, is_super: int) -> string {
+rev_info_json_full(repo: string, rev: int, user: string, is_super: int) -> string {
     info = repos_info_rev(repo, rev)
     if info == null { return "" }
 

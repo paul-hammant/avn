@@ -65,7 +65,7 @@ const SQLITE_DONE = 101
 // Zlib is only kept when it saves at least 16 bytes — same rule
 // the C version used and the wc pristine store reuses.
 
-export rep_encode_blob(data: string, length: int) -> string {
+rep_encode_blob(data: string, length: int) -> string {
     use_zlib = 0
     body = data
     body_len = length
@@ -95,20 +95,20 @@ export rep_encode_blob(data: string, length: int) -> string {
 
 // Accessors the C caller uses on the encoded envelope.
 
-export rep_encoded_use_zlib(encoded: string) -> int {
+rep_encoded_use_zlib(encoded: string) -> int {
     if string.length(encoded) == 0 { return 0 }
     ch = string.char_at(encoded, 0)
     if ch == 49 { return 1 }   // '1'
     return 0
 }
 
-export rep_encoded_bytes(encoded: string) -> string {
+rep_encoded_bytes(encoded: string) -> string {
     n = string.length(encoded)
     if n < 2 { return "" }
     return slice(encoded, n, 2, n)
 }
 
-export rep_encoded_length(encoded: string) -> int {
+rep_encoded_length(encoded: string) -> int {
     n = string.length(encoded)
     if n < 2 { return 0 }
     return n - 2
@@ -120,7 +120,7 @@ export rep_encoded_length(encoded: string) -> int {
 // parent dir exists and write the file binary-safe. Returns "" on
 // success, error message otherwise.
 
-export rep_write_encoded(repo: string, sha: string, encoded: string) -> string {
+rep_write_encoded(repo: string, sha: string, encoded: string) -> string {
     dir = string.copy(rep_dir(repo, sha))
     if io_mkdir_p(dir) != 0 { return "mkdir_p failed" }
 
@@ -136,7 +136,7 @@ export rep_write_encoded(repo: string, sha: string, encoded: string) -> string {
 // and (if 'Z') inflate to `uncompressed_size` bytes. Returns the
 // decoded payload, or "" on miss / decompression failure.
 
-export rep_read_decoded(repo: string, sha: string, uncompressed_size: int) -> string {
+rep_read_decoded(repo: string, sha: string, uncompressed_size: int) -> string {
     path = string.copy(rep_path(repo, sha))
     file, fsize, err = fs.read_binary(path)
     if string.length(err) > 0 { return "" }
@@ -204,7 +204,7 @@ export rep_cache_has(repo: string, sha: string) -> int {
     return found
 }
 
-export rep_cache_lookup_uncompressed(repo: string, sha: string) -> int {
+rep_cache_lookup_uncompressed(repo: string, sha: string) -> int {
     db, oerr = sqlite.open("${repo}/rep-cache.db")
     if string.length(oerr) > 0 { return -1 }
     stmt, perr = sqlite.prepare(db, "SELECT uncompressed_size FROM rep_cache WHERE hash = ?")
