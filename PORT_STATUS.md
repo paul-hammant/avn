@@ -39,12 +39,12 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
   was `state` being a reserved keyword.  Hand-written C%: now
   **57%** of tracked source (generated `_generated.c` files are
   gitignored and not counted toward either side).
-- **Round 7** (current): ported the svnserver /rev/N URL-tail parser
+- **Round 7**: ported the svnserver /rev/N URL-tail parser
   (ae/svnserver/url_parse.ae), dropped four copies of hand-rolled
   `int_to_dec` + `digit_char` in favour of `std.string.from_int` now
   that it's available, and ported the WC pristine-store path builder
   to ae/wc/pristine_path.ae (handles the two-level XX/YY/ fanout).
-- **Round 28** (current): **36.81% C, 63.19% Aether.** Ported
+- **Round 28**: **36.81% C, 63.19% Aether.** Ported
   svnae_repos_blame — the last big knot in repos/shim.c, ~245
   LOC of C doing line-level LCS, paths-changed walk, and
   per-line annotation carry-forward.
@@ -62,6 +62,22 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
   - repos/shim.c: 703 → 510 LOC (-193 LOC). split_lines,
     lcs_match, ann_push, struct line_ann, struct svnae_blame's
     old items array, and the 90-LOC walk loop all gone from C.
+
+- **Round 29** (current): **36.81% C, 63.19% Aether (unchanged).**
+  Code-quality consolidation: the `pin_list` / `pin_str` /
+  `pin_list_free` pattern for per-handle string memory management
+  was identically implemented in both ra/shim.c (~28 LOC) and
+  repos/shim.c (~28 LOC). Moved to a shared ae/subr/pin_list.h
+  included by both, eliminating ~56 LOC of duplication across the
+  shims. No functional change, no port activity — just cleanup
+  toward the natural end state at 36-37% C.
+
+- **Round 30** (current): **36.66% C, 63.34% Aether.** Inlined
+  trivial `mkdir_p` and `write_file_atomic` wrappers in
+  svnadmin/shim.c. Both are pure pass-throughs to aether_io_mkdir_p
+  and aether_io_write_atomic (7-11 call sites each); fall in the
+  "always inline" range per pattern 3. svnadmin/shim.c: 511 → 504
+  LOC (-7 LOC). Total C drop: -7 LOC. Final steady state: 36.66% C.
 
 - **Rounds 26-27**: **37.85% C, 62.15% Aether.** Leaf
   sweep after the structural passes:

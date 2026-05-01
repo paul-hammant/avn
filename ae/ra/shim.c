@@ -36,6 +36,7 @@
 #include "aether_json.h"    /* JsonValue / json_create_number used by the
                                svnae_ra_json_int helper the commit-build
                                Aether module calls back into. */
+#include "../subr/pin_list.h"
 #include <curl/curl.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -294,36 +295,6 @@ svnae_ra_hash_algo(const char *base_url, const char *repo_name)
  * clobber them; strdup-and-pin-to-handle gives the stable-pointer
  * contract the C API has always had. */
 
-struct pin_list {
-    char **items;
-    int n, cap;
-};
-
-static const char *
-pin_str(struct pin_list *pl, const char *fresh)
-{
-    if (!fresh) fresh = "";
-    if (pl->n == pl->cap) {
-        int nc = pl->cap ? pl->cap * 2 : 8;
-        char **np = realloc(pl->items, (size_t)nc * sizeof *np);
-        if (!np) return "";
-        pl->items = np;
-        pl->cap = nc;
-    }
-    char *copy = strdup(fresh);
-    if (!copy) return "";
-    pl->items[pl->n++] = copy;
-    return copy;
-}
-
-static void
-pin_list_free(struct pin_list *pl)
-{
-    for (int i = 0; i < pl->n; i++) free(pl->items[i]);
-    free(pl->items);
-    pl->items = NULL;
-    pl->n = pl->cap = 0;
-}
 
 struct svnae_ra_log { char *packed; int n; struct pin_list pins; };
 
