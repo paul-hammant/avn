@@ -1,10 +1,11 @@
 import build
 import aether
+import aether (source, output)
 
 main() {
     b = build.start()
     aether.program(b) {
-        aether.source("main.ae")
-        aether.output("svn")
+        source("main.ae")
+        output("svn")
     }
 }
