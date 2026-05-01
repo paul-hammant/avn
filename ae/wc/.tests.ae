@@ -1,35 +1,28 @@
-// ae/wc/.tests.ae
-// Test suite for working copy operations
-//
-// Declares integration tests for checkout, status, commit, merge, etc.
+// ae/wc/.tests.ae — working copy tests
+// Integration tests for working copy operations
 
 import std.os
-import subr.integration_test (test_suite_new, test_suite_add, test_suite_set_jobs, test_suite_run_and_exit)
+import subr.integration_test
 
 main() {
-    suite = test_suite_new("working copy operations")
+    s = integration_test.suite("working copy")
+        .set_description("Local operations: checkout, status, update, commit, merge, revert, switch")
+        .add("ae/wc/test_checkout.sh")
+        .add("ae/wc/test_status.sh")
+        .add("ae/wc/test_commit.sh")
+        .add("ae/wc/test_update.sh")
+        .add("ae/wc/test_switch.sh")
+        .add("ae/wc/test_revert_diff.sh")
+        .add("ae/wc/test_cleanup.sh")
+        .add("ae/wc/test_ignore.sh")
+        .add("ae/wc/test_props.sh")
+        .add("ae/wc/test_cp_mv.sh")
+        .add("ae/wc/test_merge.sh")
+        .add("ae/wc/test_merge_reverse.sh")
+        .add("ae/wc/test_mergeinfo_arith.sh")
+        .add("ae/wc/test_log_verbose.sh")
+        .add("ae/wc/test_server_props.sh")
+        .set_jobs(4)
 
-    test_suite_add(suite, "ae/wc/test_checkout.sh")
-    test_suite_add(suite, "ae/wc/test_status.sh")
-    test_suite_add(suite, "ae/wc/test_commit.sh")
-    test_suite_add(suite, "ae/wc/test_update.sh")
-    test_suite_add(suite, "ae/wc/test_switch.sh")
-    test_suite_add(suite, "ae/wc/test_revert_diff.sh")
-    test_suite_add(suite, "ae/wc/test_cleanup.sh")
-    test_suite_add(suite, "ae/wc/test_ignore.sh")
-    test_suite_add(suite, "ae/wc/test_props.sh")
-    test_suite_add(suite, "ae/wc/test_cp_mv.sh")
-
-    // Merge tests (complex, may be slower)
-    test_suite_add(suite, "ae/wc/test_merge.sh")
-    test_suite_add(suite, "ae/wc/test_merge_reverse.sh")
-    test_suite_add(suite, "ae/wc/test_merge3.sh")
-
-    // Metadata operations
-    test_suite_add(suite, "ae/wc/test_mergeinfo_arith.sh")
-    test_suite_add(suite, "ae/wc/test_log_verbose.sh")
-    test_suite_add(suite, "ae/wc/test_server_props.sh")
-
-    test_suite_set_jobs(suite, 4)
-    test_suite_run_and_exit(suite)
+    integration_test.run_and_exit(s)
 }

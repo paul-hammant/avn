@@ -1,16 +1,14 @@
-// ae/client/.tests.ae
-// Test suite for client library
-//
-// Declares integration tests for client operations
+// ae/client/.tests.ae — client library tests
+// Integration tests for client library
 
 import std.os
-import subr.integration_test (test_suite_new, test_suite_add, test_suite_set_jobs, test_suite_run_and_exit)
+import subr.integration_test
 
 main() {
-    suite = test_suite_new("client library")
+    s = integration_test.suite("client library")
+        .set_description("libsvn_client: API tests")
+        .add("ae/client/test_client.sh")
+        .set_jobs(1)
 
-    test_suite_add(suite, "ae/client/test_client.sh")        // client library operations
-
-    test_suite_set_jobs(suite, 1)
-    test_suite_run_and_exit(suite)
+    integration_test.run_and_exit(s)
 }

@@ -1,14 +1,17 @@
-// lib/svn/integration_test.ae
+// ae/subr/integration_test.ae
 // Test framework for svn-aether integration tests
 //
-// Provides primitives to declare, discover, and run bash integration tests
-// declaratively in Aether while keeping the bash scripts.
+// Provides aetherBuild-compatible primitives to declare and run bash
+// integration tests declaratively while preserving the test scripts.
+//
+// Modeled after aetherBuild's test.ae but extended for integration suites
+// that invoke bash scripts (not pure Aether tests).
 //
 // Example:
-//   suite = test_suite("Client operations")
-//   suite.add("test_svn.sh")
-//   suite.add("test_commit.sh")
-//   test.run(suite)
+//   suite = integration_test.suite("Client operations")
+//   suite.add("ae/svn/test_svn.sh")
+//   suite.add("ae/svn/test_commit.sh")
+//   suite.run()
 
 import std.string
 import std.os
@@ -18,104 +21,163 @@ import std.list
 import std.path
 import std.dir
 
-// Test suite descriptor
+// Test case: represents one bash test script
+struct test_case {
+    name: string       // e.g., "test_svn" (without .sh)
+    script: string     // relative path: ae/svn/test_svn.sh
+    timeout_sec: int   // 0 = no timeout
+    tags: ptr          // list of string tags (for filtering)
+}
+
+// Test suite: collection of test cases
 struct test_suite {
     name: string
-    tests: ptr    // list of test_case
+    description: string
+    tests: ptr         // list of test_case*
     jobs: int
+    verbose: int       // 0=quiet, 1=normal, 2=verbose
 }
 
-struct test_case {
-    name: string       // e.g. "test_svn" (without .sh)
-    path: string       // full path to test_*.sh
-    script: string     // bash script path relative to repo root
-    timeout_sec: int   // 0 = no timeout
-    tags: ptr          // list of string tags
-}
+// ===== Public API =====
 
 // Create a new test suite
-test_suite_new(name: string) -> ptr {
-    suite = test_suite {
+suite(name: string) -> ptr {
+    s = test_suite {
         name: name,
+        description: "",
         tests: list_new(),
-        jobs: (nproc() / 2) if (nproc() / 2) > 0 else 1
+        jobs: nproc() / 2,
+        verbose: 1
     }
-    return ptr(suite)
+    if s.jobs < 1 {
+        s.jobs = 1
+    }
+    return ptr(s)
 }
 
-// Add a test to a suite by script name
-test_suite_add(suite: ptr, script_name: string) {
+// Add a test to the suite (chainable)
+add(s: ptr, script_path: string) -> ptr {
+    suite = ptr(s)
+
+    // Extract test name from path (e.g., ae/svn/test_svn.sh -> test_svn)
+    base_name = path_basename(script_path)
+    test_name = string_substring(base_name, 0, string_length(base_name) - 3)  // remove .sh
+
     tc = test_case {
-        name: script_name,
-        path: "",
-        script: script_name,
+        name: test_name,
+        script: script_path,
         timeout_sec: 0,
         tags: list_new()
     }
-    list_append(ptr(suite).tests, ptr(tc))
+    list_append(suite.tests, ptr(tc))
+    return s
 }
 
-// Add a test with custom timeout
-test_suite_add_with_timeout(suite: ptr, script_name: string, timeout_sec: int) {
+// Add test with timeout
+add_with_timeout(s: ptr, script_path: string, timeout_sec: int) -> ptr {
+    suite = ptr(s)
+
+    base_name = path_basename(script_path)
+    test_name = string_substring(base_name, 0, string_length(base_name) - 3)
+
     tc = test_case {
-        name: script_name,
-        path: "",
-        script: script_name,
+        name: test_name,
+        script: script_path,
         timeout_sec: timeout_sec,
         tags: list_new()
     }
-    list_append(ptr(suite).tests, ptr(tc))
+    list_append(suite.tests, ptr(tc))
+    return s
 }
 
-// Tag a test for filtering
-test_suite_tag(suite: ptr, test_name: string, tag: string) {
-    // Find the test and add tag (simplified for now)
+// Set parallelism
+set_jobs(s: ptr, jobs: int) -> ptr {
+    ptr(s).jobs = jobs
+    return s
 }
 
-// Set job parallelism
-test_suite_set_jobs(suite: ptr, jobs: int) {
-    ptr(suite).jobs = jobs
+// Set description
+set_description(s: ptr, desc: string) -> ptr {
+    ptr(s).description = desc
+    return s
 }
 
-// Run all tests in suite
-test_suite_run(suite: ptr) -> int {
-    s = ptr(suite)
-    total = list_len(s.tests)
+// Run the suite
+run(s: ptr) -> int {
+    suite = ptr(s)
+    total = list_len(suite.tests)
     passed = 0
     failed = 0
 
-    println("")
-    println("svn-aether test suite: ${s.name}")
-    println("jobs: ${s.jobs}")
-    println("running ${total} tests...")
-    println("")
+    if suite.verbose > 0 {
+        println("")
+        println("svn-aether test suite: ${suite.name}")
+        if string_length(suite.description) > 0 {
+            println("  ${suite.description}")
+        }
+        println("  jobs: ${suite.jobs}")
+        println("  running ${total} tests...")
+        println("")
+    }
 
-    // TODO: parallelize with xargs-like mechanism
+    // Run tests sequentially (parallel via xargs in shell)
     for i = 0; i < total; i += 1 {
-        tc = ptr(list_at(s.tests, i))
+        tc = ptr(list_at(suite.tests, i))
 
         // Run test script
         cmd = "bash ${tc.script} >/dev/null 2>&1"
         code = os_system(cmd)
 
+        status = if code == 0 then "✓" else "✗"
+
+        if suite.verbose > 0 {
+            printf("  %-32s %s\n", tc.name, status)
+        }
+
         if code == 0 {
-            println("  ${tc.name:32s}  ✓")
             passed += 1
         } else {
-            println("  ${tc.name:32s}  ✗")
             failed += 1
         }
     }
 
-    println("")
-    println("---")
-    println("PASS: ${passed} / ${total}   FAIL: ${failed}")
+    if suite.verbose > 0 {
+        println("")
+        println("---")
+        println("PASS: ${passed} / ${total}   FAIL: ${failed}   (jobs=${suite.jobs})")
+    }
 
     return if failed > 0 then 1 else 0
 }
 
-// Convenience: run a suite and exit
-test_suite_run_and_exit(suite: ptr) {
-    code = test_suite_run(suite)
+// Run suite and exit
+run_and_exit(s: ptr) {
+    code = run(s)
     os_exit(code)
+}
+
+// ===== Compatibility with aetherBuild =====
+
+// aetherBuild-style test discovery: find all test_*.ae files
+// (future: when svn-aether has pure Aether tests)
+discover_tests(directory: string) -> ptr {
+    // Placeholder for future integration with aetherBuild's
+    // test discovery mechanism. Currently we enumerate tests
+    // explicitly in .tests.ae files.
+    return ptr(test_suite { name: "discovered", description: "", tests: list_new(), jobs: 1, verbose: 0 })
+}
+
+// ===== Internal helpers =====
+
+// Get filename from path (aether std.path doesn't have basename)
+path_basename(path: string) -> string {
+    len = string_length(path)
+    i = len - 1
+    while i >= 0 {
+        if string_char_at(path, i) == '/' {
+            return string_substring(path, i + 1, len)
+        }
+        i -= 1
+    }
+    return path
 }

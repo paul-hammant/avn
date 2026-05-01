@@ -1,17 +1,15 @@
-// ae/svnadmin/.tests.ae
-// Test suite for repository administration
-//
-// Declares integration tests for repo creation, dump, load, etc.
+// ae/svnadmin/.tests.ae — admin tool tests
+// Integration tests for svnadmin
 
 import std.os
-import subr.integration_test (test_suite_new, test_suite_add, test_suite_set_jobs, test_suite_run_and_exit)
+import subr.integration_test
 
 main() {
-    suite = test_suite_new("svnadmin repository tool")
+    s = integration_test.suite("svnadmin")
+        .set_description("Repository admin: create, dump, load, verify")
+        .add("ae/svnadmin/test_svnadmin.sh")
+        .add("ae/svnadmin/test_hash_algo.sh")
+        .set_jobs(2)
 
-    test_suite_add(suite, "ae/svnadmin/test_svnadmin.sh")     // create, dump, load
-    test_suite_add(suite, "ae/svnadmin/test_hash_algo.sh")    // hash algorithm selection
-
-    test_suite_set_jobs(suite, 2)
-    test_suite_run_and_exit(suite)
+    integration_test.run_and_exit(s)
 }

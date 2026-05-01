@@ -1,17 +1,15 @@
-// ae/svnserver/.tests.ae
-// Test suite for HTTP server implementation
-//
-// Declares integration tests for server operations and wire protocol
+// ae/svnserver/.tests.ae — HTTP server tests
+// Integration tests for aether-svnserver
 
 import std.os
-import subr.integration_test (test_suite_new, test_suite_add, test_suite_set_jobs, test_suite_run_and_exit)
+import subr.integration_test
 
 main() {
-    suite = test_suite_new("HTTP server (aether-svnserver)")
+    s = integration_test.suite("HTTP server")
+        .set_description("aether-svnserver: JSON metadata, HTTP verbs, wire protocol")
+        .add("ae/svnserver/test_server.sh")
+        .add("ae/svnserver/test_rest_put.sh")
+        .set_jobs(2)
 
-    test_suite_add(suite, "ae/svnserver/test_server.sh")      // general server operations
-    test_suite_add(suite, "ae/svnserver/test_rest_put.sh")    // PUT request handling
-
-    test_suite_set_jobs(suite, 2)
-    test_suite_run_and_exit(suite)
+    integration_test.run_and_exit(s)
 }

@@ -1,71 +1,61 @@
-// .tests.ae — root test suite
+// .tests.ae — root test suite (aetherBuild-compatible)
 //
-// Declares the complete test suite for svn-aether, discovering and running
-// all integration tests across all modules.
+// Master test suite for svn-aether: all 32 integration tests across modules.
 //
 // Usage:
 //   ae build .tests.ae -o /tmp/run_all_tests
 //   /tmp/run_all_tests
 
-import std.string
 import std.os
-import std.file
-import std.fs
-import std.list
-import std.path
-
-import subr.integration_test (
-    test_suite_new,
-    test_suite_add,
-    test_suite_set_jobs,
-    test_suite_run_and_exit
-)
+import subr.integration_test
 
 main() {
-    // Master test suite for all 32 integration tests
-    suite = test_suite_new("svn-aether (all modules)")
+    // Master test suite
+    s = integration_test.suite("svn-aether")
+        .set_description("Complete integration test suite (all 32 tests)")
 
-    // Client CLI tests (11 tests)
-    test_suite_add(suite, "ae/svn/test_svn.sh")
-    test_suite_add(suite, "ae/svn/test_acl.sh")
-    test_suite_add(suite, "ae/svn/test_acl_write.sh")
-    test_suite_add(suite, "ae/svn/test_acl_cp_follow.sh")
-    test_suite_add(suite, "ae/svn/test_branch_create.sh")
-    test_suite_add(suite, "ae/svn/test_branch_enforce.sh")
-    test_suite_add(suite, "ae/svn/test_branches_phase81.sh")
-    test_suite_add(suite, "ae/svn/test_blame.sh")
-    test_suite_add(suite, "ae/svn/test_verify.sh")
-    test_suite_add(suite, "ae/svn/test_verify_secondaries.sh")
+        // Client CLI tests (11)
+        .add("ae/svn/test_svn.sh")
+        .add("ae/svn/test_acl.sh")
+        .add("ae/svn/test_acl_write.sh")
+        .add("ae/svn/test_acl_cp_follow.sh")
+        .add("ae/svn/test_branch_create.sh")
+        .add("ae/svn/test_branch_enforce.sh")
+        .add("ae/svn/test_branches_phase81.sh")
+        .add("ae/svn/test_blame.sh")
+        .add("ae/svn/test_verify.sh")
+        .add("ae/svn/test_verify_secondaries.sh")
 
-    // Working copy tests (15 tests)
-    test_suite_add(suite, "ae/wc/test_checkout.sh")
-    test_suite_add(suite, "ae/wc/test_status.sh")
-    test_suite_add(suite, "ae/wc/test_commit.sh")
-    test_suite_add(suite, "ae/wc/test_update.sh")
-    test_suite_add(suite, "ae/wc/test_switch.sh")
-    test_suite_add(suite, "ae/wc/test_revert_diff.sh")
-    test_suite_add(suite, "ae/wc/test_cleanup.sh")
-    test_suite_add(suite, "ae/wc/test_ignore.sh")
-    test_suite_add(suite, "ae/wc/test_props.sh")
-    test_suite_add(suite, "ae/wc/test_cp_mv.sh")
-    test_suite_add(suite, "ae/wc/test_merge.sh")
-    test_suite_add(suite, "ae/wc/test_merge_reverse.sh")
-    test_suite_add(suite, "ae/wc/test_mergeinfo_arith.sh")
-    test_suite_add(suite, "ae/wc/test_log_verbose.sh")
-    test_suite_add(suite, "ae/wc/test_server_props.sh")
+        // Working copy tests (15)
+        .add("ae/wc/test_checkout.sh")
+        .add("ae/wc/test_status.sh")
+        .add("ae/wc/test_commit.sh")
+        .add("ae/wc/test_update.sh")
+        .add("ae/wc/test_switch.sh")
+        .add("ae/wc/test_revert_diff.sh")
+        .add("ae/wc/test_cleanup.sh")
+        .add("ae/wc/test_ignore.sh")
+        .add("ae/wc/test_props.sh")
+        .add("ae/wc/test_cp_mv.sh")
+        .add("ae/wc/test_merge.sh")
+        .add("ae/wc/test_merge_reverse.sh")
+        .add("ae/wc/test_mergeinfo_arith.sh")
+        .add("ae/wc/test_log_verbose.sh")
+        .add("ae/wc/test_server_props.sh")
 
-    // Server tests (2 tests)
-    test_suite_add(suite, "ae/svnserver/test_server.sh")
-    test_suite_add(suite, "ae/svnserver/test_rest_put.sh")
+        // Server tests (2)
+        .add("ae/svnserver/test_server.sh")
+        .add("ae/svnserver/test_rest_put.sh")
 
-    // Admin tests (2 tests)
-    test_suite_add(suite, "ae/svnadmin/test_svnadmin.sh")
-    test_suite_add(suite, "ae/svnadmin/test_hash_algo.sh")
+        // Admin tests (2)
+        .add("ae/svnadmin/test_svnadmin.sh")
+        .add("ae/svnadmin/test_hash_algo.sh")
 
-    // Client lib tests (1 test)
-    test_suite_add(suite, "ae/client/test_client.sh")
+        // Client library tests (1)
+        .add("ae/client/test_client.sh")
 
-    // Total: 32 integration tests
-    // Run with auto-parallelism (nproc / 2)
-    test_suite_run_and_exit(suite)
+        // Total: 32 tests
+        .set_jobs(8)  // auto: nproc / 2
+
+    integration_test.run_and_exit(s)
 }
