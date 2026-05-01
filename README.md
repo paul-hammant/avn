@@ -1,26 +1,33 @@
 # svn-aether
 
 A clean-sheet reimplementation of [Apache Subversion] in the [Aether
-systems language]. The goal isn't a mechanical C→Aether translation —
-we read the svn C tree as a *reference for behaviour contracts* and
-wrote our own on-disk format, wire protocol, and algorithms.
+systems language]. Not a mechanical C→Aether translation — we read the
+svn C tree as a *reference for behaviour contracts* and wrote our own
+on-disk formats, wire protocol, and algorithms.
 
-The reference svn C code still lives at `libsvn_*/` in this repo,
-read-only. The port lives under `ae/`. The old Apache-svn README is
-preserved at [`README.apache-svn-upstream`](./README.apache-svn-upstream).
+The implementation lives entirely in `ae/` (138 Aether files). No
+tracked C code in the port itself; Aether's standard library handles
+SQLite, zlib, and OpenSSL via FFI. Historical reference docs from the
+original Subversion are preserved in `notes/` and `doc/` for future
+updates.
 
 [Apache Subversion]: https://subversion.apache.org/
 [Aether systems language]: https://aetherlang.org/
 
 ## Status
 
-- **57 commits**, each phase reviewable in isolation.
-- **47 test suites**, ~507 assertions, all green.
-- **~14,400 lines** (Aether + C shims + shell drivers).
+- **111 commits** in the port progression (Rounds 1-31+), each phase
+  reviewable in isolation.
+- **47 test suites** (~507 assertions), all green.
+- **138 Aether source files**, no hand-written C in the port.
 - Daily-driver workflow end-to-end: `checkout → edit → status → diff →
   add → rm → commit → update → branch → merge`.
+- **Current**: 36.00% C, 64.00% Aether (C code is only generated
+  `_generated.c` files from Aether, not tracked in git).
 
-Full phase map and feature matrix: **[PORT_STATUS.md](./PORT_STATUS.md)**.
+Detailed phase map and design notes: **[PORT_STATUS.md](./PORT_STATUS.md)**,
+**[migration_method.md](./migration_method.md)**,
+**[ZERO_C_PLAN.md](./ZERO_C_PLAN.md)**.
 
 ## Binaries we ship
 
@@ -65,13 +72,27 @@ so you can run them straight from a fresh clone):
 for t in ae/*/test_*.sh; do sleep 0.3; bash "$t" || break; done
 ```
 
+### Repository structure
+
+- **ae/** — Aether port (138 source files)
+  - **ae/client/** — Client-side operations (checkout, commit, merge, etc.)
+  - **ae/wc/** — Working copy management and local operations
+  - **ae/repos/** — Repository query and traversal
+  - **ae/fs_fs/** — Filesystem repository backend (FSFS format)
+  - **ae/svn/** — Client CLI (command dispatch)
+  - **ae/svnserver/** — HTTP server implementation
+  - **ae/svnadmin/** — Admin tool (create, dump, load)
+  - **ae/subr/** — Shared utilities (pack/unpack, I/O, etc.)
+- **notes/** — Design docs, rationale, algorithm descriptions (for future updates)
+- **doc/** — User-facing documentation
+- **Root** — Build system (aether.toml, build.sh, sync-aether-deps.sh, regen.sh)
+
 ### Generated sources
 
-Some `.c` files under `ae/` are produced by `aetherc --emit=lib` from
-paired `.ae` sources (grep for `_generated.c`). They're **not checked
-into git** — `./regen.sh` rebuilds them on demand. Never hand-edit
-one; the next regen will blow your changes away. Edit the `.ae` source
-and run `./regen.sh --force`.
+Some `.c` files are produced by `aetherc --emit=lib` from `.ae` sources
+(named `*_generated.c`). They're **not checked into git** — `./regen.sh`
+rebuilds them on demand. Never hand-edit one; the next regen will blow
+your changes away. Edit the `.ae` source and run `./regen.sh --force`.
 
 ## What's intentionally different from reference svn
 
