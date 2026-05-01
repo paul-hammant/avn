@@ -1,0 +1,35 @@
+// ae/svn/.tests.ae
+// Test suite for svn CLI client
+//
+// Declares and runs integration tests for client operations:
+// checkout, status, commit, diff, log, merge, branch, blame, verify
+
+import std.os
+import subr.integration_test (test_suite_new, test_suite_add, test_suite_set_jobs, test_suite_run_and_exit)
+
+main() {
+    suite = test_suite_new("svn client CLI")
+
+    // Core workflow tests
+    test_suite_add(suite, "ae/svn/test_svn.sh")              // checkout, status, diff, commit, update
+    test_suite_add(suite, "ae/svn/test_commit.sh")           // detailed commit tests (if exists)
+
+    // ACL enforcement
+    test_suite_add(suite, "ae/svn/test_acl.sh")              // basic ACL checks
+    test_suite_add(suite, "ae/svn/test_acl_write.sh")        // ACL write permissions
+    test_suite_add(suite, "ae/svn/test_acl_cp_follow.sh")    // ACL on branch copy
+
+    // Branch operations
+    test_suite_add(suite, "ae/svn/test_branch_create.sh")    // svn branch create
+    test_suite_add(suite, "ae/svn/test_branch_enforce.sh")   // branch rules
+    test_suite_add(suite, "ae/svn/test_branches_phase81.sh") // branch compatibility
+
+    // Analysis tools
+    test_suite_add(suite, "ae/svn/test_blame.sh")            // blame/annotate
+    test_suite_add(suite, "ae/svn/test_verify.sh")           // repo verify command
+    test_suite_add(suite, "ae/svn/test_verify_secondaries.sh") // verify with secondaries
+
+    // Run with parallelism
+    test_suite_set_jobs(suite, 4)
+    test_suite_run_and_exit(suite)
+}

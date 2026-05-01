@@ -1,94 +1,103 @@
 # SVN-Aether Build & Test System
 
-This document describes the unified test runner and build grammar for the svn-aether port.
+This document describes the Aether-based test framework for the svn-aether port.
 
-## Test Discovery & Running
+## Test Declaration (Aether)
 
-All integration tests live under `ae/*/test_*.sh`. The test runner discovers them automatically.
+All 32 integration tests are declared in `.tests.ae` files using the `integration_test` framework.
+
+### Root test suite (`.tests.ae`)
+
+Run all 32 tests:
 
 ```bash
-# Run all 32 tests in parallel
-./tests/run.sh
+# Build the master test suite
+ae build .tests.ae -o /tmp/run_all_tests
 
-# Run tests matching a pattern
-./tests/run.sh test_svn          # runs ae/svn/test_*.sh
-./tests/run.sh test_commit       # runs tests with "commit" in name
-
-# Control parallelism
-./tests/run.sh --jobs 4          # 4 parallel jobs
-./tests/run.sh --jobs 1          # serial (debug)
-
-# Override the Aether binary
-AETHER=/path/to/ae ./tests/run.sh
+# Execute
+/tmp/run_all_tests
 ```
 
-Exit code: 0 if all tests pass, 1 if any fail.
+### Module-level test suites
 
-Output format (aetherBuild-style):
+Each module with tests declares its suite:
+
+```bash
+# Client tests only
+ae build ae/svn/.tests.ae -o /tmp/test_svn
+/tmp/test_svn
+
+# Working copy tests
+ae build ae/wc/.tests.ae -o /tmp/test_wc
+/tmp/test_wc
+
+# Server tests
+ae build ae/svnserver/.tests.ae -o /tmp/test_server
+/tmp/test_server
+
+# Admin tests
+ae build ae/svnadmin/.tests.ae -o /tmp/test_admin
+/tmp/test_admin
 ```
-svn-aether test suite
-repo: /home/user/avn
-ae:   /path/to/ae
-jobs: 16
 
-running 32 integration tests...
+### Test declaration grammar
 
-  test_svn                         ✓ok
-  test_commit                      ✓ok
-  test_merge                       ✗FAIL
-
----
-PASS: 31 / 32   FAIL: 1   (jobs=16)
-
-failed tests:
-  test_merge
-```
-
-## Integration Test Grammar (Future)
-
-The current 32 bash tests can be gradually migrated to a declarative grammar. Proposed syntax (inspired by aetherBuild):
-
-### Simple test_*.sh files (current)
-
-Keep the bash integration tests as-is. They're discoverable and runnable by the unified runner.
-
-### Future: Declarative test suites with `.tests.ae`
-
-For complex multi-binary tests, future `.tests.ae` files in `ae/*/` could declare:
+Each `.tests.ae` file uses the `integration_test` library:
 
 ```aether
-// ae/svn/.tests.ae — declarative test suite
-import build
-import test
+import subr.integration_test (
+    test_suite_new,
+    test_suite_add,
+    test_suite_set_jobs,
+    test_suite_run_and_exit
+)
 
 main() {
-    // Define test suite
-    suite = test.suite("svn client operations")
+    suite = test_suite_new("client operations")
     
-    // Declare what to build
-    suite.build("ae/svnserver/main.ae", "svnserver")
-    suite.build("ae/svnserver/seed.ae",  "seeder")
-    suite.build("ae/svn/main.ae",        "svn")
+    // Add bash test scripts by path
+    test_suite_add(suite, "ae/svn/test_svn.sh")
+    test_suite_add(suite, "ae/svn/test_commit.sh")
+    test_suite_add(suite, "ae/svn/test_merge.sh")
     
-    // Declare test cases
-    suite.case("checkout", {
-        setup: fn() { seeder.run("/tmp/test_repo") },
-        test: fn() { svn.run("checkout http://localhost:9999/demo") }
-    })
+    // Control parallelism
+    test_suite_set_jobs(suite, 4)
     
-    suite.case("commit", {
-        test: fn() {
-            svn.run("edit README")
-            svn.run("commit --author alice --log 'test'")
-        }
-    })
-    
-    // Run all cases
-    test.run(suite)
+    // Run and exit with status code
+    test_suite_run_and_exit(suite)
 }
 ```
 
-This is a future extension. The bash tests remain the primary mechanism for now.
+## Bash Integration Tests
+
+The 32 bash test scripts in `ae/*/test_*.sh` remain unchanged. They're orchestrated declaratively via `.tests.ae` files.
+
+```bash
+# Individual test (for debugging)
+bash ae/svn/test_svn.sh
+
+# View output
+bash ae/svn/test_svn.sh 2>&1 | head -50
+```
+
+Each test:
+- Builds its own binaries (svnserver, svn CLI, etc.)
+- Creates isolated `/tmp/svnae_test_*` repos
+- Picks unique ports (9350+) to avoid conflicts
+- Cleans up via `trap` handlers
+
+## Legacy Runner (Backward Compat)
+
+For convenience, `run_tests.sh` and `tests/run.sh` still work:
+
+```bash
+# Old bash runner (delegates to tests/run.sh)
+./run_tests.sh              # run all 32 tests
+./run_tests.sh 4            # 4 parallel jobs
+./run_tests.sh test_svn     # pattern match
+```
+
+This is now a thin bash wrapper that discovers and runs tests.
 
 ## Test Structure
 

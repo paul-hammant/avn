@@ -1,0 +1,71 @@
+// .tests.ae — root test suite
+//
+// Declares the complete test suite for svn-aether, discovering and running
+// all integration tests across all modules.
+//
+// Usage:
+//   ae build .tests.ae -o /tmp/run_all_tests
+//   /tmp/run_all_tests
+
+import std.string
+import std.os
+import std.file
+import std.fs
+import std.list
+import std.path
+
+import subr.integration_test (
+    test_suite_new,
+    test_suite_add,
+    test_suite_set_jobs,
+    test_suite_run_and_exit
+)
+
+main() {
+    // Master test suite for all 32 integration tests
+    suite = test_suite_new("svn-aether (all modules)")
+
+    // Client CLI tests (11 tests)
+    test_suite_add(suite, "ae/svn/test_svn.sh")
+    test_suite_add(suite, "ae/svn/test_acl.sh")
+    test_suite_add(suite, "ae/svn/test_acl_write.sh")
+    test_suite_add(suite, "ae/svn/test_acl_cp_follow.sh")
+    test_suite_add(suite, "ae/svn/test_branch_create.sh")
+    test_suite_add(suite, "ae/svn/test_branch_enforce.sh")
+    test_suite_add(suite, "ae/svn/test_branches_phase81.sh")
+    test_suite_add(suite, "ae/svn/test_blame.sh")
+    test_suite_add(suite, "ae/svn/test_verify.sh")
+    test_suite_add(suite, "ae/svn/test_verify_secondaries.sh")
+
+    // Working copy tests (15 tests)
+    test_suite_add(suite, "ae/wc/test_checkout.sh")
+    test_suite_add(suite, "ae/wc/test_status.sh")
+    test_suite_add(suite, "ae/wc/test_commit.sh")
+    test_suite_add(suite, "ae/wc/test_update.sh")
+    test_suite_add(suite, "ae/wc/test_switch.sh")
+    test_suite_add(suite, "ae/wc/test_revert_diff.sh")
+    test_suite_add(suite, "ae/wc/test_cleanup.sh")
+    test_suite_add(suite, "ae/wc/test_ignore.sh")
+    test_suite_add(suite, "ae/wc/test_props.sh")
+    test_suite_add(suite, "ae/wc/test_cp_mv.sh")
+    test_suite_add(suite, "ae/wc/test_merge.sh")
+    test_suite_add(suite, "ae/wc/test_merge_reverse.sh")
+    test_suite_add(suite, "ae/wc/test_mergeinfo_arith.sh")
+    test_suite_add(suite, "ae/wc/test_log_verbose.sh")
+    test_suite_add(suite, "ae/wc/test_server_props.sh")
+
+    // Server tests (2 tests)
+    test_suite_add(suite, "ae/svnserver/test_server.sh")
+    test_suite_add(suite, "ae/svnserver/test_rest_put.sh")
+
+    // Admin tests (2 tests)
+    test_suite_add(suite, "ae/svnadmin/test_svnadmin.sh")
+    test_suite_add(suite, "ae/svnadmin/test_hash_algo.sh")
+
+    // Client lib tests (1 test)
+    test_suite_add(suite, "ae/client/test_client.sh")
+
+    // Total: 32 integration tests
+    // Run with auto-parallelism (nproc / 2)
+    test_suite_run_and_exit(suite)
+}

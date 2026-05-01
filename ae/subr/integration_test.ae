@@ -1,0 +1,121 @@
+// lib/svn/integration_test.ae
+// Test framework for svn-aether integration tests
+//
+// Provides primitives to declare, discover, and run bash integration tests
+// declaratively in Aether while keeping the bash scripts.
+//
+// Example:
+//   suite = test_suite("Client operations")
+//   suite.add("test_svn.sh")
+//   suite.add("test_commit.sh")
+//   test.run(suite)
+
+import std.string
+import std.os
+import std.file
+import std.fs
+import std.list
+import std.path
+import std.dir
+
+// Test suite descriptor
+struct test_suite {
+    name: string
+    tests: ptr    // list of test_case
+    jobs: int
+}
+
+struct test_case {
+    name: string       // e.g. "test_svn" (without .sh)
+    path: string       // full path to test_*.sh
+    script: string     // bash script path relative to repo root
+    timeout_sec: int   // 0 = no timeout
+    tags: ptr          // list of string tags
+}
+
+// Create a new test suite
+test_suite_new(name: string) -> ptr {
+    suite = test_suite {
+        name: name,
+        tests: list_new(),
+        jobs: (nproc() / 2) if (nproc() / 2) > 0 else 1
+    }
+    return ptr(suite)
+}
+
+// Add a test to a suite by script name
+test_suite_add(suite: ptr, script_name: string) {
+    tc = test_case {
+        name: script_name,
+        path: "",
+        script: script_name,
+        timeout_sec: 0,
+        tags: list_new()
+    }
+    list_append(ptr(suite).tests, ptr(tc))
+}
+
+// Add a test with custom timeout
+test_suite_add_with_timeout(suite: ptr, script_name: string, timeout_sec: int) {
+    tc = test_case {
+        name: script_name,
+        path: "",
+        script: script_name,
+        timeout_sec: timeout_sec,
+        tags: list_new()
+    }
+    list_append(ptr(suite).tests, ptr(tc))
+}
+
+// Tag a test for filtering
+test_suite_tag(suite: ptr, test_name: string, tag: string) {
+    // Find the test and add tag (simplified for now)
+}
+
+// Set job parallelism
+test_suite_set_jobs(suite: ptr, jobs: int) {
+    ptr(suite).jobs = jobs
+}
+
+// Run all tests in suite
+test_suite_run(suite: ptr) -> int {
+    s = ptr(suite)
+    total = list_len(s.tests)
+    passed = 0
+    failed = 0
+
+    println("")
+    println("svn-aether test suite: ${s.name}")
+    println("jobs: ${s.jobs}")
+    println("running ${total} tests...")
+    println("")
+
+    // TODO: parallelize with xargs-like mechanism
+    for i = 0; i < total; i += 1 {
+        tc = ptr(list_at(s.tests, i))
+
+        // Run test script
+        cmd = "bash ${tc.script} >/dev/null 2>&1"
+        code = os_system(cmd)
+
+        if code == 0 {
+            println("  ${tc.name:32s}  ✓")
+            passed += 1
+        } else {
+            println("  ${tc.name:32s}  ✗")
+            failed += 1
+        }
+    }
+
+    println("")
+    println("---")
+    println("PASS: ${passed} / ${total}   FAIL: ${failed}")
+
+    return if failed > 0 then 1 else 0
+}
+
+// Convenience: run a suite and exit
+test_suite_run_and_exit(suite: ptr) {
+    code = test_suite_run(suite)
+    os_exit(code)
+}

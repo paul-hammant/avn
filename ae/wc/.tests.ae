@@ -1,0 +1,35 @@
+// ae/wc/.tests.ae
+// Test suite for working copy operations
+//
+// Declares integration tests for checkout, status, commit, merge, etc.
+
+import std.os
+import subr.integration_test (test_suite_new, test_suite_add, test_suite_set_jobs, test_suite_run_and_exit)
+
+main() {
+    suite = test_suite_new("working copy operations")
+
+    test_suite_add(suite, "ae/wc/test_checkout.sh")
+    test_suite_add(suite, "ae/wc/test_status.sh")
+    test_suite_add(suite, "ae/wc/test_commit.sh")
+    test_suite_add(suite, "ae/wc/test_update.sh")
+    test_suite_add(suite, "ae/wc/test_switch.sh")
+    test_suite_add(suite, "ae/wc/test_revert_diff.sh")
+    test_suite_add(suite, "ae/wc/test_cleanup.sh")
+    test_suite_add(suite, "ae/wc/test_ignore.sh")
+    test_suite_add(suite, "ae/wc/test_props.sh")
+    test_suite_add(suite, "ae/wc/test_cp_mv.sh")
+
+    // Merge tests (complex, may be slower)
+    test_suite_add(suite, "ae/wc/test_merge.sh")
+    test_suite_add(suite, "ae/wc/test_merge_reverse.sh")
+    test_suite_add(suite, "ae/wc/test_merge3.sh")
+
+    // Metadata operations
+    test_suite_add(suite, "ae/wc/test_mergeinfo_arith.sh")
+    test_suite_add(suite, "ae/wc/test_log_verbose.sh")
+    test_suite_add(suite, "ae/wc/test_server_props.sh")
+
+    test_suite_set_jobs(suite, 4)
+    test_suite_run_and_exit(suite)
+}
