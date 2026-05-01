@@ -99,6 +99,20 @@ For convenience, `run_tests.sh` and `tests/run.sh` still work:
 
 This is now a thin bash wrapper that discovers and runs tests.
 
+## Future: Aeocha Integration
+
+The framework can be extended to use Aeocha (Aether's native testing library from contrib/). This would provide:
+- Deeper Aether stdlib integration
+- Better assertion primitives
+- Unified testing across Aether ecosystem
+- Test parallelization at the Aether level (not shell level)
+
+Current integration_test.ae is designed to be compatible with Aeocha's patterns. Migration path:
+1. Import Aeocha instead of rolling our own
+2. Reuse test_case / test_suite structures
+3. Adapt run() to use Aeocha's assertion framework
+4. Keep bash test scripts as external test drivers
+
 ## Test Structure
 
 Each `test_*.sh` follows a standard pattern:
