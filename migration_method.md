@@ -135,7 +135,7 @@ sidesteps the question entirely by strdup'ing once.
 used by multiple call sites. Server-side log (`ae/repos/log.ae`),
 server-side paths-changed, server-side blame — all of them reuse
 the same `aether_ra_log_*` / `aether_ra_paths_*` / `aether_ra_blame_*`
-accessors from `ae/ra/packed.ae`. One set of walkers, many producers.
+accessors from `ae/client/packed.ae`. One set of walkers, many producers.
 
 
 ### 2. Drop the split-to-rejoin round trip
@@ -222,12 +222,21 @@ decl sweep and notice "this is only called from one place."
   linked into every binary that uses it. Makefile.regen per
   directory keeps the recipes local.
 
-- **The gcc link command has an argv length limit around 2.3 KB.**
-  We hit this when adding a new `ae/svnserver/blob_build_generated.c`
-  and saw `handler_commit_generated.c` get truncated to `han`. Two
-  workarounds: (a) inline the contents into an existing generated
-  file, or (b) consolidate small modules. We chose (a) for
-  commit_parse's blob builders.
+- **The gcc link command has an argv length limit around 2 KB.**
+  Not really gcc's limit — the aether build tool's own
+  `char toml_extra[2048]` assembly buffer silently truncates
+  `extra_sources` when their concatenated length exceeds 2 KiB,
+  which in turn hands gcc a mangled path like `handler_copy_generat`
+  instead of `handler_copy_generated.c`. We've hit this twice:
+  round 23 (commit_parse blob builders) and round 30 (fs_fs
+  rep_store port). Mitigations that actually work: (a) inline
+  the contents into an existing `_generated.c` path that's
+  already on the link line, or (b) consolidate two or more
+  small `.ae` modules into one. Filing as AETHER_ISSUES.md #17
+  — the parse-side buffer was bumped to 8 KiB in v0.85 but the
+  assembly-side buffer wasn't. Until that's fixed, new
+  `_generated.c` additions to svnserver in particular have a
+  real cost.
 
 - **`match`, `state`, `after`, `message`, `ptr` are reserved
   keywords.** Renaming pattern: `match_arr`, `st`, `tail`, `msg`.
@@ -245,6 +254,54 @@ decl sweep and notice "this is only called from one place."
   There's no `string.from_char(int)` in std.string today; substring
   is the cheapest path for encoding a known `\x01`/`\x02`-delimited
   action char back into a string.
+
+- **If you reach into `AetherString` directly from C, match the
+  real layout byte-for-byte.** The struct in `aether_string.h` is:
+
+  ```c
+  typedef struct AetherString {
+      unsigned int magic;     // 4 bytes
+      int          ref_count; // 4 bytes
+      size_t       length;    // 8 bytes on 64-bit
+      size_t       capacity;  // 8 bytes on 64-bit
+      char        *data;
+  } AetherString;
+  ```
+
+  A first draft that used `int32_t length` silently mis-read the
+  length field (really at offset 8, not offset 4), picked up random
+  bytes from inside `capacity`, and fed a bogus byte count into
+  `memcpy` — crash on a plausible-looking (but garbage) pointer
+  like `sdata=0x5`. Symptoms look like memory corruption upstream
+  of where the real bug is. Prefer using `string_length(s)` +
+  `string_char_at(s, i)` when you can; when you genuinely need
+  to reach into the struct, `#include "aether_string.h"` rather
+  than re-declaring the layout.
+
+- **New stdlib capabilities sometimes land after you need them —
+  keep an eye on the Aether `CHANGELOG`.** We held off on porting
+  the WC pristine store until `std.cryptography` (0.88) and
+  `std.zlib` (current) existed upstream; once they did, ~200
+  LOC of C came out in a single round. The lesson the other
+  way: if a target depends on missing stdlib, park it with a
+  note and check back, don't work around — we wasted a day once
+  before realising an upstream feature was a week out.
+
+- **When upstream tooling is the blocker, fix upstream.** Round 30
+  spent half a day on the fs_fs rep-store port only to hit a 2 KiB
+  buffer in the aether build tool that silently truncated the gcc
+  link command mid-filename. The downstream workaround (inline
+  every new module into an existing `_generated.c` path) was
+  possible, but each time it made the per-concern module structure
+  more tangled. Round 31 instead patched `~/scm/aether/tools/ae.c`
+  directly — 20 lines of diff — and the rep-store port dropped in
+  cleanly. Trade-off: you now have an unpushed patch in the
+  upstream repo that any `git pull` on `main` will need to
+  rebase. Keep a record in AETHER_ISSUES.md of what the fix was
+  (and the regression test that proves it works) so it's
+  reproducible. "Fix upstream" isn't free — but for buffer-limit
+  bugs, format-encapsulation blockers, or missing API surfaces
+  that affect multiple rounds, it's the right call.
 
 
 ## Measuring
@@ -278,10 +335,15 @@ Not every candidate is worth doing. Some we looked at and shelved:
   at a time via raw `read(2)`. Aether's `std.fs` doesn't expose an
   incremental line reader. The function stays C.
 
-- **Binary content.** Anywhere we hold arbitrary bytes with embedded
-  NULs (file content, zlib-compressed rep blobs, curl response
-  bodies) crosses Aether's string assumptions. Strings in Aether
-  are NUL-terminated. These paths stay C until that changes.
+- **Binary content.** ~~Anywhere we hold arbitrary bytes with
+  embedded NULs...~~ This changed mid-port. `fs.read_binary`
+  (0.82) / `fs.write_binary` (0.86) plus `string_new_with_length`
+  preserve embedded NULs through an AetherString's explicit
+  length field. `std.zlib` (0.90) and `std.cryptography` (0.88)
+  follow the same convention. So a round that looked impossible
+  (pristine store, SHA + zlib + binary files) was clean after
+  the stdlib caught up. Worth re-checking the changelog every
+  few rounds — capabilities arrive faster than you'd expect.
 
 
 ## Round dependencies in practice
@@ -291,7 +353,7 @@ The patterns above needed each other:
 
 - The packed-handle pattern (round 21) depended on `std.intarr`
   existing (added mid-port in Aether 0.83).
-- Rounds 22, 26, 28 all reused `ae/ra/packed.ae`'s accessors —
+- Rounds 22, 26, 28 all reused `ae/client/packed.ae`'s accessors —
   none of them would have been clean ports without round 21's
   infrastructure.
 - Round 25 (drop the globs rejoin) depended on already having

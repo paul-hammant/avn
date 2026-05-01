@@ -32,7 +32,7 @@
 set -e
 cd "$(dirname "$0")/../.."
 
-AE=/home/paul/scm/aether/build/ae
+AE="$(cd "$(dirname "$0")/../.." && pwd)/.aether_binaries/build/ae"
 PORT="${PORT:-9550}"
 SERVER_BIN=/tmp/svnae_test_aclw_server
 SEED_BIN=/tmp/svnae_test_aclw_seed

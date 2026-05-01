@@ -1,0 +1,97 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+
+// Error chain for the svn-aether port. Round 165 retires
+// ae/subr/error/shim.c (73 lines C) — Aether 0.109 added
+// self-referential structs via *Self pointer fields (see
+// fresh-aether-requests.md Section C / CHANGELOG [0.109.0]),
+// which is exactly the shape this needs.
+//
+// Note on lifetime: the C version strdup'd `message` at create
+// time and free'd it in the chain walker. This Aether port stores
+// borrowed strings — callers retain ownership of the message text.
+// Every existing callsite passes a literal or a value with caller-
+// retained scope; if a future caller passes a heap-allocated
+// AetherString, they should `string.copy` it first or hand off
+// ownership via a different shape.
+
+extern malloc(size: int) -> ptr
+extern free(p: ptr)
+
+struct SvnaeError {
+    code: int
+    msg: string
+    cause: *SvnaeError
+    file: string
+    line: int
+}
+
+// Layout: 5 fields × 8 bytes = 40 bytes; round up to 64 for alignment
+// safety on 64-bit (the canonical *Struct test uses 64).
+export error_create(code: int, msg: string, cause: ptr,
+                           file: string, line: int) -> ptr {
+    raw = malloc(64)
+    if raw == null { return null }
+    e = raw as *SvnaeError
+    e.code = code
+    e.msg = msg
+    e.cause = cause as *SvnaeError
+    e.file = file
+    e.line = line
+    return raw
+}
+
+export error_code(err: ptr) -> int {
+    if err == null { return 0 }
+    e = err as *SvnaeError
+    return e.code
+}
+
+export error_message(err: ptr) -> string {
+    if err == null { return "" }
+    e = err as *SvnaeError
+    return e.msg
+}
+
+export error_cause(err: ptr) -> ptr {
+    if err == null { return null }
+    e = err as *SvnaeError
+    return e.cause
+}
+
+export error_file(err: ptr) -> string {
+    if err == null { return "" }
+    e = err as *SvnaeError
+    return e.file
+}
+
+export error_line(err: ptr) -> int {
+    if err == null { return 0 }
+    e = err as *SvnaeError
+    return e.line
+}
+
+// Walk the chain iteratively, freeing each link's storage. The
+// C version strdup'd messages and free'd them too — see the
+// lifetime note at the top of the file for why this version
+// only frees the struct allocations.
+export error_free(err: ptr) {
+    p = err
+    while p != null {
+        e = p as *SvnaeError
+        nxt = e.cause
+        free(p)
+        p = nxt
+    }
+    return
+}
+
+main() {
+    println("ae/subr/error/error.ae is a library; not meant to run standalone")
+}

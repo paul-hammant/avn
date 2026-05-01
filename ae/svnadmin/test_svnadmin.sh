@@ -21,7 +21,7 @@
 set -e
 cd "$(dirname "$0")/../.."
 
-AE=/home/paul/scm/aether/build/ae
+AE="$(cd "$(dirname "$0")/../.." && pwd)/.aether_binaries/build/ae"
 REPO1=/tmp/svnae_test_adm_repo1
 REPO2=/tmp/svnae_test_adm_repo2
 DUMP=/tmp/svnae_test_adm.dump

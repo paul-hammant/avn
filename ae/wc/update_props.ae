@@ -20,63 +20,58 @@
 //   (a) overwrite / add every remote (key, value) locally.
 //   (b) delete any local key that the remote set doesn't carry.
 //
-// Two handles involved — struct svnae_ra_props (server-side) and
-// struct svnae_wc_proplist (local-WC side) — both opaque ptrs
+// Two handles involved — struct ra_props (server-side) and
+// struct wc_proplist (local-WC side) — both opaque ptrs
 // accessed through their count/name/value accessors.
 
 import std.string
 
-extern svnae_ra_get_props(base_url: string, repo: string,
+extern ra_get_props(base_url: string, repo: string,
                            rev: int, path: string) -> ptr
-extern svnae_ra_props_count(P: ptr) -> int
-extern svnae_ra_props_name(P: ptr, i: int) -> string
-extern svnae_ra_props_value(P: ptr, i: int) -> string
-extern svnae_ra_props_free(P: ptr)
+extern ra_props_count(P: ptr) -> int
+extern ra_props_name(P: ptr, i: int) -> string
+extern ra_props_value(P: ptr, i: int) -> string
+extern ra_props_free(P: ptr)
 
-extern svnae_wc_proplist(wc_root: string, path: string) -> ptr
-extern svnae_wc_proplist_count(L: ptr) -> int
-extern svnae_wc_proplist_name(L: ptr, i: int) -> string
-extern svnae_wc_proplist_free(L: ptr)
+extern wc_proplist(wc_root: string, path: string) -> ptr
+extern wc_proplist_count(L: ptr) -> int
+extern wc_proplist_name(L: ptr, i: int) -> string
+extern wc_proplist_free(L: ptr)
 
-extern svnae_wc_propset(wc_root: string, path: string,
+extern wc_propset(wc_root: string, path: string,
                          name: string, value: string) -> int
-extern svnae_wc_propdel(wc_root: string, path: string, name: string) -> int
+extern wc_propdel(wc_root: string, path: string, name: string) -> int
 
 export ingest_props(base_url: string, repo: string, rev: int,
                      wc_root: string, rel: string) {
-    ingest_props_impl(base_url, repo, rev, wc_root, rel)
-}
-
-ingest_props_impl(base_url: string, repo: string, rev: int,
-                   wc_root: string, rel: string) {
-    P = svnae_ra_get_props(base_url, repo, rev, rel)
+    P = ra_get_props(base_url, repo, rev, rel)
     rn = 0
-    if P != null { rn = svnae_ra_props_count(P) }
+    if P != null { rn = ra_props_count(P) }
 
     // (a) Overwrite / add from remote.
     j = 0
     while j < rn {
-        pname = svnae_ra_props_name(P, j)
+        pname = ra_props_name(P, j)
         pname = string.copy(pname)
-        pval = svnae_ra_props_value(P, j)
+        pval = ra_props_value(P, j)
         pval = string.copy(pval)
-        svnae_wc_propset(wc_root, rel, pname, pval)
+        wc_propset(wc_root, rel, pname, pval)
         j = j + 1
     }
 
     // (b) For each local prop not in remote, delete it.
-    L = svnae_wc_proplist(wc_root, rel)
+    L = wc_proplist(wc_root, rel)
     if L != null {
-        ln = svnae_wc_proplist_count(L)
+        ln = wc_proplist_count(L)
         i = 0
         while i < ln {
-            lname = svnae_wc_proplist_name(L, i)
+            lname = wc_proplist_name(L, i)
             lname = string.copy(lname)
 
             found = 0
             k = 0
             while k < rn {
-                rname = svnae_ra_props_name(P, k)
+                rname = ra_props_name(P, k)
                 if string.equals(lname, rname) == 1 {
                     found = 1
                     break
@@ -84,15 +79,16 @@ ingest_props_impl(base_url: string, repo: string, rev: int,
                 k = k + 1
             }
             if found == 0 {
-                svnae_wc_propdel(wc_root, rel, lname)
+                wc_propdel(wc_root, rel, lname)
             }
             i = i + 1
         }
-        svnae_wc_proplist_free(L)
+        wc_proplist_free(L)
     }
 
-    if P != null { svnae_ra_props_free(P) }
+    if P != null { ra_props_free(P) }
 }
+
 
 main() {
     println("ae/wc/update_props.ae is a library; not meant to run standalone")

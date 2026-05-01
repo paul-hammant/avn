@@ -14,15 +14,15 @@
 // permissions and limitations under the License.
 
 // /rev/N/paths handler body. Fetches the changed-paths list for the
-// rev, lets aether_paths_changed_json (ae/svnserver/json.ae build
+// rev, lets paths_changed_json (ae/svnserver/json.ae build
 // siblings) emit the ACL-filtered JSON, frees the list, and responds.
 //
 // Thin by design: the per-entry ACL filter lives inside
-// aether_paths_changed_json — the handler just wires transport.
+// paths_changed_json — the handler just wires transport.
 
-extern svnae_repos_paths_changed(repo: string, rev: int) -> ptr
-extern svnae_repos_paths_free(paths: ptr)
-extern aether_paths_changed_json(repo: string, rev: int, paths: ptr,
+extern repos_paths_changed(repo: string, rev: int) -> ptr
+extern repos_paths_free(paths: ptr)
+extern paths_changed_json(repo: string, rev: int, paths: ptr,
                                  user: string, is_super: int) -> string
 
 extern svnserver_respond_error(res: ptr, code: int, msg: string)
@@ -30,20 +30,16 @@ extern svnserver_respond_json_ok(res: ptr, body: string)
 
 export paths_handle(req: ptr, res: ptr, repo: string, rev: int,
                     user: string, is_super: int) {
-    paths_handle_impl(req, res, repo, rev, user, is_super)
-}
-
-paths_handle_impl(req: ptr, res: ptr, repo: string, rev: int,
-                  user: string, is_super: int) {
-    paths = svnae_repos_paths_changed(repo, rev)
+    paths = repos_paths_changed(repo, rev)
     if paths == null {
         svnserver_respond_error(res, 404, "no such rev")
         return
     }
-    body = aether_paths_changed_json(repo, rev, paths, user, is_super)
-    svnae_repos_paths_free(paths)
+    body = paths_changed_json(repo, rev, paths, user, is_super)
+    repos_paths_free(paths)
     svnserver_respond_json_ok(res, body)
 }
+
 
 main() {
     println("ae/svnserver/handler_rev_paths.ae is a library; not meant to run standalone")

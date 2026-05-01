@@ -17,42 +17,37 @@
 // ACL applies: denied paths → 404.
 //
 // Note: the inner diff is O(revs * lines^2); fine for typical source
-// trees but expensive for large files. aether_blame_json does the
+// trees but expensive for large files. blame_json does the
 // JSON assembly from the opaque blame handle the repos-level walker
 // fills in.
 
 import std.string
 
-extern svnserver_acl_allows(repo: string, rev: int, user: string, path: string) -> int
-extern svnae_repos_blame(repo: string, rev: int, target: string) -> ptr
-extern svnae_blame_free(b: ptr)
-extern aether_blame_json(blame: ptr) -> string
+extern acl_allows_mode(repo: string, rev: int, user: string, target_path: string, want_write: int) -> int
+extern repos_blame(repo: string, rev: int, target: string) -> ptr
+extern blame_free(b: ptr)
+extern blame_json(blame: ptr) -> string
 
 extern svnserver_respond_error(res: ptr, code: int, msg: string)
 extern svnserver_respond_json_ok(res: ptr, body: string)
 
 export blame_handle(req: ptr, res: ptr, repo: string, rev: int,
                     target: string, user: string, is_super: int) {
-    blame_handle_impl(req, res, repo, rev, target, user, is_super)
-}
-
-blame_handle_impl(req: ptr, res: ptr, repo: string, rev: int,
-                  target: string, user: string, is_super: int) {
     if is_super == 0 {
-        if svnserver_acl_allows(repo, rev, user, target) == 0 {
+        if acl_allows_mode(repo, rev, user, target, 0) == 0 {
             svnserver_respond_error(res, 404, "not found")
             return
         }
     }
 
-    b = svnae_repos_blame(repo, rev, target)
+    b = repos_blame(repo, rev, target)
     if b == null {
         svnserver_respond_error(res, 404, "not found")
         return
     }
 
-    body = aether_blame_json(b)
-    svnae_blame_free(b)
+    body = blame_json(b)
+    blame_free(b)
 
     if string.length(body) == 0 {
         svnserver_respond_json_ok(res, "{\"lines\":[]}")
@@ -60,6 +55,7 @@ blame_handle_impl(req: ptr, res: ptr, repo: string, rev: int,
     }
     svnserver_respond_json_ok(res, body)
 }
+
 
 main() {
     println("ae/svnserver/handler_rev_blame.ae is a library; not meant to run standalone")

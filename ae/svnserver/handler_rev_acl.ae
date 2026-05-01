@@ -15,33 +15,29 @@
 
 // /rev/N/acl[/<path>] handler body. Super-user only; normal users
 // get 404 so they can't probe ACL existence. The body builder
-// (aether_acl_resolve_json in ae/svnserver/acl_resolve.ae)
+// (acl_resolve_json in ae/svnserver/acl_resolve.ae)
 // contains all the rule-walking logic.
 
 import std.string
 
-extern aether_acl_resolve_json(repo: string, rev: int, target: string) -> string
+extern acl_resolve_json(repo: string, rev: int, target: string) -> string
 extern svnserver_respond_error(res: ptr, code: int, msg: string)
 extern svnserver_respond_json_ok(res: ptr, body: string)
 
 export acl_handle(req: ptr, res: ptr, repo: string, rev: int,
                   target: string, user: string, is_super: int) {
-    acl_handle_impl(req, res, repo, rev, target, user, is_super)
-}
-
-acl_handle_impl(req: ptr, res: ptr, repo: string, rev: int,
-                target: string, user: string, is_super: int) {
     if is_super == 0 {
         svnserver_respond_error(res, 404, "not found")
         return
     }
-    body = aether_acl_resolve_json(repo, rev, target)
+    body = acl_resolve_json(repo, rev, target)
     if string.length(body) == 0 {
         svnserver_respond_json_ok(res, "{\"rules\":[],\"effective_from\":\"\"}")
         return
     }
     svnserver_respond_json_ok(res, body)
 }
+
 
 main() {
     println("ae/svnserver/handler_rev_acl.ae is a library; not meant to run standalone")

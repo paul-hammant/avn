@@ -31,7 +31,7 @@
 set -e
 cd "$(dirname "$0")/../.."
 
-AE=/home/paul/scm/aether/build/ae
+AE="$(cd "$(dirname "$0")/../.." && pwd)/.aether_binaries/build/ae"
 PORT="${PORT:-9660}"
 REPO=/tmp/svnae_test_b81_repo
 WC=/tmp/svnae_test_b81_wc

@@ -24,12 +24,12 @@
 
 import std.string
 
-extern svnserver_acl_allows(repo: string, rev: int, user: string, path: string) -> int
-extern svnae_repos_cat(repo: string, rev: int, path: string) -> string
-extern svnae_rep_free(p: string)
-extern svnae_repos_resolve_kind(repo: string, rev: int, path: string) -> int
-extern svnae_repos_resolve_sha(repo: string, rev: int, path: string) -> string
-extern svnae_repo_primary_hash(repo: string) -> string
+extern acl_allows_mode(repo: string, rev: int, user: string, target_path: string, want_write: int) -> int
+extern repos_cat(repo: string, rev: int, path: string) -> string
+extern rep_free(p: string)
+extern repos_resolve_kind(repo: string, rev: int, path: string) -> int
+extern repos_resolve_sha(repo: string, rev: int, path: string) -> string
+extern repo_primary_hash(repo: string) -> string
 extern svnserver_respond_binary_ok(res: ptr, data: string, length: int,
                                    content_type: string)
 extern svnserver_set_merkle_headers(res: ptr, algo: string, kind: string, sha: string)
@@ -39,37 +39,32 @@ extern svnserver_respond_error(res: ptr, code: int, msg: string)
 // emitted. The C handler just returns after us.
 export cat_handle(req: ptr, res: ptr, repo: string, rev: int,
                   file_path: string, user: string, is_super: int) -> int {
-    return cat_handle_impl(req, res, repo, rev, file_path, user, is_super)
-}
-
-cat_handle_impl(req: ptr, res: ptr, repo: string, rev: int,
-                file_path: string, user: string, is_super: int) -> int {
     if string.length(file_path) == 0 {
         svnserver_respond_error(res, 400, "cat requires a path")
         return 1
     }
 
     if is_super == 0 {
-        if svnserver_acl_allows(repo, rev, user, file_path) == 0 {
+        if acl_allows_mode(repo, rev, user, file_path, 0) == 0 {
             svnserver_respond_error(res, 404, "not found")
             return 1
         }
     }
 
-    data = svnae_repos_cat(repo, rev, file_path)
+    data = repos_cat(repo, rev, file_path)
     if string.length(data) == 0 {
-        // svnae_repos_cat returns NULL (wrapped as "") on miss.
+        // repos_cat returns NULL (wrapped as "") on miss.
         svnserver_respond_error(res, 404, "not found")
         return 1
     }
 
     // Merkle headers. Fetching kind+sha does its own work; both
     // need to be non-empty to set the headers.
-    kind = svnae_repos_resolve_kind(repo, rev, file_path)
-    sha = svnae_repos_resolve_sha(repo, rev, file_path)
+    kind = repos_resolve_kind(repo, rev, file_path)
+    sha = repos_resolve_sha(repo, rev, file_path)
     if kind != 0 {
         if string.length(sha) > 0 {
-            algo = svnae_repo_primary_hash(repo)
+            algo = repo_primary_hash(repo)
             kind_str = "file"
             if kind == 100 { kind_str = "dir" }
             svnserver_set_merkle_headers(res, algo, kind_str, sha)
@@ -78,9 +73,10 @@ cat_handle_impl(req: ptr, res: ptr, repo: string, rev: int,
 
     svnserver_respond_binary_ok(res, data, string.length(data),
                                 "application/octet-stream")
-    svnae_rep_free(data)
+    rep_free(data)
     return 0
 }
+
 
 main() {
     println("ae/svnserver/handler_rev_cat.ae is a library; not meant to run standalone")

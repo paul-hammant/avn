@@ -13,7 +13,7 @@
 // implied. See the License for the specific language governing
 // permissions and limitations under the License.
 
-// Apply-pass of svnae_wc_update. Ported from ae/wc/update_shim.c's
+// Apply-pass of wc_update. Ported from ae/wc/update_shim.c's
 // two-pass diff-and-apply loop.
 //
 // The C side owns:
@@ -28,6 +28,7 @@
 //           write+pristine+db).
 
 import std.string
+import std.io
 
 // --- remote_tree accessors (C-side opaque handle) -------------------------
 extern rtree_count(rt: ptr) -> int
@@ -39,53 +40,55 @@ extern rtree_data_len_at(rt: ptr, i: int) -> int
 extern rtree_find_by_path(rt: ptr, path: string) -> int
 
 // --- wc.db nodelist accessors ---------------------------------------------
-extern svnae_wc_nodelist_count(L: ptr) -> int
-extern svnae_wc_nodelist_path(L: ptr, i: int) -> string
-extern svnae_wc_nodelist_kind(L: ptr, i: int) -> int
-extern svnae_wc_nodelist_base_rev(L: ptr, i: int) -> int
-extern svnae_wc_nodelist_base_sha1(L: ptr, i: int) -> string
-extern svnae_wc_nodelist_state(L: ptr, i: int) -> int
+extern wc_nodelist_count(L: ptr) -> int
+extern wc_nodelist_path(L: ptr, i: int) -> string
+extern wc_nodelist_kind(L: ptr, i: int) -> int
+extern wc_nodelist_base_rev(L: ptr, i: int) -> int
+extern wc_nodelist_base_sha1(L: ptr, i: int) -> string
+extern wc_nodelist_state(L: ptr, i: int) -> int
 
 // --- sqlite3 handle mutations ---------------------------------------------
-extern svnae_wc_db_upsert_node(db: ptr, path: string, kind: int,
+extern wc_db_upsert_node(db: ptr, path: string, kind: int,
                                base_rev: int, sha1: string, st: int) -> int
-extern svnae_wc_db_delete_node(db: ptr, path: string) -> int
-extern svnae_wc_db_set_conflicted(db: ptr, path: string, conflicted: int) -> int
+extern wc_db_delete_node(db: ptr, path: string) -> int
+extern wc_db_set_conflicted(db: ptr, path: string, conflicted: int) -> int
 
 // --- pristine + hash FFI --------------------------------------------------
-extern svnae_wc_pristine_put(wc_root: string, data: string, length: int) -> string
-extern svnae_wc_hash_file(wc_root: string, path: string, out_buf: ptr) -> int
+extern wc_pristine_put(wc_root: string, data: string, length: int) -> string
 
 // --- io helpers + merge3 entry -------------------------------------------
-extern aether_io_mkdir_p(path: string) -> int
-extern aether_io_write_atomic(path: string, data: string, length: int) -> int
-extern aether_io_unlink(path: string) -> int
-extern aether_io_rmdir(path: string) -> int
-extern aether_path_join_rel(prefix: string, name: string) -> string
+extern io_mkdir_p(path: string) -> int
+extern io_write_atomic(path: string, data: string, length: int) -> int
+extern io_unlink(path: string) -> int
+extern io_rmdir(path: string) -> int
+extern path_join_rel(prefix: string, name: string) -> string
 
-extern svnae_merge3_apply(wc_path: string,
+extern merge3_apply(wc_path: string,
                           base_data: string, base_len: int, base_rev: int,
                           theirs_data: string, theirs_len: int, theirs_rev: int) -> int
 
-extern svnae_wc_pristine_size(wc_root: string, sha1: string) -> int
-extern svnae_wc_pristine_get(wc_root: string, sha1: string) -> string
-extern svnae_wc_pristine_free(p: string)
+extern wc_pristine_size(wc_root: string, sha1: string) -> int
+extern wc_pristine_get(wc_root: string, sha1: string) -> string
 
 // --- prop ingest -------------------------------------------------------
 // Implementation lives in ae/wc/update_props.ae; call the aether-
 // prefixed symbol directly (no C trampoline).
-extern aether_ingest_props(base_url: string, repo: string, rev: int,
+extern ingest_props(base_url: string, repo: string, rev: int,
                             wc_root: string, rel: string)
 
 // --- disk-sha helper ------------------------------------------------------
-// Thin wrapper around svnae_wc_hash_file that drops the out_buf pointer
-// and returns the 65-byte hex (C side owns the string; we strcmp it via
-// string.equals). C implementation writes into a TLS scratch and
-// returns the pointer.
-extern update_sha1_of_file(wc_root: string, path: string) -> string
+// Hash the contents of `path` on disk via the canonical wc_hash_file in
+// pristine.ae. Round 130 dropped the C trampoline (update_sha1_of_file +
+// wc_hash_file) — both were a TLS-scratch detour the .ae caller
+// no longer needs.
+extern wc_hash_file(wc_root: string, path: string) -> string
 
 // --- stderr helper (lightly-typed println for our "C    foo" trace) ------
-extern svnae_stderr_puts(s: string)
+// Round 180: switched to std.io.stderr_write (Aether 0.110).
+update_stderr_(s: string) {
+    io.stderr_write(s, string.length(s))
+    return
+}
 
 // =========================================================================
 // Pass A — for each local node, decide what to do vs remote.
@@ -96,20 +99,14 @@ extern svnae_stderr_puts(s: string)
 export update_apply_pass_a(wc_root: string, base_url: string, repo: string,
                            target_rev: int, rt: ptr, nodelist: ptr,
                            db: ptr) -> int {
-    return update_apply_pass_a_impl(wc_root, base_url, repo,
-                                    target_rev, rt, nodelist, db)
-}
-
-update_apply_pass_a_impl(wc_root: string, base_url: string, repo: string,
-                         target_rev: int, rt: ptr, nodelist: ptr, db: ptr) -> int {
     had_conflict = 0
-    n_local = svnae_wc_nodelist_count(nodelist)
+    n_local = wc_nodelist_count(nodelist)
     i = 0
     while i < n_local {
-        rel      = svnae_wc_nodelist_path(nodelist, i)
-        kind     = svnae_wc_nodelist_kind(nodelist, i)
-        st       = svnae_wc_nodelist_state(nodelist, i)
-        base_sha = svnae_wc_nodelist_base_sha1(nodelist, i)
+        rel      = wc_nodelist_path(nodelist, i)
+        kind     = wc_nodelist_kind(nodelist, i)
+        st       = wc_nodelist_state(nodelist, i)
+        base_sha = wc_nodelist_base_sha1(nodelist, i)
 
         // Skip added/deleted — user's in-progress work.
         skip = 0
@@ -119,10 +116,10 @@ update_apply_pass_a_impl(wc_root: string, base_url: string, repo: string,
             r_idx = rtree_find_by_path(rt, rel)
             if r_idx < 0 {
                 // Remote removed it. Delete locally.
-                disk = aether_path_join_rel(wc_root, rel)
-                if kind == 0 { aether_io_unlink(disk) }
-                if kind == 1 { aether_io_rmdir(disk) }
-                svnae_wc_db_delete_node(db, rel)
+                disk = path_join_rel(wc_root, rel)
+                if kind == 0 { io_unlink(disk) }
+                if kind == 1 { io_rmdir(disk) }
+                wc_db_delete_node(db, rel)
             }
             if r_idx >= 0 {
                 r_kind = rtree_kind_at(rt, r_idx)
@@ -132,22 +129,22 @@ update_apply_pass_a_impl(wc_root: string, base_url: string, repo: string,
 
                 if kind != r_kind {
                     // Kind switched — tree-conflict; we skip and log.
-                    svnae_stderr_puts("warning: kind change not handled: ")
-                    svnae_stderr_puts(rel)
-                    svnae_stderr_puts("\n")
+                    update_stderr_("warning: kind change not handled: ")
+                    update_stderr_(rel)
+                    update_stderr_("\n")
                 }
                 if kind == r_kind {
                     if kind == 0 {
                         // File case.
                         if string.equals(r_sha, base_sha) == 1 {
                             // Remote == base. Still bump base_rev + props.
-                            svnae_wc_db_upsert_node(db, rel, kind, target_rev, base_sha, 0)
-                            aether_ingest_props(base_url, repo, target_rev, wc_root, rel)
+                            wc_db_upsert_node(db, rel, kind, target_rev, base_sha, 0)
+                            ingest_props(base_url, repo, target_rev, wc_root, rel)
                         }
                         if string.equals(r_sha, base_sha) == 0 {
                             // Remote changed. Clean or conflict?
-                            disk = aether_path_join_rel(wc_root, rel)
-                            disk_sha = update_sha1_of_file(wc_root, disk)
+                            disk = path_join_rel(wc_root, rel)
+                            disk_sha = wc_hash_file(wc_root, disk)
                             local_clean = 0
                             if string.length(disk_sha) > 0 {
                                 if string.equals(disk_sha, base_sha) == 1 {
@@ -156,45 +153,44 @@ update_apply_pass_a_impl(wc_root: string, base_url: string, repo: string,
                             }
                             if local_clean == 1 {
                                 // Straight overwrite.
-                                ok = aether_io_write_atomic(disk, r_data, r_len)
+                                ok = io_write_atomic(disk, r_data, r_len)
                                 if ok == 0 {
-                                    svnae_wc_pristine_put(wc_root, r_data, r_len)
-                                    svnae_wc_db_upsert_node(db, rel, 0, target_rev, r_sha, 0)
-                                    aether_ingest_props(base_url, repo, target_rev, wc_root, rel)
+                                    wc_pristine_put(wc_root, r_data, r_len)
+                                    wc_db_upsert_node(db, rel, 0, target_rev, r_sha, 0)
+                                    ingest_props(base_url, repo, target_rev, wc_root, rel)
                                 }
                             }
                             if local_clean == 0 {
                                 // 3-way merge.
-                                base_len = svnae_wc_pristine_size(wc_root, base_sha)
-                                base_buf = svnae_wc_pristine_get(wc_root, base_sha)
+                                base_len = wc_pristine_size(wc_root, base_sha)
+                                base_buf = wc_pristine_get(wc_root, base_sha)
                                 if string.length(base_buf) == 0 {
                                     // Fallback: reject but still advance pointer.
-                                    svnae_wc_db_upsert_node(db, rel, kind, target_rev, base_sha, 0)
+                                    wc_db_upsert_node(db, rel, kind, target_rev, base_sha, 0)
                                 }
                                 if string.length(base_buf) > 0 {
-                                    local_base_rev = svnae_wc_nodelist_base_rev(nodelist, i)
-                                    m3rc = svnae_merge3_apply(disk,
+                                    local_base_rev = wc_nodelist_base_rev(nodelist, i)
+                                    m3rc = merge3_apply(disk,
                                                               base_buf, base_len, local_base_rev,
                                                               r_data, r_len, target_rev)
-                                    svnae_wc_pristine_free(base_buf)
                                     if m3rc == 0 {
-                                        svnae_wc_pristine_put(wc_root, r_data, r_len)
-                                        svnae_wc_db_upsert_node(db, rel, 0, target_rev, r_sha, 0)
-                                        aether_ingest_props(base_url, repo, target_rev, wc_root, rel)
+                                        wc_pristine_put(wc_root, r_data, r_len)
+                                        wc_db_upsert_node(db, rel, 0, target_rev, r_sha, 0)
+                                        ingest_props(base_url, repo, target_rev, wc_root, rel)
                                     }
                                     if m3rc == 1 {
-                                        svnae_wc_pristine_put(wc_root, r_data, r_len)
-                                        svnae_wc_db_upsert_node(db, rel, 0, target_rev, r_sha, 0)
-                                        svnae_wc_db_set_conflicted(db, rel, 1)
+                                        wc_pristine_put(wc_root, r_data, r_len)
+                                        wc_db_upsert_node(db, rel, 0, target_rev, r_sha, 0)
+                                        wc_db_set_conflicted(db, rel, 1)
                                         had_conflict = 1
-                                        svnae_stderr_puts("C    ")
-                                        svnae_stderr_puts(rel)
-                                        svnae_stderr_puts("\n")
+                                        update_stderr_("C    ")
+                                        update_stderr_(rel)
+                                        update_stderr_("\n")
                                     }
                                     if m3rc < 0 {
-                                        svnae_stderr_puts("error merging ")
-                                        svnae_stderr_puts(rel)
-                                        svnae_stderr_puts("; left alone\n")
+                                        update_stderr_("error merging ")
+                                        update_stderr_(rel)
+                                        update_stderr_("; left alone\n")
                                     }
                                 }
                             }
@@ -202,8 +198,8 @@ update_apply_pass_a_impl(wc_root: string, base_url: string, repo: string,
                     }
                     if kind == 1 {
                         // Dir: just bump base_rev + ingest props.
-                        svnae_wc_db_upsert_node(db, rel, kind, target_rev, base_sha, 0)
-                        aether_ingest_props(base_url, repo, target_rev, wc_root, rel)
+                        wc_db_upsert_node(db, rel, kind, target_rev, base_sha, 0)
+                        ingest_props(base_url, repo, target_rev, wc_root, rel)
                     }
                 }
             }
@@ -214,6 +210,7 @@ update_apply_pass_a_impl(wc_root: string, base_url: string, repo: string,
     return had_conflict
 }
 
+
 // =========================================================================
 // Pass B — remote paths not in local get added.
 // =========================================================================
@@ -221,13 +218,8 @@ update_apply_pass_a_impl(wc_root: string, base_url: string, repo: string,
 export update_apply_pass_b(wc_root: string, base_url: string, repo: string,
                            target_rev: int, rt: ptr, nodelist: ptr,
                            db: ptr) {
-    update_apply_pass_b_impl(wc_root, base_url, repo, target_rev, rt, nodelist, db)
-}
-
-update_apply_pass_b_impl(wc_root: string, base_url: string, repo: string,
-                         target_rev: int, rt: ptr, nodelist: ptr, db: ptr) {
     nr = rtree_count(rt)
-    n_local = svnae_wc_nodelist_count(nodelist)
+    n_local = wc_nodelist_count(nodelist)
     i = 0
     while i < nr {
         rpath = rtree_path_at(rt, i)
@@ -235,7 +227,7 @@ update_apply_pass_b_impl(wc_root: string, base_url: string, repo: string,
         found = 0
         j = 0
         while j < n_local {
-            if string.equals(svnae_wc_nodelist_path(nodelist, j), rpath) == 1 {
+            if string.equals(wc_nodelist_path(nodelist, j), rpath) == 1 {
                 found = 1
                 break
             }
@@ -246,29 +238,30 @@ update_apply_pass_b_impl(wc_root: string, base_url: string, repo: string,
             r_sha  = rtree_sha_at(rt, i)
             r_data = rtree_data_at(rt, i)
             r_len  = rtree_data_len_at(rt, i)
-            disk   = aether_path_join_rel(wc_root, rpath)
+            disk   = path_join_rel(wc_root, rpath)
 
             ok = 0
             if r_kind == 1 {
-                if aether_io_mkdir_p(disk) == 0 {
-                    svnae_wc_db_upsert_node(db, rpath, 1, target_rev, "", 0)
+                if io_mkdir_p(disk) == 0 {
+                    wc_db_upsert_node(db, rpath, 1, target_rev, "", 0)
                     ok = 1
                 }
             }
             if r_kind == 0 {
-                if aether_io_write_atomic(disk, r_data, r_len) == 0 {
-                    svnae_wc_pristine_put(wc_root, r_data, r_len)
-                    svnae_wc_db_upsert_node(db, rpath, 0, target_rev, r_sha, 0)
+                if io_write_atomic(disk, r_data, r_len) == 0 {
+                    wc_pristine_put(wc_root, r_data, r_len)
+                    wc_db_upsert_node(db, rpath, 0, target_rev, r_sha, 0)
                     ok = 1
                 }
             }
             if ok == 1 {
-                aether_ingest_props(base_url, repo, target_rev, wc_root, rpath)
+                ingest_props(base_url, repo, target_rev, wc_root, rpath)
             }
         }
         i = i + 1
     }
 }
+
 
 main() {
     println("ae/wc/update_apply.ae is a library; not meant to run standalone")

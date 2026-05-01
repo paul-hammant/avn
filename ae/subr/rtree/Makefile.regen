@@ -1,0 +1,14 @@
+# Regen recipe for ae/subr/rtree/rtree.ae (the remote-tree storage
+# port from Round 152).
+
+AETHERC ?= $(abspath $(dir $(lastword $(MAKEFILE_LIST))))/../../../.aether_binaries/build/aetherc
+
+GENERATED := rtree_generated.c
+
+all: $(GENERATED)
+
+# rtree.ae: pure std.list/std.intarr. No capabilities.
+rtree_generated.c: rtree.ae
+	$(AETHERC) --emit=lib $< $@
+
+.PHONY: all

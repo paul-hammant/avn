@@ -1,0 +1,276 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// permissions and limitations under the License.
+
+// Round 64 (Gordian knot): port the orchestration of commit finalise
+// and branch create out of ae/fs_fs/commit_shim.c. The recursive
+// tree-rebuild lives in ae/fs_fs/rebuild.ae (called as
+// rebuild_dir); everything around it — load base root sha,
+// inherit props/acl, write rev blob, the 4-file pointer set,
+// path_rev index population — is pure orchestration here.
+//
+// Net retired from commit_shim.c: roughly 250 lines including the
+// 55-line inline sqlite3 path_rev block (lines 211-265 pre-Round 64).
+// The path_rev INSERT loop now goes through contrib.sqlite alongside
+// every other rep-cache.db op in the codebase.
+
+import std.string
+import std.fs
+import std.os
+import contrib.sqlite
+
+const SQLITE_DONE = 101
+
+// ---- C-side helpers we depend on -----------------------------------
+
+// Recursive tree rebuild stays in C (txn_shim.c) — bulk content walk.
+extern txn_base_rev(t: ptr) -> int
+extern rebuild_dir(repo: string, base_dir_sha: string, prefix: string, t: ptr) -> string
+
+// Repository primitives.
+extern rep_write_blob(repo: string, data: string, len: int) -> string
+extern repos_head_rev(repo: string) -> int
+
+// Aether-side helpers (already exported as aether_* aliases).
+extern repos_rev_field(repo: string, rev: int, key: string) -> string
+extern repos_inherit_rev_field(repo: string, prev: int, key: string, override: string) -> string
+extern rev_blob_body(root: string, branch: string, props: string, acl: string,
+                             prev: int, author: string, date: string, log: string) -> string
+extern write_rev_pointer_set(repo: string, branch: string, next_rev: int,
+                                     rev_sha: string) -> int
+extern branch_head_rev(repo: string, base: string) -> int
+extern filter_dir(repo: string, src_sha: string, prefix: string,
+                          globs_joined: string) -> string
+extern io_mkdir_p(path: string) -> int
+extern io_write_atomic(path: string, data: string, length: int) -> int
+extern io_exists(path: string) -> int
+
+// paths_changed handle from repos/shim.c — opaque ptr + count + path
+// accessor. Used to enumerate paths-changed-by-rev for the path_rev
+// secondary index.
+extern repos_paths_changed(repo: string, rev: int) -> ptr
+extern repos_paths_count(P: ptr) -> int
+extern repos_paths_path(P: ptr, i: int) -> string
+extern repos_paths_free(P: ptr)
+
+// ---- private helpers ------------------------------------------------
+
+// Load the root-dir sha1 for a given revision. "" on miss (caller
+// treats as failure).
+load_rev_root_sha1_(repo: string, rev: int) -> string {
+    v = repos_rev_field(repo, rev, "root")
+    if string.length(v) == 0 { return "" }
+    return string.copy(v)
+}
+
+// Populate path_rev index: one row per path this rev touched. Derived
+// from a tree-diff against base_rev's root, reusing repos_paths_
+// changed (which itself diffs the new rev against its predecessor).
+//
+// Falls through silently if the table doesn't exist yet (very old
+// repos), so this stays safe during gradual schema migration.
+populate_path_rev_(repo: string, branch: string, rev: int) {
+    P = repos_paths_changed(repo, rev)
+    if P == null { return 0 }
+    pn = repos_paths_count(P)
+    if pn == 0 { repos_paths_free(P); return 0 }
+
+    db, oerr = sqlite.open("${repo}/rep-cache.db")
+    if string.length(oerr) > 0 { repos_paths_free(P); return 0 }
+
+    // Schema retrofit: seeded-from-scratch repos (via seed.ae) didn't
+    // go through svnadmin/create when the path_rev table was added,
+    // so create-if-missing here. Idempotent.
+    sqlite.exec(db,
+        "CREATE TABLE IF NOT EXISTS path_rev (  branch TEXT NOT NULL,  path   TEXT NOT NULL,  rev    INTEGER NOT NULL,  PRIMARY KEY (branch, path, rev));CREATE INDEX IF NOT EXISTS path_rev_lookup ON path_rev (branch, path);")
+
+    sqlite.exec(db, "BEGIN")
+    stmt, perr = sqlite.prepare(db,
+        "INSERT OR IGNORE INTO path_rev (branch, path, rev) VALUES (?, ?, ?)")
+    if string.length(perr) == 0 {
+        i = 0
+        while i < pn {
+            sqlite.bind_text(stmt, 1, branch)
+            sqlite.bind_text(stmt, 2, repos_paths_path(P, i))
+            sqlite.bind_int (stmt, 3, rev)
+            sqlite.step(stmt, db)
+            sqlite.reset(stmt)
+            i = i + 1
+        }
+        sqlite.finalize(stmt)
+    }
+    sqlite.exec(db, "COMMIT")
+    sqlite.close(db)
+    repos_paths_free(P)
+    return 0
+}
+
+// Write the branch spec file ($repo/branches/<name>/spec). Ensures a
+// trailing newline regardless of whether `globs_joined` already ends
+// in one. Returns 0 on success, -1 on failure.
+write_spec_file_(spec_path: string, globs_joined: string) -> int {
+    glen = string.length(globs_joined)
+    if glen == 0 {
+        if io_write_atomic(spec_path, "", 0) != 0 { return 0 - 1 }
+        return 0
+    }
+    last = string.char_at(globs_joined, glen - 1)
+    if last == 10 {   // '\n'
+        if io_write_atomic(spec_path, globs_joined, glen) != 0 { return 0 - 1 }
+        return 0
+    }
+    with_nl = string.concat(globs_joined, "\n")
+    if io_write_atomic(spec_path, with_nl, glen + 1) != 0 { return 0 - 1 }
+    return 0
+}
+
+// Count non-empty newline-separated segments. Used to size the
+// branch-create log message.
+count_globs_(globs_joined: string) -> int {
+    n = 0
+    glen = string.length(globs_joined)
+    i = 0
+    seg = 0
+    while i < glen {
+        c = string.char_at(globs_joined, i)
+        if c == 10 {
+            if seg > 0 { n = n + 1 }
+            seg = 0
+        } else {
+            seg = seg + 1
+        }
+        i = i + 1
+    }
+    if seg > 0 { n = n + 1 }
+    return n
+}
+
+// ---- public entry points -------------------------------------------
+
+// Branch-aware commit finalise core. Private impl so the legacy
+// wrappers below can forward to it without an export-to-export call
+// (Aether requires forward references resolve in declaration order).
+finalise_on_branch_(repo: string, txn: ptr,
+                     branch: string,
+                     author: string, logmsg: string,
+                     props_sha1: string, acl_sha1: string) -> int {
+    if string.length(branch) == 0 { branch = "main" }
+
+    base_rev = txn_base_rev(txn)
+    if base_rev < 0 { return 0 - 1 }
+    base_root = load_rev_root_sha1_(repo, base_rev)
+    if string.length(base_root) == 0 { return 0 - 1 }
+
+    new_root = rebuild_dir(repo, base_root, "", txn)
+    if string.length(new_root) == 0 { return 0 - 1 }
+    new_root = string.copy(new_root)
+
+    prev = repos_head_rev(repo)
+    if prev < 0 { return 0 - 1 }
+    next = prev + 1
+
+    // Inherit props / acl from the previous rev when caller passes "".
+    ps = repos_inherit_rev_field(repo, prev, "props", props_sha1)
+    as_ = repos_inherit_rev_field(repo, prev, "acl", acl_sha1)
+    ps = string.copy(ps)
+    as_ = string.copy(as_)
+
+    rev_body = rev_blob_body(new_root, branch, ps, as_, prev, author,
+                                     os.now_utc_iso8601(), logmsg)
+    rev_sha_borrowed = rep_write_blob(repo, rev_body, string.length(rev_body))
+    if string.length(rev_sha_borrowed) == 0 { return 0 - 1 }
+    rev_sha = string.copy(rev_sha_borrowed)
+
+    // Write the 4-file pointer set (legacy + per-branch).
+    if write_rev_pointer_set(repo, branch, next, rev_sha) != 0 { return 0 - 1 }
+
+    populate_path_rev_(repo, branch, next)
+
+    return next
+}
+
+// Commit finalise — single entry point. For every commit:
+//   - rev blob gets a `branch:` field identifying the branch advanced
+//   - legacy $repo/revs/NNNNNN and $repo/head pointers still written
+//   - new per-branch layout written too
+//   - path_rev index gets one row per touched path
+//
+// `branch` is typically "main"; pass another name for branch-aware
+// commits. `props_sha1` / `acl_sha1` are "" when the commit doesn't
+// touch props / ACLs.
+//
+// Returns the new rev number on success, -1 on failure.
+export commit_finalise(repo: string, txn: ptr, branch: string,
+                       author: string, logmsg: string,
+                       props_sha1: string, acl_sha1: string) -> int {
+    return finalise_on_branch_(repo, txn, branch, author, logmsg,
+                                props_sha1, acl_sha1)
+}
+
+// Branch create: build a filtered copy of an existing branch's tree
+// using a set of glob patterns. Writes the branch dir, spec file,
+// rev pointer set, and a new rev blob with `branch: <name>`.
+//
+//   $repo/branches/<name>/spec         — glob per line
+//   $repo/branches/<name>/head         — rev=N
+//   $repo/branches/<name>/revs/<aa>/<bb>/NNNNNN
+//
+// Returns the new rev number on success, -1 on failure. Constraints:
+//   - `name` must not already exist as a branch
+//   - `base` must exist
+//   - `globs_joined` must be non-empty
+export branch_create(repo: string, name: string, base: string,
+                            globs_joined: string, author: string) -> int {
+    if string.length(name) == 0 { return 0 - 1 }
+    if string.length(base) == 0 { return 0 - 1 }
+    if string.length(globs_joined) == 0 { return 0 - 1 }
+
+    br_dir = "${repo}/branches/${name}"
+    if io_exists(br_dir) == 1 { return 0 - 1 }
+
+    base_rev = branch_head_rev(repo, base)
+    if base_rev < 0 { return 0 - 1 }
+
+    base_root = load_rev_root_sha1_(repo, base_rev)
+    if string.length(base_root) == 0 { return 0 - 1 }
+
+    // Filter base's tree via the recursive Aether filter. Takes the
+    // same newline-joined globs we'll write to the spec file below.
+    new_root_borrowed = filter_dir(repo, base_root, "", globs_joined)
+    if string.length(new_root_borrowed) == 0 { return 0 - 1 }
+    new_root = string.copy(new_root_borrowed)
+
+    if io_mkdir_p(br_dir) != 0 { return 0 - 1 }
+    if write_spec_file_("${br_dir}/spec", globs_joined) != 0 { return 0 - 1 }
+
+    // Cross-branch rev numbering: rev numbers are per-repo, not
+    // per-branch. (See commit message on the original C version.)
+    new_rev = repos_head_rev(repo) + 1
+
+    n_globs = count_globs_(globs_joined)
+    logmsg = "create branch ${name} from ${base} with ${n_globs} include(s)"
+
+    rev_body = rev_blob_body(new_root, name, "", "", base_rev, author,
+                                     os.now_utc_iso8601(), logmsg)
+    rev_sha_borrowed = rep_write_blob(repo, rev_body, string.length(rev_body))
+    if string.length(rev_sha_borrowed) == 0 { return 0 - 1 }
+    rev_sha = string.copy(rev_sha_borrowed)
+
+    if write_rev_pointer_set(repo, name, new_rev, rev_sha) != 0 { return 0 - 1 }
+    return new_rev
+}
+
+main() {
+    println("ae/fs_fs/commit_finalise.ae is a library; not meant to run standalone")
+}

@@ -29,7 +29,7 @@
 
 import std.string
 
-is_sidecar_suffix_impl(suffix: string) -> int {
+export is_sidecar_suffix(suffix: string) -> int {
     n = string.length(suffix)
     if n == 0 { return 0 }
     // "mine"
@@ -60,10 +60,6 @@ is_sidecar_suffix_impl(suffix: string) -> int {
     return 0
 }
 
-export is_sidecar_suffix(suffix: string) -> int {
-    return is_sidecar_suffix_impl(suffix)
-}
-
 // Given a full basename (without directory prefix), return 1 iff it
 // looks like a sidecar file — i.e. it has a '.' and the tail after
 // the last '.' is a legitimate sidecar suffix. "README.mine" → 1;
@@ -80,7 +76,7 @@ export is_sidecar_name(name: string) -> int {
     }
     if dot < 0 { return 0 }
     if dot == n - 1 { return 0 }   // trailing '.'
-    return is_sidecar_suffix_impl(string.substring(name, dot + 1, n))
+    return is_sidecar_suffix(string.substring(name, dot + 1, n))
 }
 
 // If `suffix` is "r<digits>" return the integer rev; else -1.

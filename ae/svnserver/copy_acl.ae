@@ -26,19 +26,15 @@ import std.string
 
 // Externs hoisted to the top because Aether's resolver requires
 // them to be visible before any function that references them.
-extern aether_load_rev_blob_field(repo: string, rev: int, key: string) -> string
-extern svnae_rep_read_blob(repo: string, sha: string) -> string
-extern svnae_rep_free(body: string)
-extern svnae_rep_write_blob(repo: string, data: string, len: int) -> string
-extern aether_paths_index_sort_by_path(body: string) -> string
+extern load_rev_blob_field(repo: string, rev: int, key: string) -> string
+extern rep_read_blob(repo: string, sha: string) -> string
+extern rep_free(body: string)
+extern rep_write_blob(repo: string, data: string, len: int) -> string
+extern paths_index_sort_by_path(body: string) -> string
 
 // Returns the augmented body. Empty input → empty output (caller keeps
 // the "inherit previous" default).
 export copy_acl_follow(body: string, from_path: string, to_path: string) -> string {
-    return copy_acl_follow_impl(body, from_path, to_path)
-}
-
-copy_acl_follow_impl(body: string, from_path: string, to_path: string) -> string {
     n = string.length(body)
     if n == 0 { return "" }
     from_len = string.length(from_path)
@@ -104,6 +100,7 @@ copy_acl_follow_impl(body: string, from_path: string, to_path: string) -> string
     return out
 }
 
+
 starts_with_same_bytes(hay: string, needle: string, n: int) -> int {
     i = 0
     while i < n {
@@ -120,17 +117,17 @@ starts_with_same_bytes(hay: string, needle: string, n: int) -> int {
 // augmentation added no entries.
 export auto_follow_copy_acl(repo: string, base_rev: int,
                              from_path: string, to_path: string) -> string {
-    acl_root = aether_load_rev_blob_field(repo, base_rev, "acl")
+    acl_root = load_rev_blob_field(repo, base_rev, "acl")
     if string.length(acl_root) == 0 { return "" }
 
-    body = svnae_rep_read_blob(repo, acl_root)
+    body = rep_read_blob(repo, acl_root)
     if string.length(body) == 0 { return "" }
-    augmented = copy_acl_follow_impl(body, from_path, to_path)
-    svnae_rep_free(body)
+    augmented = copy_acl_follow(body, from_path, to_path)
+    rep_free(body)
     if string.length(augmented) == 0 { return "" }
 
-    sorted = aether_paths_index_sort_by_path(augmented)
-    return svnae_rep_write_blob(repo, sorted, string.length(sorted))
+    sorted = paths_index_sort_by_path(augmented)
+    return rep_write_blob(repo, sorted, string.length(sorted))
 }
 
 main() {

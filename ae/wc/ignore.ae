@@ -23,8 +23,8 @@
 
 import std.string
 
-// FFI to fnmatch(3) with flags=0 (no FNM_PATHNAME).
-extern svnae_fnmatch_plain(glob: string, path: string) -> int
+// Round 179: string.glob_match (Aether 0.110) replaced the
+// fnmatch-shim FFI. Same POSIX fnmatch(3) semantics with flags=0.
 
 // Trim ASCII spaces, tabs, and '\r' from both ends of `s`.
 trim_ws(s: string) -> string {
@@ -66,7 +66,7 @@ export ignore_matches(patterns: string, name: string) -> int {
             if i > start {
                 tok = trim_ws(string.substring(patterns, start, i))
                 if string.length(tok) > 0 {
-                    if svnae_fnmatch_plain(tok, name) == 1 { return 1 }
+                    if string.glob_match(tok, name) == 1 { return 1 }
                 }
             }
             start = i + 1

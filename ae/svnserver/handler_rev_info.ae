@@ -25,16 +25,16 @@
 
 import std.string
 
-extern svnae_repos_info_rev(repo: string, rev: int) -> ptr
-extern svnae_repos_info_rev_num(i: ptr) -> int
-extern svnae_repos_info_author(i: ptr) -> string
-extern svnae_repos_info_date(i: ptr) -> string
-extern svnae_repos_info_msg(i: ptr) -> string
-extern svnae_repos_info_free(i: ptr)
-extern svnserver_load_rev_root_sha(repo: string, rev: int) -> string
-extern aether_redacted_dir_sha(repo: string, rev: int, user: string,
+extern repos_info_rev(repo: string, rev: int) -> ptr
+extern repos_info_rev_num(i: ptr) -> int
+extern repos_info_author(i: ptr) -> string
+extern repos_info_date(i: ptr) -> string
+extern repos_info_msg(i: ptr) -> string
+extern repos_info_free(i: ptr)
+extern load_rev_blob_field(repo: string, rev: int, key: string) -> string
+extern redacted_dir_sha(repo: string, rev: int, user: string,
                                dir_sha: string, prefix: string) -> string
-extern aether_rev_info_json(rev: int, author: string, date: string,
+extern rev_info_json(rev: int, author: string, date: string,
                             msg: string, root: string) -> string
 
 extern svnserver_respond_error(res: ptr, code: int, msg: string)
@@ -42,10 +42,30 @@ extern svnserver_respond_json_ok(res: ptr, body: string)
 
 // Returns "{...json...}" on success, "" if the rev is missing.
 // Named `_full` to distinguish from the field-emit-only helper
-// aether_rev_info_json in ae/svnserver/json.ae (which just builds
+// rev_info_json in ae/svnserver/json.ae (which just builds
 // the inner {rev, author, ...} object from already-known fields).
 export rev_info_json_full(repo: string, rev: int, user: string, is_super: int) -> string {
-    return rev_info_json_full_impl(repo, rev, user, is_super)
+    info = repos_info_rev(repo, rev)
+    if info == null { return "" }
+
+    root_sha = load_rev_blob_field(repo, rev, "root")
+    reported_root = root_sha
+    if is_super == 0 {
+        if string.length(root_sha) > 0 {
+            redact = redacted_dir_sha(repo, rev, user, root_sha, "")
+            if string.length(redact) > 0 {
+                reported_root = redact
+            }
+        }
+    }
+
+    body = rev_info_json(repos_info_rev_num(info),
+                                repos_info_author(info),
+                                repos_info_date(info),
+                                repos_info_msg(info),
+                                reported_root)
+    repos_info_free(info)
+    return body
 }
 
 // Full handler including transport: 404 on missing rev, JSON emit
@@ -53,7 +73,7 @@ export rev_info_json_full(repo: string, rev: int, user: string, is_super: int) -
 // is a single extern call.
 export rev_info_handle(req: ptr, res: ptr, repo: string, rev: int,
                        user: string, is_super: int) {
-    body = rev_info_json_full_impl(repo, rev, user, is_super)
+    body = rev_info_json_full(repo, rev, user, is_super)
     if string.length(body) == 0 {
         svnserver_respond_error(res, 404, "no such rev")
         return
@@ -61,29 +81,6 @@ export rev_info_handle(req: ptr, res: ptr, repo: string, rev: int,
     svnserver_respond_json_ok(res, body)
 }
 
-rev_info_json_full_impl(repo: string, rev: int, user: string, is_super: int) -> string {
-    info = svnae_repos_info_rev(repo, rev)
-    if info == null { return "" }
-
-    root_sha = svnserver_load_rev_root_sha(repo, rev)
-    reported_root = root_sha
-    if is_super == 0 {
-        if string.length(root_sha) > 0 {
-            redact = aether_redacted_dir_sha(repo, rev, user, root_sha, "")
-            if string.length(redact) > 0 {
-                reported_root = redact
-            }
-        }
-    }
-
-    body = aether_rev_info_json(svnae_repos_info_rev_num(info),
-                                svnae_repos_info_author(info),
-                                svnae_repos_info_date(info),
-                                svnae_repos_info_msg(info),
-                                reported_root)
-    svnae_repos_info_free(info)
-    return body
-}
 
 main() {
     println("ae/svnserver/handler_rev_info.ae is a library; not meant to run standalone")

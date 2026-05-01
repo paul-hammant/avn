@@ -1,0 +1,233 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// permissions and limitations under the License.
+
+// Working-copy pristine store — put / get / has / size / hash.
+//
+// This file replaces the bulk of ae/wc/pristine_shim.c. SHA-1 /
+// SHA-256 come from std.cryptography (0.88), zlib deflate/inflate
+// from std.zlib (0.90+), binary-safe file I/O from std.fs
+// (read_binary 0.82, write_binary 0.86). The wc.db info-table
+// lookup for the configured hash algorithm (Round 37) reads via
+// the same subr.sqlite bindings the fs_fs rep-store uses. What
+// stays in C: three tiny byte-level helpers — pack_le32, binary-
+// safe concat, binary-safe slice — since std.string has no byte-
+// construction primitive that doesn't run through an intermediate
+// C-style string.
+//
+// On-disk format (identical to fs_fs rep-store, and unchanged from
+// the C implementation):
+//
+//   $wc/.svn/pristine/aa/bb/<sha1>.rep
+//   byte 0       : 'R' (raw) or 'Z' (zlib)
+//   bytes 1..4   : uncompressed length, 4-byte little-endian
+//   bytes 5..    : payload (compressed if 'Z')
+//
+// Dedup rule: identical blobs hash the same under the repo's
+// configured algorithm, so the file name *is* the cache — if the
+// .rep file exists, pristine_put is a no-op.
+//
+// Compression rule (also matches fs_fs): only keep the zlib output
+// if it saves at least 16 bytes. Level 6, same default the C
+// version used.
+
+import std.string
+import std.fs
+import std.zlib
+import std.cryptography
+
+import contrib.sqlite
+
+const SQLITE_ROW = 100
+
+// Read the wc's configured hash algorithm from .svn/wc.db's info
+// table. Returns "sha1" when the DB is missing, the info row is
+// absent, or the stored value is empty — mirrors the C wrapper's
+// fallback that every caller relied on. The concrete caller never
+// sees an empty string.
+wc_hash_algo(wc_root: string) -> string {
+    db, oerr = sqlite.open("${wc_root}/.svn/wc.db")
+    if string.length(oerr) > 0 { return "sha1" }
+    stmt, perr = sqlite.prepare(db, "SELECT value FROM info WHERE key = ?")
+    if string.length(perr) > 0 { sqlite.close(db); return "sha1" }
+    sqlite.bind_text(stmt, 1, "hash_algo")
+    rc, _ = sqlite.step(stmt, db)
+    algo = ""
+    if rc == SQLITE_ROW {
+        raw = sqlite.column_text(stmt, 0)
+        algo = string.copy(raw)
+    }
+    sqlite.finalize(stmt)
+    sqlite.close(db)
+    if string.length(algo) == 0 { return "sha1" }
+    return algo
+}
+
+// Path builder already lives in ae/wc/pristine_path.ae.
+extern pristine_path(wc_root: string, sha: string) -> string
+extern pristine_dir(wc_root: string, sha: string) -> string
+
+// io helpers.
+extern io_mkdir_p(path: string) -> int
+extern io_exists(path: string) -> int
+extern io_is_regular_file(path: string) -> int
+
+// Binary-safe byte ops — see ae/subr/binbuf.ae for impls.
+extern pack_le32(v: int) -> string
+extern concat(prefix: string, prefix_len: int, suf: string, suf_len: int) -> string
+extern slice(s: string, s_len: int, start: int, end: int) -> string
+
+// ---- hashing -------------------------------------------------------------
+
+// Hash `data[0..length]` using the wc's configured algorithm. Returns
+// the hex digest, or "" on failure.
+export wc_hash_bytes(wc_root: string, data: string, length: int) -> string {
+    algo = wc_hash_algo(wc_root)
+    if string.equals(algo, "sha256") == 1 {
+        digest, err = cryptography.sha256_hex(data, length)
+        if string.length(err) > 0 { return "" }
+        return digest
+    }
+    // sha1 is the default for anything else (including "sha1" and
+    // legacy empty).
+    digest, err = cryptography.sha1_hex(data, length)
+    if string.length(err) > 0 { return "" }
+    return digest
+}
+
+
+// Hash the contents of `path` on disk. "" on I/O or hash failure.
+export wc_hash_file(wc_root: string, path: string) -> string {
+    content, clen, err = fs.read_binary(path)
+    if string.length(err) > 0 { return "" }
+    return wc_hash_bytes(wc_root, content, clen)
+}
+
+
+// ---- pristine put --------------------------------------------------------
+
+// Write `data[0..length]` into the pristine store. Returns the sha
+// hex string on success (or the existing sha if the blob is already
+// cached), "" on failure.
+export wc_pristine_put(wc_root: string, data: string, length: int) -> string {
+    sha = wc_hash_bytes(wc_root, data, length)
+    if string.length(sha) == 0 { return "" }
+    sha = string.copy(sha)
+
+    path = string.copy(pristine_path(wc_root, sha))
+    if io_exists(path) == 1 { return sha }
+
+    dir = string.copy(pristine_dir(wc_root, sha))
+    if io_mkdir_p(dir) != 0 { return "" }
+
+    // Decide RAW vs ZLIB. Same threshold fs_fs uses: zlib only if
+    // it saves at least 16 bytes over raw.
+    use_zlib = 0
+    zbytes = ""
+    zlen = 0
+    if length > 0 {
+        zb, zl, zerr = zlib.deflate(data, length, 6)
+        if string.length(zerr) == 0 {
+            if zl + 16 < length {
+                use_zlib = 1
+                zbytes = zb
+                zlen = zl
+            }
+        }
+    }
+
+    // Build the file buffer: header byte + 4-byte LE length + payload.
+    header_tag = "R"
+    if use_zlib == 1 { header_tag = "Z" }
+
+    le = pack_le32(length)
+
+    body = data
+    body_len = length
+    if use_zlib == 1 {
+        body = zbytes
+        body_len = zlen
+    }
+
+    buf = concat(header_tag, 1, le, 4)
+    buf = concat(buf, 5, body, body_len)
+
+    total_len = 1 + 4 + body_len
+    werr = fs.write_binary(path, buf, total_len)
+    if string.length(werr) > 0 { return "" }
+    return sha
+}
+
+
+// ---- pristine get --------------------------------------------------------
+
+// Read the pristine blob for `sha`. Returns the bytes as an
+// AetherString (binary-safe via string_new_with_length). "" on miss
+// or corruption.
+export wc_pristine_get(wc_root: string, sha: string) -> string {
+    path = string.copy(pristine_path(wc_root, sha))
+    file, fsize, err = fs.read_binary(path)
+    if string.length(err) > 0 { return "" }
+    if fsize < 5 { return "" }
+
+    header = string.char_at(file, 0)
+    uncompressed = unpack_le32(file, 1)
+
+    payload_len = fsize - 5
+    payload = slice(file, fsize, 5, fsize)
+
+    if header == 82 {          // 'R'
+        if payload_len != uncompressed { return "" }
+        return payload
+    }
+    if header == 90 {          // 'Z'
+        bytes, outlen, ierr = zlib.inflate(payload, payload_len)
+        if string.length(ierr) > 0 { return "" }
+        if outlen != uncompressed { return "" }
+        return bytes
+    }
+    return ""
+}
+
+
+// ---- has / size ---------------------------------------------------------
+
+export wc_pristine_has(wc_root: string, sha: string) -> int {
+    path = string.copy(pristine_path(wc_root, sha))
+    return io_is_regular_file(path)
+}
+
+export wc_pristine_size(wc_root: string, sha: string) -> int {
+    path = string.copy(pristine_path(wc_root, sha))
+    file, fsize, err = fs.read_binary(path)
+    if string.length(err) > 0 { return -1 }
+    if fsize < 5 { return -1 }
+    return unpack_le32(file, 1)
+}
+
+// ---- little-endian uint32 unpack ---------------------------------------
+
+// char_at returns the byte as a non-negative int in [0,255], so no
+// sign-extension masking is needed.
+unpack_le32(s: string, pos: int) -> int {
+    b0 = string.char_at(s, pos)
+    b1 = string.char_at(s, pos + 1)
+    b2 = string.char_at(s, pos + 2)
+    b3 = string.char_at(s, pos + 3)
+    return b0 | (b1 << 8) | (b2 << 16) | (b3 << 24)
+}
+
+main() {
+    println("ae/wc/pristine.ae is a library; not meant to run standalone")
+}

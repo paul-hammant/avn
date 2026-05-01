@@ -30,39 +30,32 @@
 
 import std.string
 import std.json
+import std.http
 
-extern svnserver_request_body(req: ptr) -> string
-extern svnserver_request_body_length(req: ptr) -> int
-extern svnserver_request_user(req: ptr) -> string
+extern svnserver_request_header(req: ptr, name: string) -> string
 extern svnserver_request_is_super(req: ptr) -> int
-extern svnserver_request_branch(req: ptr) -> string
 
-extern aether_acl_user_has_rw_subtree(repo: string, rev: int,
+extern acl_subtree_rw(repo: string, rev: int,
                                        user: string, path: string) -> int
-extern svnserver_acl_allows_mode(repo: string, rev: int, user: string,
-                                  path: string, want_write: int) -> int
+extern acl_allows_mode(repo: string, rev: int, user: string, target_path: string, want_write: int) -> int
 extern svnserver_spec_allows(repo: string, branch: string,
                               path: string, is_super: int) -> int
-extern svnae_repos_resolve_kind(repo: string, rev: int, path: string) -> int
-extern svnae_repos_resolve_sha(repo: string, rev: int, path: string) -> string
+extern repos_resolve_kind(repo: string, rev: int, path: string) -> int
+extern repos_resolve_sha(repo: string, rev: int, path: string) -> string
 
 extern auto_follow_copy_acl(repo: string, base_rev: int,
                              from_path: string, to_path: string) -> string
 
-extern svnae_txn_new(base_rev: int) -> ptr
-extern svnae_txn_copy(t: ptr, path: string, from_sha1: string, from_kind: int) -> int
-extern svnae_txn_free(t: ptr)
-extern svnae_commit_finalise_with_acl(repo: string, txn: ptr,
-                                       author: string, log_msg: string,
-                                       props_sha: string, acl_sha: string) -> int
+extern txn_new(base_rev: int) -> ptr
+extern txn_copy(t: ptr, path: string, from_sha1: string, from_kind: int) -> int
+extern txn_free(t: ptr)
+extern commit_finalise(repo: string, txn: ptr, branch: string,
+                              author: string, log_msg: string,
+                              props_sha: string, acl_sha: string) -> int
 
 export copy_from_body(req: ptr, repo: string) -> int {
-    return copy_from_body_impl(req, repo)
-}
-
-copy_from_body_impl(req: ptr, repo: string) -> int {
-    body = svnserver_request_body(req)
-    body_len = svnserver_request_body_length(req)
+    body = http.request_body(req)
+    body_len = http.request_body_length(req)
     if body_len == 0 { return -1 }
 
     root, err = json.parse(body)
@@ -108,18 +101,19 @@ copy_from_body_impl(req: ptr, repo: string) -> int {
 
     json.free(root)
 
-    user = svnserver_request_user(req)
+    user = svnserver_request_header(req, "X-Svnae-User")
     is_super = svnserver_request_is_super(req)
     if is_super == 0 {
-        if aether_acl_user_has_rw_subtree(repo, base_rev, user, from_path) == 0 {
+        if acl_subtree_rw(repo, base_rev, user, from_path) == 0 {
             return -4
         }
-        if svnserver_acl_allows_mode(repo, base_rev, user, to_path, 1) == 0 {
+        if acl_allows_mode(repo, base_rev, user, to_path, 1) == 0 {
             return -4
         }
     }
 
-    cp_branch = svnserver_request_branch(req)
+    cp_branch = svnserver_request_header(req, "Svn-Branch")
+    if string.length(cp_branch) == 0 { cp_branch = "main" }
     if svnserver_spec_allows(repo, cp_branch, from_path, is_super) == 0 {
         return -5
     }
@@ -127,29 +121,30 @@ copy_from_body_impl(req: ptr, repo: string) -> int {
         return -5
     }
 
-    kind = svnae_repos_resolve_kind(repo, base_rev, from_path)
+    kind = repos_resolve_kind(repo, base_rev, from_path)
     if kind == 0 { return -6 }
-    from_sha = svnae_repos_resolve_sha(repo, base_rev, from_path)
+    from_sha = repos_resolve_sha(repo, base_rev, from_path)
     from_sha = string.copy(from_sha)
     from_kind_int = 0
     if kind == 100 { from_kind_int = 1 }   // 'd'
 
     new_acl_sha = auto_follow_copy_acl(repo, base_rev, from_path, to_path)
-    // svnae_rep_write_blob returns into a thread-local buffer; the
+    // rep_write_blob returns into a thread-local buffer; the
     // txn_copy/commit path below also calls rep_write_blob (for the
     // node copy's dirblob), which will overwrite this slot. Snapshot
     // before handing off to the txn machinery.
     new_acl_sha = string.copy(new_acl_sha)
 
-    txn = svnae_txn_new(base_rev)
-    svnae_txn_copy(txn, to_path, from_sha, from_kind_int)
-    new_rev = svnae_commit_finalise_with_acl(repo, txn, author, logmsg,
-                                              "", new_acl_sha)
-    svnae_txn_free(txn)
+    txn = txn_new(base_rev)
+    txn_copy(txn, to_path, from_sha, from_kind_int)
+    new_rev = commit_finalise(repo, txn, "main", author, logmsg,
+                                     "", new_acl_sha)
+    txn_free(txn)
 
     if new_rev < 0 { return -7 }
     return new_rev
 }
+
 
 main() {
     println("ae/svnserver/copy_parse.ae is a library; not meant to run standalone")

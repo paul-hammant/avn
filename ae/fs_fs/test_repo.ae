@@ -19,46 +19,32 @@
 
 import std.fs
 import std.string
+import std.zlib
 
 // --- externs from subr shims ------------------------------------------------
 
-extern svnae_sha1_hex(data: string, data_len: int) -> string
-extern svnae_checksum_free_hex(buf: string)
+extern crypto_hash_hex(algo: string, data: string, length: int) -> string
 
-extern svnae_zlib_deflate(data: string, data_len: int, level: int) -> ptr
-extern svnae_zlib_inflate_offset(base: string, offset: int, data_len: int, expected_out: int) -> ptr
-extern svnae_buf_length(b: ptr) -> int
-extern svnae_buf_data(b: ptr) -> string
-extern svnae_buf_free(b: ptr)
-extern svnae_write_header_and_buf(path: string, header: string, buf: ptr) -> int
+// Round 176: std.zlib retired the C-side zlib_*/buf_*
+// shim. zlib.deflate / zlib.inflate return (string, int, error) tuples;
+// the previous opaque-buf handle dance is gone.
 
-extern svnae_write_and_fsync(path: string, data: string, len: int) -> int
-extern svnae_write_header_and_body(path: string, header: string, body: string, body_len: int) -> int
-extern svnae_rename(from: string, to: string) -> int
-extern svnae_is_regular_file(path: string) -> int
-extern svnae_remove(path: string) -> int
-extern svnae_getpid() -> int
-extern svnae_read_file(path: string, out_len: ptr) -> ptr
-extern svnae_read_file_length(b: ptr) -> int
-extern svnae_read_file_data(b: ptr) -> string
-extern svnae_read_file_free(b: ptr)
+extern io_write_atomic(path: string, data: string, length: int) -> int
+extern io_write_header_and_body(path: string, header: string, body: string, body_len: int) -> int
+extern io_rename(from: string, to: string) -> int
+extern io_is_regular_file(path: string) -> int
+extern io_remove(path: string) -> int
+extern os_getpid_raw() -> int
+// Round 185: switched to fs.read_binary (already shipped) — no
+// more buf carrier, no manual free, length-aware return.
 
 extern file_exists(path: string) -> int
 extern dir_exists(path: string) -> int
 
-const SQLITE_OK   = 0
+import contrib.sqlite
+
 const SQLITE_ROW  = 100
 const SQLITE_DONE = 101
-
-extern svnae_sqlite_open(path: string) -> ptr
-extern svnae_sqlite_close(db: ptr) -> int
-extern svnae_sqlite_exec(db: ptr, sql: string) -> int
-extern svnae_sqlite_prepare(db: ptr, sql: string) -> ptr
-extern svnae_sqlite_finalize(stmt: ptr) -> int
-extern svnae_sqlite_step(stmt: ptr) -> int
-extern svnae_sqlite_bind_int(stmt: ptr, idx: int, v: int) -> int
-extern svnae_sqlite_bind_text(stmt: ptr, idx: int, text: string) -> int
-extern svnae_sqlite_column_int(stmt: ptr, col: int) -> int
 
 const STORAGE_RAW  = 1
 const STORAGE_ZLIB = 2
@@ -71,14 +57,14 @@ create_repo(path: string) {
     reps = "${path}/reps"
     merr = fs.mkdir_p(reps)
     if string.length(merr) != 0 { return 11 }
-    rc = svnae_write_and_fsync("${path}/format", "svnae-fsfs-1\n", 13)
+    rc = io_write_atomic("${path}/format", "svnae-fsfs-1\n", 13)
     if rc != 0 { return rc }
-    db = svnae_sqlite_open("${path}/rep-cache.db")
-    if db == 0 { return 3 }
-    rc = svnae_sqlite_exec(db,
+    db, oerr = sqlite.open("${path}/rep-cache.db")
+    if string.length(oerr) > 0 { return 3 }
+    err = sqlite.exec(db,
         "CREATE TABLE rep_cache (hash TEXT PRIMARY KEY, rel_path TEXT NOT NULL, uncompressed_size INT NOT NULL, storage INT NOT NULL)")
-    svnae_sqlite_close(db)
-    if rc != SQLITE_OK { return 4 }
+    sqlite.close(db)
+    if string.length(err) > 0 { return 4 }
     return 0
 }
 
@@ -98,75 +84,72 @@ ensure_fanout_dirs(repo: string, sha1: string) {
 }
 
 rep_cache_has(repo: string, sha1: string) {
-    db = svnae_sqlite_open("${repo}/rep-cache.db")
-    if db == 0 { return 0 }
-    stmt = svnae_sqlite_prepare(db, "SELECT 1 FROM rep_cache WHERE hash = ?")
-    if stmt == 0 { svnae_sqlite_close(db); return 0 }
-    svnae_sqlite_bind_text(stmt, 1, sha1)
-    rc = svnae_sqlite_step(stmt)
+    db, oerr = sqlite.open("${repo}/rep-cache.db")
+    if string.length(oerr) > 0 { return 0 }
+    stmt, perr = sqlite.prepare(db, "SELECT 1 FROM rep_cache WHERE hash = ?")
+    if string.length(perr) > 0 { sqlite.close(db); return 0 }
+    sqlite.bind_text(stmt, 1, sha1)
+    rc, _ = sqlite.step(stmt, db)
     found = 0
     if rc == SQLITE_ROW { found = 1 }
-    svnae_sqlite_finalize(stmt)
-    svnae_sqlite_close(db)
+    sqlite.finalize(stmt)
+    sqlite.close(db)
     return found
 }
 
 rep_cache_lookup_storage(repo: string, sha1: string) {
-    db = svnae_sqlite_open("${repo}/rep-cache.db")
-    if db == 0 { return 0 }
-    stmt = svnae_sqlite_prepare(db, "SELECT storage FROM rep_cache WHERE hash = ?")
-    svnae_sqlite_bind_text(stmt, 1, sha1)
-    rc = svnae_sqlite_step(stmt)
+    db, oerr = sqlite.open("${repo}/rep-cache.db")
+    if string.length(oerr) > 0 { return 0 }
+    stmt, _ = sqlite.prepare(db, "SELECT storage FROM rep_cache WHERE hash = ?")
+    sqlite.bind_text(stmt, 1, sha1)
+    rc, _ = sqlite.step(stmt, db)
     s = 0
-    if rc == SQLITE_ROW { s = svnae_sqlite_column_int(stmt, 0) }
-    svnae_sqlite_finalize(stmt)
-    svnae_sqlite_close(db)
+    if rc == SQLITE_ROW { s = sqlite.column_int(stmt, 0) }
+    sqlite.finalize(stmt)
+    sqlite.close(db)
     return s
 }
 
 rep_cache_lookup_uncompressed_size(repo: string, sha1: string) {
-    db = svnae_sqlite_open("${repo}/rep-cache.db")
-    if db == 0 { return 0 }
-    stmt = svnae_sqlite_prepare(db, "SELECT uncompressed_size FROM rep_cache WHERE hash = ?")
-    svnae_sqlite_bind_text(stmt, 1, sha1)
-    rc = svnae_sqlite_step(stmt)
+    db, oerr = sqlite.open("${repo}/rep-cache.db")
+    if string.length(oerr) > 0 { return 0 }
+    stmt, _ = sqlite.prepare(db, "SELECT uncompressed_size FROM rep_cache WHERE hash = ?")
+    sqlite.bind_text(stmt, 1, sha1)
+    rc, _ = sqlite.step(stmt, db)
     v = 0
-    if rc == SQLITE_ROW { v = svnae_sqlite_column_int(stmt, 0) }
-    svnae_sqlite_finalize(stmt)
-    svnae_sqlite_close(db)
+    if rc == SQLITE_ROW { v = sqlite.column_int(stmt, 0) }
+    sqlite.finalize(stmt)
+    sqlite.close(db)
     return v
 }
 
 rep_cache_insert(repo: string, sha1: string, rel_path: string,
                  uncompressed_size: int, storage: int) {
-    db = svnae_sqlite_open("${repo}/rep-cache.db")
-    if db == 0 { return 1 }
-    stmt = svnae_sqlite_prepare(db,
+    db, oerr = sqlite.open("${repo}/rep-cache.db")
+    if string.length(oerr) > 0 { return 1 }
+    stmt, _ = sqlite.prepare(db,
         "INSERT INTO rep_cache (hash, rel_path, uncompressed_size, storage) VALUES (?, ?, ?, ?)")
-    svnae_sqlite_bind_text(stmt, 1, sha1)
-    svnae_sqlite_bind_text(stmt, 2, rel_path)
-    svnae_sqlite_bind_int (stmt, 3, uncompressed_size)
-    svnae_sqlite_bind_int (stmt, 4, storage)
-    rc = svnae_sqlite_step(stmt)
-    svnae_sqlite_finalize(stmt)
-    svnae_sqlite_close(db)
+    sqlite.bind_text(stmt, 1, sha1)
+    sqlite.bind_text(stmt, 2, rel_path)
+    sqlite.bind_int (stmt, 3, uncompressed_size)
+    sqlite.bind_int (stmt, 4, storage)
+    rc, _ = sqlite.step(stmt, db)
+    sqlite.finalize(stmt)
+    sqlite.close(db)
     if rc != SQLITE_DONE { return 2 }
     return 0
 }
 
 write_blob(repo: string, data: string) {
     n = string.length(data)
-    raw = svnae_sha1_hex(data, n)
-    sha1_copy = string.concat("", raw)
-    svnae_checksum_free_hex(raw)
+    sha1_copy = crypto_hash_hex("sha1", data, n)
 
     if rep_cache_has(repo, sha1_copy) == 1 { return sha1_copy }
 
     storage = STORAGE_RAW
-    comp = svnae_zlib_deflate(data, n, 6)
+    comp, clen, cerr = zlib.deflate(data, n, 6)
     use_zlib = 0
-    if comp != 0 {
-        clen = svnae_buf_length(comp)
+    if string.length(cerr) == 0 {
         if clen + 16 < n {
             storage = STORAGE_ZLIB
             use_zlib = 1
@@ -180,19 +163,16 @@ write_blob(repo: string, data: string) {
     rel = rel_path_for_hash(sha1_copy)
     full = "${repo}/reps/${rel}"
 
-    tmp = "${full}.tmp.${svnae_getpid()}.0"
+    tmp = "${full}.tmp.${os_getpid_raw()}.0"
     wrc = 0
-    // ZLIB payloads can contain NULs, so we never route them through an
-    // Aether string. The compress shim takes the buf handle directly.
     if use_zlib == 1 {
-        wrc = svnae_write_header_and_buf(tmp, storage_hdr, comp)
+        wrc = io_write_header_and_body(tmp, storage_hdr, comp, clen)
     } else {
-        wrc = svnae_write_header_and_body(tmp, storage_hdr, data, n)
+        wrc = io_write_header_and_body(tmp, storage_hdr, data, n)
     }
-    if comp != 0 { svnae_buf_free(comp) }
-    if wrc != 0 { svnae_remove(tmp); return "" }
-    rc = svnae_rename(tmp, full)
-    if rc != 0 { svnae_remove(tmp); return "" }
+    if wrc != 0 { io_remove(tmp); return "" }
+    rc = io_rename(tmp, full)
+    if rc != 0 { io_remove(tmp); return "" }
 
     rc = rep_cache_insert(repo, sha1_copy, rel, n, storage)
     if rc != 0 { return "" }
@@ -206,28 +186,21 @@ read_blob(repo: string, sha1_hex: string) {
     rel = rel_path_for_hash(sha1_hex)
     full = "${repo}/reps/${rel}"
 
-    // Binary-safe read: fs.read's strlen-based copy breaks on zlib blobs.
-    raw_buf = svnae_read_file(full, 0)
-    if raw_buf == 0 { return "" }
-    total_len = svnae_read_file_length(raw_buf)
-    raw_ptr = svnae_read_file_data(raw_buf)
-    if total_len < 1 { svnae_read_file_free(raw_buf); return "" }
+    raw_ptr, total_len, rerr = fs.read_binary(full)
+    if string.length(rerr) > 0 { return "" }
+    if total_len < 1 { return "" }
 
     if storage == STORAGE_RAW {
-        body_str = string.substring(raw_ptr, 1, total_len)
-        svnae_read_file_free(raw_buf)
-        return body_str
+        return string.substring_n(raw_ptr, total_len, 1, total_len)
     }
 
-    inf = svnae_zlib_inflate_offset(raw_ptr, 1, total_len - 1, uncompressed)
-    svnae_read_file_free(raw_buf)
-    if inf == 0 { return "" }
-    // Return the buf's data pointer. The buf struct itself leaks (~16 bytes
-    // per read). A proper owned-string return type will come when Aether's
-    // cross-module `ptr` typing is fixed and we can hoist this into the
-    // module boundary. Bytes are NUL-terminated by buf_new so strlen-based
-    // operations on the result are safe.
-    return svnae_buf_data(inf)
+    body_compressed = string.substring_n(raw_ptr, total_len, 1, total_len)
+    out, _, ierr = zlib.inflate(body_compressed, total_len - 1)
+    if string.length(ierr) > 0 { return "" }
+    // Silence the unused-warning for `uncompressed` — kept as the
+    // historical sanity check on the rep-cache size column.
+    uncompressed = uncompressed
+    return out
 }
 
 // --- test harness ----------------------------------------------------------
@@ -255,8 +228,8 @@ rmtree(path: string) { system("rm -rf '${path}'"); return 0 }
 
 main() {
     fails = 0
-    pid = svnae_getpid()
-    repo = "/tmp/svnae_test_repo_${pid}"
+    pid = os_getpid_raw()
+    repo = "/tmp/test_repo_${pid}"
     rmtree(repo)
 
     // 1. create_repo

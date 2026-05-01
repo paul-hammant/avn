@@ -27,7 +27,9 @@ import std.string
 // Return the JSON-escaped form of `v` including surrounding double
 // quotes. Handles the six short-form escapes and \u00XX for any other
 // control byte < 0x20.
-json_escape_string_impl(v: string) -> string {
+
+// Public wrappers — exported to C as json_escape_string / json_int_to_dec.
+export json_escape_string(v: string) -> string {
     out = "\""
     n = string.length(v)
     run_start = 0
@@ -52,11 +54,6 @@ json_escape_string_impl(v: string) -> string {
     }
     out = string.concat(out, "\"")
     return out
-}
-
-// Public wrappers — exported to C as aether_json_escape_string / aether_json_int_to_dec.
-export json_escape_string(v: string) -> string {
-    return json_escape_string_impl(v)
 }
 
 export json_int_to_dec(v: int) -> string {
@@ -145,10 +142,10 @@ export props_blob_to_json(body: string) -> string {
                 if string.length(key) >= 256 {
                     out = string.concat(out, "\"\"")
                 } else {
-                    out = string.concat(out, json_escape_string_impl(key))
+                    out = string.concat(out, json_escape_string(key))
                 }
                 out = string.concat(out, ":")
-                out = string.concat(out, json_escape_string_impl(val))
+                out = string.concat(out, json_escape_string(val))
             }
             line_start = i + 1
         }
@@ -189,7 +186,7 @@ export specs_to_json_array(body: string) -> string {
                 if any == 1 { out = string.concat(out, ",") }
                 any = 1
                 glob = string.substring(body, line_start, end)
-                out = string.concat(out, json_escape_string_impl(glob))
+                out = string.concat(out, json_escape_string(glob))
             }
             line_start = i + 1
         }
@@ -211,13 +208,13 @@ export rev_info_json(rev: int, author: string, date: string, msg: string, root: 
     out = "{\"rev\":"
     out = string.concat(out, string.from_int(rev))
     out = string.concat(out, ",\"author\":")
-    out = string.concat(out, json_escape_string_impl(author))
+    out = string.concat(out, json_escape_string(author))
     out = string.concat(out, ",\"date\":")
-    out = string.concat(out, json_escape_string_impl(date))
+    out = string.concat(out, json_escape_string(date))
     out = string.concat(out, ",\"msg\":")
-    out = string.concat(out, json_escape_string_impl(msg))
+    out = string.concat(out, json_escape_string(msg))
     out = string.concat(out, ",\"root\":")
-    out = string.concat(out, json_escape_string_impl(root))
+    out = string.concat(out, json_escape_string(root))
     out = string.concat(out, "}")
     return out
 }
@@ -227,11 +224,11 @@ export log_entry_json(rev: int, author: string, date: string, msg: string) -> st
     out = "{\"rev\":"
     out = string.concat(out, string.from_int(rev))
     out = string.concat(out, ",\"author\":")
-    out = string.concat(out, json_escape_string_impl(author))
+    out = string.concat(out, json_escape_string(author))
     out = string.concat(out, ",\"date\":")
-    out = string.concat(out, json_escape_string_impl(date))
+    out = string.concat(out, json_escape_string(date))
     out = string.concat(out, ",\"msg\":")
-    out = string.concat(out, json_escape_string_impl(msg))
+    out = string.concat(out, json_escape_string(msg))
     out = string.concat(out, "}")
     return out
 }
@@ -239,9 +236,9 @@ export log_entry_json(rev: int, author: string, date: string, msg: string) -> st
 // {"action":"A","path":"..."}
 export path_change_entry_json(action: string, path: string) -> string {
     out = "{\"action\":"
-    out = string.concat(out, json_escape_string_impl(action))
+    out = string.concat(out, json_escape_string(action))
     out = string.concat(out, ",\"path\":")
-    out = string.concat(out, json_escape_string_impl(path))
+    out = string.concat(out, json_escape_string(path))
     out = string.concat(out, "}")
     return out
 }
@@ -250,9 +247,9 @@ export path_change_entry_json(action: string, path: string) -> string {
 // — everything up to the opening of the secondaries array.
 export hashes_prelude_json(algo: string, primary_hash: string) -> string {
     out = "{\"primary\":{\"algo\":"
-    out = string.concat(out, json_escape_string_impl(algo))
+    out = string.concat(out, json_escape_string(algo))
     out = string.concat(out, ",\"hash\":")
-    out = string.concat(out, json_escape_string_impl(primary_hash))
+    out = string.concat(out, json_escape_string(primary_hash))
     out = string.concat(out, "},\"secondaries\":[")
     return out
 }
@@ -277,14 +274,14 @@ export acl_response_json(rules_body: string, effective_from: string) -> string {
                 rule = string.substring(rules_body, line_start, i)
                 if first == 0 { out = string.concat(out, ",") }
                 first = 0
-                out = string.concat(out, json_escape_string_impl(rule))
+                out = string.concat(out, json_escape_string(rule))
             }
             line_start = i + 1
         }
         i = i + 1
     }
     out = string.concat(out, "],\"effective_from\":")
-    out = string.concat(out, json_escape_string_impl(effective_from))
+    out = string.concat(out, json_escape_string(effective_from))
     out = string.concat(out, "}")
     return out
 }
@@ -292,9 +289,9 @@ export acl_response_json(rules_body: string, effective_from: string) -> string {
 // Single secondary entry: {"algo":"...","hash":"..."}
 export secondary_entry_json(algo: string, hash: string) -> string {
     out = "{\"algo\":"
-    out = string.concat(out, json_escape_string_impl(algo))
+    out = string.concat(out, json_escape_string(algo))
     out = string.concat(out, ",\"hash\":")
-    out = string.concat(out, json_escape_string_impl(hash))
+    out = string.concat(out, json_escape_string(hash))
     out = string.concat(out, "}")
     return out
 }
@@ -302,7 +299,7 @@ export secondary_entry_json(algo: string, hash: string) -> string {
 // Tiny response builders for mutation endpoints.
 export error_response_json(msg: string) -> string {
     out = "{\"error\":"
-    out = string.concat(out, json_escape_string_impl(msg))
+    out = string.concat(out, json_escape_string(msg))
     return string.concat(out, "}")
 }
 
@@ -316,7 +313,7 @@ export rev_sha_response_json(rev: int, sha: string) -> string {
     out = "{\"rev\":"
     out = string.concat(out, string.from_int(rev))
     out = string.concat(out, ",\"sha\":")
-    out = string.concat(out, json_escape_string_impl(sha))
+    out = string.concat(out, json_escape_string(sha))
     return string.concat(out, "}")
 }
 
@@ -324,7 +321,7 @@ export rev_branch_response_json(rev: int, branch: string) -> string {
     out = "{\"rev\":"
     out = string.concat(out, string.from_int(rev))
     out = string.concat(out, ",\"branch\":")
-    out = string.concat(out, json_escape_string_impl(branch))
+    out = string.concat(out, json_escape_string(branch))
     return string.concat(out, "}")
 }
 
@@ -334,9 +331,9 @@ export info_prelude_json(head: int, name: string, hash_algo: string) -> string {
     out = "{\"head\":"
     out = string.concat(out, string.from_int(head))
     out = string.concat(out, ",\"name\":")
-    out = string.concat(out, json_escape_string_impl(name))
+    out = string.concat(out, json_escape_string(name))
     out = string.concat(out, ",\"hash_algo\":")
-    out = string.concat(out, json_escape_string_impl(hash_algo))
+    out = string.concat(out, json_escape_string(hash_algo))
     out = string.concat(out, ",\"default_branch\":\"main\"")
     return out
 }
@@ -345,7 +342,7 @@ export info_prelude_json(head: int, name: string, hash_algo: string) -> string {
 // visible children; {"kind":"hidden","sha":"..."} for denied.
 export list_entry_visible_json(name: string, kind_c: int) -> string {
     out = "{\"name\":"
-    out = string.concat(out, json_escape_string_impl(name))
+    out = string.concat(out, json_escape_string(name))
     out = string.concat(out, ",\"kind\":")
     if kind_c == 100 {   // 'd'
         out = string.concat(out, "\"dir\"")
@@ -357,7 +354,7 @@ export list_entry_visible_json(name: string, kind_c: int) -> string {
 
 export list_entry_hidden_json(sha: string) -> string {
     out = "{\"kind\":\"hidden\",\"sha\":"
-    out = string.concat(out, json_escape_string_impl(sha))
+    out = string.concat(out, json_escape_string(sha))
     return string.concat(out, "}")
 }
 
@@ -386,9 +383,9 @@ export blame_entry_json(rev: int, author: string, text: string) -> string {
     out = "{\"rev\":"
     out = string.concat(out, string.from_int(rev))
     out = string.concat(out, ",\"author\":")
-    out = string.concat(out, json_escape_string_impl(author))
+    out = string.concat(out, json_escape_string(author))
     out = string.concat(out, ",\"text\":")
-    out = string.concat(out, json_escape_string_impl(text))
+    out = string.concat(out, json_escape_string(text))
     out = string.concat(out, "}")
     return out
 }

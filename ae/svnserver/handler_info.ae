@@ -26,25 +26,21 @@ import std.string
 
 // Parse "/repos/NAME/info" into (name, tail) via the url_parse helper.
 // Returns the repo name on success, "" on malformed.
-extern aether_parse_repo_name_in(path: string) -> string
+extern parse_repo_name_in(path: string) -> string
 
 // Look up the repo filesystem path by name (static map on the C side).
 extern svnserver_find_repo_path(name: string) -> string
 
-extern svnae_repos_head_rev(repo: string) -> int
-extern svnae_repo_primary_hash(repo: string) -> string
-extern aether_info_json(repo: string, name: string, head: int, hash_algo: string) -> string
+extern repos_head_rev(repo: string) -> int
+extern repo_primary_hash(repo: string) -> string
+extern info_json(repo: string, name: string, head: int, hash_algo: string) -> string
 
 // ACL-free route; no auth decoding needed beyond "did path parse".
 export handler_info(req: ptr, res: ptr) {
-    handler_info_impl(req, res)
-}
-
-handler_info_impl(req: ptr, res: ptr) {
     path = http.request_path(req)
 
     // Must be of the shape "/repos/{name}/info".
-    name = aether_parse_repo_name_in(path)
+    name = parse_repo_name_in(path)
     if string.length(name) == 0 {
         svnserver_respond_error(res, 404, "not found")
         return
@@ -61,16 +57,17 @@ handler_info_impl(req: ptr, res: ptr) {
         return
     }
 
-    head = svnae_repos_head_rev(repo)
+    head = repos_head_rev(repo)
     if head < 0 {
         svnserver_respond_error(res, 500, "cannot read head")
         return
     }
 
-    body = aether_info_json(repo, name, head, svnae_repo_primary_hash(repo))
+    body = info_json(repo, name, head, repo_primary_hash(repo))
     http.response_set_status(res, 200)
     http.response_json(res, body)
 }
+
 
 // Error emitter is a C shim (svnserver_respond_error in shim.c);
 // Aether just calls through.

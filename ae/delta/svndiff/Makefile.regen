@@ -1,0 +1,16 @@
+# Regen recipe for ae/delta/svndiff/encoder.ae (the svndiff1 encoder
+# struct + builder hoisted from shim.c in Round 166 — Aether 0.109's
+# *Struct return-type fix + bytes packed-int helpers retired the
+# C-side encoder).
+
+AETHERC ?= $(abspath $(dir $(lastword $(MAKEFILE_LIST))))/../../../.aether_binaries/build/aetherc
+
+GENERATED := encoder_generated.c
+
+all: $(GENERATED)
+
+# encoder.ae: pure std.bytes / *StructName / malloc/free. No capabilities.
+encoder_generated.c: encoder.ae
+	$(AETHERC) --emit=lib $< $@
+
+.PHONY: all

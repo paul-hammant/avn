@@ -1,0 +1,70 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+
+// statuslist + proplist handle accessors — Aether port of
+// ae/wc/status_shim.c and ae/wc/props_shim.c. Same recipe as the
+// repos / ra / db_accessors ports (Rounds 154–156): handle is the
+// underlying packed AetherString, refcount handles lifetime, no
+// pin_str needed.
+
+import std.string
+
+extern statuslist_count   (packed: string) -> int
+extern statuslist_path_at (packed: string, i: int) -> string
+extern statuslist_code_at (packed: string, i: int) -> int
+
+extern proplist_count   (packed: string) -> int
+extern proplist_name_at (packed: string, i: int) -> string
+extern proplist_value_at(packed: string, i: int) -> string
+
+// ---- statuslist handle ---------------------------------------
+
+export wc_statuslist_handle(packed: string) -> ptr {
+    if string.length(packed) == 0 { return null }
+    return string.copy(packed)
+}
+
+export wc_statuslist_count(L: ptr) -> int {
+    if L == null { return 0 }
+    return statuslist_count(L)
+}
+export wc_statuslist_path (L: ptr, i: int) -> string {
+    if L == null { return "" }
+    return statuslist_path_at(L, i)
+}
+export wc_statuslist_code (L: ptr, i: int) -> int {
+    if L == null { return 0 - 1 }
+    return statuslist_code_at(L, i)
+}
+export wc_statuslist_free (L: ptr) { return 0 }
+
+// ---- proplist handle -----------------------------------------
+
+export wc_proplist_handle(packed: string) -> ptr {
+    if string.length(packed) == 0 { return null }
+    return string.copy(packed)
+}
+
+export wc_proplist_count(L: ptr) -> int {
+    if L == null { return 0 }
+    return proplist_count(L)
+}
+export wc_proplist_name (L: ptr, i: int) -> string {
+    if L == null { return "" }
+    return proplist_name_at(L, i)
+}
+export wc_proplist_value(L: ptr, i: int) -> string {
+    if L == null { return "" }
+    return proplist_value_at(L, i)
+}
+export wc_proplist_free (L: ptr) { return 0 }
+
+main() {
+    println("ae/wc/wc_accessors.ae is a library; not meant to run standalone")
+}

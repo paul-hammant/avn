@@ -23,35 +23,30 @@
 //   rev 3: LICENSE removed
 
 import std.fs
+import std.os
 import std.string
 
 extern aether_args_count() -> int
 extern aether_args_get(index: int) -> string
 
-extern svnae_rep_write_blob(repo: string, data: string, len: int) -> string
-extern svnae_rep_read_blob(repo: string, sha1_hex: string) -> string
-extern svnae_rep_free(p: string)
+extern rep_write_blob(repo: string, data: string, len: int) -> string
+extern rep_read_blob(repo: string, sha1_hex: string) -> string
+extern rep_free(p: string)
 
-extern svnae_txn_new(base_rev: int) -> ptr
-extern svnae_txn_base_rev(t: ptr) -> int
-extern svnae_txn_add_file(t: ptr, path: string, content: string, len: int) -> int
-extern svnae_txn_mkdir(t: ptr, path: string) -> int
-extern svnae_txn_delete(t: ptr, path: string) -> int
-extern svnae_txn_free(t: ptr)
-extern svnae_txn_rebuild_root(repo: string, base_root_sha1: string, t: ptr) -> string
+extern txn_new(base_rev: int) -> ptr
+extern txn_base_rev(t: ptr) -> int
+extern txn_add_file(t: ptr, path: string, content: string, len: int) -> int
+extern txn_mkdir(t: ptr, path: string) -> int
+extern txn_delete(t: ptr, path: string) -> int
+extern txn_free(t: ptr)
+extern rebuild_dir(repo: string, base_dir_sha: string, prefix: string, t: ptr) -> string
 
-extern svnae_write_and_fsync(path: string, data: string, len: int) -> int
+extern io_write_atomic(path: string, data: string, length: int) -> int
 extern dir_exists(path: string) -> int
 
-extern svnae_fsfs_read_small_file(path: string) -> ptr
-extern svnae_fsfs_buf_data(b: ptr) -> string
-extern svnae_fsfs_buf_free(b: ptr)
-extern svnae_fsfs_now_iso8601() -> string
+extern io_read_file(path: string) -> string
 
-const SQLITE_OK = 0
-extern svnae_sqlite_open(path: string) -> ptr
-extern svnae_sqlite_close(db: ptr) -> int
-extern svnae_sqlite_exec(db: ptr, sql: string) -> int
+import contrib.sqlite
 
 fsfs_init(path: string) {
     if dir_exists(path) == 1 { return 1 }
@@ -61,22 +56,22 @@ fsfs_init(path: string) {
     if string.length(merr) != 0 { return 11 }
     merr = fs.mkdir_p("${path}/revs")
     if string.length(merr) != 0 { return 12 }
-    rc = svnae_write_and_fsync("${path}/format", "svnae-fsfs-1\n", 13)
+    rc = io_write_atomic("${path}/format", "svnae-fsfs-1\n", 13)
     if rc != 0 { return rc }
-    db = svnae_sqlite_open("${path}/rep-cache.db")
-    if db == 0 { return 3 }
-    rc = svnae_sqlite_exec(db,
+    db, oerr = sqlite.open("${path}/rep-cache.db")
+    if string.length(oerr) > 0 { return 3 }
+    err = sqlite.exec(db,
         "CREATE TABLE rep_cache (hash TEXT PRIMARY KEY, rel_path TEXT NOT NULL, uncompressed_size INT NOT NULL, storage INT NOT NULL)")
-    svnae_sqlite_close(db)
-    if rc != SQLITE_OK { return 4 }
-    empty_sha = svnae_rep_write_blob(path, "", 0)
+    sqlite.close(db)
+    if string.length(err) > 0 { return 4 }
+    empty_sha = rep_write_blob(path, "", 0)
     empty_copy = string.concat("", empty_sha)
-    rev0 = "root: ${empty_copy}\nprev: 0\nauthor: (init)\ndate: ${svnae_fsfs_now_iso8601()}\nlog: initial empty revision\n"
-    rev0_sha = svnae_rep_write_blob(path, rev0, string.length(rev0))
+    rev0 = "root: ${empty_copy}\nprev: 0\nauthor: (init)\ndate: ${os.now_utc_iso8601()}\nlog: initial empty revision\n"
+    rev0_sha = rep_write_blob(path, rev0, string.length(rev0))
     rev0_copy = string.concat("", rev0_sha)
-    rc = svnae_write_and_fsync("${path}/revs/000000", "${rev0_copy}\n", string.length(rev0_copy) + 1)
+    rc = io_write_atomic("${path}/revs/000000", "${rev0_copy}\n", string.length(rev0_copy) + 1)
     if rc != 0 { return rc }
-    rc = svnae_write_and_fsync("${path}/head", "0\n", 2)
+    rc = io_write_atomic("${path}/head", "0\n", 2)
     if rc != 0 { return rc }
     return 0
 }
@@ -119,43 +114,40 @@ parse_line_value(body: string, key: string) {
 }
 
 rev_root_sha1(repo: string, rev: int) {
-    b = svnae_fsfs_read_small_file(rev_file_path(repo, rev))
-    if b == 0 { return "" }
-    rev_blob_sha1 = string.trim(svnae_fsfs_buf_data(b))
-    svnae_fsfs_buf_free(b)
-    rev_body = svnae_rep_read_blob(repo, rev_blob_sha1)
+    raw = io_read_file(rev_file_path(repo, rev))
+    if string.length(raw) == 0 { return "" }
+    rev_blob_sha1 = string.trim(raw)
+    rev_body = rep_read_blob(repo, rev_blob_sha1)
     root = parse_line_value(rev_body, "root")
     root_copy = string.concat("", root)
-    svnae_rep_free(rev_body)
+    rep_free(rev_body)
     return root_copy
 }
 
 fsfs_head_rev(repo: string) {
-    b = svnae_fsfs_read_small_file("${repo}/head")
-    if b == 0 { return -1 }
-    t = string.trim(svnae_fsfs_buf_data(b))
-    svnae_fsfs_buf_free(b)
+    raw = io_read_file("${repo}/head")
+    if string.length(raw) == 0 { return -1 }
+    t = string.trim(raw)
     if string.try_int(t) == 0 { return -1 }
     return string.get_int(t)
 }
 
 commit_txn(repo: string, txn: ptr, author: string, logmsg: string) {
-    base_rev = svnae_txn_base_rev(txn)
+    base_rev = txn_base_rev(txn)
     base_root = rev_root_sha1(repo, base_rev)
     if string.length(base_root) == 0 { return -1 }
-    new_root_raw = svnae_txn_rebuild_root(repo, base_root, txn)
-    if new_root_raw == 0 { return -1 }
-    new_root = string.concat("", new_root_raw)
-    svnae_rep_free(new_root_raw)
+    new_root = rebuild_dir(repo, base_root, "", txn)
+    if string.length(new_root) == 0 { return -1 }
+    new_root = string.copy(new_root)
     prev = fsfs_head_rev(repo)
     next = prev + 1
-    rev_body = "root: ${new_root}\nprev: ${prev}\nauthor: ${author}\ndate: ${svnae_fsfs_now_iso8601()}\nlog: ${logmsg}\n"
-    rev_sha_raw = svnae_rep_write_blob(repo, rev_body, string.length(rev_body))
+    rev_body = "root: ${new_root}\nprev: ${prev}\nauthor: ${author}\ndate: ${os.now_utc_iso8601()}\nlog: ${logmsg}\n"
+    rev_sha_raw = rep_write_blob(repo, rev_body, string.length(rev_body))
     rev_sha = string.concat("", rev_sha_raw)
     ptr_body = "${rev_sha}\n"
-    rc = svnae_write_and_fsync(rev_file_path(repo, next), ptr_body, string.length(ptr_body))
+    rc = io_write_atomic(rev_file_path(repo, next), ptr_body, string.length(ptr_body))
     if rc != 0 { return -1 }
-    rc = svnae_write_and_fsync("${repo}/head", "${next}\n", string.length("${next}\n"))
+    rc = io_write_atomic("${repo}/head", "${next}\n", string.length("${next}\n"))
     if rc != 0 { return -1 }
     return next
 }
@@ -170,29 +162,29 @@ main() {
     rc = fsfs_init(repo)
     if rc != 0 { println("init failed: ${rc}"); exit(1) }
 
-    txn = svnae_txn_new(0)
-    svnae_txn_mkdir(txn, "src")
-    svnae_txn_add_file(txn, "README",     "Hello\n",                     6)
-    svnae_txn_add_file(txn, "src/main.c", "int main() { return 0; }\n", 25)
-    svnae_txn_add_file(txn, "LICENSE",    "Apache-2.0\n",               11)
+    txn = txn_new(0)
+    txn_mkdir(txn, "src")
+    txn_add_file(txn, "README",     "Hello\n",                     6)
+    txn_add_file(txn, "src/main.c", "int main() { return 0; }\n", 25)
+    txn_add_file(txn, "LICENSE",    "Apache-2.0\n",               11)
     if commit_txn(repo, txn, "alice", "first commit") != 1 {
         println("commit 1 failed"); exit(1)
     }
-    svnae_txn_free(txn)
+    txn_free(txn)
 
-    txn = svnae_txn_new(1)
-    svnae_txn_add_file(txn, "src/main.c", "int main() { return 42; }\n", 26)
+    txn = txn_new(1)
+    txn_add_file(txn, "src/main.c", "int main() { return 42; }\n", 26)
     if commit_txn(repo, txn, "bob", "answer to everything") != 2 {
         println("commit 2 failed"); exit(1)
     }
-    svnae_txn_free(txn)
+    txn_free(txn)
 
-    txn = svnae_txn_new(2)
-    svnae_txn_delete(txn, "LICENSE")
+    txn = txn_new(2)
+    txn_delete(txn, "LICENSE")
     if commit_txn(repo, txn, "alice", "drop license") != 3 {
         println("commit 3 failed"); exit(1)
     }
-    svnae_txn_free(txn)
+    txn_free(txn)
 
     println("seeded ${repo} with 3 revisions")
 }

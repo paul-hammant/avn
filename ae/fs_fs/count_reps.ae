@@ -19,24 +19,24 @@
 
 import std.string
 
-extern aether_io_listdir(path: string) -> ptr
-extern aether_io_listdir_count(handle: ptr) -> int
-extern aether_io_listdir_name(handle: ptr, index: int) -> string
-extern aether_io_listdir_free(handle: ptr)
-extern aether_io_stat_kind(path: string) -> int
+extern io_listdir(path: string) -> ptr
+extern io_listdir_count(handle: ptr) -> int
+extern io_listdir_name(handle: ptr, index: int) -> string
+extern io_listdir_free(handle: ptr)
+extern io_stat_kind(path: string) -> int
 
 export fs_count_rep_files(repo: string) -> int {
     return count_reps_recurse(string.concat(repo, "/reps"))
 }
 
 count_reps_recurse(dir: string) -> int {
-    d = aether_io_listdir(dir)
+    d = io_listdir(dir)
     if d == null { return 0 }
     total = 0
-    n = aether_io_listdir_count(d)
+    n = io_listdir_count(d)
     i = 0
     while i < n {
-        name = aether_io_listdir_name(d, i)
+        name = io_listdir_name(d, i)
         name = string.copy(name)
         skip = 0
         if string.length(name) == 0 { skip = 1 }
@@ -45,7 +45,7 @@ count_reps_recurse(dir: string) -> int {
         }
         if skip == 0 {
             child = string.concat(string.concat(dir, "/"), name)
-            kind = aether_io_stat_kind(child)
+            kind = io_stat_kind(child)
             if kind == 2 {
                 total = total + count_reps_recurse(child)
             }
@@ -61,7 +61,7 @@ count_reps_recurse(dir: string) -> int {
         }
         i = i + 1
     }
-    aether_io_listdir_free(d)
+    io_listdir_free(d)
     return total
 }
 

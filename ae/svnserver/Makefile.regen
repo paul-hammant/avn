@@ -1,10 +1,20 @@
 # Regeneration recipe for Aether-as-library C sources under ae/svnserver/.
 
-AETHERC ?= $(HOME)/scm/aether/build/aetherc
+AETHERC ?= $(abspath $(dir $(lastword $(MAKEFILE_LIST))))/../../.aether_binaries/build/aetherc
 
-GENERATED := json_generated.c paths_index_generated.c acl_generated.c copy_acl_generated.c url_parse_generated.c redact_generated.c info_json_generated.c log_json_generated.c list_json_generated.c acl_resolve_generated.c acl_subtree_generated.c rev_load_generated.c acl_mode_generated.c branch_create_parse_generated.c copy_parse_generated.c commit_parse_generated.c based_on_check_generated.c handle_repo_rev_generated.c dispatch_generated.c handler_info_generated.c handler_log_generated.c handler_rev_info_generated.c handler_rev_cat_generated.c handler_rev_list_generated.c handler_rev_paths_generated.c handler_rev_hashes_generated.c handler_rev_acl_generated.c handler_rev_props_generated.c handler_rev_blame_generated.c handler_path_get_generated.c handler_path_delete_generated.c handler_path_put_generated.c handler_branch_create_generated.c handler_copy_generated.c handler_commit_generated.c
+GENERATED := state_generated.c auth_generated.c json_generated.c paths_index_generated.c acl_generated.c copy_acl_generated.c url_parse_generated.c redact_generated.c info_json_generated.c log_json_generated.c list_json_generated.c acl_resolve_generated.c acl_subtree_generated.c rev_load_generated.c acl_mode_generated.c branch_create_parse_generated.c copy_parse_generated.c commit_parse_generated.c based_on_check_generated.c handle_repo_rev_generated.c dispatch_generated.c respond_generated.c handler_info_generated.c handler_log_generated.c handler_rev_info_generated.c handler_rev_cat_generated.c handler_rev_list_generated.c handler_rev_paths_generated.c handler_rev_hashes_generated.c handler_rev_acl_generated.c handler_rev_props_generated.c handler_rev_blame_generated.c handler_path_get_generated.c handler_path_delete_generated.c handler_path_put_generated.c handler_branch_create_generated.c handler_copy_generated.c handler_commit_generated.c
 
 all: $(GENERATED)
+
+# Round 186: spec_allows + request_header replacements (auth.ae uses
+# std.http.get_header so needs --with=net).
+auth_generated.c: auth.ae
+	$(AETHERC) --emit=lib --with=net $< $@
+
+# Round 190: shim.c retired; per-process state lives in std.config.
+# Imports std.http for the X-Svnae-Superuser header lookup.
+state_generated.c: state.ae
+	$(AETHERC) --emit=lib --with=net $< $@
 
 json_generated.c: json.ae
 	$(AETHERC) --emit=lib $< $@
@@ -49,10 +59,10 @@ branch_create_parse_generated.c: branch_create_parse.ae
 	$(AETHERC) --emit=lib $< $@
 
 copy_parse_generated.c: copy_parse.ae
-	$(AETHERC) --emit=lib $< $@
+	$(AETHERC) --emit=lib --with=net $< $@
 
 commit_parse_generated.c: commit_parse.ae
-	$(AETHERC) --emit=lib $< $@
+	$(AETHERC) --emit=lib --with=net $< $@
 
 based_on_check_generated.c: based_on_check.ae
 	$(AETHERC) --emit=lib --with=net $< $@
@@ -61,6 +71,11 @@ handle_repo_rev_generated.c: handle_repo_rev.ae
 	$(AETHERC) --emit=lib --with=net $< $@
 
 dispatch_generated.c: dispatch.ae
+	$(AETHERC) --emit=lib --with=net $< $@
+
+# respond.ae imports std.http (server-response setters); --with=net
+# opts in to the network capability.
+respond_generated.c: respond.ae
 	$(AETHERC) --emit=lib --with=net $< $@
 
 handler_info_generated.c: handler_info.ae

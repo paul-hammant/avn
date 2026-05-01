@@ -44,6 +44,86 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
   `int_to_dec` + `digit_char` in favour of `std.string.from_int` now
   that it's available, and ported the WC pristine-store path builder
   to ae/wc/pristine_path.ae (handles the two-level XX/YY/ fanout).
+- **Round 31** (current): **36.00% C, 64.00% Aether.**
+  Round-30's rep-store port landed — the upstream Aether
+  toolchain's `extra_sources` assembly buffer was bumped
+  2 KiB → 8 KiB in a local patch (see AETHER_ISSUES.md #17,
+  rebuilt at `~/scm/aether/build/ae`), which unblocks adding
+  new `_generated.c` paths to svnserver's link line without
+  triggering the silent truncation that sunk round 30.
+  - New `ae/fs_fs/rep_store.ae` (175 LOC) owns the blob
+    encode/decode half of the rep store: use_zlib decision
+    with the 16-byte threshold, RAW/ZLIB-tagged envelope,
+    binary-safe file write via fs.write_binary, inflate via
+    zlib.inflate on read.
+  - `aether_pristine_concat_binary` / `_slice_binary` moved
+    from pristine_shim.c to rep_store_shim.c so both
+    pristine_generated.c and rep_store_generated.c link one
+    copy. The `aether_pristine_*` names kept for stability
+    (now semi-misleading — worth a rename next time we touch
+    every call site).
+  - C side of rep_store_shim.c drops the direct `#include
+    <zlib.h>` and the inline `compress2`/`uncompress` calls;
+    the sqlite rep-cache + hash dispatch stay.
+  - Binaries linking pristine-but-not-rep_store (svn,
+    test_wc_pristine) also link rep_store_shim.c now so the
+    hoisted concat/slice symbols resolve.
+  - net: -17 LOC C, +175 LOC Aether. rep_store_shim.c
+    stayed roughly the same size because the C drops were
+    balanced by the two binary-safe helpers that had to move
+    here. The structural win is format encapsulation —
+    future rep-store format changes touch one Aether file.
+
+- **Round 30**: no-LOC round. **36.28% C, 63.72% Aether**
+  (unchanged).
+
+  Attempted port of the fs_fs rep-store (sibling shape to round
+  29's wc pristine port — same hash + zlib + binary-file-write
+  pattern, using the now-ambient std.cryptography + std.zlib).
+  The Aether side (`ae/fs_fs/rep_store.ae`, 200 LOC) worked
+  end-to-end, but adding `ae/fs_fs/rep_store_generated.c` to
+  the svnserver binary's `extra_sources` pushed the line over
+  2 KiB, which silently truncated the gcc link command to
+  `handler_copy_generat` and failed to link. Rolled back.
+
+  Filed as AETHER_ISSUES.md #17 — the parse-side `extra_sources`
+  buffer was bumped to 8 KiB in aether v0.85, but the
+  assembly-side buffer (`char toml_extra[2048]` in
+  `build_gcc_cmd`) stayed at 2 KiB. Until that's fixed, new
+  `_generated.c` files on the svnserver link line cost more
+  than a clean commit — same gotcha we inlined blob_build.ae
+  around in round 23.
+
+  The lesson is captured in migration_method.md's tooling
+  section and feeds forward into round 31: once that buffer
+  is raised upstream, the rep-store port's green path
+  should drop in cleanly.
+
+- **Round 29**: **36.28% C, 63.72% Aether.** Ported
+  the wc pristine store (sha + zlib + binary file I/O) now that
+  std.cryptography (0.88) and std.zlib (0.90+) landed upstream.
+  - ae/wc/pristine.ae owns: wc_hash_bytes (dispatches
+    sha1_hex/sha256_hex by the wc's configured algo),
+    wc_hash_file (fs.read_binary + hash), wc_pristine_put
+    (hash+dedup+zlib.deflate+fs.write_binary), wc_pristine_get
+    (fs.read_binary+zlib.inflate), wc_pristine_has,
+    wc_pristine_size.
+  - C side keeps three small byte-level helpers
+    (aether_pristine_pack_le32, _concat_binary, _slice_binary)
+    that std.string can't do without a NUL-terminated
+    intermediary. wc_hash_algo was moved to Aether in round 37
+    (reads .svn/wc.db info via the subr.sqlite bindings used
+    by fs_fs's rep-cache).
+  - pristine_shim.c: 306 → 270 LOC. Dropped the direct zlib
+    include, compress2 / uncompress calls, hex encoding, and
+    the fs_try_read_binary TLS dance.
+  - Bug in the first draft: AetherString has size_t length
+    (8 bytes on 64-bit), not int32_t. My mis-sized struct
+    read past length into data, handing concat a garbage
+    byte count (`sdata=0x5`). Fix: match aether_string.h
+    layout verbatim. Captured as a gotcha in
+    migration_method.md.
+
 - **Round 28**: **36.81% C, 63.19% Aether.** Ported
   svnae_repos_blame — the last big knot in repos/shim.c, ~245
   LOC of C doing line-level LCS, paths-changed walk, and
@@ -118,7 +198,7 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
     list: Aether produces "<N>\x02<name>\x01<value>\x02...", C
     rebuilt a struct-of-arrays with per-field accessors.
     Collapsed to the {packed, n, pin_list} pattern + new
-    ra_props_count/name/value accessors in ae/ra/packed.ae.
+    ra_props_count/name/value accessors in ae/client/packed.ae.
   - `verify_dir` inside the verify client had an inline copy
     of the same reparse (~20 LOC) to populate its local
     `struct entry[]`. Swapped it for ra_list_count/name/kind
@@ -162,7 +242,7 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
   - New `ae/repos/log.ae::repos_log_packed(repo)` does the whole
     rev walk in Aether, emitting the exact same "<N>\x02<rev>
     \x01<author>\x01<date>\x01<msg>\x02..." shape ra_parse_log
-    does. The C accessors reuse ra_log_* from ae/ra/packed.ae
+    does. The C accessors reuse ra_log_* from ae/client/packed.ae
     directly — same record shape, zero new walkers.
   - `ae/repos/paths_changed.ae` gained `paths_changed_packed`
     + `pack_amd_pairs` to produce the packed form from the
@@ -174,7 +254,7 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
     free machinery. Added the same {packed, n, pin_list}
     handle + pin_str helper pattern round 21 established for
     ra/shim.c.
-  - Packed-accessor reuse: ae/ra/packed_generated.c is now linked
+  - Packed-accessor reuse: ae/client/packed_generated.c is now linked
     by svnadmin, svnserver, and test_repos in addition to the
     existing RA consumers. One set of walkers serves both
     sides of the wire.
@@ -185,7 +265,7 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
   blame, list) plus a 28-line single-record parser (info) all
   disappeared in favour of typed accessors over the packed
   string itself.
-  - New `ae/ra/packed.ae` (366 LOC Aether) exposes
+  - New `ae/client/packed.ae` (366 LOC Aether) exposes
     `ra_{log,paths,blame,list}_{count,rev,author,...}` and the
     five `ra_info_*` accessors. Each one walks the packed
     `<N>\x02<entry>\x02<entry>...` string on demand.
@@ -320,7 +400,7 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
 - **Round 14**: **43.40% C, 56.59% Aether.** Focus
   shifts to the RA client side + repos helpers:
   - `svnae_ra_commit_finish`: 140 LOC of cJSON-heavy body
-    serialisation moves up to ae/ra/commit_build.ae. std.json
+    serialisation moves up to ae/client/commit_build.ae. std.json
     for construction; C-side accessors expose struct svnae_ra_commit.
   - `svnae_ra_server_copy` + `svnae_ra_branch_create` bodies:
     small cJSON builders, also Aether via std.json.
@@ -350,7 +430,7 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
     map. Four new "joined" C wrappers split newline-joined
     strings back into char** arrays for the blob builders that
     don't have an Aether-friendly signature.
-  - RA client (ae/ra/shim.c) also got parse-side ports for
+  - RA client (ae/client/shim.c) also got parse-side ports for
     head_rev, hash_algo, info_rev, log, paths_changed, props,
     blame, and list. C still owns curl + auth headers + struct
     allocation; std.json does the JSON walk.
@@ -708,7 +788,7 @@ for t in server ra svn wc_checkout wc_status wc_mutate wc_commit \
   printf '%-27s ' "test_$t"
   case $t in
     server)   s=ae/svnserver/test_server.sh ;;
-    ra)       s=ae/ra/test_ra.sh ;;
+    ra)       s=ae/client/test_client.sh ;;
     svn)      s=ae/svn/test_svn.sh ;;
     wc_*)     s=ae/wc/test_${t#wc_}.sh ;;
     svnadmin) s=ae/svnadmin/test_svnadmin.sh ;;

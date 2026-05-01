@@ -133,7 +133,7 @@ all ported via the same pattern — see below. What's left:
 1. `ae/svnserver/shim.c` HTTP handlers (~1400 lines) — each one is
    pure but depends on std.http's server shape which we haven't
    wired through yet.
-2. `ae/ra/shim.c` curl client (~1000 lines) — std.http has a client
+2. `ae/client/shim.c` curl client (~1000 lines) — std.http has a client
    but switching is last-resort.
 3. `ae/wc/db_shim.c` (~350 lines) — pure sqlite3.
 4. `ae/wc/checkout_shim.c` walk (~70 lines) — curl + opaque RA

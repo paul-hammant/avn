@@ -22,39 +22,26 @@
 
 import std.string
 
-extern svnae_svndiff_encoder_new(source_len: int, target_len: int) -> ptr
-extern svnae_svndiff_encoder_add_op(enc: ptr, action: int, length: int, offset: int) -> int
-extern svnae_svndiff_encoder_finish(enc: ptr, new_data: string, new_data_len: int) -> ptr
+extern svndiff_encoder_new(source_len: int, target_len: int) -> ptr
+extern svndiff_encoder_add_op(enc: ptr, action: int, length: int, offset: int) -> int
+extern svndiff_encoder_finish(enc: ptr, new_data: string, new_data_len: int) -> (string, int)
 
-extern svnae_svndiff_decode_apply(diff: string, diff_len: int, source: string, source_len: int) -> ptr
-
-extern svnae_svndiff_buf_length(b: ptr) -> int
-extern svnae_svndiff_buf_data(b: ptr) -> string
-extern svnae_svndiff_buf_free(b: ptr)
+extern svndiff_decode_apply(diff: string, diff_len: int, source: string, source_len: int) -> (string, int)
 
 const OP_SOURCE = 0
 const OP_TARGET = 1
 const OP_NEW    = 2
 
-// Finalise the encoder, apply the resulting diff, and verify the reconstructed
-// bytes equal `target`. Returns 0 on success, 1 on failure.
+// Round 184: encoder_finish + decode_apply both return (string, int)
+// length-aware AetherString tuples — no buf carrier, no buf_free.
 run_case(label: string, source: string, target: string, enc: ptr, new_data: string) {
     ndat = string.length(new_data)
-    diff = svnae_svndiff_encoder_finish(enc, new_data, ndat)
-    if diff == 0 {
-        println("FAIL ${label}: encoder_finish returned null")
+    diff_data, diff_len = svndiff_encoder_finish(enc, new_data, ndat)
+    if diff_len == 0 {
+        println("FAIL ${label}: encoder_finish returned empty")
         return 1
     }
-    diff_data = svnae_svndiff_buf_data(diff)
-    diff_len = svnae_svndiff_buf_length(diff)
-    applied = svnae_svndiff_decode_apply(diff_data, diff_len, source, string.length(source))
-    if applied == 0 {
-        svnae_svndiff_buf_free(diff)
-        println("FAIL ${label}: decode_apply returned null")
-        return 1
-    }
-    got_str = svnae_svndiff_buf_data(applied)
-    got_len = svnae_svndiff_buf_length(applied)
+    got_str, got_len = svndiff_decode_apply(diff_data, diff_len, source, string.length(source))
     want_len = string.length(target)
 
     rc = 0
@@ -69,32 +56,30 @@ run_case(label: string, source: string, target: string, enc: ptr, new_data: stri
     } else {
         println("ok   ${label} (${diff_len}B diff; ${got_len}B target)")
     }
-    svnae_svndiff_buf_free(diff)
-    svnae_svndiff_buf_free(applied)
     return rc
 }
 
 case_identity() {
     src = "Hello, world!\n"
-    enc = svnae_svndiff_encoder_new(string.length(src), string.length(src))
-    svnae_svndiff_encoder_add_op(enc, OP_SOURCE, string.length(src), 0)
+    enc = svndiff_encoder_new(string.length(src), string.length(src))
+    svndiff_encoder_add_op(enc, OP_SOURCE, string.length(src), 0)
     return run_case("identity", src, src, enc, "")
 }
 
 case_pure_new() {
     src = ""
     tgt = "abc"
-    enc = svnae_svndiff_encoder_new(0, 3)
-    svnae_svndiff_encoder_add_op(enc, OP_NEW, 3, 0)
+    enc = svndiff_encoder_new(0, 3)
+    svndiff_encoder_add_op(enc, OP_NEW, 3, 0)
     return run_case("pure new-data", src, tgt, enc, "abc")
 }
 
 case_src_prefix_new() {
     src = "ABCDEFGH"
     tgt = "ABCDxyz"
-    enc = svnae_svndiff_encoder_new(string.length(src), string.length(tgt))
-    svnae_svndiff_encoder_add_op(enc, OP_SOURCE, 4, 0)
-    svnae_svndiff_encoder_add_op(enc, OP_NEW,    3, 0)
+    enc = svndiff_encoder_new(string.length(src), string.length(tgt))
+    svndiff_encoder_add_op(enc, OP_SOURCE, 4, 0)
+    svndiff_encoder_add_op(enc, OP_NEW,    3, 0)
     return run_case("src prefix + new", src, tgt, enc, "xyz")
 }
 
@@ -102,9 +87,9 @@ case_target_rle() {
     // source "", target 8 'x's, built via [new 1 "x"] + [target 7 @0].
     src = ""
     tgt = "xxxxxxxx"
-    enc = svnae_svndiff_encoder_new(0, 8)
-    svnae_svndiff_encoder_add_op(enc, OP_NEW,    1, 0)
-    svnae_svndiff_encoder_add_op(enc, OP_TARGET, 7, 0)
+    enc = svndiff_encoder_new(0, 8)
+    svndiff_encoder_add_op(enc, OP_NEW,    1, 0)
+    svndiff_encoder_add_op(enc, OP_TARGET, 7, 0)
     return run_case("target self-copy RLE", src, tgt, enc, "x")
 }
 
@@ -112,10 +97,10 @@ case_word_replace() {
     // "The quick brown fox" -> "The slow brown fox": 4 src + 4 new + 10 src.
     src = "The quick brown fox"
     tgt = "The slow brown fox"
-    enc = svnae_svndiff_encoder_new(string.length(src), string.length(tgt))
-    svnae_svndiff_encoder_add_op(enc, OP_SOURCE, 4, 0)    // "The "
-    svnae_svndiff_encoder_add_op(enc, OP_NEW,    4, 0)    // "slow"
-    svnae_svndiff_encoder_add_op(enc, OP_SOURCE, 10, 9)   // " brown fox"
+    enc = svndiff_encoder_new(string.length(src), string.length(tgt))
+    svndiff_encoder_add_op(enc, OP_SOURCE, 4, 0)    // "The "
+    svndiff_encoder_add_op(enc, OP_NEW,    4, 0)    // "slow"
+    svndiff_encoder_add_op(enc, OP_SOURCE, 10, 9)   // " brown fox"
     return run_case("word replace", src, tgt, enc, "slow")
 }
 
@@ -128,8 +113,8 @@ case_varint_length() {
         tgt = string.concat(tgt, "Z")
         i = i + 1
     }
-    enc = svnae_svndiff_encoder_new(0, 100)
-    svnae_svndiff_encoder_add_op(enc, OP_NEW, 100, 0)
+    enc = svndiff_encoder_new(0, 100)
+    svndiff_encoder_add_op(enc, OP_NEW, 100, 0)
     return run_case("varint length (>63)", src, tgt, enc, tgt)
 }
 

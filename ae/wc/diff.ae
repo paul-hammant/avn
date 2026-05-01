@@ -1,0 +1,220 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// permissions and limitations under the License.
+
+// svn diff — for every modified tracked file, shell out to
+// /usr/bin/diff -u with svn-style labels and let the diff tool's
+// stdout flow through ours.
+//
+//   wc_diff(wc_root, rel_path_or_empty)
+//     "" rel_path → diff every changed node; otherwise just that one.
+//
+// Round 80 (Gordian) ports the orchestration off ae/wc/diff_shim.c.
+// fork + execl /usr/bin/diff goes through std.os.os_run; tmp-file
+// staging via fs.write_atomic; pristine fetch via the canonical
+// wc_pristine_get (Round 129 retired the C wrapper).
+
+import std.fs
+import std.string
+import std.collections
+
+extern wc_db_open(wc_root: string) -> ptr
+extern wc_db_close(db: ptr)
+
+extern wc_db_list_nodes(db: ptr) -> ptr
+extern wc_nodelist_count(L: ptr) -> int
+extern wc_nodelist_path(L: ptr, i: int) -> string
+extern wc_nodelist_kind(L: ptr, i: int) -> int
+extern wc_nodelist_state(L: ptr, i: int) -> int
+extern wc_nodelist_base_rev(L: ptr, i: int) -> int
+extern wc_nodelist_base_sha1(L: ptr, i: int) -> string
+extern wc_nodelist_free(L: ptr)
+
+// Pristine slurp + size. Round 113 retired the C-side
+// diff_tmp_write_pristine — the whole step (size lookup,
+// blob fetch, tmp write) is one Aether-native function now,
+// thanks to wc_pristine_get returning a length-aware AetherString
+// that std.fs.write_atomic unwraps correctly.
+extern wc_pristine_size(wc_root: string, sha: string) -> int
+extern wc_pristine_get(wc_root: string, sha: string) -> string
+extern io_write_atomic(path: string, data: string, length: int) -> int
+
+diff_tmp_write_pristine_(wc_root: string, sha: string, path: string) -> int {
+    sz = wc_pristine_size(wc_root, sha)
+    if sz < 0 { return 0 - 1 }
+    data = wc_pristine_get(wc_root, sha)
+    // wc_pristine_get returns "" on miss; even legitimate empty
+    // blobs are size>=1 (svn never stores zero-length pristines),
+    // so length-0 is unambiguously a miss.
+    if string.length(data) == 0 { return 0 - 1 }
+    return io_write_atomic(path, data, sz)
+}
+
+extern wc_hash_file(wc_root: string, path: string) -> string
+
+extern io_unlink(path: string) -> int
+extern os_getpid_raw() -> int
+
+extern os_run(prog: string, argv_list: ptr, env_list: ptr) -> int
+extern list_new() -> ptr
+extern list_add_raw(list: ptr, item: ptr) -> int
+extern list_free(list: ptr)
+
+// Globally-monotonic counter for tmp filenames so two svn diff calls
+// running concurrently in the same process don't collide.
+tmp_seq_(prefix: string, seq: int) -> string {
+    pid = os_getpid_raw()
+    return "/tmp/diff_${pid}_${seq}_${prefix}.tmp"
+}
+
+// Write `data` to a fresh tmp file. Returns the path or "" on error.
+write_data_tmp_(data: string, len: int, seq: int, label: string) -> string {
+    p = tmp_seq_(label, seq)
+    err = fs.write_atomic(p, data, len)
+    if string.length(err) > 0 { return "" }
+    return p
+}
+
+// Run /usr/bin/diff -u --label LB --label LA before after, inheriting
+// our stdout. Output goes directly. Return value of diff itself is
+// irrelevant — 0 = identical, 1 = differ, 2 = trouble; we always
+// succeed as long as the tool ran.
+run_diff_(label_before: string, label_after: string, before_p: string, after_p: string) {
+    argv = list_new()
+    list_add_raw(argv, "-u")
+    list_add_raw(argv, "--label")
+    list_add_raw(argv, label_before)
+    list_add_raw(argv, "--label")
+    list_add_raw(argv, label_after)
+    list_add_raw(argv, before_p)
+    list_add_raw(argv, after_p)
+    os_run("/usr/bin/diff", argv, null)
+    list_free(argv)
+    return 0
+}
+
+// Emit the svn-style header for a single path.
+emit_header_(rel: string) {
+    println("Index: ${rel}")
+    println("===================================================================")
+    return 0
+}
+
+// Diff a single nodelist row at index i. Returns the next seq value
+// so the caller can keep tmp-file names monotonic across rows.
+diff_one_(wc_root: string, L: ptr, i: int, target: string, seq: int) -> int {
+    rel      = wc_nodelist_path(L, i)
+    kind     = wc_nodelist_kind(L, i)
+    st       = wc_nodelist_state(L, i)
+    brev     = wc_nodelist_base_rev(L, i)
+    base_sha = wc_nodelist_base_sha1(L, i)
+
+    rel = string.copy(rel)
+    base_sha = string.copy(base_sha)
+
+    // Filter to the requested path if non-empty.
+    if string.length(target) > 0 {
+        if string.equals(rel, target) == 0 { return seq }
+    }
+    // Files only; dirs don't have content to diff.
+    if kind != 0 { return seq }
+
+    disk = "${wc_root}/${rel}"
+
+    // Pick the (before, after, label_before, label_after) tuple based
+    // on the node's state. before / after are tmp paths or the disk
+    // path itself; cleanup_before / cleanup_after track what to unlink.
+    before = ""
+    after_p = ""
+    cleanup_before = 0
+    cleanup_after = 0
+    label_before = ""
+    label_after = ""
+
+    if st == 1 {
+        // added: before = empty tmp, after = disk
+        before = write_data_tmp_("", 0, seq, "before")
+        seq = seq + 1
+        after_p = disk
+        cleanup_before = 1
+        label_before = "${rel}\t(nonexistent)"
+        label_after  = "${rel}\t(working copy)"
+    }
+    if st == 2 {
+        // deleted: before = pristine, after = empty tmp
+        psize = wc_pristine_size(wc_root, base_sha)
+        before = tmp_seq_("before", seq)
+        seq = seq + 1
+        rcw = diff_tmp_write_pristine_(wc_root, base_sha, before)
+        if rcw != 0 { return seq }
+        after_p = write_data_tmp_("", 0, seq, "after")
+        seq = seq + 1
+        cleanup_before = 1
+        cleanup_after  = 1
+        label_before = "${rel}\t(revision ${brev})"
+        label_after  = "${rel}\t(nonexistent)"
+        psize = psize        // silence warning; will be removed
+    }
+    if st == 0 {
+        // normal: only diff if disk != pristine.
+        cur = wc_hash_file(wc_root, disk)
+        cur = string.copy(cur)
+        if string.length(cur) == 0 { return seq }
+        if string.equals(cur, base_sha) == 1 { return seq }
+        before = tmp_seq_("before", seq)
+        seq = seq + 1
+        rcw = diff_tmp_write_pristine_(wc_root, base_sha, before)
+        if rcw != 0 { return seq }
+        after_p = disk
+        cleanup_before = 1
+        label_before = "${rel}\t(revision ${brev})"
+        label_after  = "${rel}\t(working copy)"
+    }
+
+    if string.length(before) == 0 { return seq }
+    if string.length(after_p) == 0 { return seq }
+
+    emit_header_(rel)
+    run_diff_(label_before, label_after, before, after_p)
+
+    if cleanup_before == 1 { io_unlink(before) }
+    if cleanup_after == 1 { io_unlink(after_p) }
+    return seq
+}
+
+export wc_diff(wc_root: string, rel_path_or_empty: string) -> int {
+    db = wc_db_open(wc_root)
+    if db == null { return 0 - 1 }
+    L = wc_db_list_nodes(db)
+    n = wc_nodelist_count(L)
+
+    target = ""
+    if string.length(rel_path_or_empty) > 0 { target = rel_path_or_empty }
+    target = string.copy(target)
+
+    seq = 0
+    i = 0
+    while i < n {
+        seq = diff_one_(wc_root, L, i, target, seq)
+        i = i + 1
+    }
+
+    wc_nodelist_free(L)
+    wc_db_close(db)
+    return 0
+}
+
+main() {
+    println("ae/wc/diff.ae is a library; not meant to run standalone")
+}

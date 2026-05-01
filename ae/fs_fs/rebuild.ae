@@ -28,36 +28,36 @@
 // The reclist (the sorted-by-name set of (kind, sha, name) we build
 // up) is represented as a newline-separated string in exactly the
 // same "K SHA NAME\n" format the final blob uses. Aether's existing
-// dir-blob readers (aether_dir_count_entries / _entry_name / etc.)
+// dir-blob readers (dir_count_entries / _entry_name / etc.)
 // parse it on lookup. This avoids reinventing a sorted list type.
 
 import std.string
 
 // --- FFI: rep store + txn accessors + existing helpers --------------------
 
-extern svnae_rep_read_blob(repo: string, sha_hex: string) -> string
-extern svnae_rep_write_blob(repo: string, data: string, length: int) -> string
-extern svnae_rep_free(blob: string)
+extern rep_read_blob(repo: string, sha_hex: string) -> string
+extern rep_write_blob(repo: string, data: string, length: int) -> string
+extern rep_free(blob: string)
 
-// `struct svnae_txn *` on the C side — opaque here, we pass it through.
-extern svnae_txn_count(t: ptr) -> int
-extern svnae_txn_edit_kind(t: ptr, i: int) -> int
-extern svnae_txn_edit_path(t: ptr, i: int) -> string
-extern svnae_txn_edit_content_data(t: ptr, i: int) -> string
-extern svnae_txn_edit_content_len(t: ptr, i: int) -> int
-extern svnae_txn_edit_copy_sha(t: ptr, i: int) -> string
-extern svnae_txn_edit_copy_kind(t: ptr, i: int) -> int
+// `struct txn *` on the C side — opaque here, we pass it through.
+extern txn_count(t: ptr) -> int
+extern txn_edit_kind(t: ptr, i: int) -> int
+extern txn_edit_path(t: ptr, i: int) -> string
+extern txn_edit_content_data(t: ptr, i: int) -> string
+extern txn_edit_content_len(t: ptr, i: int) -> int
+extern txn_edit_copy_sha(t: ptr, i: int) -> string
+extern txn_edit_copy_kind(t: ptr, i: int) -> int
 
-extern aether_dir_count_entries(body: string) -> int
-extern aether_dir_entry_kind(body: string, i: int) -> int
-extern aether_dir_entry_sha(body: string, i: int) -> string
-extern aether_dir_entry_name(body: string, i: int) -> string
-extern aether_dir_entry_line(kind: int, sha: string, name: string) -> string
+extern dir_count_entries(body: string) -> int
+extern dir_entry_kind(body: string, i: int) -> int
+extern dir_entry_sha(body: string, i: int) -> string
+extern dir_entry_name(body: string, i: int) -> string
+extern dir_entry_line(kind: int, sha: string, name: string) -> string
 
-extern aether_path_is_immediate_child(path: string, pfx: string) -> int
-extern aether_path_basename_after(path: string, pfx: string) -> string
-extern aether_path_covers(path: string, pfx: string) -> int
-extern aether_path_join_rel(pfx: string, name: string) -> string
+extern path_is_immediate_child(path: string, pfx: string) -> int
+extern path_basename_after(path: string, pfx: string) -> string
+extern path_covers(path: string, pfx: string) -> int
+extern path_join_rel(pfx: string, name: string) -> string
 
 // Edit kinds — mirror the C enum.
 const EDIT_ADD_FILE = 1
@@ -69,11 +69,11 @@ const EDIT_COPY     = 4
 
 // Does this edit list touch `prefix` or any descendant?
 edits_touch_subtree(txn: ptr, prefix: string) -> int {
-    n = svnae_txn_count(txn)
+    n = txn_count(txn)
     i = 0
     while i < n {
-        p = svnae_txn_edit_path(txn, i)
-        if aether_path_covers(p, prefix) == 1 { return 1 }
+        p = txn_edit_path(txn, i)
+        if path_covers(p, prefix) == 1 { return 1 }
         i = i + 1
     }
     return 0
@@ -82,12 +82,12 @@ edits_touch_subtree(txn: ptr, prefix: string) -> int {
 // Find txn edit with exact path match. Returns kind, or 0 if not
 // present. -1 not used because 0 is not a valid kind.
 txn_find_edit_kind(txn: ptr, path: string) -> int {
-    n = svnae_txn_count(txn)
+    n = txn_count(txn)
     i = 0
     while i < n {
-        ep = svnae_txn_edit_path(txn, i)
+        ep = txn_edit_path(txn, i)
         if string.equals(ep, path) == 1 {
-            return svnae_txn_edit_kind(txn, i)
+            return txn_edit_kind(txn, i)
         }
         i = i + 1
     }
@@ -97,15 +97,15 @@ txn_find_edit_kind(txn: ptr, path: string) -> int {
 // Remove the line whose name field matches `name` from a reclist
 // body. Returns the new body. Keeps all other lines in place.
 reclist_remove(body: string, name: string) -> string {
-    n = aether_dir_count_entries(body)
+    n = dir_count_entries(body)
     out = ""
     i = 0
     while i < n {
-        ename = aether_dir_entry_name(body, i)
+        ename = dir_entry_name(body, i)
         if string.equals(ename, name) == 0 {
-            out = string.concat(out, aether_dir_entry_line(
-                aether_dir_entry_kind(body, i),
-                aether_dir_entry_sha(body, i),
+            out = string.concat(out, dir_entry_line(
+                dir_entry_kind(body, i),
+                dir_entry_sha(body, i),
                 ename))
         }
         i = i + 1
@@ -116,26 +116,26 @@ reclist_remove(body: string, name: string) -> string {
 // Insert-or-replace a line in the reclist. Match by name; if present,
 // overwrite its kind+sha; if absent, append.
 reclist_add(body: string, name: string, kind: int, sha: string) -> string {
-    n = aether_dir_count_entries(body)
+    n = dir_count_entries(body)
     found = 0
     out = ""
     i = 0
     while i < n {
-        ename = aether_dir_entry_name(body, i)
+        ename = dir_entry_name(body, i)
         if string.equals(ename, name) == 1 {
             found = 1
-            out = string.concat(out, aether_dir_entry_line(kind, sha, name))
+            out = string.concat(out, dir_entry_line(kind, sha, name))
         }
         if string.equals(ename, name) == 0 {
-            out = string.concat(out, aether_dir_entry_line(
-                aether_dir_entry_kind(body, i),
-                aether_dir_entry_sha(body, i),
+            out = string.concat(out, dir_entry_line(
+                dir_entry_kind(body, i),
+                dir_entry_sha(body, i),
                 ename))
         }
         i = i + 1
     }
     if found == 0 {
-        out = string.concat(out, aether_dir_entry_line(kind, sha, name))
+        out = string.concat(out, dir_entry_line(kind, sha, name))
     }
     return out
 }
@@ -144,11 +144,11 @@ reclist_add(body: string, name: string, kind: int, sha: string) -> string {
 // mkdir branch to avoid clobbering a subdir whose sha we've just
 // computed via recursion.
 reclist_has_dir(body: string, name: string) -> int {
-    n = aether_dir_count_entries(body)
+    n = dir_count_entries(body)
     i = 0
     while i < n {
-        if aether_dir_entry_kind(body, i) == 100 {   // 'd'
-            if string.equals(aether_dir_entry_name(body, i), name) == 1 {
+        if dir_entry_kind(body, i) == 100 {   // 'd'
+            if string.equals(dir_entry_name(body, i), name) == 1 {
                 return 1
             }
         }
@@ -159,12 +159,12 @@ reclist_has_dir(body: string, name: string) -> int {
 
 // Look up a dir entry's sha by name. Empty string if absent.
 reclist_dir_sha(body: string, name: string) -> string {
-    n = aether_dir_count_entries(body)
+    n = dir_count_entries(body)
     i = 0
     while i < n {
-        if aether_dir_entry_kind(body, i) == 100 {
-            if string.equals(aether_dir_entry_name(body, i), name) == 1 {
-                return aether_dir_entry_sha(body, i)
+        if dir_entry_kind(body, i) == 100 {
+            if string.equals(dir_entry_name(body, i), name) == 1 {
+                return dir_entry_sha(body, i)
             }
         }
         i = i + 1
@@ -175,18 +175,18 @@ reclist_dir_sha(body: string, name: string) -> string {
 // Update just the sha field of an existing entry (identified by name,
 // kind unchanged).
 reclist_update_sha(body: string, name: string, new_sha: string) -> string {
-    n = aether_dir_count_entries(body)
+    n = dir_count_entries(body)
     out = ""
     i = 0
     while i < n {
-        ename = aether_dir_entry_name(body, i)
-        ekind = aether_dir_entry_kind(body, i)
+        ename = dir_entry_name(body, i)
+        ekind = dir_entry_kind(body, i)
         if string.equals(ename, name) == 1 {
-            out = string.concat(out, aether_dir_entry_line(ekind, new_sha, ename))
+            out = string.concat(out, dir_entry_line(ekind, new_sha, ename))
         }
         if string.equals(ename, name) == 0 {
-            out = string.concat(out, aether_dir_entry_line(
-                ekind, aether_dir_entry_sha(body, i), ename))
+            out = string.concat(out, dir_entry_line(
+                ekind, dir_entry_sha(body, i), ename))
         }
         i = i + 1
     }
@@ -197,7 +197,7 @@ reclist_update_sha(body: string, name: string, new_sha: string) -> string {
 // parsed entries, then re-serialise). The reclist is typically <20
 // entries so O(N²) is fine.
 reclist_sort(body: string) -> string {
-    n = aether_dir_count_entries(body)
+    n = dir_count_entries(body)
     if n <= 1 { return body }
 
     // Insertion sort by rebuilding the body. We walk entries 0..n and
@@ -205,32 +205,32 @@ reclist_sort(body: string) -> string {
     sorted = ""
     i = 0
     while i < n {
-        this_name = aether_dir_entry_name(body, i)
-        this_kind = aether_dir_entry_kind(body, i)
-        this_sha  = aether_dir_entry_sha(body, i)
+        this_name = dir_entry_name(body, i)
+        this_kind = dir_entry_kind(body, i)
+        this_sha  = dir_entry_sha(body, i)
 
         // Walk sorted so far, insert in order.
-        sn = aether_dir_count_entries(sorted)
+        sn = dir_count_entries(sorted)
         new_sorted = ""
         placed = 0
         j = 0
         while j < sn {
-            jname = aether_dir_entry_name(sorted, j)
+            jname = dir_entry_name(sorted, j)
             if placed == 0 {
                 if string.compare(this_name, jname) < 0 {
                     new_sorted = string.concat(new_sorted,
-                        aether_dir_entry_line(this_kind, this_sha, this_name))
+                        dir_entry_line(this_kind, this_sha, this_name))
                     placed = 1
                 }
             }
             new_sorted = string.concat(new_sorted,
-                aether_dir_entry_line(aether_dir_entry_kind(sorted, j),
-                                      aether_dir_entry_sha(sorted, j), jname))
+                dir_entry_line(dir_entry_kind(sorted, j),
+                                      dir_entry_sha(sorted, j), jname))
             j = j + 1
         }
         if placed == 0 {
             new_sorted = string.concat(new_sorted,
-                aether_dir_entry_line(this_kind, this_sha, this_name))
+                dir_entry_line(this_kind, this_sha, this_name))
         }
         sorted = new_sorted
         i = i + 1
@@ -244,10 +244,6 @@ reclist_sort(body: string) -> string {
 // after applying `txn`'s edits. Returns the new dir blob's sha (empty
 // string if nothing survived at all).
 export rebuild_dir(repo: string, base_dir_sha: string, prefix: string, txn: ptr) -> string {
-    return rebuild_dir_impl(repo, base_dir_sha, prefix, txn)
-}
-
-rebuild_dir_impl(repo: string, base_dir_sha: string, prefix: string, txn: ptr) -> string {
     // reclist body starts empty; we build up "K SHA NAME\n" lines.
     rl = ""
 
@@ -256,66 +252,64 @@ rebuild_dir_impl(repo: string, base_dir_sha: string, prefix: string, txn: ptr) -
     // base_body (either "blob missing" or "blob exists but is the
     // empty-dir blob") produces zero iterations — correct.
     if string.length(base_dir_sha) > 0 {
-        base_body = svnae_rep_read_blob(repo, base_dir_sha)
-        {
-            n_entries = aether_dir_count_entries(base_body)
-            ei = 0
-            while ei < n_entries {
-                kind = aether_dir_entry_kind(base_body, ei)
-                sha = aether_dir_entry_sha(base_body, ei)
-                name = aether_dir_entry_name(base_body, ei)
-                full_path = aether_path_join_rel(prefix, name)
+        base_body = rep_read_blob(repo, base_dir_sha)
+        n_entries = dir_count_entries(base_body)
+        ei = 0
+        while ei < n_entries {
+            kind = dir_entry_kind(base_body, ei)
+            sha = dir_entry_sha(base_body, ei)
+            name = dir_entry_name(base_body, ei)
+            full_path = path_join_rel(prefix, name)
 
-                k_edit = txn_find_edit_kind(txn, full_path)
-                keep = 1
-                if k_edit == EDIT_DELETE   { keep = 0 }
-                if k_edit == EDIT_ADD_FILE { keep = 0 }  // step 2 will add
-                if keep == 1 {
-                    if kind == 100 {                     // 'd'
-                        if edits_touch_subtree(txn, full_path) == 1 {
-                            new_sub = rebuild_dir_impl(repo, sha, full_path, txn)
-                            if string.length(new_sub) > 0 {
-                                rl = reclist_add(rl, name, kind, new_sub)
-                            }
-                            if string.length(new_sub) == 0 {
-                                empty_sha = svnae_rep_write_blob(repo, "", 0)
-                                rl = reclist_add(rl, name, kind, empty_sha)
-                            }
+            k_edit = txn_find_edit_kind(txn, full_path)
+            keep = 1
+            if k_edit == EDIT_DELETE   { keep = 0 }
+            if k_edit == EDIT_ADD_FILE { keep = 0 }  // step 2 will add
+            if keep == 1 {
+                if kind == 100 {                     // 'd'
+                    if edits_touch_subtree(txn, full_path) == 1 {
+                        new_sub = rebuild_dir(repo, sha, full_path, txn)
+                        if string.length(new_sub) > 0 {
+                            rl = reclist_add(rl, name, kind, new_sub)
                         }
-                        if edits_touch_subtree(txn, full_path) == 0 {
-                            rl = reclist_add(rl, name, kind, sha)
+                        if string.length(new_sub) == 0 {
+                            empty_sha = rep_write_blob(repo, "", 0)
+                            rl = reclist_add(rl, name, kind, empty_sha)
                         }
                     }
-                    if kind != 100 {
+                    if edits_touch_subtree(txn, full_path) == 0 {
                         rl = reclist_add(rl, name, kind, sha)
                     }
                 }
-
-                ei = ei + 1
+                if kind != 100 {
+                    rl = reclist_add(rl, name, kind, sha)
+                }
             }
+
+            ei = ei + 1
         }
-        svnae_rep_free(base_body)
+        rep_free(base_body)
     }
 
     // Step 2: apply edits whose immediate parent is this dir.
-    n_edits = svnae_txn_count(txn)
+    n_edits = txn_count(txn)
     ei = 0
     while ei < n_edits {
-        epath = svnae_txn_edit_path(txn, ei)
-        ekind = svnae_txn_edit_kind(txn, ei)
-        if aether_path_is_immediate_child(epath, prefix) == 1 {
-            name = aether_path_basename_after(epath, prefix)
+        epath = txn_edit_path(txn, ei)
+        ekind = txn_edit_kind(txn, ei)
+        if path_is_immediate_child(epath, prefix) == 1 {
+            name = path_basename_after(epath, prefix)
             if ekind == EDIT_ADD_FILE {
-                content = svnae_txn_edit_content_data(txn, ei)
-                clen = svnae_txn_edit_content_len(txn, ei)
-                new_sha = svnae_rep_write_blob(repo, content, clen)
+                content = txn_edit_content_data(txn, ei)
+                clen = txn_edit_content_len(txn, ei)
+                new_sha = rep_write_blob(repo, content, clen)
                 if string.length(new_sha) > 0 {
                     rl = reclist_add(rl, name, 102, new_sha)   // 'f'
                 }
             }
             if ekind == EDIT_MKDIR {
                 if reclist_has_dir(rl, name) == 0 {
-                    empty_sha = svnae_rep_write_blob(repo, "", 0)
+                    empty_sha = rep_write_blob(repo, "", 0)
                     rl = reclist_add(rl, name, 100, empty_sha) // 'd'
                 }
             }
@@ -323,8 +317,8 @@ rebuild_dir_impl(repo: string, base_dir_sha: string, prefix: string, txn: ptr) -
                 rl = reclist_remove(rl, name)
             }
             if ekind == EDIT_COPY {
-                copy_sha = svnae_txn_edit_copy_sha(txn, ei)
-                copy_kind_int = svnae_txn_edit_copy_kind(txn, ei)
+                copy_sha = txn_edit_copy_sha(txn, ei)
+                copy_kind_int = txn_edit_copy_kind(txn, ei)
                 k_byte = 102                                    // 'f'
                 if copy_kind_int == 1 { k_byte = 100 }          // 'd'
                 rl = reclist_add(rl, name, k_byte, copy_sha)
@@ -336,17 +330,17 @@ rebuild_dir_impl(repo: string, base_dir_sha: string, prefix: string, txn: ptr) -
     // Step 3: for every dir entry in rl, if the txn has edits in its
     // subtree, recurse from the entry's current sha.
     ri = 0
-    rn = aether_dir_count_entries(rl)
+    rn = dir_count_entries(rl)
     // We can't modify rl while iterating with its current indices (the
     // reclist_update_sha rewrites it and the length stays the same),
     // so snapshot the names we need to revisit.
     while ri < rn {
-        if aether_dir_entry_kind(rl, ri) == 100 {    // 'd'
-            dname = aether_dir_entry_name(rl, ri)
-            subprefix = aether_path_join_rel(prefix, dname)
+        if dir_entry_kind(rl, ri) == 100 {    // 'd'
+            dname = dir_entry_name(rl, ri)
+            subprefix = path_join_rel(prefix, dname)
             if edits_touch_subtree(txn, subprefix) == 1 {
                 cur_sha = reclist_dir_sha(rl, dname)
-                new_sub = rebuild_dir_impl(repo, cur_sha, subprefix, txn)
+                new_sub = rebuild_dir(repo, cur_sha, subprefix, txn)
                 if string.length(new_sub) > 0 {
                     rl = reclist_update_sha(rl, dname, new_sub)
                 }
@@ -357,11 +351,12 @@ rebuild_dir_impl(repo: string, base_dir_sha: string, prefix: string, txn: ptr) -
 
     // Step 4: sort and emit.
     sorted = reclist_sort(rl)
-    return svnae_rep_write_blob(repo, sorted, string.length(sorted))
+    return rep_write_blob(repo, sorted, string.length(sorted))
 }
 
+
 // Helper for the "empty base blob is legitimate" edge case. An empty
-// string returned from svnae_rep_read_blob could mean either "blob
+// string returned from rep_read_blob could mean either "blob
 // not found" or "blob exists and is empty" — and they're
 // indistinguishable through the string API. We assume "empty sha
 // means empty blob" by inspection of the sha (the all-zeros sha is

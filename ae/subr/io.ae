@@ -28,12 +28,36 @@
 import std.fs
 import std.dir
 import std.string
+import std.bytes
 
 // Atomic write: stage to <path>.tmp.<pid>, fsync, rename. Binary-safe —
 // length is the byte count; embedded NULs fine. Returns 0 on success,
 // 1 on any failure.
 export io_write_atomic(path: string, data: string, length: int) -> int {
     err = fs.write_atomic(path, data, length)
+    if string.length(err) > 0 { return 1 }
+    return 0
+}
+
+// Concatenate `header` (a short ASCII tag like "R" / "Z") and `body`
+// (which may contain embedded NULs) into one std.bytes buffer and
+// write atomically. Replaces the C-side write_header_and_body
+// shim that hand-rolled write()/fsync()/close() in a loop. Returns
+// 0 on success, 1 on failure.
+export io_write_header_and_body(path: string, header: string,
+                                 body: string, body_len: int) -> int {
+    hlen = string.length(header)
+    total = hlen + body_len
+    buf = bytes.new(total + 1)
+    if buf == null { return 1 }
+    if hlen > 0 {
+        bytes.copy_from_string(buf, 0, header, hlen)
+    }
+    if body_len > 0 {
+        bytes.copy_from_string(buf, hlen, body, body_len)
+    }
+    packed = bytes.finish(buf, total)
+    err = fs.write_atomic(path, packed, total)
     if string.length(err) > 0 { return 1 }
     return 0
 }
@@ -120,6 +144,18 @@ export io_listdir_free(handle: ptr) {
 
 // Remove a file. Returns 0 on success, 1 on failure.
 export io_unlink(path: string) -> int {
+    err = fs.delete(path)
+    if string.length(err) > 0 { return 1 }
+    return 0
+}
+
+// Idempotent unlink: missing file is success. Used by svn's "delete tmp
+// if present" cleanup paths, where a stale tmp may or may not exist.
+// Returns 0 on success or already-absent, 1 if the file exists but
+// can't be deleted.
+export io_remove(path: string) -> int {
+    _k, _s, _m, stat_err = fs.file_stat(path)
+    if string.length(stat_err) > 0 { return 0 }
     err = fs.delete(path)
     if string.length(err) > 0 { return 1 }
     return 0

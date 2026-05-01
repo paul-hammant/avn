@@ -17,15 +17,25 @@
 set -e
 cd "$(dirname "$0")"
 
-AETHERC="${AETHERC:-$HOME/scm/aether/build/aetherc}"
+AETHERC="$(pwd)/.aether_binaries/build/aetherc"
 if [ ! -x "$AETHERC" ]; then
-    echo "regen.sh: aetherc not found at $AETHERC — set AETHERC=/path/to/aetherc" >&2
+    cat >&2 <<'EOF'
+regen.sh: .aether_binaries/build/aetherc not found.
+
+The Aether toolchain snapshot is missing. Populate it with:
+
+    AETHER_HOME=/path/to/aether/checkout ./sync-aether-deps.sh
+EOF
     exit 2
 fi
 
 FORCE=""
 if [ "${1:-}" = "--force" ]; then FORCE="-B"; fi
 
-for mk in ae/*/Makefile.regen; do
+# Recursive glob — there's a Makefile.regen at every directory that
+# has .ae files needing codegen, including ae/ffi/openssl/ which is
+# two levels deep.
+for mk in ae/*/Makefile.regen ae/*/*/Makefile.regen; do
+    [ -f "$mk" ] || continue
     make -C "$(dirname "$mk")" -f Makefile.regen AETHERC="$AETHERC" $FORCE
 done

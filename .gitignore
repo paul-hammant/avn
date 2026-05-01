@@ -4,3 +4,8 @@ target/
 # aetherc --emit=lib output — regenerated from *.ae via ./regen.sh.
 # Never hand-edit these; they will be overwritten. See README.md.
 ae/**/*_generated.c
+
+# Snapshot of the Aether toolchain + stdlib + contrib modules.
+# Populated by ./sync-aether-deps.sh from $AETHER_HOME. Re-run that
+# script when you bump Aether — never hand-edit; gets wiped on sync.
+.aether_binaries/

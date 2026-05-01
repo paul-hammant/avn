@@ -41,73 +41,50 @@
 //
 // Since both formats are line-oriented ASCII, they pass through Aether's
 // strlen-based string pipeline safely. File contents, which can be
-// arbitrary bytes, always travel through svnae_buf handles (ptr) —
+// arbitrary bytes, always travel through buf handles (ptr) —
 // never through Aether strings.
 
 import std.fs
+import std.os
 import std.string
+import std.zlib
 
 // --- externs from subr shims ------------------------------------------------
 
-extern svnae_sha1_hex(data: string, data_len: int) -> string
-extern svnae_checksum_free_hex(buf: string)
+extern crypto_hash_hex(algo: string, data: string, length: int) -> string
 
-extern svnae_zlib_deflate(data: string, data_len: int, level: int) -> ptr
-extern svnae_zlib_inflate_offset(base: string, offset: int, data_len: int, expected_out: int) -> ptr
-extern svnae_buf_length(b: ptr) -> int
-extern svnae_buf_data(b: ptr) -> string
-extern svnae_buf_free(b: ptr)
-extern svnae_write_header_and_buf(path: string, header: string, buf: ptr) -> int
+// Round 176: std.zlib retired the C-side zlib_*/buf_*
+// shim. zlib.deflate / zlib.inflate return (string, int, error)
+// tuples; the previous opaque-buf handle dance is gone.
 
-extern svnae_write_and_fsync(path: string, data: string, len: int) -> int
-extern svnae_write_header_and_body(path: string, header: string, body: string, body_len: int) -> int
-extern svnae_rename(from: string, to: string) -> int
-extern svnae_is_regular_file(path: string) -> int
-extern svnae_remove(path: string) -> int
-extern svnae_getpid() -> int
-extern svnae_read_file(path: string, out_len: ptr) -> ptr
-extern svnae_read_file_length(b: ptr) -> int
-extern svnae_read_file_data(b: ptr) -> string
-extern svnae_read_file_free(b: ptr)
+extern io_write_atomic(path: string, data: string, length: int) -> int
+extern io_write_header_and_body(path: string, header: string, body: string, body_len: int) -> int
+extern io_rename(from: string, to: string) -> int
+extern io_is_regular_file(path: string) -> int
+extern io_remove(path: string) -> int
+extern os_getpid_raw() -> int
+// Round 185: switched to fs.read_binary.
 
 extern file_exists(path: string) -> int
 extern dir_exists(path: string) -> int
 
 // --- externs from fs_fs/shim.c ---------------------------------------------
 
-extern svnae_fsfs_read_small_file(path: string) -> ptr
-extern svnae_fsfs_buf_length(b: ptr) -> int
-extern svnae_fsfs_buf_data(b: ptr) -> string
-extern svnae_fsfs_buf_free(b: ptr)
-extern svnae_fsfs_now_iso8601() -> string
+extern io_read_file(path: string) -> string
 
-extern svnae_fsfs_tree_builder_new() -> ptr
-extern svnae_fsfs_tree_builder_add(tb: ptr, path: string, kind: int, content: string, content_len: int) -> int
-extern svnae_fsfs_tree_builder_count(tb: ptr) -> int
-extern svnae_fsfs_tree_builder_path(tb: ptr, i: int) -> string
-extern svnae_fsfs_tree_builder_kind(tb: ptr, i: int) -> int
-extern svnae_fsfs_tree_builder_content(tb: ptr, i: int) -> ptr
-extern svnae_fsfs_tree_builder_free(tb: ptr)
+extern fsfs_tree_builder_new() -> ptr
+extern fsfs_tree_builder_add(tb: ptr, path: string, kind: int, content: string, content_len: int) -> int
+extern fsfs_tree_builder_count(tb: ptr) -> int
+extern fsfs_tree_builder_path(tb: ptr, i: int) -> string
+extern fsfs_tree_builder_kind(tb: ptr, i: int) -> int
+extern fsfs_tree_builder_content_data(tb: ptr, i: int) -> string
+extern fsfs_tree_builder_free(tb: ptr)
 
-extern svnae_fsfs_sb_new() -> ptr
-extern svnae_fsfs_sb_push(sb: ptr, s: string) -> int
-extern svnae_fsfs_sb_data(sb: ptr) -> string
-extern svnae_fsfs_sb_length(sb: ptr) -> int
-extern svnae_fsfs_sb_free(sb: ptr)
 
-const SQLITE_OK   = 0
+import contrib.sqlite
+
 const SQLITE_ROW  = 100
 const SQLITE_DONE = 101
-
-extern svnae_sqlite_open(path: string) -> ptr
-extern svnae_sqlite_close(db: ptr) -> int
-extern svnae_sqlite_exec(db: ptr, sql: string) -> int
-extern svnae_sqlite_prepare(db: ptr, sql: string) -> ptr
-extern svnae_sqlite_finalize(stmt: ptr) -> int
-extern svnae_sqlite_step(stmt: ptr) -> int
-extern svnae_sqlite_bind_int(stmt: ptr, idx: int, v: int) -> int
-extern svnae_sqlite_bind_text(stmt: ptr, idx: int, text: string) -> int
-extern svnae_sqlite_column_int(stmt: ptr, col: int) -> int
 
 // --- rep-store from Phase 3.1 (inlined) ------------------------------------
 
@@ -129,81 +106,78 @@ ensure_fanout_dirs(repo: string, sha1: string) {
 }
 
 rep_cache_has(repo: string, sha1: string) {
-    db = svnae_sqlite_open("${repo}/rep-cache.db")
-    if db == 0 { return 0 }
-    stmt = svnae_sqlite_prepare(db, "SELECT 1 FROM rep_cache WHERE hash = ?")
-    if stmt == 0 { svnae_sqlite_close(db); return 0 }
-    svnae_sqlite_bind_text(stmt, 1, sha1)
-    rc = svnae_sqlite_step(stmt)
+    db, oerr = sqlite.open("${repo}/rep-cache.db")
+    if string.length(oerr) > 0 { return 0 }
+    stmt, perr = sqlite.prepare(db, "SELECT 1 FROM rep_cache WHERE hash = ?")
+    if string.length(perr) > 0 { sqlite.close(db); return 0 }
+    sqlite.bind_text(stmt, 1, sha1)
+    rc, _ = sqlite.step(stmt, db)
     found = 0
     if rc == SQLITE_ROW { found = 1 }
-    svnae_sqlite_finalize(stmt)
-    svnae_sqlite_close(db)
+    sqlite.finalize(stmt)
+    sqlite.close(db)
     return found
 }
 
 rep_cache_lookup_storage(repo: string, sha1: string) {
-    db = svnae_sqlite_open("${repo}/rep-cache.db")
-    if db == 0 { return 0 }
-    stmt = svnae_sqlite_prepare(db, "SELECT storage FROM rep_cache WHERE hash = ?")
-    svnae_sqlite_bind_text(stmt, 1, sha1)
-    rc = svnae_sqlite_step(stmt)
+    db, oerr = sqlite.open("${repo}/rep-cache.db")
+    if string.length(oerr) > 0 { return 0 }
+    stmt, _ = sqlite.prepare(db, "SELECT storage FROM rep_cache WHERE hash = ?")
+    sqlite.bind_text(stmt, 1, sha1)
+    rc, _ = sqlite.step(stmt, db)
     s = 0
-    if rc == SQLITE_ROW { s = svnae_sqlite_column_int(stmt, 0) }
-    svnae_sqlite_finalize(stmt)
-    svnae_sqlite_close(db)
+    if rc == SQLITE_ROW { s = sqlite.column_int(stmt, 0) }
+    sqlite.finalize(stmt)
+    sqlite.close(db)
     return s
 }
 
 rep_cache_lookup_uncompressed_size(repo: string, sha1: string) {
-    db = svnae_sqlite_open("${repo}/rep-cache.db")
-    if db == 0 { return 0 }
-    stmt = svnae_sqlite_prepare(db, "SELECT uncompressed_size FROM rep_cache WHERE hash = ?")
-    svnae_sqlite_bind_text(stmt, 1, sha1)
-    rc = svnae_sqlite_step(stmt)
+    db, oerr = sqlite.open("${repo}/rep-cache.db")
+    if string.length(oerr) > 0 { return 0 }
+    stmt, _ = sqlite.prepare(db, "SELECT uncompressed_size FROM rep_cache WHERE hash = ?")
+    sqlite.bind_text(stmt, 1, sha1)
+    rc, _ = sqlite.step(stmt, db)
     v = 0
-    if rc == SQLITE_ROW { v = svnae_sqlite_column_int(stmt, 0) }
-    svnae_sqlite_finalize(stmt)
-    svnae_sqlite_close(db)
+    if rc == SQLITE_ROW { v = sqlite.column_int(stmt, 0) }
+    sqlite.finalize(stmt)
+    sqlite.close(db)
     return v
 }
 
 rep_cache_insert(repo: string, sha1: string, rel_path: string,
                  uncompressed_size: int, storage: int) {
-    db = svnae_sqlite_open("${repo}/rep-cache.db")
-    if db == 0 { return 1 }
-    stmt = svnae_sqlite_prepare(db,
+    db, oerr = sqlite.open("${repo}/rep-cache.db")
+    if string.length(oerr) > 0 { return 1 }
+    stmt, _ = sqlite.prepare(db,
         "INSERT INTO rep_cache (hash, rel_path, uncompressed_size, storage) VALUES (?, ?, ?, ?)")
-    svnae_sqlite_bind_text(stmt, 1, sha1)
-    svnae_sqlite_bind_text(stmt, 2, rel_path)
-    svnae_sqlite_bind_int (stmt, 3, uncompressed_size)
-    svnae_sqlite_bind_int (stmt, 4, storage)
-    rc = svnae_sqlite_step(stmt)
-    svnae_sqlite_finalize(stmt)
-    svnae_sqlite_close(db)
+    sqlite.bind_text(stmt, 1, sha1)
+    sqlite.bind_text(stmt, 2, rel_path)
+    sqlite.bind_int (stmt, 3, uncompressed_size)
+    sqlite.bind_int (stmt, 4, storage)
+    rc, _ = sqlite.step(stmt, db)
+    sqlite.finalize(stmt)
+    sqlite.close(db)
     if rc != SQLITE_DONE { return 2 }
     return 0
 }
 
 // Write bytes to the rep store. `data_for_hash` is the bytes to hash;
-// `buf_for_write` is an svnae_buf handle whose bytes will actually be
+// `buf_for_write` is an buf handle whose bytes will actually be
 // persisted. For strings they're the same content, accessed two ways:
 // we hash the string (strlen-unsafe not an issue for text payloads),
 // and write via the buf handle (which carries an explicit length, so
 // embedded NULs are fine). Returns the SHA-1 of the data.
 write_blob_text(repo: string, data: string) {
     n = string.length(data)
-    raw = svnae_sha1_hex(data, n)
-    sha1_copy = string.concat("", raw)
-    svnae_checksum_free_hex(raw)
+    sha1_copy = crypto_hash_hex("sha1", data, n)
 
     if rep_cache_has(repo, sha1_copy) == 1 { return sha1_copy }
 
     storage = STORAGE_RAW
-    comp = svnae_zlib_deflate(data, n, 6)
+    comp, clen, cerr = zlib.deflate(data, n, 6)
     use_zlib = 0
-    if comp != 0 {
-        clen = svnae_buf_length(comp)
+    if string.length(cerr) == 0 {
         if clen + 16 < n {
             storage = STORAGE_ZLIB
             use_zlib = 1
@@ -217,17 +191,16 @@ write_blob_text(repo: string, data: string) {
     rel = rel_path_for_hash(sha1_copy)
     full = "${repo}/reps/${rel}"
 
-    tmp = "${full}.tmp.${svnae_getpid()}.0"
+    tmp = "${full}.tmp.${os_getpid_raw()}.0"
     wrc = 0
     if use_zlib == 1 {
-        wrc = svnae_write_header_and_buf(tmp, storage_hdr, comp)
+        wrc = io_write_header_and_body(tmp, storage_hdr, comp, clen)
     } else {
-        wrc = svnae_write_header_and_body(tmp, storage_hdr, data, n)
+        wrc = io_write_header_and_body(tmp, storage_hdr, data, n)
     }
-    if comp != 0 { svnae_buf_free(comp) }
-    if wrc != 0 { svnae_remove(tmp); return "" }
-    rc = svnae_rename(tmp, full)
-    if rc != 0 { svnae_remove(tmp); return "" }
+    if wrc != 0 { io_remove(tmp); return "" }
+    rc = io_rename(tmp, full)
+    if rc != 0 { io_remove(tmp); return "" }
 
     rc = rep_cache_insert(repo, sha1_copy, rel, n, storage)
     if rc != 0 { return "" }
@@ -240,20 +213,17 @@ read_blob(repo: string, sha1_hex: string) {
     uncompressed = rep_cache_lookup_uncompressed_size(repo, sha1_hex)
     rel = rel_path_for_hash(sha1_hex)
     full = "${repo}/reps/${rel}"
-    raw_buf = svnae_read_file(full, 0)
-    if raw_buf == 0 { return "" }
-    total_len = svnae_read_file_length(raw_buf)
-    raw_ptr = svnae_read_file_data(raw_buf)
-    if total_len < 1 { svnae_read_file_free(raw_buf); return "" }
+    raw_ptr, total_len, rerr = fs.read_binary(full)
+    if string.length(rerr) > 0 { return "" }
+    if total_len < 1 { return "" }
     if storage == STORAGE_RAW {
-        body_str = string.substring(raw_ptr, 1, total_len)
-        svnae_read_file_free(raw_buf)
-        return body_str
+        return string.substring_n(raw_ptr, total_len, 1, total_len)
     }
-    inf = svnae_zlib_inflate_offset(raw_ptr, 1, total_len - 1, uncompressed)
-    svnae_read_file_free(raw_buf)
-    if inf == 0 { return "" }
-    return svnae_buf_data(inf)
+    body_compressed = string.substring_n(raw_ptr, total_len, 1, total_len)
+    out, _, ierr = zlib.inflate(body_compressed, total_len - 1)
+    if string.length(ierr) > 0 { return "" }
+    uncompressed = uncompressed
+    return out
 }
 
 // --- fs_fs init -------------------------------------------------------------
@@ -267,36 +237,33 @@ fsfs_init(path: string) {
     merr = fs.mkdir_p("${path}/revs")
     if string.length(merr) != 0 { return 12 }
 
-    rc = svnae_write_and_fsync("${path}/format", "svnae-fsfs-1\n", 13)
+    rc = io_write_atomic("${path}/format", "svnae-fsfs-1\n", 13)
     if rc != 0 { return rc }
 
-    db = svnae_sqlite_open("${path}/rep-cache.db")
-    if db == 0 { return 3 }
-    rc = svnae_sqlite_exec(db,
+    db, oerr = sqlite.open("${path}/rep-cache.db")
+    if string.length(oerr) > 0 { return 3 }
+    err = sqlite.exec(db,
         "CREATE TABLE rep_cache (hash TEXT PRIMARY KEY, rel_path TEXT NOT NULL, uncompressed_size INT NOT NULL, storage INT NOT NULL)")
-    svnae_sqlite_close(db)
-    if rc != SQLITE_OK { return 4 }
+    sqlite.close(db)
+    if string.length(err) > 0 { return 4 }
 
     // Seed revision 0: empty root directory + rev blob pointing at it.
     empty_dir_sha1 = write_blob_text(path, "")
-    rev0_body = "root: ${empty_dir_sha1}\nprev: 0\nauthor: (init)\ndate: ${svnae_fsfs_now_iso8601()}\nlog: initial empty revision\n"
+    rev0_body = "root: ${empty_dir_sha1}\nprev: 0\nauthor: (init)\ndate: ${os.now_utc_iso8601()}\nlog: initial empty revision\n"
     rev0_sha1 = write_blob_text(path, rev0_body)
 
-    rc = svnae_write_and_fsync("${path}/revs/000000", "${rev0_sha1}\n", string.length(rev0_sha1) + 1)
+    rc = io_write_atomic("${path}/revs/000000", "${rev0_sha1}\n", string.length(rev0_sha1) + 1)
     if rc != 0 { return rc }
-    rc = svnae_write_and_fsync("${path}/head", "0\n", 2)
+    rc = io_write_atomic("${path}/head", "0\n", 2)
     if rc != 0 { return rc }
     return 0
 }
 
 // Read the current head revision number (as int).
 fsfs_head_rev(repo: string) {
-    b = svnae_fsfs_read_small_file("${repo}/head")
-    if b == 0 { return -1 }
-    s = svnae_fsfs_buf_data(b)
-    t = string.trim(s)
-    svnae_fsfs_buf_free(b)
-    // string.try_int / get_int via std.string
+    raw = io_read_file("${repo}/head")
+    if string.length(raw) == 0 { return -1 }
+    t = string.trim(raw)
     ok = string.try_int(t)
     if ok == 0 { return -1 }
     return string.get_int(t)
@@ -317,11 +284,9 @@ rev_file_path(repo: string, rev: int) {
 
 // Read the revision blob for rev `N`. Returns "" on failure.
 fsfs_load_rev_blob(repo: string, rev: int) {
-    b = svnae_fsfs_read_small_file(rev_file_path(repo, rev))
-    if b == 0 { return "" }
-    s = svnae_fsfs_buf_data(b)
-    sha1_line = string.trim(s)
-    svnae_fsfs_buf_free(b)
+    raw = io_read_file(rev_file_path(repo, rev))
+    if string.length(raw) == 0 { return "" }
+    sha1_line = string.trim(raw)
     return read_blob(repo, sha1_line)
 }
 
@@ -477,7 +442,7 @@ fsfs_read_file_at(repo: string, rev: int, path: string) {
 fsfs_commit_flat(repo: string, tb: ptr, author: string, logmsg: string) {
     // Step 1: write each file blob. Accumulate dir entries as "f <sha1> <name>\n"
     // strings, sorted by name via a simple selection loop.
-    count = svnae_fsfs_tree_builder_count(tb)
+    count = fsfs_tree_builder_count(tb)
 
     // Sort indices by path. In-place bubble sort over a local int list
     // would be nice; Aether doesn't give us dynamic int arrays. Use a
@@ -486,59 +451,51 @@ fsfs_commit_flat(repo: string, tb: ptr, author: string, logmsg: string) {
     // Actually simpler: an array-of-names sorted via repeated scans.
     // Assemble all entry records into a sorted sb.
 
-    // Write each file blob; remember sha1s in a parallel sb.
-    sha1s_sb = svnae_fsfs_sb_new()
-    names_sb = svnae_fsfs_sb_new()
+    // Write each file blob; remember sha1s in a parallel "<line>\n…"
+    // accumulator. Round 110 retired the C-side fsfs_sb_*
+    // builder — for the small repos test_revisions.ae uses, the
+    // O(n²) string.concat cost is invisible.
+    sha1s_txt = ""
+    names_txt = ""
     i = 0
     while i < count {
-        path = svnae_fsfs_tree_builder_path(tb, i)
-        kind = svnae_fsfs_tree_builder_kind(tb, i)
+        path = fsfs_tree_builder_path(tb, i)
+        kind = fsfs_tree_builder_kind(tb, i)
         if kind != 0 {
             // For Phase 3.2 we only commit files.
             i = i + 1
             continue
         }
-        buf = svnae_fsfs_tree_builder_content(tb, i)
-        blen = svnae_fsfs_buf_length(buf)
-        bdata = svnae_fsfs_buf_data(buf)
+        bdata = fsfs_tree_builder_content_data(tb, i)
         // write_blob_text: since we know content may be arbitrary bytes,
         // we should have a binary-safe variant. For tests we use text,
         // so this is fine.
         sha1 = write_blob_text(repo, bdata)
-        svnae_fsfs_buf_free(buf)
 
-        svnae_fsfs_sb_push(names_sb, path)
-        svnae_fsfs_sb_push(names_sb, "\n")
-        svnae_fsfs_sb_push(sha1s_sb, sha1)
-        svnae_fsfs_sb_push(sha1s_sb, "\n")
+        names_txt = string.concat(names_txt, path)
+        names_txt = string.concat(names_txt, "\n")
+        sha1s_txt = string.concat(sha1s_txt, sha1)
+        sha1s_txt = string.concat(sha1s_txt, "\n")
         i = i + 1
     }
 
-    // Build a sorted directory-blob body. Approach: scan names_sb for the
-    // lexicographically smallest name not yet emitted, emit its "f <sha1> <name>"
-    // line, mark as emitted, repeat.
-    //
-    // "Mark as emitted" done by wrapping each match in a separate used-flag
-    // — since we can't mutate strings, we just track the names we've already
-    // picked in a growing used_sb and skip them.
-    body_sb = svnae_fsfs_sb_new()
-    used_sb = svnae_fsfs_sb_new()
-    names_txt = svnae_fsfs_sb_data(names_sb)
-    sha1s_txt = svnae_fsfs_sb_data(sha1s_sb)
+    // Build a sorted directory-blob body. Approach: scan names_txt for
+    // the lexicographically smallest name not yet emitted, emit its
+    // "f <sha1> <name>" line, mark as emitted (via a parallel
+    // "|<idx>|" tracker), repeat.
+    body = ""
+    used_txt = ""
     remaining = count_nonempty_lines(names_txt)
     while remaining > 0 {
         // Find smallest-unused name.
         best_idx = -1
         best_name = ""
         idx = 0
-        p = names_txt
-        q = sha1s_txt
         pos = 0
-        qpos = 0
         while idx < count {
             name = line_at(names_txt, pos)
             line_len = string.length(name) + 1
-            is_used = string.contains(svnae_fsfs_sb_data(used_sb), "|${idx}|")
+            is_used = string.contains(used_txt, "|${idx}|")
             if is_used == 0 {
                 if best_idx < 0 {
                     best_idx = idx
@@ -553,22 +510,16 @@ fsfs_commit_flat(repo: string, tb: ptr, author: string, logmsg: string) {
         }
         // Emit this entry.
         sha1 = line_at(sha1s_txt, position_of_line(sha1s_txt, best_idx))
-        svnae_fsfs_sb_push(body_sb, "f ")
-        svnae_fsfs_sb_push(body_sb, sha1)
-        svnae_fsfs_sb_push(body_sb, " ")
-        svnae_fsfs_sb_push(body_sb, best_name)
-        svnae_fsfs_sb_push(body_sb, "\n")
-        svnae_fsfs_sb_push(used_sb, "|${best_idx}|")
+        body = string.concat(body, "f ")
+        body = string.concat(body, sha1)
+        body = string.concat(body, " ")
+        body = string.concat(body, best_name)
+        body = string.concat(body, "\n")
+        used_txt = string.concat(used_txt, "|${best_idx}|")
         remaining = remaining - 1
     }
 
-    body = svnae_fsfs_sb_data(body_sb)
     body_copy = string.concat("", body)
-
-    svnae_fsfs_sb_free(names_sb)
-    svnae_fsfs_sb_free(sha1s_sb)
-    svnae_fsfs_sb_free(body_sb)
-    svnae_fsfs_sb_free(used_sb)
 
     // Write the root dir blob.
     root_sha1 = write_blob_text(repo, body_copy)
@@ -578,17 +529,17 @@ fsfs_commit_flat(repo: string, tb: ptr, author: string, logmsg: string) {
     next = prev + 1
 
     // Build revision blob.
-    rev_body = "root: ${root_sha1}\nprev: ${prev}\nauthor: ${author}\ndate: ${svnae_fsfs_now_iso8601()}\nlog: ${logmsg}\n"
+    rev_body = "root: ${root_sha1}\nprev: ${prev}\nauthor: ${author}\ndate: ${os.now_utc_iso8601()}\nlog: ${logmsg}\n"
     rev_sha1 = write_blob_text(repo, rev_body)
 
     // Persist revs/<N> pointing at rev_sha1 and bump head.
     rev_path = rev_file_path(repo, next)
     ptr_body = "${rev_sha1}\n"
-    rc = svnae_write_and_fsync(rev_path, ptr_body, string.length(ptr_body))
+    rc = io_write_atomic(rev_path, ptr_body, string.length(ptr_body))
     if rc != 0 { return -1 }
 
     head_body = "${next}\n"
-    rc = svnae_write_and_fsync("${repo}/head", head_body, string.length(head_body))
+    rc = io_write_atomic("${repo}/head", head_body, string.length(head_body))
     if rc != 0 { return -1 }
 
     return next
@@ -658,21 +609,18 @@ extern system(cmd: string) -> int
 rmtree(path: string) { system("rm -rf '${path}'"); return 0 }
 
 count_rep_files(repo: string) {
-    count_file = "/tmp/svnae_count_${svnae_getpid()}.txt"
+    count_file = "/tmp/count_${os_getpid_raw()}.txt"
     system("find '${repo}/reps' -name '*.rep' | wc -l > '${count_file}'")
-    b = svnae_fsfs_read_small_file(count_file)
-    if b == 0 { return -1 }
-    s = svnae_fsfs_buf_data(b)
-    t = string.trim(s)
-    v = string.get_int(t)
-    svnae_fsfs_buf_free(b)
-    return v
+    raw = io_read_file(count_file)
+    if string.length(raw) == 0 { return -1 }
+    t = string.trim(raw)
+    return string.get_int(t)
 }
 
 main() {
     fails = 0
-    pid = svnae_getpid()
-    repo = "/tmp/svnae_test_revs_${pid}"
+    pid = os_getpid_raw()
+    repo = "/tmp/test_revs_${pid}"
     rmtree(repo)
 
     // 1. init creates rev 0 with an empty root.
@@ -681,12 +629,12 @@ main() {
     fails = fails + expect_int("head after init", fsfs_head_rev(repo), 0)
 
     // 2. commit rev 1 with a few files.
-    tb = svnae_fsfs_tree_builder_new()
-    svnae_fsfs_tree_builder_add(tb, "README",  0, "Hello from Aether svn!\n", 23)
-    svnae_fsfs_tree_builder_add(tb, "main.c",  0, "int main(void) { return 0; }\n", 29)
-    svnae_fsfs_tree_builder_add(tb, "notes.txt", 0, "quick brown fox\n", 16)
+    tb = fsfs_tree_builder_new()
+    fsfs_tree_builder_add(tb, "README",  0, "Hello from Aether svn!\n", 23)
+    fsfs_tree_builder_add(tb, "main.c",  0, "int main(void) { return 0; }\n", 29)
+    fsfs_tree_builder_add(tb, "notes.txt", 0, "quick brown fox\n", 16)
     new_rev = fsfs_commit_flat(repo, tb, "paul", "initial commit")
-    svnae_fsfs_tree_builder_free(tb)
+    fsfs_tree_builder_free(tb)
     fails = fails + expect_int("commit rev 1", new_rev, 1)
     fails = fails + expect_int("head after commit 1", fsfs_head_rev(repo), 1)
 
@@ -706,12 +654,12 @@ main() {
     //    rep-shared (same sha1, no new .rep file written for them).
     before_count = count_rep_files(repo)
 
-    tb = svnae_fsfs_tree_builder_new()
-    svnae_fsfs_tree_builder_add(tb, "README",  0, "Hello from Aether svn!\n", 23)
-    svnae_fsfs_tree_builder_add(tb, "main.c",  0, "int main(void) { return 0; }\n", 29)
-    svnae_fsfs_tree_builder_add(tb, "notes.txt", 0, "the updated note\n", 17)
+    tb = fsfs_tree_builder_new()
+    fsfs_tree_builder_add(tb, "README",  0, "Hello from Aether svn!\n", 23)
+    fsfs_tree_builder_add(tb, "main.c",  0, "int main(void) { return 0; }\n", 29)
+    fsfs_tree_builder_add(tb, "notes.txt", 0, "the updated note\n", 17)
     new_rev = fsfs_commit_flat(repo, tb, "paul", "update notes")
-    svnae_fsfs_tree_builder_free(tb)
+    fsfs_tree_builder_free(tb)
     fails = fails + expect_int("commit rev 2", new_rev, 2)
 
     after_count = count_rep_files(repo)

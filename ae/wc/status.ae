@@ -1,0 +1,310 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// permissions and limitations under the License.
+
+// svn status — compare on-disk WC against wc.db + pristine to produce
+// a list of (path, code) entries:
+//
+//     ' '  Normal (filtered from output)
+//     'A'  Added                'D'  Deleted
+//     'M'  Modified              '!'  Missing
+//     '?'  Unversioned           'C'  Conflicted
+//
+// Round 68 (Gordian) ports the recursive filesystem walk +
+// hand-rolled strset (was 25 lines of linear-search-set in
+// status_shim.c) to a std.collections HashMap-backed tracked-set
+// for O(1) membership. Storage of the result list (wc_status_*)
+// stays in C — same shape as nodelist and proplist.
+
+import std.string
+import std.collections
+
+// Explicit externs for std.collections symbols. Aether's `import`
+// brings the module into scope but doesn't auto-bind names — we
+// redeclare and use the raw externs (auto-linked from
+// aether_collections.c) so we don't need module.ae's Aether
+// wrappers compiled into our binary.
+extern map_new() -> ptr
+extern map_put_raw(map: ptr, key: string, value: ptr) -> int
+extern map_has(map: ptr, key: string) -> int
+extern map_free(map: ptr)
+
+// wc.db lifecycle + nodelist accessors.
+extern wc_db_open(wc_root: string) -> ptr
+extern wc_db_close(db: ptr)
+extern wc_db_list_nodes(db: ptr) -> ptr
+extern wc_nodelist_count(L: ptr) -> int
+extern wc_nodelist_path(L: ptr, i: int) -> string
+extern wc_nodelist_kind(L: ptr, i: int) -> int
+extern wc_nodelist_base_sha1(L: ptr, i: int) -> string
+extern wc_nodelist_state(L: ptr, i: int) -> int
+extern wc_nodelist_conflicted(L: ptr, i: int) -> int
+extern wc_nodelist_free(L: ptr)
+
+// Status code classifier — maps the (conflicted, state, kind, on_disk,
+// sha_read, sha_ok) tuple to a status char. Lives in
+// ae/wc/status_code.ae.
+extern status_code(conflicted: int, st: int, kind: int,
+                           on_disk: int, sha_read: int, sha_ok: int) -> int
+
+// Hash a file via the WC's configured algorithm. Returns 0 on success
+// (with hex written into the C-allocated output buffer); we only need
+// the result strings here, so we wrap with a side-effect-free Aether
+// helper from the pristine module.
+extern wc_hash_file(wc_root: string, path: string) -> string
+
+// Statuslist handle constructor (status_shim.c). Wraps a Aether-
+// built packed string "<n>\x02<path>\x01<code>\x02..." into the
+// shared packed_handle struct; field accessors live in
+// ae/wc/status_packed.ae.
+extern wc_statuslist_handle(packed: string) -> ptr
+
+// IO helpers.
+extern io_exists(path: string) -> int
+extern io_listdir(path: string) -> ptr
+extern io_listdir_count(handle: ptr) -> int
+extern io_listdir_name(handle: ptr, index: int) -> string
+extern io_listdir_free(handle: ptr)
+extern io_stat_kind(path: string) -> int
+extern path_join_rel(prefix: string, name: string) -> string
+extern is_sidecar_name(name: string) -> int
+
+// svn:ignore handling.
+extern propget_value(wc_root: string, path: string, name: string) -> string
+extern ignore_matches(patterns: string, name: string) -> int
+
+// SHA-of-file as hex. Returns "" on error.
+sha_of_file_(wc_root: string, path: string) -> string {
+    h = wc_hash_file(wc_root, path)
+    if string.length(h) == 0 { return "" }
+    return string.copy(h)
+}
+
+// Append a "<path>\x01<code>\x02" record onto the running body.
+append_record_(body: string, path: string, code: int) -> string {
+    rec = "${path}\x01${code}\x02"
+    return string.concat(body, rec)
+}
+
+// Insertion-sort the running body (records separated by \x02) by
+// path. Same shape as repos/paths_changed.ae's sort_by_path —
+// O(N²) is fine for the typical WC sizes here.
+sort_body_(body: string) -> string {
+    // Count records.
+    n = 0
+    pos = 0
+    blen = string.length(body)
+    while pos < blen {
+        sep = string.index_of_from(body, "\x02", pos)
+        if sep < 0 { return body }   // malformed; bail
+        n = n + 1
+        pos = sep + 1
+    }
+    if n <= 1 { return body }
+
+    sorted = ""
+    i = 0
+    rpos = 0
+    while i < n {
+        rsep = string.index_of_from(body, "\x02", rpos)
+        this_rec = string.substring(body, rpos, rsep)
+        this_path_end = string.index_of(this_rec, "\x01")
+        this_path = string.substring(this_rec, 0, this_path_end)
+
+        // Walk `sorted` and splice this_rec into the right slot.
+        new_sorted = ""
+        sn = 0
+        spos = 0
+        slen = string.length(sorted)
+        placed = 0
+        while spos < slen {
+            ssep = string.index_of_from(sorted, "\x02", spos)
+            jrec = string.substring(sorted, spos, ssep)
+            jpath_end = string.index_of(jrec, "\x01")
+            jpath = string.substring(jrec, 0, jpath_end)
+            if placed == 0 {
+                if string.compare(this_path, jpath) < 0 {
+                    new_sorted = string.concat(new_sorted, this_rec)
+                    new_sorted = string.concat(new_sorted, "\x02")
+                    placed = 1
+                }
+            }
+            new_sorted = string.concat(new_sorted, jrec)
+            new_sorted = string.concat(new_sorted, "\x02")
+            spos = ssep + 1
+            sn = sn + 1
+        }
+        if placed == 0 {
+            new_sorted = string.concat(new_sorted, this_rec)
+            new_sorted = string.concat(new_sorted, "\x02")
+        }
+        sorted = new_sorted
+        rpos = rsep + 1
+        i = i + 1
+    }
+    return sorted
+}
+
+// Recursive filesystem walk, emitting '?' for any path not in
+// `tracked` (a std.collections.map used as a string set; we don't
+// care about the value — `map.has` is the membership test).
+// Returns a packed body fragment "<path>\x01<code>\x02..." for the
+// caller to fold into its own running accumulator.
+walk_unversioned_(wc_root: string, rel: string, tracked: ptr) -> string {
+    out = ""
+    dir_path_borrowed = path_join_rel(wc_root, rel)
+    dir_path = string.copy(dir_path_borrowed)
+
+    // Fetch svn:ignore for this directory. propget returns "" both on
+    // miss and on set-to-empty; either way no patterns apply.
+    ignore_prop = propget_value(wc_root, rel, "svn:ignore")
+    ignore_prop = string.copy(ignore_prop)
+    have_ignores = 0
+    if string.length(ignore_prop) > 0 { have_ignores = 1 }
+
+    d = io_listdir(dir_path)
+    if d == null { return out }
+    n_entries = io_listdir_count(d)
+    i = 0
+    while i < n_entries {
+        name = io_listdir_name(d, i)
+        name = string.copy(name)
+        skip = 0
+        if string.equals(name, ".svn") == 1 { skip = 1 }
+        // Skip conflict sidecars — .mine and .r<N>. They'll be cleaned
+        // up by `svn resolve`.
+        if skip == 0 {
+            if is_sidecar_name(name) == 1 { skip = 1 }
+        }
+        if skip == 0 {
+            child_rel_borrowed = path_join_rel(rel, name)
+            child_rel = string.copy(child_rel_borrowed)
+            child_fs_borrowed = path_join_rel(wc_root, child_rel)
+            child_fs = string.copy(child_fs_borrowed)
+            kind = io_stat_kind(child_fs)   // 1=file 2=dir, 0=missing
+            if kind != 0 {
+                is_tracked = map_has(tracked, child_rel)
+                ignored = 0
+                if is_tracked == 0 {
+                    if have_ignores == 1 {
+                        ignored = ignore_matches(ignore_prop, name)
+                    }
+                }
+                if kind == 2 {
+                    if is_tracked == 0 {
+                        if ignored == 0 { out = append_record_(out, child_rel, 63) }   // '?'
+                    }
+                    if is_tracked == 1 {
+                        sub = walk_unversioned_(wc_root, child_rel, tracked)
+                        out = string.concat(out, sub)
+                    }
+                }
+                if kind == 1 {
+                    if is_tracked == 0 {
+                        if ignored == 0 { out = append_record_(out, child_rel, 63) }
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+    io_listdir_free(d)
+    return out
+}
+
+// Public entry point. Returns a statuslist ptr (packed_handle-
+// backed); caller frees via wc_statuslist_free.
+export wc_status(wc_root: string) -> ptr {
+    db = wc_db_open(wc_root)
+    if db == null { return null }
+
+    body = ""
+    tracked = map_new()
+
+    // Pass 1: every tracked node.
+    L = wc_db_list_nodes(db)
+    n = wc_nodelist_count(L)
+    i = 0
+    sentinel = "1"
+    while i < n {
+        rel        = wc_nodelist_path(L, i)
+        rel        = string.copy(rel)
+        kind       = wc_nodelist_kind(L, i)
+        state      = wc_nodelist_state(L, i)
+        conflicted = wc_nodelist_conflicted(L, i)
+        base_sha   = wc_nodelist_base_sha1(L, i)
+        base_sha   = string.copy(base_sha)
+
+        map_put_raw(tracked, rel, sentinel)
+
+        disk = "${wc_root}/${rel}"
+        on_disk = io_exists(disk)
+
+        // Hash the file only when the classifier needs it: normal-
+        // state file nodes that are on disk and not conflicted.
+        sha_read = 0
+        sha_ok = 0
+        if conflicted == 0 {
+            if state == 0 {
+                if on_disk == 1 {
+                    if kind == 0 {
+                        cur = sha_of_file_(wc_root, disk)
+                        if string.length(cur) > 0 {
+                            sha_read = 1
+                            if string.equals(cur, base_sha) == 1 { sha_ok = 1 }
+                        }
+                    }
+                }
+            }
+        }
+        code = status_code(conflicted, state, kind, on_disk, sha_read, sha_ok)
+        if code != 32 {   // not space
+            body = append_record_(body, rel, code)
+        }
+        i = i + 1
+    }
+    wc_nodelist_free(L)
+
+    // Pass 2: filesystem walk for '?' entries.
+    walk_body = walk_unversioned_(wc_root, "", tracked)
+    body = string.concat(body, walk_body)
+
+    map_free(tracked)
+    wc_db_close(db)
+
+    // Recount across full body (tracked + walker output) — every
+    // record is terminated by \x02.
+    sorted = sort_body_(body)
+    final_n = count_records_(sorted)
+    head = "${final_n}\x02"
+    packed = string.concat(head, sorted)
+    return wc_statuslist_handle(packed)
+}
+
+count_records_(body: string) -> int {
+    n = 0
+    pos = 0
+    blen = string.length(body)
+    while pos < blen {
+        sep = string.index_of_from(body, "\x02", pos)
+        if sep < 0 { return n }
+        n = n + 1
+        pos = sep + 1
+    }
+    return n
+}
+
+main() {
+    println("ae/wc/status.ae is a library; not meant to run standalone")
+}

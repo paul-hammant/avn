@@ -20,63 +20,58 @@
 // through the new repos/ shim.
 
 import std.fs
+import std.os
 import std.string
 
 // --- Phase 3.x plumbing (init + txn commit) -------------------------------
 
-extern svnae_rep_write_blob(repo: string, data: string, len: int) -> string
-extern svnae_rep_read_blob(repo: string, sha1_hex: string) -> string
-extern svnae_rep_free(p: string)
+extern rep_write_blob(repo: string, data: string, len: int) -> string
+extern rep_read_blob(repo: string, sha1_hex: string) -> string
+extern rep_free(p: string)
 
-extern svnae_txn_new(base_rev: int) -> ptr
-extern svnae_txn_base_rev(t: ptr) -> int
-extern svnae_txn_add_file(t: ptr, path: string, content: string, len: int) -> int
-extern svnae_txn_mkdir(t: ptr, path: string) -> int
-extern svnae_txn_delete(t: ptr, path: string) -> int
-extern svnae_txn_free(t: ptr)
-extern svnae_txn_rebuild_root(repo: string, base_root_sha1: string, t: ptr) -> string
+extern txn_new(base_rev: int) -> ptr
+extern txn_base_rev(t: ptr) -> int
+extern txn_add_file(t: ptr, path: string, content: string, len: int) -> int
+extern txn_mkdir(t: ptr, path: string) -> int
+extern txn_delete(t: ptr, path: string) -> int
+extern txn_free(t: ptr)
+extern rebuild_dir(repo: string, base_dir_sha: string, prefix: string, t: ptr) -> string
 
-extern svnae_write_and_fsync(path: string, data: string, len: int) -> int
-extern svnae_getpid() -> int
+extern io_write_atomic(path: string, data: string, length: int) -> int
+extern os_getpid_raw() -> int
 extern dir_exists(path: string) -> int
 
-extern svnae_fsfs_read_small_file(path: string) -> ptr
-extern svnae_fsfs_buf_data(b: ptr) -> string
-extern svnae_fsfs_buf_free(b: ptr)
-extern svnae_fsfs_now_iso8601() -> string
+extern io_read_file(path: string) -> string
 
-const SQLITE_OK = 0
-extern svnae_sqlite_open(path: string) -> ptr
-extern svnae_sqlite_close(db: ptr) -> int
-extern svnae_sqlite_exec(db: ptr, sql: string) -> int
+import contrib.sqlite
 
 // --- repos shim externs ----------------------------------------------------
 
-extern svnae_repos_head_rev(repo: string) -> int
+extern repos_head_rev(repo: string) -> int
 
-extern svnae_repos_log(repo: string) -> ptr
-extern svnae_repos_log_count(lg: ptr) -> int
-extern svnae_repos_log_rev(lg: ptr, i: int) -> int
-extern svnae_repos_log_author(lg: ptr, i: int) -> string
-extern svnae_repos_log_date(lg: ptr, i: int) -> string
-extern svnae_repos_log_msg(lg: ptr, i: int) -> string
-extern svnae_repos_log_free(lg: ptr)
+extern repos_log(repo: string) -> ptr
+extern repos_log_count(lg: ptr) -> int
+extern repos_log_rev(lg: ptr, i: int) -> int
+extern repos_log_author(lg: ptr, i: int) -> string
+extern repos_log_date(lg: ptr, i: int) -> string
+extern repos_log_msg(lg: ptr, i: int) -> string
+extern repos_log_free(lg: ptr)
 
-extern svnae_repos_cat(repo: string, rev: int, path: string) -> string
-// (returned buffer is freed via svnae_rep_free — rep_store_shim owns it)
+extern repos_cat(repo: string, rev: int, path: string) -> string
+// (returned buffer is freed via rep_free — rep_store_shim owns it)
 
-extern svnae_repos_list(repo: string, rev: int, path: string) -> ptr
-extern svnae_repos_list_count(L: ptr) -> int
-extern svnae_repos_list_name(L: ptr, i: int) -> string
-extern svnae_repos_list_kind(L: ptr, i: int) -> string
-extern svnae_repos_list_free(L: ptr)
+extern repos_list(repo: string, rev: int, path: string) -> ptr
+extern repos_list_count(L: ptr) -> int
+extern repos_list_name(L: ptr, i: int) -> string
+extern repos_list_kind(L: ptr, i: int) -> string
+extern repos_list_free(L: ptr)
 
-extern svnae_repos_info_rev(repo: string, rev: int) -> ptr
-extern svnae_repos_info_rev_num(I: ptr) -> int
-extern svnae_repos_info_author(I: ptr) -> string
-extern svnae_repos_info_date(I: ptr) -> string
-extern svnae_repos_info_msg(I: ptr) -> string
-extern svnae_repos_info_free(I: ptr)
+extern repos_info_rev(repo: string, rev: int) -> ptr
+extern repos_info_rev_num(I: ptr) -> int
+extern repos_info_author(I: ptr) -> string
+extern repos_info_date(I: ptr) -> string
+extern repos_info_msg(I: ptr) -> string
+extern repos_info_free(I: ptr)
 
 // --- repo init (same as Phase 3.3) ---------------------------------------
 
@@ -88,23 +83,23 @@ fsfs_init(path: string) {
     if string.length(merr) != 0 { return 11 }
     merr = fs.mkdir_p("${path}/revs")
     if string.length(merr) != 0 { return 12 }
-    rc = svnae_write_and_fsync("${path}/format", "svnae-fsfs-1\n", 13)
+    rc = io_write_atomic("${path}/format", "svnae-fsfs-1\n", 13)
     if rc != 0 { return rc }
-    db = svnae_sqlite_open("${path}/rep-cache.db")
-    if db == 0 { return 3 }
-    rc = svnae_sqlite_exec(db,
+    db, oerr = sqlite.open("${path}/rep-cache.db")
+    if string.length(oerr) > 0 { return 3 }
+    err = sqlite.exec(db,
         "CREATE TABLE rep_cache (hash TEXT PRIMARY KEY, rel_path TEXT NOT NULL, uncompressed_size INT NOT NULL, storage INT NOT NULL)")
-    svnae_sqlite_close(db)
-    if rc != SQLITE_OK { return 4 }
+    sqlite.close(db)
+    if string.length(err) > 0 { return 4 }
 
-    empty_sha = svnae_rep_write_blob(path, "", 0)
+    empty_sha = rep_write_blob(path, "", 0)
     empty_copy = string.concat("", empty_sha)
-    rev0 = "root: ${empty_copy}\nprev: 0\nauthor: (init)\ndate: ${svnae_fsfs_now_iso8601()}\nlog: initial empty revision\n"
-    rev0_sha = svnae_rep_write_blob(path, rev0, string.length(rev0))
+    rev0 = "root: ${empty_copy}\nprev: 0\nauthor: (init)\ndate: ${os.now_utc_iso8601()}\nlog: initial empty revision\n"
+    rev0_sha = rep_write_blob(path, rev0, string.length(rev0))
     rev0_copy = string.concat("", rev0_sha)
-    rc = svnae_write_and_fsync("${path}/revs/000000", "${rev0_copy}\n", string.length(rev0_copy) + 1)
+    rc = io_write_atomic("${path}/revs/000000", "${rev0_copy}\n", string.length(rev0_copy) + 1)
     if rc != 0 { return rc }
-    rc = svnae_write_and_fsync("${path}/head", "0\n", 2)
+    rc = io_write_atomic("${path}/head", "0\n", 2)
     if rc != 0 { return rc }
     return 0
 }
@@ -147,43 +142,40 @@ parse_line_value(body: string, key: string) {
 }
 
 rev_root_sha1(repo: string, rev: int) {
-    b = svnae_fsfs_read_small_file(rev_file_path(repo, rev))
-    if b == 0 { return "" }
-    rev_blob_sha1 = string.trim(svnae_fsfs_buf_data(b))
-    svnae_fsfs_buf_free(b)
-    rev_body = svnae_rep_read_blob(repo, rev_blob_sha1)
+    raw = io_read_file(rev_file_path(repo, rev))
+    if string.length(raw) == 0 { return "" }
+    rev_blob_sha1 = string.trim(raw)
+    rev_body = rep_read_blob(repo, rev_blob_sha1)
     root = parse_line_value(rev_body, "root")
     root_copy = string.concat("", root)
-    svnae_rep_free(rev_body)
+    rep_free(rev_body)
     return root_copy
 }
 
 fsfs_head_rev(repo: string) {
-    b = svnae_fsfs_read_small_file("${repo}/head")
-    if b == 0 { return -1 }
-    t = string.trim(svnae_fsfs_buf_data(b))
-    svnae_fsfs_buf_free(b)
+    raw = io_read_file("${repo}/head")
+    if string.length(raw) == 0 { return -1 }
+    t = string.trim(raw)
     if string.try_int(t) == 0 { return -1 }
     return string.get_int(t)
 }
 
 commit_txn(repo: string, txn: ptr, author: string, logmsg: string) {
-    base_rev = svnae_txn_base_rev(txn)
+    base_rev = txn_base_rev(txn)
     base_root = rev_root_sha1(repo, base_rev)
     if string.length(base_root) == 0 { return -1 }
-    new_root_raw = svnae_txn_rebuild_root(repo, base_root, txn)
-    if new_root_raw == 0 { return -1 }
-    new_root = string.concat("", new_root_raw)
-    svnae_rep_free(new_root_raw)
+    new_root = rebuild_dir(repo, base_root, "", txn)
+    if string.length(new_root) == 0 { return -1 }
+    new_root = string.copy(new_root)
     prev = fsfs_head_rev(repo)
     next = prev + 1
-    rev_body = "root: ${new_root}\nprev: ${prev}\nauthor: ${author}\ndate: ${svnae_fsfs_now_iso8601()}\nlog: ${logmsg}\n"
-    rev_sha_raw = svnae_rep_write_blob(repo, rev_body, string.length(rev_body))
+    rev_body = "root: ${new_root}\nprev: ${prev}\nauthor: ${author}\ndate: ${os.now_utc_iso8601()}\nlog: ${logmsg}\n"
+    rev_sha_raw = rep_write_blob(repo, rev_body, string.length(rev_body))
     rev_sha = string.concat("", rev_sha_raw)
     ptr_body = "${rev_sha}\n"
-    rc = svnae_write_and_fsync(rev_file_path(repo, next), ptr_body, string.length(ptr_body))
+    rc = io_write_atomic(rev_file_path(repo, next), ptr_body, string.length(ptr_body))
     if rc != 0 { return -1 }
-    rc = svnae_write_and_fsync("${repo}/head", "${next}\n", string.length("${next}\n"))
+    rc = io_write_atomic("${repo}/head", "${next}\n", string.length("${next}\n"))
     if rc != 0 { return -1 }
     return next
 }
@@ -209,140 +201,144 @@ rmtree(path: string) { system("rm -rf '${path}'"); return 0 }
 
 main() {
     fails = 0
-    pid = svnae_getpid()
-    repo = "/tmp/svnae_test_repos_${pid}"
+    pid = os_getpid_raw()
+    repo = "/tmp/test_repos_${pid}"
     rmtree(repo)
 
     rc = fsfs_init(repo)
     fails = fails + expect_int("init rc", rc, 0)
 
     // Commit 1: three files and a subdir.
-    txn = svnae_txn_new(0)
-    svnae_txn_mkdir(txn, "src")
-    svnae_txn_add_file(txn, "README",     "Hello\n",                     6)
-    svnae_txn_add_file(txn, "src/main.c", "int main() { return 0; }\n", 25)
-    svnae_txn_add_file(txn, "LICENSE",    "Apache-2.0\n",                11)
+    txn = txn_new(0)
+    txn_mkdir(txn, "src")
+    txn_add_file(txn, "README",     "Hello\n",                     6)
+    txn_add_file(txn, "src/main.c", "int main() { return 0; }\n", 25)
+    txn_add_file(txn, "LICENSE",    "Apache-2.0\n",                11)
     r1 = commit_txn(repo, txn, "alice", "first commit")
-    svnae_txn_free(txn)
+    txn_free(txn)
     fails = fails + expect_int("commit 1 rev", r1, 1)
 
     // Commit 2: modify src/main.c.
-    txn = svnae_txn_new(1)
-    svnae_txn_add_file(txn, "src/main.c", "int main() { return 42; }\n", 26)
+    txn = txn_new(1)
+    txn_add_file(txn, "src/main.c", "int main() { return 42; }\n", 26)
     r2 = commit_txn(repo, txn, "bob", "answer to everything")
-    svnae_txn_free(txn)
+    txn_free(txn)
     fails = fails + expect_int("commit 2 rev", r2, 2)
 
     // Commit 3: delete LICENSE.
-    txn = svnae_txn_new(2)
-    svnae_txn_delete(txn, "LICENSE")
+    txn = txn_new(2)
+    txn_delete(txn, "LICENSE")
     r3 = commit_txn(repo, txn, "alice", "drop license")
-    svnae_txn_free(txn)
+    txn_free(txn)
     fails = fails + expect_int("commit 3 rev", r3, 3)
 
     // --- head_rev ---
-    fails = fails + expect_int("head rev", svnae_repos_head_rev(repo), 3)
+    fails = fails + expect_int("head rev", repos_head_rev(repo), 3)
 
     // --- log ---
-    lg = svnae_repos_log(repo)
-    fails = fails + expect_int("log count", svnae_repos_log_count(lg), 4)  // 0..3
-    fails = fails + expect_int("log[0] rev", svnae_repos_log_rev(lg, 0), 0)
-    fails = fails + expect_str("log[0] author", svnae_repos_log_author(lg, 0), "(init)")
-    fails = fails + expect_str("log[1] author", svnae_repos_log_author(lg, 1), "alice")
-    fails = fails + expect_str("log[1] msg",    svnae_repos_log_msg(lg, 1),    "first commit")
-    fails = fails + expect_str("log[2] author", svnae_repos_log_author(lg, 2), "bob")
-    fails = fails + expect_str("log[2] msg",    svnae_repos_log_msg(lg, 2),    "answer to everything")
-    fails = fails + expect_str("log[3] author", svnae_repos_log_author(lg, 3), "alice")
-    fails = fails + expect_str("log[3] msg",    svnae_repos_log_msg(lg, 3),    "drop license")
-    svnae_repos_log_free(lg)
+    lg = repos_log(repo)
+    fails = fails + expect_int("log count", repos_log_count(lg), 4)  // 0..3
+    fails = fails + expect_int("log[0] rev", repos_log_rev(lg, 0), 0)
+    fails = fails + expect_str("log[0] author", repos_log_author(lg, 0), "(init)")
+    fails = fails + expect_str("log[1] author", repos_log_author(lg, 1), "alice")
+    fails = fails + expect_str("log[1] msg",    repos_log_msg(lg, 1),    "first commit")
+    fails = fails + expect_str("log[2] author", repos_log_author(lg, 2), "bob")
+    fails = fails + expect_str("log[2] msg",    repos_log_msg(lg, 2),    "answer to everything")
+    fails = fails + expect_str("log[3] author", repos_log_author(lg, 3), "alice")
+    fails = fails + expect_str("log[3] msg",    repos_log_msg(lg, 3),    "drop license")
+    repos_log_free(lg)
 
     // --- cat ---
-    c = svnae_repos_cat(repo, 1, "README")
+    c = repos_cat(repo, 1, "README")
     fails = fails + expect_str("cat r1 README", c, "Hello\n")
-    svnae_rep_free(c)
+    rep_free(c)
 
-    c = svnae_repos_cat(repo, 1, "src/main.c")
+    c = repos_cat(repo, 1, "src/main.c")
     fails = fails + expect_str("cat r1 src/main.c", c, "int main() { return 0; }\n")
-    svnae_rep_free(c)
+    rep_free(c)
 
-    c = svnae_repos_cat(repo, 2, "src/main.c")
+    c = repos_cat(repo, 2, "src/main.c")
     fails = fails + expect_str("cat r2 src/main.c", c, "int main() { return 42; }\n")
-    svnae_rep_free(c)
+    rep_free(c)
 
     // r1 still has the old content (immutability).
-    c = svnae_repos_cat(repo, 1, "src/main.c")
+    c = repos_cat(repo, 1, "src/main.c")
     fails = fails + expect_str("cat r1 src/main.c (still old)", c, "int main() { return 0; }\n")
-    svnae_rep_free(c)
+    rep_free(c)
 
     // r3 has no LICENSE.
-    c = svnae_repos_cat(repo, 3, "LICENSE")
+    c = repos_cat(repo, 3, "LICENSE")
     if c != 0 {
         fails = fails + 1
         println("FAIL cat r3 LICENSE: expected null/missing, got something")
-        svnae_rep_free(c)
+        rep_free(c)
     } else {
         println("ok   cat r3 LICENSE (deleted)")
     }
 
     // Unknown file.
-    c = svnae_repos_cat(repo, 3, "nope")
+    c = repos_cat(repo, 3, "nope")
     if c != 0 {
         fails = fails + 1
         println("FAIL cat r3 nope: expected null")
-        svnae_rep_free(c)
+        rep_free(c)
     } else {
         println("ok   cat r3 unknown")
     }
 
     // --- list ---
     // Root at r1: README, src, LICENSE (sorted: LICENSE, README, src).
-    L = svnae_repos_list(repo, 1, "/")
-    fails = fails + expect_int("list r1 / count", svnae_repos_list_count(L), 3)
-    fails = fails + expect_str("list r1 /[0] name", svnae_repos_list_name(L, 0), "LICENSE")
-    fails = fails + expect_str("list r1 /[0] kind", svnae_repos_list_kind(L, 0), "file")
-    fails = fails + expect_str("list r1 /[1] name", svnae_repos_list_name(L, 1), "README")
-    fails = fails + expect_str("list r1 /[2] name", svnae_repos_list_name(L, 2), "src")
-    fails = fails + expect_str("list r1 /[2] kind", svnae_repos_list_kind(L, 2), "dir")
-    svnae_repos_list_free(L)
+    L = repos_list(repo, 1, "/")
+    fails = fails + expect_int("list r1 / count", repos_list_count(L), 3)
+    fails = fails + expect_str("list r1 /[0] name", repos_list_name(L, 0), "LICENSE")
+    fails = fails + expect_str("list r1 /[0] kind", repos_list_kind(L, 0), "file")
+    fails = fails + expect_str("list r1 /[1] name", repos_list_name(L, 1), "README")
+    fails = fails + expect_str("list r1 /[2] name", repos_list_name(L, 2), "src")
+    fails = fails + expect_str("list r1 /[2] kind", repos_list_kind(L, 2), "dir")
+    repos_list_free(L)
 
-    // Root at r3: LICENSE removed → README, src.
-    L = svnae_repos_list(repo, 3, "/")
-    fails = fails + expect_int("list r3 / count", svnae_repos_list_count(L), 2)
-    fails = fails + expect_str("list r3 /[0] name", svnae_repos_list_name(L, 0), "README")
-    fails = fails + expect_str("list r3 /[1] name", svnae_repos_list_name(L, 1), "src")
-    svnae_repos_list_free(L)
+    // Root at r3: LICENSE removed → README, src. Cover both kinds so a
+    // dir/file mis-encoding in list_packed.ae trips two assertions, not
+    // just the one at r1 — caught a "dir"/"d" mismatch in round 60.
+    L = repos_list(repo, 3, "/")
+    fails = fails + expect_int("list r3 / count", repos_list_count(L), 2)
+    fails = fails + expect_str("list r3 /[0] name", repos_list_name(L, 0), "README")
+    fails = fails + expect_str("list r3 /[0] kind", repos_list_kind(L, 0), "file")
+    fails = fails + expect_str("list r3 /[1] name", repos_list_name(L, 1), "src")
+    fails = fails + expect_str("list r3 /[1] kind", repos_list_kind(L, 1), "dir")
+    repos_list_free(L)
 
     // Subdir listing.
-    L = svnae_repos_list(repo, 2, "src")
-    fails = fails + expect_int("list r2 src count", svnae_repos_list_count(L), 1)
-    fails = fails + expect_str("list r2 src[0] name", svnae_repos_list_name(L, 0), "main.c")
-    fails = fails + expect_str("list r2 src[0] kind", svnae_repos_list_kind(L, 0), "file")
-    svnae_repos_list_free(L)
+    L = repos_list(repo, 2, "src")
+    fails = fails + expect_int("list r2 src count", repos_list_count(L), 1)
+    fails = fails + expect_str("list r2 src[0] name", repos_list_name(L, 0), "main.c")
+    fails = fails + expect_str("list r2 src[0] kind", repos_list_kind(L, 0), "file")
+    repos_list_free(L)
 
     // list on a file -> null.
-    L = svnae_repos_list(repo, 1, "README")
+    L = repos_list(repo, 1, "README")
     if L != 0 {
         fails = fails + 1
         println("FAIL list on a file: expected null")
-        svnae_repos_list_free(L)
+        repos_list_free(L)
     } else {
         println("ok   list on a file is null")
     }
 
     // --- info ---
-    I = svnae_repos_info_rev(repo, 2)
-    fails = fails + expect_int("info r2 rev",    svnae_repos_info_rev_num(I), 2)
-    fails = fails + expect_str("info r2 author", svnae_repos_info_author(I),  "bob")
-    fails = fails + expect_str("info r2 msg",    svnae_repos_info_msg(I),     "answer to everything")
+    I = repos_info_rev(repo, 2)
+    fails = fails + expect_int("info r2 rev",    repos_info_rev_num(I), 2)
+    fails = fails + expect_str("info r2 author", repos_info_author(I),  "bob")
+    fails = fails + expect_str("info r2 msg",    repos_info_msg(I),     "answer to everything")
     // Date should be a non-empty ISO-8601 timestamp; we don't pin the value.
-    dt = svnae_repos_info_date(I)
+    dt = repos_info_date(I)
     if string.length(dt) < 10 {
         fails = fails + 1
         println("FAIL info r2 date: too short: [${dt}]")
     } else {
         println("ok   info r2 date: ${dt}")
     }
-    svnae_repos_info_free(I)
+    repos_info_free(I)
 
     rmtree(repo)
 

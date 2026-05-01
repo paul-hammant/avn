@@ -1,12 +1,25 @@
 # Regeneration recipe for Aether-as-library C sources under ae/svnadmin/.
 
-AETHERC ?= $(HOME)/scm/aether/build/aetherc
+AETHERC ?= $(abspath $(dir $(lastword $(MAKEFILE_LIST))))/../../.aether_binaries/build/aetherc
 
-GENERATED := dump_generated.c
+GENERATED := dump_generated.c admin_db_generated.c create_generated.c dump_load_generated.c
 
 all: $(GENERATED)
 
 dump_generated.c: dump.ae
 	$(AETHERC) --emit=lib $< $@
+
+# admin_db.ae imports contrib.sqlite — invoke from project root so
+# the resolver finds the contrib symlink.
+admin_db_generated.c: admin_db.ae
+	cd ../.. && $(AETHERC) --emit=lib ae/svnadmin/admin_db.ae ae/svnadmin/admin_db_generated.c
+
+# create.ae uses std.os.now_utc_iso8601 for the genesis-rev date.
+create_generated.c: create.ae
+	$(AETHERC) --emit=lib --with=os $< $@
+
+# dump_load.ae imports std.io for the full fd surface (Round 188).
+dump_load_generated.c: dump_load.ae
+	$(AETHERC) --emit=lib --with=fs $< $@
 
 .PHONY: all

@@ -24,26 +24,21 @@
 
 import std.string
 
-extern aether_load_rev_blob_field(repo: string, rev: int, key: string) -> string
-extern svnae_rep_read_blob(repo: string, sha: string) -> string
-extern svnae_rep_free(body: string)
-extern aether_paths_index_ancestor_shas(body: string, target: string) -> string
-extern aether_acl_decide(body: string, user: string, want_write: int) -> int
+extern load_rev_blob_field(repo: string, rev: int, key: string) -> string
+extern rep_read_blob(repo: string, sha: string) -> string
+extern rep_free(body: string)
+extern paths_index_ancestor_shas(body: string, target: string) -> string
+extern acl_decide(body: string, user: string, want_write: int) -> int
 
 export acl_allows_mode(repo: string, rev: int, user: string,
                         target_path: string, want_write: int) -> int {
-    return acl_allows_mode_impl(repo, rev, user, target_path, want_write)
-}
-
-acl_allows_mode_impl(repo: string, rev: int, user: string,
-                      target_path: string, want_write: int) -> int {
-    acl_root = aether_load_rev_blob_field(repo, rev, "acl")
+    acl_root = load_rev_blob_field(repo, rev, "acl")
     if string.length(acl_root) == 0 { return 1 }
 
-    paths_body = svnae_rep_read_blob(repo, acl_root)
+    paths_body = rep_read_blob(repo, acl_root)
     if string.length(paths_body) == 0 { return 1 }
 
-    shas = aether_paths_index_ancestor_shas(paths_body, target_path)
+    shas = paths_index_ancestor_shas(paths_body, target_path)
     shas = string.copy(shas)   // paths_body frees below
 
     // Walk newline-separated shas in order. First definite decision wins.
@@ -64,10 +59,10 @@ acl_allows_mode_impl(repo: string, rev: int, user: string,
             if slen > 0 {
                 if decided == 0 {
                     sha = string.substring(shas, line_start, i)
-                    rules = svnae_rep_read_blob(repo, sha)
+                    rules = rep_read_blob(repo, sha)
                     if string.length(rules) > 0 {
-                        d = aether_acl_decide(rules, user, want_write)
-                        svnae_rep_free(rules)
+                        d = acl_decide(rules, user, want_write)
+                        rep_free(rules)
                         if d == 0 { result = 0; decided = 1 }
                         if d == 1 { result = 1; decided = 1 }
                     }
@@ -77,9 +72,10 @@ acl_allows_mode_impl(repo: string, rev: int, user: string,
         }
         i = i + 1
     }
-    svnae_rep_free(paths_body)
+    rep_free(paths_body)
     return result
 }
+
 
 main() {
     println("ae/svnserver/acl_mode.ae is a library; not meant to run standalone")
