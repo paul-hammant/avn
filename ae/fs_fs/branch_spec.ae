@@ -203,7 +203,7 @@ branch_pad2hex(n: int) -> string {
 // shape would be nicer but crossing the FFI with an empty AetherString
 // from C requires an unwrap helper we can't rely on in every caller;
 // -1 on failure is enough — the caller aborts the commit anyway.
-export write_rev_pointer_set(repo: string, branch: string, next_rev: int,
+export rev_pointer_write(repo: string, branch: string, next_rev: int,
                               rev_sha: string) -> int {
     if string.length(repo) == 0 { return -1 }
     if string.length(branch) == 0 { return -1 }

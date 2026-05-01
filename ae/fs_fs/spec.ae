@@ -84,11 +84,6 @@ path_matches_glob(path: string, glob: string) {
     return 0
 }
 
-// Exported entry for the per-glob loop in ae/fs_fs/commit_shim.c.
-export spec_path_matches_glob(path: string, glob: string) {
-    return path_matches_glob(path, glob)
-}
-
 // Given newline-separated globs in `specs_joined`, does `path` match
 // ANY of them? Returns 1 on match, 0 on no match.
 //
