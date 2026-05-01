@@ -82,7 +82,7 @@ extern commit_finalise(repo: string, txn: ptr, branch: string,
 // bumping up against a path-list length limit; adding another
 // _generated.c would truncate the link argv.
 extern rep_write_blob(repo: string, data: string, length: int) -> string
-extern paths_index_sort_by_path(body: string) -> string
+extern paths_index_sort(body: string) -> string
 
 export commit_from_body(req: ptr, res: ptr, repo: string) -> int {
     body_len = http.request_body_length(req)
@@ -520,7 +520,7 @@ build_acl_blob_joined(repo: string, rules_joined: string) -> string {
 
 // Build "<sha> <path>\n" sorted by path, write to rep store. Shared
 // shape for paths-props and paths-acl; sort delegated to
-// paths_index_sort_by_path (ae/fs_fs/format_line.ae).
+// paths_index_sort (ae/fs_fs/format_line.ae).
 build_paths_index_blob(repo: string, paths_joined: string, shas_joined: string) -> string {
     np = count_lines(paths_joined)
     ns = count_lines(shas_joined)
@@ -539,7 +539,7 @@ build_paths_index_blob(repo: string, paths_joined: string, shas_joined: string) 
         i = i + 1
     }
 
-    sorted = paths_index_sort_by_path(body)
+    sorted = paths_index_sort(body)
     return rep_write_blob(repo, sorted, string.length(sorted))
 }
 

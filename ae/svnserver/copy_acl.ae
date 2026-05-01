@@ -18,7 +18,7 @@
 // entry under `to_path`. This helper takes the existing paths-acl blob
 // body and returns a new body that preserves all original entries plus
 // the rebased ones. Order is preserved; the caller feeds the result to
-// paths_index_sort_by_path if they want sorted output.
+// paths_index_sort if they want sorted output.
 //
 // The body is the line-oriented "<sha> <path>\n" shape.
 
@@ -30,7 +30,7 @@ extern load_rev_blob_field(repo: string, rev: int, key: string) -> string
 extern rep_read_blob(repo: string, sha: string) -> string
 extern rep_free(body: string)
 extern rep_write_blob(repo: string, data: string, len: int) -> string
-extern paths_index_sort_by_path(body: string) -> string
+extern paths_index_sort(body: string) -> string
 
 // Returns the augmented body. Empty input → empty output (caller keeps
 // the "inherit previous" default).
@@ -126,7 +126,7 @@ export auto_follow_copy_acl(repo: string, base_rev: int,
     rep_free(body)
     if string.length(augmented) == 0 { return "" }
 
-    sorted = paths_index_sort_by_path(augmented)
+    sorted = paths_index_sort(augmented)
     return rep_write_blob(repo, sorted, string.length(sorted))
 }
 

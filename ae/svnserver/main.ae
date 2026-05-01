@@ -30,7 +30,7 @@ extern aether_args_get(index: int) -> string
 // --- repos shim externs our handler code calls back into ------------------
 
 extern svnserver_register_repo(name: string, path: string)
-extern svnserver_set_superuser_token(token: string)
+extern svnserver_set_super_token(token: string)
 
 // The Aether dispatcher is exported under a stable C symbol via
 // @c_callback in dispatch.ae; we declare it here as a plain extern
@@ -67,7 +67,7 @@ main() {
         a = aether_args_get(i)
         if string.equals(a, "--superuser-token") == 1 {
             if i + 1 < argc {
-                svnserver_set_superuser_token(aether_args_get(i + 1))
+                svnserver_set_super_token(aether_args_get(i + 1))
             }
         }
         i = i + 1

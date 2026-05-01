@@ -42,7 +42,7 @@ extern parse_tagged_int(line: string, prefix: string, fallback: int) -> int
 extern tagged_rest(line: string, prefix: string) -> string
 
 // Rep cache enumeration (ae/svnadmin/admin_db.ae).
-extern admin_db_list_reps_packed(repo: string) -> string
+extern admin_reps_packed(repo: string) -> string
 extern admin_reps_count(packed: string) -> int
 extern admin_reps_sha_at(packed: string, i: int) -> string
 extern admin_reps_size_at(packed: string, i: int) -> int
@@ -101,7 +101,7 @@ export svnadmin_dump(repo: string, out_fd: int) -> int {
     head = repos_head_rev(repo)
     if head < 0 { return 0 - 1 }
 
-    reps_packed = admin_db_list_reps_packed(repo)
+    reps_packed = admin_reps_packed(repo)
     if string.length(reps_packed) == 0 { return 0 - 1 }
     n_reps = admin_reps_count(reps_packed)
 

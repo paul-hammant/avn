@@ -24,7 +24,7 @@ import std.string
 extern ra_copy_build_body(base_rev: int, from_path: string,
                                   to_path: string, author: string,
                                   logmsg: string) -> string
-extern ra_branch_create_build_body(base: string,
+extern ra_branch_create_body(base: string,
                                            includes_joined: string) -> string
 
 // URL builders (ae/client/urls.ae).
@@ -59,7 +59,7 @@ export ra_branch_create(base_url: string, repo_name: string,
                                includes_joined: string) -> int {
     inc = includes_joined
     if string.length(inc) == 0 { inc = "" }
-    json = ra_branch_create_build_body(base, inc)
+    json = ra_branch_create_body(base, inc)
     url = url_branches_create(base_url, repo_name, name)
     return post_for_rev(url, json, 201)
 }

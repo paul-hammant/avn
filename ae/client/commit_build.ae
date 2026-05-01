@@ -315,7 +315,7 @@ export ra_copy_build_body(base_rev: int, from_path: string, to_path: string,
 // Build the /branches/<NAME>/create POST body:
 //   { "base": "<sha-or-branch>", "include": ["glob", ...] }
 // `includes_joined` is a \n-separated list (empty lines skipped).
-export ra_branch_create_build_body(base: string, includes_joined: string) -> string {
+export ra_branch_create_body(base: string, includes_joined: string) -> string {
     body = json_create_object()
     json.object_set(body, "base", json_create_string(base))
 

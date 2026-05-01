@@ -159,7 +159,7 @@ export rev_blob_body(root: string, branch: string, props: string, acl: string,
 //
 // Input / output are newline-separated. Blank/malformed lines dropped.
 // O(n²) insertion sort — n is small (touched paths per commit).
-export paths_index_sort_by_path(body: string) -> string {
+export paths_index_sort(body: string) -> string {
     // Split into lines.
     n = string.length(body)
     if n == 0 { return "" }
