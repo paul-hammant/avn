@@ -9,3 +9,6 @@ ae/**/*_generated.c
 # Populated by ./sync-aether-deps.sh from $AETHER_HOME. Re-run that
 # script when you bump Aether — never hand-edit; gets wiped on sync.
 .aether_binaries/
+
+# aetherBuild modules
+.aeb/

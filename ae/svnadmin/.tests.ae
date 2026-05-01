@@ -1,0 +1,7 @@
+import build
+import bash
+
+main() {
+    b = build.start()
+    bash.test(b)
+}
