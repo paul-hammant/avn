@@ -1,0 +1,10 @@
+import build
+import aether
+
+main() {
+    b = build.start()
+    aether.program(b) {
+        aether.source("test_client.ae")
+        aether.output("test_client")
+    }
+}
