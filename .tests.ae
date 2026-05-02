@@ -31,8 +31,9 @@ main() {
     build.dep(b, "ae/svn/.tests-verify.ae")
     build.dep(b, "ae/svn/.tests-verify_secondaries.ae")
 
-    // ae/wc — test_switch in .tests.ae plus 16 SDK-fixture tests.
-    build.dep(b, "ae/wc/.tests.ae")
+    // ae/wc — all 17 tests on SDK fixtures (test_switch's stage-1
+    // server is fixture-managed; stage 2 is inline in the script).
+    build.dep(b, "ae/wc/.tests-switch.ae")
     build.dep(b, "ae/wc/.tests-branch.ae")
     build.dep(b, "ae/wc/.tests-checkout.ae")
     build.dep(b, "ae/wc/.tests-cleanup.ae")

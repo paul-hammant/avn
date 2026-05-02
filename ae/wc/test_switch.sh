@@ -13,15 +13,13 @@
 
 source "$(dirname "$0")/../../tests/lib.sh"
 
-PORT="${PORT:-9480}"
-REPO=/tmp/svnae_test_sw_repo
+# Stage 1 fixture: primary repo + server. Stage 2 (alternate repo
+# on PORT+1) is managed inline by the test below.
+PORT="$test_sw_PORT"
+REPO="$test_sw_REPO"
 WC=/tmp/svnae_test_sw_wc
-
 URL="http://127.0.0.1:$PORT/demo"
-
-rm -rf "$REPO" "$WC"
-tlib_seed "$REPO"
-tlib_start_server "$PORT" "$REPO"
+rm -rf "$WC"
 
 # --- Build a second repo named 'alt' on the same server, used as the
 #     "branch" to switch to. The seeder only knows one layout, so we'll
@@ -113,8 +111,9 @@ tlib_check "3-way merge kept local" "1" "$has_local"
 
 cd /
 
-kill "$SRV" "$SRV2" 2>/dev/null || true
-wait "$SRV" "$SRV2" 2>/dev/null || true
-rm -rf "$REPO" "$REPO2" "$WC"
+# Stage 2 server (the fixture handles stage 1 via post_command).
+kill "$SRV2" 2>/dev/null || true
+wait "$SRV2" 2>/dev/null || true
+rm -rf "$REPO2" "$WC"
 
 tlib_summary "test_wc_switch"
