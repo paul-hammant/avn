@@ -1,8 +1,53 @@
 # TODO
 
 Outstanding work on the svn-aether port. Prioritised by leverage.
-Tests are 32/32 green at HEAD; 100% Aether (zero hand-written C);
-naming sweep finished through Round 206.
+Tests are 32/32 green at HEAD (bash integration suite) plus 8/8
+Aether-native unit tests; 100% Aether (zero hand-written C); naming
+sweep finished through Round 206.
+
+## Real failures surfaced by Round 225
+
+Five `test_*.ae` programs were declared as `[[bin]]` in aether.toml
+but never actually run. When wired into the test suite via
+`aether.program_test(b)`, they reveal real assertion failures.
+The .ae sources are still in the tree as scaffolding; the
+`.tests-<tag>.ae` wrappers are NOT in the aggregator (would break
+the green build). Each needs its own debugging round.
+
+### F1. ae/delta/test_svndiff.ae — 6 cases failing
+**Symptom**: `length 1 != N` mismatches across multiple svndiff
+encode shapes (target self-copy RLE, word replace, varint length).
+**Hypothesis**: encoder output buffer length is reported as 1
+when something else is expected — possibly TLS buffer accessor
+bug, or test using stale return contract.
+
+### F2. ae/delta/test_xdelta.ae — multiple cases
+**Symptom**: same shape (`length 1 != N`).
+**Hypothesis**: shares the same length-accessor as F1.
+
+### F3. ae/fs_fs/test_repo.ae — `read_blob` failures
+**Symptom**: `read_blob big length: got 0, want 10000` and
+content mismatches.
+**Hypothesis**: blob read returns empty for large blobs.
+Could be related to F1/F2 if blob length accessor regressed.
+
+### F4. ae/fs_fs/test_revisions.ae — file-content mismatches
+**Symptom**: `r1 README:` fails (left empty), same for main.c
+and notes.txt.
+**Hypothesis**: read path issue — possibly the same
+length-accessor or rev-blob seeding contract broke.
+
+### F5. ae/repos/test_repos.ae — at least 2 cases
+**Symptom**: `cat r3 LICENSE: expected null/missing, got something`
+— pre-r3 file should not exist, but does.
+**Hypothesis**: rev resolution returns the wrong content for
+deleted-in-rev paths.
+
+To debug: pick one (F1 is the smallest), run
+`aeb ae/delta/.tests-svndiff.ae` (need to recreate the file —
+it was deleted in Round 225), instrument the test, find the
+length-accessor regression. Each is probably 30-60 lines of
+investigation.
 
 ## Tests
 
