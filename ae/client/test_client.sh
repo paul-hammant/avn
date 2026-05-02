@@ -23,12 +23,13 @@
 # via env vars if running outside aeb (e.g. interactive bash).
 set -e
 cd "$(dirname "$0")/../.."
+ROOT="$(pwd)"
 
 PORT="${PORT:-9320}"
 REPO=/tmp/svnae_test_ra_repo
-SERVER_BIN="${SERVER_BIN:-target/ae/svnserver/bin/aether-svnserver}"
-SEED_BIN="${SEED_BIN:-target/ae/svnserver/bin/svnae-seed}"
-CLIENT_BIN="${CLIENT_BIN:-target/ae/client/bin/test_client}"
+SERVER_BIN="${SERVER_BIN:-$ROOT/target/ae/svnserver/bin/aether-svnserver}"
+SEED_BIN="${SEED_BIN:-$ROOT/target/ae/svnserver/bin/svnae-seed}"
+CLIENT_BIN="${CLIENT_BIN:-$ROOT/target/ae/client/bin/test_client}"
 
 trap 'pkill -f "${SERVER_BIN} demo ${REPO} ${PORT}" 2>/dev/null || true' EXIT
 

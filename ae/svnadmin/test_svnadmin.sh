@@ -20,15 +20,15 @@
 # same file contents).
 set -e
 cd "$(dirname "$0")/../.."
+ROOT="$(pwd)"
 
-AE="$(cd "$(dirname "$0")/../.." && pwd)/.aether_binaries/build/ae"
 REPO1=/tmp/svnae_test_adm_repo1
 REPO2=/tmp/svnae_test_adm_repo2
 DUMP=/tmp/svnae_test_adm.dump
-SEED_BIN=/tmp/svnae_test_adm_seed
-ADMIN_BIN=/tmp/svnae_test_adm_admin
-SERVER_BIN=/tmp/svnae_test_adm_server
-SVN_BIN=/tmp/svnae_test_adm_svn
+SEED_BIN="${SEED_BIN:-$ROOT/target/ae/svnserver/bin/svnae-seed}"
+ADMIN_BIN="${ADMIN_BIN:-$ROOT/target/ae/svnadmin/bin/svnadmin}"
+SERVER_BIN="${SERVER_BIN:-$ROOT/target/ae/svnserver/bin/aether-svnserver}"
+SVN_BIN="${SVN_BIN:-$ROOT/target/ae/svn/bin/svn}"
 PORT=9430
 
 URL1="http://127.0.0.1:$PORT/r1"
@@ -36,13 +36,6 @@ URL2="http://127.0.0.1:$((PORT+1))/r2"
 
 trap 'pkill -f "${SERVER_BIN} .* ${PORT}" 2>/dev/null || true
       pkill -f "${SERVER_BIN} .* $((PORT+1))" 2>/dev/null || true' EXIT
-
-echo "[*] Build..."
-./regen.sh >/dev/null
-"$AE" build ae/svnserver/seed.ae -o "$SEED_BIN"   >/dev/null 2>&1
-"$AE" build ae/svnadmin/main.ae  -o "$ADMIN_BIN"  >/dev/null 2>&1
-"$AE" build ae/svnserver/main.ae -o "$SERVER_BIN" >/dev/null 2>&1
-"$AE" build ae/svn/main.ae       -o "$SVN_BIN"    >/dev/null 2>&1
 
 rm -rf "$REPO1" "$REPO2" "$DUMP"
 
