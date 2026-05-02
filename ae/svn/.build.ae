@@ -7,11 +7,11 @@ main() {
     aether.program(b) {
         source("main.ae")
         output("svn")
+        link_flag("-laether_sqlite")
         link_flag("-lsqlite3")
         link_flag("-lz")
         link_flag("-lssl")
         link_flag("-lcrypto")
-        extra_source("../../contrib/sqlite/aether_sqlite.c")
         regen("../../ae/client/accessors.ae")
         regen("../../ae/client/http_client.ae")
         regen("../../ae/client/verify.ae")

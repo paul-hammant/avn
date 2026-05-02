@@ -9,6 +9,7 @@ main() {
     build.dep(b, "ae/svn")
     build.dep(b, "ae/svnadmin")
     build.dep(b, "ae/svnserver")
+    build.dep(b, "ae/svnserver/.build-seed.ae")
     bash.test(b) {
         svn_server_with_token("test_branch_create", "9665", "b82a-token")
         script("test_branch_create.sh")

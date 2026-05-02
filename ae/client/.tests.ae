@@ -8,6 +8,7 @@ main() {
     b = build.start()
     build.dep(b, "ae/client")
     build.dep(b, "ae/svnserver")
+    build.dep(b, "ae/svnserver/.build-seed.ae")
     bash.test(b) {
         svn_server("test_client", "9320")
         script("test_client.sh")

@@ -9,6 +9,7 @@ main() {
     build.dep(b, "ae/svn")
     build.dep(b, "ae/svnadmin")
     build.dep(b, "ae/svnserver")
+    build.dep(b, "ae/svnserver/.build-seed.ae")
     bash.test(b) {
         svn_server_with_token("test_acl_cp_follow", "9625", "cpacl-token")
         script("test_acl_cp_follow.sh")

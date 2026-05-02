@@ -55,12 +55,12 @@ diverge freely on plumbing where doing so paid off.
   shipped SDKs (build, aether, bash, …). The port-local svnae SDK
   is tracked in-tree; it lives at `.aeb/lib/svnae/` (gitignore is
   set up to exclude the symlinked SDKs but track `svnae`).
-- **Aeocha** (Aether-native test framework): `~/scm/aether/contrib/aeocha/`.
-  Not used for the existing 32 integration tests (those are bash
-  scripts driving compiled binaries end-to-end), but the natural
-  fit for new pure-Aether unit tests if/when we add them. Symlinked
-  at `contrib/aeocha` for `import contrib.aeocha`. See README and
-  `example_self_test.ae` for the `describe`/`it` shape.
+- **Aeocha** (Aether-native test framework): installed by Aether to
+  `~/.local/share/aether/contrib/aeocha/`. Not used for the existing
+  32 integration tests (those are bash scripts driving compiled
+  binaries end-to-end), but the natural fit for new pure-Aether
+  unit tests if/when we add them. `import contrib.aeocha` resolves
+  via Aether's contrib search path.
 
 ## Build & test
 
@@ -122,20 +122,20 @@ inline. Don't migrate them.
 
 ### Adding a new Aether-native unit test (Aeocha)
 
-Untrodden — we haven't done this yet. Aeocha is `import`-clean and
-the contrib symlink is in place. The Aeocha README's
+Untrodden — we haven't done this yet. Aeocha is installed at
+`~/.local/share/aether/contrib/aeocha/` and `import contrib.aeocha`
+resolves via Aether's stdlib search path. The Aeocha README's
 `example_self_test.ae` is the model: `aeocha.init()`, then
 `describe`/`it` blocks with `assert_eq`/`assert_str_eq`.
 Wire it via `aether.program_test(b)` in a `.tests-<X>.ae`.
 
 ## What stays in C
 
-`contrib/sqlite/aether_sqlite.c` — the SQLite veneer. Tracked
-upstream at `~/scm/aether/contrib/sqlite/`; symlinked here. Not
-something we maintain.
-
-Everything else is Aether (compiled to C by aetherc, but the C is
-generated and gitignored).
+Nothing in our tree. The SQLite veneer (`aether_sqlite.c`) is
+provided by Aether's prebuilt `libaether_sqlite.a` at
+`$PREFIX/lib/aether/`; we link it via `link_flag("-laether_sqlite")`
+in each `.build.ae`. Our own `.ae` source compiles to C via
+`aetherc`, but that C is generated and gitignored.
 
 ## Aether specifics that bite
 
