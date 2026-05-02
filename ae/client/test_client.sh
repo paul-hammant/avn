@@ -18,23 +18,19 @@
 # End-to-end test for ae/ra: seeds a repo, starts aether-svnserver,
 # runs the Aether RA client binary, verifies it completed OK, kills
 # the server.
+#
+# Binaries are pre-built by aeb via .build.ae files; override paths
+# via env vars if running outside aeb (e.g. interactive bash).
 set -e
 cd "$(dirname "$0")/../.."
 
-AE="$(cd "$(dirname "$0")/../.." && pwd)/.aether_binaries/build/ae"
 PORT="${PORT:-9320}"
 REPO=/tmp/svnae_test_ra_repo
-SERVER_BIN=/tmp/svnae_test_ra_server
-SEED_BIN=/tmp/svnae_test_ra_seed
-CLIENT_BIN=/tmp/svnae_test_ra_client
+SERVER_BIN="${SERVER_BIN:-target/ae/svnserver/bin/aether-svnserver}"
+SEED_BIN="${SEED_BIN:-target/ae/svnserver/bin/svnae-seed}"
+CLIENT_BIN="${CLIENT_BIN:-target/ae/client/bin/test_client}"
 
 trap 'pkill -f "${SERVER_BIN} demo ${REPO} ${PORT}" 2>/dev/null || true' EXIT
-
-echo "[*] Building server + seeder + RA client..."
-./regen.sh >/dev/null
-"$AE" build ae/svnserver/main.ae -o "$SERVER_BIN" >/dev/null 2>&1
-"$AE" build ae/svnserver/seed.ae -o "$SEED_BIN"  >/dev/null 2>&1
-"$AE" build ae/client/test_client.ae     -o "$CLIENT_BIN" >/dev/null 2>&1
 
 echo "[*] Seeding..."
 rm -rf "$REPO"

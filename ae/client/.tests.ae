@@ -1,8 +1,11 @@
 import build
 import bash
+import bash (jobs)
 
 main() {
     b = build.start()
+    build.dep(b, "ae/client")
+    build.dep(b, "ae/svnserver")
     bash.test(b) {
         jobs(8)
     }

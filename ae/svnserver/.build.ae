@@ -8,4 +8,8 @@ main() {
         source("main.ae")
         output("aether-svnserver")
     }
+    aether.program(b) {
+        source("seed.ae")
+        output("svnae-seed")
+    }
 }

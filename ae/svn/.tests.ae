@@ -1,5 +1,6 @@
 import build
 import bash
+import bash (jobs)
 
 main() {
     b = build.start()
