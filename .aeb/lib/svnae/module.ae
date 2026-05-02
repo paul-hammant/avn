@@ -30,6 +30,25 @@
 //   $DEMO_FIXTURE_REPO=/tmp/svnae_aeb_demo_fixture_repo
 //   $DEMO_FIXTURE_PID=<spawned pid>
 //   $DEMO_FIXTURE_LOG=/tmp/svnae_srv_demo_fixture_9300.log
+//
+// One-off scenarios that don't fit a setter can call pre_command /
+// post_command directly with a heredoc string. Aether heredoc is
+// literal-only (no ${...} interpolation), so the shell sees the
+// body verbatim — bash variable expansion happens at run time:
+//
+//     bash.test(b) {
+//         pre_command(<<SH
+//     source tests/lib.sh
+//     tlib_seed_named primary  /tmp/repo_a
+//     tlib_seed_named secondary /tmp/repo_b
+//     tlib_fixture_server primary   9430
+//     tlib_fixture_server secondary 9431
+//     SH
+//         )
+//         script("test_two_servers.sh")
+//     }
+//
+// Use that shape when none of the setters below fit.
 
 import build
 import bash
