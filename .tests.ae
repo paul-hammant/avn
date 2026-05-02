@@ -1,0 +1,50 @@
+// Repo-root aggregator: every .tests*.ae in the tree as an explicit
+// dep. Run via `aeb` (no arg) for the full 32-test suite, or via
+// `aeb .tests.ae` for the same suite in target mode.
+//
+// Without this file, target mode (`aeb` with a directory arg) only
+// resolves to the canonical .tests.ae in that dir; sibling
+// .tests-<tag>.ae files don't get pulled in. This aggregator wires
+// every leaf .tests file together so target-mode discovery works.
+
+import build
+
+main() {
+    b = build.start()
+
+    build.dep(b, "ae/client/.tests.ae")
+    build.dep(b, "ae/svnadmin/.tests.ae")
+
+    // ae/svnserver — split into two .tests-*.ae files (server, put).
+    build.dep(b, "ae/svnserver/.tests-server.ae")
+    build.dep(b, "ae/svnserver/.tests-put.ae")
+
+    // ae/svn — 4 still-inline tests in .tests.ae plus 6 SDK-fixture
+    // tests in .tests-<tag>.ae.
+    build.dep(b, "ae/svn/.tests.ae")
+    build.dep(b, "ae/svn/.tests-acl.ae")
+    build.dep(b, "ae/svn/.tests-acl_cp_follow.ae")
+    build.dep(b, "ae/svn/.tests-acl_write.ae")
+    build.dep(b, "ae/svn/.tests-blame.ae")
+    build.dep(b, "ae/svn/.tests-branch_create.ae")
+    build.dep(b, "ae/svn/.tests-branch_enforce.ae")
+
+    // ae/wc — test_switch in .tests.ae plus 16 SDK-fixture tests.
+    build.dep(b, "ae/wc/.tests.ae")
+    build.dep(b, "ae/wc/.tests-branch.ae")
+    build.dep(b, "ae/wc/.tests-checkout.ae")
+    build.dep(b, "ae/wc/.tests-cleanup.ae")
+    build.dep(b, "ae/wc/.tests-commit.ae")
+    build.dep(b, "ae/wc/.tests-cp_mv.ae")
+    build.dep(b, "ae/wc/.tests-ignore.ae")
+    build.dep(b, "ae/wc/.tests-log_verbose.ae")
+    build.dep(b, "ae/wc/.tests-merge.ae")
+    build.dep(b, "ae/wc/.tests-mergeinfo_arith.ae")
+    build.dep(b, "ae/wc/.tests-merge_reverse.ae")
+    build.dep(b, "ae/wc/.tests-mutate.ae")
+    build.dep(b, "ae/wc/.tests-props.ae")
+    build.dep(b, "ae/wc/.tests-revert_diff.ae")
+    build.dep(b, "ae/wc/.tests-server_props.ae")
+    build.dep(b, "ae/wc/.tests-status.ae")
+    build.dep(b, "ae/wc/.tests-update.ae")
+}
