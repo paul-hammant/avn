@@ -25,23 +25,18 @@
 # We then add r4..r6 with known actions to cover A/M/D explicitly.
 set -e
 cd "$(dirname "$0")/../.."
+ROOT="$(pwd)"
 
-AE="$(cd "$(dirname "$0")/../.." && pwd)/.aether_binaries/build/ae"
 PORT="${PORT:-9500}"
 REPO=/tmp/svnae_test_logv_repo
 WC=/tmp/svnae_test_logv_wc
-SERVER_BIN=/tmp/svnae_test_logv_server
-SEED_BIN=/tmp/svnae_test_logv_seed
-SVN_BIN=/tmp/svnae_test_logv_svn
+SERVER_BIN="${SERVER_BIN:-$ROOT/target/ae/svnserver/bin/aether-svnserver}"
+SEED_BIN="${SEED_BIN:-$ROOT/target/ae/svnserver/bin/svnae-seed}"
+SVN_BIN="${SVN_BIN:-$ROOT/target/ae/svn/bin/svn}"
 
 URL="http://127.0.0.1:$PORT/demo"
 trap 'pkill -f "${SERVER_BIN} demo ${REPO} ${PORT}" 2>/dev/null || true' EXIT
 
-echo "[*] Build..."
-./regen.sh >/dev/null
-"$AE" build ae/svnserver/main.ae -o "$SERVER_BIN" >/dev/null 2>&1
-"$AE" build ae/svnserver/seed.ae -o "$SEED_BIN"   >/dev/null 2>&1
-"$AE" build ae/svn/main.ae       -o "$SVN_BIN"    >/dev/null 2>&1
 
 rm -rf "$REPO" "$WC"
 "$SEED_BIN" "$REPO" >/dev/null

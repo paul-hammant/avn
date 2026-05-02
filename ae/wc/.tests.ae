@@ -4,6 +4,8 @@ import bash (jobs)
 
 main() {
     b = build.start()
+    build.dep(b, "ae/svn")
+    build.dep(b, "ae/svnserver")
     bash.test(b) {
         jobs(8)
     }
