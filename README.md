@@ -33,45 +33,35 @@ Full phase map and feature matrix: **[PORT_STATUS.md](./PORT_STATUS.md)**.
 
 ## Quickstart
 
-Assumes `aether` is built at `~/scm/aether/build/`. Adjust via `AE=...` /
-`AETHERC=...` env vars if yours lives elsewhere.
+Build and test driven by [aetherBuild]'s `aeb`. Run `aeb --init` once to
+populate `.aeb/lib/`; everything after that is one command.
+
+[aetherBuild]: https://github.com/paul-hammant/aetherBuild
 
 ```bash
-# Build every binary. The wrapper regenerates ae/**/_generated.c first
-# (from the paired .ae sources via aetherc --emit=lib) and then invokes
-# `ae build` for each [[bin]] in aether.toml. Outputs land under /tmp/.
-./build.sh                       # all binaries
-./build.sh svn                   # just the svn CLI
+# Build every binary AND run the 32-test suite
+aeb
 
-# Create an empty repo (or seed a known test tree)
-/tmp/svnadmin create /srv/repo
-# or:
-/tmp/svnae-seed /srv/repo        # three-commit known tree
+# Build a single binary
+aeb ae/svn         # just svn — output at target/ae/svn/bin/svn
 
-# Serve it
-/tmp/aether-svnserver demo /srv/repo 8080 &
-
-# Use it
-/tmp/svn checkout http://localhost:8080/demo wc
+# Outputs land under target/ae/<dir>/bin/<name>
+target/ae/svnadmin/bin/svnadmin create /srv/repo
+target/ae/svnserver/bin/svnae-seed   /srv/repo        # three-commit known tree
+target/ae/svnserver/bin/aether-svnserver demo /srv/repo 8080 &
+target/ae/svn/bin/svn checkout http://localhost:8080/demo wc
 cd wc
 echo "hi" >> README
-/tmp/svn commit --author alice --log "tweak"
-```
-
-Run all test suites (each script calls `./regen.sh` before it builds,
-so you can run them straight from a fresh clone):
-
-```bash
-for t in ae/*/test_*.sh; do sleep 0.3; bash "$t" || break; done
+../target/ae/svn/bin/svn commit --author alice --log "tweak"
 ```
 
 ### Generated sources
 
 Some `.c` files under `ae/` are produced by `aetherc --emit=lib` from
 paired `.ae` sources (grep for `_generated.c`). They're **not checked
-into git** — `./regen.sh` rebuilds them on demand. Never hand-edit
-one; the next regen will blow your changes away. Edit the `.ae` source
-and run `./regen.sh --force`.
+into git** — the `ae build` toolchain rebuilds them on demand from the
+per-directory `Makefile.regen` files. Never hand-edit one; the next
+regen will blow your changes away. Edit the `.ae` source instead.
 
 ## What's intentionally different from reference svn
 
