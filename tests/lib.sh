@@ -32,6 +32,10 @@
 
 if [ -n "${BASH_SOURCE[1]:-}" ] && [ -f "${BASH_SOURCE[1]}" ]; then
     cd "$(dirname "${BASH_SOURCE[1]}")/../.."
+    # Sourced from a test script — fail-fast so a bad cd or failed
+    # binary launch doesn't leak files to cwd. (Pre_command from the
+    # SDK isn't a real script, so we skip this in that mode.)
+    set -e
 fi
 ROOT="$(pwd)"
 
