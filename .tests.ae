@@ -19,15 +19,17 @@ main() {
     build.dep(b, "ae/svnserver/.tests-server.ae")
     build.dep(b, "ae/svnserver/.tests-put.ae")
 
-    // ae/svn — 4 still-inline tests in .tests.ae plus 6 SDK-fixture
-    // tests in .tests-<tag>.ae.
-    build.dep(b, "ae/svn/.tests.ae")
+    // ae/svn — all 10 tests on SDK fixtures, one .tests-<tag>.ae each.
     build.dep(b, "ae/svn/.tests-acl.ae")
     build.dep(b, "ae/svn/.tests-acl_cp_follow.ae")
     build.dep(b, "ae/svn/.tests-acl_write.ae")
     build.dep(b, "ae/svn/.tests-blame.ae")
     build.dep(b, "ae/svn/.tests-branch_create.ae")
     build.dep(b, "ae/svn/.tests-branch_enforce.ae")
+    build.dep(b, "ae/svn/.tests-branches_phase81.ae")
+    build.dep(b, "ae/svn/.tests-svn.ae")
+    build.dep(b, "ae/svn/.tests-verify.ae")
+    build.dep(b, "ae/svn/.tests-verify_secondaries.ae")
 
     // ae/wc — test_switch in .tests.ae plus 16 SDK-fixture tests.
     build.dep(b, "ae/wc/.tests.ae")

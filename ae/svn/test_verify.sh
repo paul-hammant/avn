@@ -13,14 +13,12 @@
 
 source "$(dirname "$0")/../../tests/lib.sh"
 
-PORT="${PORT:-9530}"
+# Stage 1 fixture: sha1 seeded repo + server on $test_verify_PORT.
+PORT="$test_verify_PORT"
+REPO="$test_verify_REPO"
+URL="http://127.0.0.1:$PORT/demo"
 
 # --- (A) default (sha1) seeded repo — verify all revs. ---
-REPO=/tmp/svnae_verify_repo
-tlib_seed "$REPO"
-tlib_start_server "$PORT" "$REPO"
-
-URL="http://127.0.0.1:$PORT/demo"
 
 # Default (HEAD).
 out=$("$SVN_BIN" verify "$URL" 2>&1)
@@ -72,8 +70,12 @@ tlib_check "tamper detected"      "1"  "$got"
 # Restore so the server can be cleanly shut down.
 mv "$target.bak" "$target"
 
-tlib_stop_server
-rm -rf "$REPO"
+# Stop the stage-1 fixture server so stage 2 can run cleanly.
+# (post_command will kill any remaining fixture servers, but stage 2
+# binds PORT+1 which might collide with a different test's fixture
+# if we leave stage 1 holding ports.)
+kill "$test_verify_PID" 2>/dev/null || true
+wait "$test_verify_PID" 2>/dev/null || true
 
 # --- (D) sha256 repo — same verify pipeline. ---
 REPO2=/tmp/svnae_verify_repo_256

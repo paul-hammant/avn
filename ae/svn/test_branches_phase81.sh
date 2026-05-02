@@ -19,15 +19,14 @@
 
 source "$(dirname "$0")/../../tests/lib.sh"
 
-PORT="${PORT:-9660}"
-REPO=/tmp/svnae_test_b81_repo
+PORT="$test_b81_PORT"
+REPO="$test_b81_REPO"
 WC=/tmp/svnae_test_b81_wc
 
 URL="http://127.0.0.1:$PORT/demo"
+rm -rf "$WC"
 
-# --- (A) create lays down the per-branch layout. ---
-rm -rf "$REPO" "$WC"
-"$ADMIN_BIN" create "$REPO" >/dev/null
+# --- (A) create laid down the per-branch layout (fixture-created). ---
 tlib_check "branches/main/head exists"    "1" "$(test -f "$REPO/branches/main/head" && echo 1 || echo 0)"
 tlib_check "branches/main/revs dir"       "1" "$(test -d "$REPO/branches/main/revs" && echo 1 || echo 0)"
 tlib_check "branches/main/revs/00/00/000000" "1" \
@@ -41,9 +40,6 @@ tlib_check "path_rev table defined"       "1" \
     "$(echo "$sql_schema" | grep -c 'CREATE TABLE path_rev' || true)"
 
 # --- Make some commits and verify propagation. ---
-"$SERVER_BIN" demo "$REPO" "$PORT" >/tmp/svnae_test_b81_srv.log 2>&1 &
-SRV=$!
-sleep 1.2
 
 "$SVN_BIN" checkout "$URL" "$WC" >/dev/null
 cd "$WC"
@@ -116,7 +112,6 @@ tlib_check "branch URL doesn't crash CLI" "1" \
     "$(echo "$out" | grep -cE '(svn info|could not contact|no such revision|Revision:)' || true)"
 
 cd /
-tlib_stop_server
-rm -rf "$REPO" "$WC"
+rm -rf "$WC"
 
 tlib_summary "test_branches_phase81"

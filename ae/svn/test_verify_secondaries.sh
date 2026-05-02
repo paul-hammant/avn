@@ -18,24 +18,22 @@
 
 source "$(dirname "$0")/../../tests/lib.sh"
 
+# Fixture: empty repo created with --algos sha256,sha1.
+# Test owns server lifecycle (multiple restarts to corrupt rep-cache).
 PORT="${PORT:-9602}"
-REPO=/tmp/svnae_test_sec_repo
+REPO="$test_sec_REPO"
 WC=/tmp/svnae_test_sec_wc
-
 URL="http://127.0.0.1:$PORT/demo"
+rm -rf "$WC"
 
-# --- (A) Create multi-algo repo. ---
-rm -rf "$REPO" "$WC"
-"$ADMIN_BIN" create "$REPO" --algos sha256,sha1 >/dev/null
+# --- (A) Multi-algo repo (created by fixture). ---
 tlib_check "format line"          "svnae-fsfs-1 sha256,sha1"  "$(cat "$REPO/format")"
 # First rep (empty blob) should have a 64-char name.
 rep_name=$(basename "$(ls "$REPO/reps"/*/*/*.rep | head -1)" .rep)
 tlib_check "rep name length"      "64"  "${#rep_name}"
 
 # Populate with a known file so we have non-empty data to hash.
-"$SERVER_BIN" demo "$REPO" "$PORT" >/tmp/svnae_test_sec_srv.log 2>&1 &
-SRV=$!
-sleep 1.2
+tlib_start_server "$PORT" "$REPO"
 "$SVN_BIN" checkout "$URL" "$WC" >/dev/null
 cd "$WC"
 echo "hello secondary" > note.txt

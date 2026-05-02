@@ -7,19 +7,9 @@
 
 source "$(dirname "$0")/../../tests/lib.sh"
 
-PORT="${PORT:-9350}"
-REPO=/tmp/svnae_test_cli_repo
-
+PORT="$test_svn_PORT"
+REPO="$test_svn_REPO"
 URL="http://127.0.0.1:$PORT/demo"
-
-echo "[*] Seeding..."
-rm -rf "$REPO"
-"$SEED_BIN" "$REPO" >/dev/null
-
-echo "[*] Launching server :$PORT ..."
-"$SERVER_BIN" demo "$REPO" "$PORT" >/tmp/svnae_test_cli_server.log 2>&1 &
-SRV=$!
-sleep 1.5
 
 # --- info ---
 out=$("$SVN_BIN" info "$URL")
@@ -84,9 +74,6 @@ if "$SVN_BIN" unknown 2>/dev/null; then
 else
     echo "  ok   unknown subcommand exits nonzero"
 fi
-
-tlib_stop_server
-rm -rf "$REPO"
 
 if [ "$FAILS" -gt 0 ]; then
     echo ""

@@ -69,3 +69,55 @@ svn_server_with_token(_ctx: ptr, name: string, port: string, token: string) {
     pre_command(_ctx, pre)
     post_command(_ctx, "source tests/lib.sh && tlib_kill_servers")
 }
+
+// empty_repo(NAME) — declare an empty repo fixture (no seed, no server).
+// Wipes /tmp/svnae_aeb_<NAME>_repo and runs `svnadmin create` on it.
+// Exports ${NAME}_REPO for the test script. Use when the test wants
+// to inspect the create-time layout, or seed/spawn its own server.
+empty_repo(_ctx: ptr, name: string) {
+    repo = string.concat("/tmp/svnae_aeb_", string.concat(name, "_repo"))
+    pre = string.concat("source tests/lib.sh && tlib_empty_repo ",
+                        string.concat(name, string.concat(" ", repo)))
+    pre_command(_ctx, pre)
+    post_command(_ctx, string.concat("rm -rf ", repo))
+}
+
+// empty_repo_with_algos(NAME, ALGOS) — like empty_repo but the repo
+// is created with `svnadmin create --algos ALGOS`.
+empty_repo_with_algos(_ctx: ptr, name: string, algos: string) {
+    repo = string.concat("/tmp/svnae_aeb_", string.concat(name, "_repo"))
+    pre = string.concat("source tests/lib.sh && tlib_empty_repo_with_algos ",
+                        string.concat(name, string.concat(" ", string.concat(repo, string.concat(" ", algos)))))
+    pre_command(_ctx, pre)
+    post_command(_ctx, string.concat("rm -rf ", repo))
+}
+
+// empty_server(NAME, PORT) — empty_repo + server. The repo is created
+// via `svnadmin create` (not seeded with svnae-seed), then a server
+// is spawned on PORT. Same env vars as svn_server.
+empty_server(_ctx: ptr, name: string, port: string) {
+    repo = string.concat("/tmp/svnae_aeb_", string.concat(name, "_repo"))
+    pre = string.concat("source tests/lib.sh && tlib_empty_repo ",
+                        string.concat(name, string.concat(" ", repo)))
+    pre = string.concat(pre, " && tlib_fixture_server ")
+    pre = string.concat(pre, name)
+    pre = string.concat(pre, " ")
+    pre = string.concat(pre, port)
+    pre_command(_ctx, pre)
+    post_command(_ctx, "source tests/lib.sh && tlib_kill_servers")
+}
+
+// empty_server_with_algos(NAME, PORT, ALGOS) — like empty_server but
+// the repo is created with `svnadmin create --algos ALGOS`. Used for
+// secondary-hash tests (e.g. ALGOS = "sha256,sha1").
+empty_server_with_algos(_ctx: ptr, name: string, port: string, algos: string) {
+    repo = string.concat("/tmp/svnae_aeb_", string.concat(name, "_repo"))
+    pre = string.concat("source tests/lib.sh && tlib_empty_repo_with_algos ",
+                        string.concat(name, string.concat(" ", string.concat(repo, string.concat(" ", algos)))))
+    pre = string.concat(pre, " && tlib_fixture_server ")
+    pre = string.concat(pre, name)
+    pre = string.concat(pre, " ")
+    pre = string.concat(pre, port)
+    pre_command(_ctx, pre)
+    post_command(_ctx, "source tests/lib.sh && tlib_kill_servers")
+}

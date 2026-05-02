@@ -109,6 +109,26 @@ tlib_seed_named() {
     export "${name}_REPO=$repo"
 }
 
+# tlib_empty_repo NAME REPO — wipe REPO, run `svnadmin create`, export
+# ${NAME}_REPO. Used by tests that exercise create-time layout or
+# spawn their own server.
+tlib_empty_repo() {
+    local name="$1" repo="$2"
+    rm -rf "$repo"
+    "$ADMIN_BIN" create "$repo" >/dev/null
+    export "${name}_REPO=$repo"
+}
+
+# tlib_empty_repo_with_algos NAME REPO ALGOS — like tlib_empty_repo but
+# passes --algos ALGOS to svnadmin create. Used for multi-algo
+# (secondary hash) test fixtures.
+tlib_empty_repo_with_algos() {
+    local name="$1" repo="$2" algos="$3"
+    rm -rf "$repo"
+    "$ADMIN_BIN" create "$repo" --algos "$algos" >/dev/null
+    export "${name}_REPO=$repo"
+}
+
 # tlib_fixture_server NAME PORT [extra-server-args...]
 # Reads ${NAME}_REPO. Exports ${NAME}_PORT, ${NAME}_PID, ${NAME}_LOG.
 # Server is invoked as `aether-svnserver demo $repo $port $@` — URL

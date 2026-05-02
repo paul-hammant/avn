@@ -1,0 +1,19 @@
+import build
+import bash
+import bash (script, pre_command, post_command)
+import svnae
+import svnae (svn_server)
+
+main() {
+    b = build.start()
+    build.dep(b, "ae/svn")
+    build.dep(b, "ae/svnadmin")
+    build.dep(b, "ae/svnserver")
+    bash.test(b) {
+        // Stage 1 fixture: sha1 seeded repo. Stage 2 (sha256) is
+        // managed inline by the test — it spawns a 2nd server on
+        // PORT+1 after stopping the stage 1 fixture.
+        svn_server("test_verify", "9530")
+        script("test_verify.sh")
+    }
+}

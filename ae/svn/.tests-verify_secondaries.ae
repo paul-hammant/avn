@@ -1,0 +1,18 @@
+import build
+import bash
+import bash (script, pre_command, post_command)
+import svnae
+import svnae (empty_repo_with_algos)
+
+main() {
+    b = build.start()
+    build.dep(b, "ae/svn")
+    build.dep(b, "ae/svnadmin")
+    build.dep(b, "ae/svnserver")
+    bash.test(b) {
+        // Test owns server lifecycle (multiple restarts mid-test);
+        // fixture just provides a fresh sha256,sha1 repo.
+        empty_repo_with_algos("test_sec", "sha256,sha1")
+        script("test_verify_secondaries.sh")
+    }
+}
