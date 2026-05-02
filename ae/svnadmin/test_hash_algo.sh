@@ -34,7 +34,7 @@ SERVER_BIN="${SERVER_BIN:-$ROOT/target/ae/svnserver/bin/aether-svnserver}"
 SEED_BIN="${SEED_BIN:-$ROOT/target/ae/svnserver/bin/svnae-seed}"
 SVN_BIN="${SVN_BIN:-$ROOT/target/ae/svn/bin/svn}"
 
-trap 'pkill -f "${SERVER_BIN} demo" 2>/dev/null || true' EXIT
+trap 'pkill -f "${SERVER_BIN} .* ${PORT}" 2>/dev/null || true' EXIT
 
 FAILS=0
 check() {

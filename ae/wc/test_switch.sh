@@ -82,7 +82,7 @@ rm -rf "$REPO2"
 "$SERVER_BIN" demo "$REPO2" "$PORT2" >/tmp/svnae_test_sw_server2.log 2>&1 &
 SRV2=$!
 sleep 1.0
-trap 'pkill -f "${SERVER_BIN} demo" 2>/dev/null || true' EXIT
+trap 'pkill -f "${SERVER_BIN} .* ${PORT}" 2>/dev/null || true' EXIT
 
 # Differentiate repo2 from repo1: commit a change there so switching
 # actually pulls something new.

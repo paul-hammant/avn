@@ -43,7 +43,7 @@ SVN_BIN="${SVN_BIN:-$ROOT/target/ae/svn/bin/svn}"
 TOKEN="test-put-token"
 URL="http://127.0.0.1:$PORT/repos/demo"
 
-trap 'pkill -f "${SERVER_BIN} demo" 2>/dev/null || true' EXIT
+trap 'pkill -f "${SERVER_BIN} .* ${PORT}" 2>/dev/null || true' EXIT
 
 rm -rf "$REPO"
 "$SEED_BIN" "$REPO" >/dev/null

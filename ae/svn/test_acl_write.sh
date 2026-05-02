@@ -31,22 +31,17 @@
 #   (G) super-user always bypasses.
 set -e
 cd "$(dirname "$0")/../.."
+ROOT="$(pwd)"
 
-AE="$(cd "$(dirname "$0")/../.." && pwd)/.aether_binaries/build/ae"
 PORT="${PORT:-9550}"
-SERVER_BIN=/tmp/svnae_test_aclw_server
-SEED_BIN=/tmp/svnae_test_aclw_seed
-SVN_BIN=/tmp/svnae_test_aclw_svn
+SERVER_BIN="${SERVER_BIN:-$ROOT/target/ae/svnserver/bin/aether-svnserver}"
+SEED_BIN="${SEED_BIN:-$ROOT/target/ae/svnserver/bin/svnae-seed}"
+SVN_BIN="${SVN_BIN:-$ROOT/target/ae/svn/bin/svn}"
 
 TOKEN="test-super-token-7-2"
 
-trap 'pkill -f "${SERVER_BIN} demo" 2>/dev/null || true' EXIT
+trap 'pkill -f "${SERVER_BIN} .* ${PORT}" 2>/dev/null || true' EXIT
 
-echo "[*] Build..."
-./regen.sh >/dev/null
-"$AE" build ae/svnserver/main.ae -o "$SERVER_BIN" >/dev/null 2>&1
-"$AE" build ae/svnserver/seed.ae -o "$SEED_BIN"   >/dev/null 2>&1
-"$AE" build ae/svn/main.ae       -o "$SVN_BIN"    >/dev/null 2>&1
 
 REPO=/tmp/svnae_test_aclw_repo
 rm -rf "$REPO"
