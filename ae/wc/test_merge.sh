@@ -16,15 +16,13 @@
 
 source "$(dirname "$0")/../../tests/lib.sh"
 
-PORT="${PORT:-9700}"
-REPO=/tmp/svnae_test_mrg_repo
+PORT="$test_merge_PORT"
+REPO="$test_merge_REPO"
 WC=/tmp/svnae_test_mrg_wc
 
 URL="http://127.0.0.1:$PORT/demo"
 
-rm -rf "$REPO" "$WC"
-tlib_seed "$REPO"
-tlib_start_server "$PORT" "$REPO"
+rm -rf "$WC"
 
 # r4: branch src -> src-branch
 "$SVN_BIN" cp "$URL/src" "$URL/src-branch" --author alice --log "branch src" >/dev/null
@@ -100,7 +98,5 @@ out=$("$SVN_BIN" status)
 tlib_check "resolved shows M"       "1" "$(echo "$out" | grep -c '^M.*src-branch/main.c' || true)"
 
 cd /
-tlib_stop_server
-rm -rf "$REPO" "$WC"
 
 tlib_summary "test_wc_merge"

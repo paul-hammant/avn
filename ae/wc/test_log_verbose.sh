@@ -14,14 +14,12 @@
 
 source "$(dirname "$0")/../../tests/lib.sh"
 
-PORT="${PORT:-9500}"
-REPO=/tmp/svnae_test_logv_repo
+PORT="$test_log_verbose_PORT"
+REPO="$test_log_verbose_REPO"
 WC=/tmp/svnae_test_logv_wc
 
 URL="http://127.0.0.1:$PORT/demo"
-rm -rf "$REPO" "$WC"
-tlib_seed "$REPO"
-tlib_start_server "$PORT" "$REPO"
+rm -rf "$WC"
 
 # --- Build known history: r4 adds NEW, r5 modifies README, r6 deletes NEW. ---
 "$SVN_BIN" checkout "$URL" "$WC" >/dev/null
@@ -67,8 +65,5 @@ tlib_check "log -v shows D NEW"       "1" "$(echo "$out" | grep -c '^   D /NEW$'
 # Without -v, no "Changed paths:" should appear.
 out=$("$SVN_BIN" log "$URL")
 tlib_check "bare log no header"       "0" "$(echo "$out" | grep -c 'Changed paths:' || true)"
-
-tlib_stop_server
-rm -rf "$REPO" "$WC"
 
 tlib_summary "test_log_verbose"

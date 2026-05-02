@@ -7,8 +7,8 @@
 
 source "$(dirname "$0")/../../tests/lib.sh"
 
-PORT="${PORT:-9380}"
-REPO=/tmp/svnae_test_st_repo
+PORT="$test_status_PORT"
+REPO="$test_status_REPO"
 WC=/tmp/svnae_test_st_wc
 
 URL="http://127.0.0.1:$PORT/demo"
@@ -57,8 +57,5 @@ EOF
 rm "$WC/newfile"
 out=$("$SVN_BIN" status "$WC")
 tlib_check "fully-restored WC clean"   ""          "$out"
-
-tlib_stop_server
-rm -rf "$REPO" "$WC"
 
 tlib_summary "test_wc_status"

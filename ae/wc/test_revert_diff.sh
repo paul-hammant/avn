@@ -7,15 +7,13 @@
 
 source "$(dirname "$0")/../../tests/lib.sh"
 
-PORT="${PORT:-9420}"
-REPO=/tmp/svnae_test_rd_repo
+PORT="$test_revert_diff_PORT"
+REPO="$test_revert_diff_REPO"
 WC=/tmp/svnae_test_rd_wc
 
 URL="http://127.0.0.1:$PORT/demo"
 
-rm -rf "$REPO" "$WC"
-tlib_seed "$REPO"
-tlib_start_server "$PORT" "$REPO"
+rm -rf "$WC"
 
 "$SVN_BIN" checkout "$URL" "$WC" >/dev/null
 cd "$WC"
@@ -94,7 +92,5 @@ out=$("$SVN_BIN" diff)
 tlib_check "fully clean diff empty"  "" "$out"
 
 cd /
-tlib_stop_server
-rm -rf "$REPO" "$WC"
 
 tlib_summary "test_wc_revert_diff"

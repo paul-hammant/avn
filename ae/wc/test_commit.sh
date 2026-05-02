@@ -7,15 +7,13 @@
 
 source "$(dirname "$0")/../../tests/lib.sh"
 
-PORT="${PORT:-9400}"
-REPO=/tmp/svnae_test_wcc_repo
+PORT="$test_commit_PORT"
+REPO="$test_commit_REPO"
 WC=/tmp/svnae_test_wcc_wc
 
 URL="http://127.0.0.1:$PORT/demo"
 
-rm -rf "$REPO" "$WC"
-tlib_seed "$REPO"
-tlib_start_server "$PORT" "$REPO"
+rm -rf "$WC"
 
 "$SVN_BIN" checkout "$URL" "$WC" >/dev/null
 cd "$WC"
@@ -59,7 +57,5 @@ out=$("$SVN_BIN" commit --author foo --log "empty")
 tlib_check "no-op commit message"   "No changes to commit." "$out"
 
 cd /
-tlib_stop_server
-rm -rf "$REPO" "$WC"
 
 tlib_summary "test_wc_commit"

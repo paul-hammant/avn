@@ -8,15 +8,13 @@
 
 source "$(dirname "$0")/../../tests/lib.sh"
 
-PORT="${PORT:-9460}"
-REPO=/tmp/svnae_test_sp_repo
+PORT="$test_server_props_PORT"
+REPO="$test_server_props_REPO"
 WC1=/tmp/svnae_test_sp_wc1
 WC2=/tmp/svnae_test_sp_wc2
 
 URL="http://127.0.0.1:$PORT/demo"
-rm -rf "$REPO" "$WC1" "$WC2"
-tlib_seed "$REPO"
-tlib_start_server "$PORT" "$REPO"
+rm -rf "$WC1" "$WC2"
 
 # --- WC1: check out, propset on a file and a dir, commit. ---
 "$SVN_BIN" checkout "$URL" "$WC1" >/dev/null
@@ -60,7 +58,5 @@ else
 fi
 
 cd /
-tlib_stop_server
-rm -rf "$REPO" "$WC1" "$WC2"
 
 tlib_summary "test_server_props"

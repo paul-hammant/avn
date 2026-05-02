@@ -8,14 +8,12 @@
 
 source "$(dirname "$0")/../../tests/lib.sh"
 
-PORT="${PORT:-9710}"
-REPO=/tmp/svnae_test_ig_repo
+PORT="$test_ignore_PORT"
+REPO="$test_ignore_REPO"
 WC=/tmp/svnae_test_ig_wc
 
 URL="http://127.0.0.1:$PORT/demo"
-rm -rf "$REPO" "$WC"
-tlib_seed "$REPO"
-tlib_start_server "$PORT" "$REPO"
+rm -rf "$WC"
 "$SVN_BIN" checkout "$URL" "$WC" >/dev/null
 cd "$WC"
 
@@ -65,7 +63,5 @@ out=$("$SVN_BIN" status)
 tlib_check "clean after cleanup"            "" "$out"
 
 cd /
-tlib_stop_server
-rm -rf "$REPO" "$WC"
 
 tlib_summary "test_wc_ignore"

@@ -8,8 +8,8 @@
 
 source "$(dirname "$0")/../../tests/lib.sh"
 
-PORT="${PORT:-9370}"
-REPO=/tmp/svnae_test_co_repo
+PORT="$test_checkout_PORT"
+REPO="$test_checkout_REPO"
 WC=/tmp/svnae_test_co_wc
 
 URL="http://127.0.0.1:$PORT/demo"
@@ -48,8 +48,5 @@ tlib_check "r1 main.c old"      "int main() { return 0; }" "$(cat "$WC1/src/main
 
 rev_info1=$(sqlite3 "$WC1/.svn/wc.db" "SELECT value FROM info WHERE key='base_rev'")
 tlib_check "r1 info base_rev"   "1"                        "$rev_info1"
-
-tlib_stop_server
-rm -rf "$REPO" "$WC" "$WC1"
 
 tlib_summary "test_wc_checkout"

@@ -7,14 +7,12 @@
 
 source "$(dirname "$0")/../../tests/lib.sh"
 
-PORT="${PORT:-9450}"
-REPO=/tmp/svnae_test_pr_repo
+PORT="$test_props_PORT"
+REPO="$test_props_REPO"
 WC=/tmp/svnae_test_pr_wc
 
 URL="http://127.0.0.1:$PORT/demo"
-rm -rf "$REPO" "$WC"
-tlib_seed "$REPO"
-tlib_start_server "$PORT" "$REPO"
+rm -rf "$WC"
 "$SVN_BIN" checkout "$URL" "$WC" >/dev/null
 cd "$WC"
 
@@ -68,7 +66,5 @@ out=$("$SVN_BIN" proplist README)
 tlib_check "proplist empty"       "" "$out"
 
 cd /
-tlib_stop_server
-rm -rf "$REPO" "$WC"
 
 tlib_summary "test_wc_props"

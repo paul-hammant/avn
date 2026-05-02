@@ -16,14 +16,12 @@
 
 source "$(dirname "$0")/../../tests/lib.sh"
 
-PORT="${PORT:-9490}"
-REPO=/tmp/svnae_test_rmrg_repo
+PORT="$test_merge_reverse_PORT"
+REPO="$test_merge_reverse_REPO"
 WC=/tmp/svnae_test_rmrg_wc
 
 URL="http://127.0.0.1:$PORT/demo"
-rm -rf "$REPO" "$WC"
-tlib_seed "$REPO"
-tlib_start_server "$PORT" "$REPO"
+rm -rf "$WC"
 
 check_file() {
     local label="$1" expected="$2" path="$3"
@@ -104,7 +102,5 @@ mi=$("$SVN_BIN" propget svn:mergeinfo . 2>/dev/null || echo "")
 tlib_check "range reverse mergeinfo"  "src:-5-6"                             "$mi"
 
 cd /
-tlib_stop_server
-rm -rf "$REPO" "$WC"
 
 tlib_summary "test_wc_merge_reverse"

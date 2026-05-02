@@ -14,14 +14,12 @@
 
 source "$(dirname "$0")/../../tests/lib.sh"
 
-PORT="${PORT:-9560}"
-REPO=/tmp/svnae_test_clean_repo
+PORT="$test_cleanup_PORT"
+REPO="$test_cleanup_REPO"
 WC=/tmp/svnae_test_clean_wc
 
 URL="http://127.0.0.1:$PORT/demo"
-rm -rf "$REPO" "$WC"
-tlib_seed "$REPO"
-tlib_start_server "$PORT" "$REPO"
+rm -rf "$WC"
 
 # --- (A) non-WC path rejected. ---
 out=$("$SVN_BIN" cleanup /tmp/definitely_not_a_wc_$$ 2>&1 || true)
@@ -56,7 +54,5 @@ tlib_check "README survives"    "1" "$(test -f "$WC/README" && echo 1 || echo 0)
 tlib_check "src/main.c survives" "1" "$(test -f "$WC/src/main.c" && echo 1 || echo 0)"
 
 cd /
-tlib_stop_server
-rm -rf "$REPO" "$WC"
 
 tlib_summary "test_cleanup"

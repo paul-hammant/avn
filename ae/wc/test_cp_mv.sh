@@ -8,14 +8,12 @@
 
 source "$(dirname "$0")/../../tests/lib.sh"
 
-PORT="${PORT:-9440}"
-REPO=/tmp/svnae_test_cpmv_repo
+PORT="$test_cp_mv_PORT"
+REPO="$test_cp_mv_REPO"
 WC=/tmp/svnae_test_cpmv_wc
 
 URL="http://127.0.0.1:$PORT/demo"
-rm -rf "$REPO" "$WC"
-tlib_seed "$REPO"
-tlib_start_server "$PORT" "$REPO"
+rm -rf "$WC"
 
 "$SVN_BIN" checkout "$URL" "$WC" >/dev/null
 cd "$WC"
@@ -70,7 +68,5 @@ code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/repos/demo
 tlib_check "remote main.c gone"    "404" "$code"
 
 cd /
-tlib_stop_server
-rm -rf "$REPO" "$WC"
 
 tlib_summary "test_wc_cp_mv"

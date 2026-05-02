@@ -12,14 +12,12 @@
 
 source "$(dirname "$0")/../../tests/lib.sh"
 
-PORT="${PORT:-9510}"
-REPO=/tmp/svnae_test_miar_repo
+PORT="$test_mergeinfo_arith_PORT"
+REPO="$test_mergeinfo_arith_REPO"
 WC=/tmp/svnae_test_miar_wc
 
 URL="http://127.0.0.1:$PORT/demo"
-rm -rf "$REPO" "$WC"
-tlib_seed "$REPO"
-tlib_start_server "$PORT" "$REPO"
+rm -rf "$WC"
 
 # --- Build r4..r8: each adds its own line to src/main.c in a
 #     disjoint region so cherry-picks merge3-cleanly. ---
@@ -94,7 +92,5 @@ mi=$("$SVN_BIN" propget svn:mergeinfo . 2>/dev/null || echo "")
 tlib_check "partial cancel r6"      "src:5-5,7-7"    "$mi"
 
 cd /
-tlib_stop_server
-rm -rf "$REPO" "$WC"
 
 tlib_summary "test_mergeinfo_arith"

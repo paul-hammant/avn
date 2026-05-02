@@ -7,8 +7,8 @@
 
 source "$(dirname "$0")/../../tests/lib.sh"
 
-PORT="${PORT:-9390}"
-REPO=/tmp/svnae_test_mut_repo
+PORT="$test_mutate_PORT"
+REPO="$test_mutate_REPO"
 WC=/tmp/svnae_test_mut_wc
 
 URL="http://127.0.0.1:$PORT/demo"
@@ -60,7 +60,5 @@ out=$("$SVN_BIN" status)
 tlib_check "DRAFT back to ?" "1" "$(echo "$out" | grep -c '^?.*DRAFT' || true)"
 
 cd /
-tlib_stop_server
-rm -rf "$REPO" "$WC"
 
 tlib_summary "test_wc_mutate"

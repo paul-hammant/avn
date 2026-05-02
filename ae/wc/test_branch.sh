@@ -13,8 +13,8 @@
 
 source "$(dirname "$0")/../../tests/lib.sh"
 
-PORT="${PORT:-9470}"
-REPO=/tmp/svnae_test_br_repo
+PORT="$test_branch_PORT"
+REPO="$test_branch_REPO"
 WC=/tmp/svnae_test_br_wc
 URL="http://127.0.0.1:$PORT/demo"
 
@@ -81,7 +81,5 @@ tlib_check "branch final"             "branch change"            "$b"
 tlib_check "trunk and branch differ"  "differ"                   "$( [ "$a" = "$b" ] && echo same || echo differ)"
 
 cd /
-tlib_stop_server
-rm -rf "$REPO" "$WC"
 
 tlib_summary "test_wc_branch"

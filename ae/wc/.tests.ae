@@ -1,12 +1,19 @@
+// test_switch is the lone wc test still on inline-spawn — it
+// uses two servers (PORT and PORT+1) which doesn't fit the
+// single-fixture svnae setter. Keep it here on auto-spawn.
+//
+// Migrated tests live in .tests-<name>.ae alongside this file
+// (one per test, fixture declared via svnae.svn_server).
+
 import build
 import bash
-import bash (jobs)
+import bash (script, jobs)
 
 main() {
     b = build.start()
     build.dep(b, "ae/svn")
     build.dep(b, "ae/svnserver")
     bash.test(b) {
-        jobs(8)
+        script("test_switch.sh")
     }
 }

@@ -8,16 +8,14 @@
 
 source "$(dirname "$0")/../../tests/lib.sh"
 
-PORT="${PORT:-9410}"
-REPO=/tmp/svnae_test_upd_repo
+PORT="$test_update_PORT"
+REPO="$test_update_REPO"
 WC1=/tmp/svnae_test_upd_wc1
 WC2=/tmp/svnae_test_upd_wc2
 
 URL="http://127.0.0.1:$PORT/demo"
 
-rm -rf "$REPO" "$WC1" "$WC2"
-tlib_seed "$REPO"
-tlib_start_server "$PORT" "$REPO"
+rm -rf "$WC1" "$WC2"
 
 "$SVN_BIN" checkout "$URL" "$WC1" >/dev/null
 "$SVN_BIN" checkout "$URL" "$WC2" >/dev/null
@@ -126,7 +124,5 @@ tlib_check "update --rev 4"        "At revision 4."   "$out"
 tlib_check "wc2 README is rev-4"   "updated from wc1" "$(cat README)"
 
 cd /
-tlib_stop_server
-rm -rf "$REPO" "$WC1" "$WC2"
 
 tlib_summary "test_wc_update"
