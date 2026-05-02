@@ -34,15 +34,13 @@ Full phase map and feature matrix: **[PORT_STATUS.md](./PORT_STATUS.md)**.
 ## Quickstart
 
 Build and test driven by [aetherBuild]'s `aeb`. Run `aeb --init` once to
-populate `.aeb/lib/`. On a fresh clone, run `./regen.sh` first to
-generate `_generated.c` files (fast — `aetherc` per .ae module);
-everything after that is one command.
+populate `.aeb/lib/`. After that, one command builds every binary
+(regenerating `_generated.c` files as needed via aetherc) and runs the
+full 32-test suite.
 
 [aetherBuild]: https://github.com/paul-hammant/aetherBuild
 
 ```bash
-./regen.sh         # one-time on fresh clone (or after pulling .ae changes)
-
 # Build every binary AND run the 32-test suite
 aeb
 
@@ -63,14 +61,9 @@ echo "hi" >> README
 
 Some `.c` files under `ae/` are produced by `aetherc --emit=lib` from
 paired `.ae` sources (grep for `_generated.c`). They're **not checked
-into git** — `./regen.sh` walks every `Makefile.regen` and runs the
-codegen. Re-run after editing any `.ae` source. Never hand-edit a
-`_generated.c`; the next regen blows your changes away.
-
-Layer-2 work (in-flight): teaching aeb's `aether.program(b)` to do
-the codegen itself via the `regen(...)` setter. That'll retire
-`regen.sh` and the `Makefile.regen` files. Blocked on aeb supporting
-multiple `.build-X.ae` files per directory.
+into git** — aeb's `aether.program(b) { regen(...) }` setter
+regenerates them on demand. Never hand-edit a `_generated.c`; the next
+regen blows your changes away. Edit the `.ae` source instead.
 
 ## What's intentionally different from reference svn
 
