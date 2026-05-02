@@ -1,19 +1,7 @@
 #!/bin/bash
 
 # Copyright 2026 Paul Hammant (portions).
-# Portions copyright Apache Subversion project contributors (2001-2026).
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
-# implied. See the License for the specific language governing
-# permissions and limitations under the License.
+# Apache License, Version 2.0 — see LICENSE.
 
 # Phase 7.2: write-side ACL enforcement + copy guard.
 #
@@ -29,19 +17,14 @@
 #       write on /src so that's fine. Test: bob (no write) tries to
 #       set +bob on /src — must be refused.
 #   (G) super-user always bypasses.
-set -e
-cd "$(dirname "$0")/../.."
-ROOT="$(pwd)"
+
+source "$(dirname "$0")/../../tests/lib.sh"
 
 PORT="${PORT:-9550}"
-SERVER_BIN="${SERVER_BIN:-$ROOT/target/ae/svnserver/bin/aether-svnserver}"
-SEED_BIN="${SEED_BIN:-$ROOT/target/ae/svnserver/bin/svnae-seed}"
-SVN_BIN="${SVN_BIN:-$ROOT/target/ae/svn/bin/svn}"
 
 TOKEN="test-super-token-7-2"
 
 trap 'pkill -f "${SERVER_BIN} .* ${PORT}" 2>/dev/null || true' EXIT
-
 
 REPO=/tmp/svnae_test_aclw_repo
 rm -rf "$REPO"
@@ -52,14 +35,6 @@ sleep 1.2
 
 URL="http://127.0.0.1:$PORT/demo"
 
-FAILS=0
-check() {
-    local label="$1" expected="$2" actual="$3"
-    if [ "$expected" = "$actual" ]; then echo "  ok   $label"
-    else echo "  FAIL $label"; echo "    expected: $expected"; echo "    got:      $actual"; FAILS=$((FAILS+1))
-    fi
-}
-
 # --- (A) Super-user sets ACL: alice:rw, chuck:r, everyone else denied.
 SVN_SUPERUSER_TOKEN="$TOKEN" "$SVN_BIN" acl set "$URL" src \
     "+alice:rw" "+chuck:r" "-*" >/dev/null
@@ -69,65 +44,59 @@ SVN_SUPERUSER_TOKEN="$TOKEN" "$SVN_BIN" acl set "$URL" src \
 out=$(SVN_USER=alice "$SVN_BIN" commit "$URL" \
         --author alice --log "alice adds file" \
         --add-file 'src/alice.txt=hello' 2>&1)
-check "alice commits in src"  "1" "$(echo "$out" | grep -c 'Committed revision' || true)"
+tlib_check "alice commits in src"  "1" "$(echo "$out" | grep -c 'Committed revision' || true)"
 
 # --- (C) bob (denied) cannot commit to src. Server returns 403.
 out=$(SVN_USER=bob "$SVN_BIN" commit "$URL" \
         --author bob --log "bob tries" \
         --add-file 'src/bob.txt=nope' 2>&1 || true)
-check "bob refused at src"    "0" "$(echo "$out" | grep -c 'Committed revision' || true)"
+tlib_check "bob refused at src"    "0" "$(echo "$out" | grep -c 'Committed revision' || true)"
 
 # --- (D) chuck is read-only: his commit is refused.
 out=$(SVN_USER=chuck "$SVN_BIN" commit "$URL" \
         --author chuck --log "chuck tries" \
         --add-file 'src/chuck.txt=readonly' 2>&1 || true)
-check "chuck (r-only) refused" "0" "$(echo "$out" | grep -c 'Committed revision' || true)"
+tlib_check "chuck (r-only) refused" "0" "$(echo "$out" | grep -c 'Committed revision' || true)"
 
 # ... but chuck can still READ src (confirms rw vs r distinction).
 cat_chuck=$(SVN_USER=chuck "$SVN_BIN" cat "$URL" src/alice.txt)
-check "chuck can read alice's file" "hello" "$cat_chuck"
+tlib_check "chuck can read alice's file" "hello" "$cat_chuck"
 
 # --- (E) anonymous (no user header) is refused on write.
 out=$("$SVN_BIN" commit "$URL" \
         --author anon --log "anon tries" \
         --add-file 'src/anon.txt=noname' 2>&1 || true)
-check "anon refused at src"   "0" "$(echo "$out" | grep -c 'Committed revision' || true)"
+tlib_check "anon refused at src"   "0" "$(echo "$out" | grep -c 'Committed revision' || true)"
 
 # Anon can commit OUTSIDE src (root has no ACL restricting it).
 out=$("$SVN_BIN" commit "$URL" \
         --author anon --log "anon outside src" \
         --add-file 'public.txt=ok' 2>&1)
-check "anon commits at root"  "1" "$(echo "$out" | grep -c 'Committed revision' || true)"
+tlib_check "anon commits at root"  "1" "$(echo "$out" | grep -c 'Committed revision' || true)"
 
 # --- (F) self-elevation refused: bob tries to set +bob:rw on /src.
 #     Server must refuse because bob has no write on /src.
 out=$(SVN_USER=bob "$SVN_BIN" acl set "$URL" src "+bob:rw" 2>&1 || true)
-check "bob can't self-elevate"  "0" "$(echo "$out" | grep -c 'Committed revision' || true)"
+tlib_check "bob can't self-elevate"  "0" "$(echo "$out" | grep -c 'Committed revision' || true)"
 
 # --- (G) super-user bypasses everything.
 out=$(SVN_SUPERUSER_TOKEN="$TOKEN" "$SVN_BIN" commit "$URL" \
         --author super --log "super in src" \
         --add-file 'src/super.txt=ok' 2>&1)
-check "super-user commits in src" "1" "$(echo "$out" | grep -c 'Committed revision' || true)"
+tlib_check "super-user commits in src" "1" "$(echo "$out" | grep -c 'Committed revision' || true)"
 
 # --- Copy guard: bob tries to copy src (denied read) to public. Must fail.
 out=$(SVN_USER=bob "$SVN_BIN" cp "$URL/src" "$URL/bob-stolen" \
         --author bob --log "steal attempt" 2>&1 || true)
-check "bob can't copy denied subtree" "0" "$(echo "$out" | grep -c 'Committed revision' || true)"
+tlib_check "bob can't copy denied subtree" "0" "$(echo "$out" | grep -c 'Committed revision' || true)"
 
 # Super-user can (but a future phase might add an explicit opt-in).
 out=$(SVN_SUPERUSER_TOKEN="$TOKEN" "$SVN_BIN" cp "$URL/src" "$URL/src-mirror" \
         --author super --log "super copies" 2>&1)
-check "super-user copies denied subtree" "1" "$(echo "$out" | grep -c 'Committed revision' || true)"
+tlib_check "super-user copies denied subtree" "1" "$(echo "$out" | grep -c 'Committed revision' || true)"
 
 kill "$SRV" 2>/dev/null || true
 wait "$SRV" 2>/dev/null || true
 rm -rf "$REPO"
 
-if [ "$FAILS" -gt 0 ]; then
-    echo ""
-    echo "FAIL: $FAILS case(s)"
-    exit 1
-fi
-echo ""
-echo "test_acl_write: OK"
+tlib_summary "test_acl_write"

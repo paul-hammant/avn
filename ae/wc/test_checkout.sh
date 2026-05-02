@@ -1,37 +1,20 @@
 #!/bin/bash
 
 # Copyright 2026 Paul Hammant (portions).
-# Portions copyright Apache Subversion project contributors (2001-2026).
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
-# implied. See the License for the specific language governing
-# permissions and limitations under the License.
+# Apache License, Version 2.0 — see LICENSE.
 
 # End-to-end checkout test: server is seeded, svn CLI checks out, we
 # verify the files on disk, wc.db rows, and pristine blobs.
-set -e
-cd "$(dirname "$0")/../.."
-ROOT="$(pwd)"
+
+source "$(dirname "$0")/../../tests/lib.sh"
 
 PORT="${PORT:-9370}"
 REPO=/tmp/svnae_test_co_repo
 WC=/tmp/svnae_test_co_wc
-SERVER_BIN="${SERVER_BIN:-$ROOT/target/ae/svnserver/bin/aether-svnserver}"
-SEED_BIN="${SEED_BIN:-$ROOT/target/ae/svnserver/bin/svnae-seed}"
-SVN_BIN="${SVN_BIN:-$ROOT/target/ae/svn/bin/svn}"
 
 URL="http://127.0.0.1:$PORT/demo"
 
 trap 'pkill -f "${SERVER_BIN} demo ${REPO} ${PORT}" 2>/dev/null || true' EXIT
-
 
 rm -rf "$REPO" "$WC"
 "$SEED_BIN" "$REPO" >/dev/null
@@ -40,53 +23,39 @@ rm -rf "$REPO" "$WC"
 SRV=$!
 sleep 1.5
 
-FAILS=0
-check() {
-    local label="$1" expected="$2" actual="$3"
-    if [ "$expected" = "$actual" ]; then echo "  ok   $label"
-    else echo "  FAIL $label"; echo "    expected: $expected"; echo "    got:      $actual"; FAILS=$((FAILS+1))
-    fi
-}
-
 # --- checkout head ---
 "$SVN_BIN" checkout "$URL" "$WC" >/dev/null
-check "README exists"      "Hello"                    "$(cat "$WC/README")"
-check "src/main.c exists"  "int main() { return 42; }" "$(cat "$WC/src/main.c")"
-check "LICENSE absent"     "absent"                   "$(test -f "$WC/LICENSE" && echo present || echo absent)"
-check "src is dir"         "dir"                      "$(test -d "$WC/src" && echo dir || echo nondir)"
+tlib_check "README exists"      "Hello"                    "$(cat "$WC/README")"
+tlib_check "src/main.c exists"  "int main() { return 42; }" "$(cat "$WC/src/main.c")"
+tlib_check "LICENSE absent"     "absent"                   "$(test -f "$WC/LICENSE" && echo present || echo absent)"
+tlib_check "src is dir"         "dir"                      "$(test -d "$WC/src" && echo dir || echo nondir)"
 
 # --- .svn/wc.db populated ---
 n_nodes=$(sqlite3 "$WC/.svn/wc.db" "SELECT COUNT(*) FROM nodes")
-check "nodes count"        "3"                        "$n_nodes"
+tlib_check "nodes count"        "3"                        "$n_nodes"
 
 url_info=$(sqlite3 "$WC/.svn/wc.db" "SELECT value FROM info WHERE key='url'")
-check "info url"           "$URL"                     "$url_info"
+tlib_check "info url"           "$URL"                     "$url_info"
 
 rev_info=$(sqlite3 "$WC/.svn/wc.db" "SELECT value FROM info WHERE key='base_rev'")
-check "info base_rev"      "3"                        "$rev_info"
+tlib_check "info base_rev"      "3"                        "$rev_info"
 
 # --- pristine store populated ---
 n_pristine=$(find "$WC/.svn/pristine" -name '*.rep' | wc -l)
-check "pristine count"     "2"                        "$n_pristine"
+tlib_check "pristine count"     "2"                        "$n_pristine"
 
 # --- checkout --rev 1 into a second WC ---
 WC1="${WC}_r1"
 rm -rf "$WC1"
 "$SVN_BIN" checkout "$URL" "$WC1" --rev 1 >/dev/null
-check "r1 LICENSE present" "Apache-2.0"               "$(cat "$WC1/LICENSE")"
-check "r1 main.c old"      "int main() { return 0; }" "$(cat "$WC1/src/main.c")"
+tlib_check "r1 LICENSE present" "Apache-2.0"               "$(cat "$WC1/LICENSE")"
+tlib_check "r1 main.c old"      "int main() { return 0; }" "$(cat "$WC1/src/main.c")"
 
 rev_info1=$(sqlite3 "$WC1/.svn/wc.db" "SELECT value FROM info WHERE key='base_rev'")
-check "r1 info base_rev"   "1"                        "$rev_info1"
+tlib_check "r1 info base_rev"   "1"                        "$rev_info1"
 
 kill "$SRV" 2>/dev/null || true
 wait "$SRV" 2>/dev/null || true
 rm -rf "$REPO" "$WC" "$WC1"
 
-if [ "$FAILS" -gt 0 ]; then
-    echo ""
-    echo "FAIL: $FAILS case(s)"
-    exit 1
-fi
-echo ""
-echo "test_wc_checkout: OK"
+tlib_summary "test_wc_checkout"

@@ -1,19 +1,7 @@
 #!/bin/bash
 
 # Copyright 2026 Paul Hammant (portions).
-# Portions copyright Apache Subversion project contributors (2001-2026).
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
-# implied. See the License for the specific language governing
-# permissions and limitations under the License.
+# Apache License, Version 2.0 — see LICENSE.
 
 # svn switch — relocate a WC to a different branch URL. Covers:
 #   - clean switch: WC has no local edits, switch pulls the branch's
@@ -22,35 +10,22 @@
 #     overlap survive; modifications on a file that also differs in
 #     the branch go through 3-way merge (clean or conflict).
 #   - svn info after switch reports the new URL.
-set -e
-cd "$(dirname "$0")/../.."
-ROOT="$(pwd)"
+
+source "$(dirname "$0")/../../tests/lib.sh"
 
 PORT="${PORT:-9480}"
 REPO=/tmp/svnae_test_sw_repo
 WC=/tmp/svnae_test_sw_wc
-SERVER_BIN="${SERVER_BIN:-$ROOT/target/ae/svnserver/bin/aether-svnserver}"
-SEED_BIN="${SEED_BIN:-$ROOT/target/ae/svnserver/bin/svnae-seed}"
-SVN_BIN="${SVN_BIN:-$ROOT/target/ae/svn/bin/svn}"
 
 URL="http://127.0.0.1:$PORT/demo"
 
 trap 'pkill -f "${SERVER_BIN} demo ${REPO} ${PORT}" 2>/dev/null || true' EXIT
-
 
 rm -rf "$REPO" "$WC"
 "$SEED_BIN" "$REPO" >/dev/null
 "$SERVER_BIN" demo "$REPO" "$PORT" >/tmp/svnae_test_sw_server.log 2>&1 &
 SRV=$!
 sleep 1.5
-
-FAILS=0
-check() {
-    local label="$1" expected="$2" actual="$3"
-    if [ "$expected" = "$actual" ]; then echo "  ok   $label"
-    else echo "  FAIL $label"; echo "    expected: $expected"; echo "    got:      $actual"; FAILS=$((FAILS+1))
-    fi
-}
 
 # --- Build a second repo named 'alt' on the same server, used as the
 #     "branch" to switch to. The seeder only knows one layout, so we'll
@@ -93,7 +68,7 @@ cd "$WC"
 # Pre-condition sanity: the two repos differ at README.
 [ "$(cat README)" != "feature-x content" ] || { echo "FAIL: repos not differentiated"; exit 1; }
 "$SVN_BIN" switch "$URL2" >/tmp/svnae_test_sw_out.log 2>&1
-check "post-switch README"  "feature-x content"   "$(cat README)"
+tlib_check "post-switch README"  "feature-x content"   "$(cat README)"
 
 # Info reflects the new URL.
 info_url=$("$SVN_BIN" info "$URL2" | awk -F': ' '/^URL:/{print $2}')
@@ -104,7 +79,7 @@ info_url=$("$SVN_BIN" info "$URL2" | awk -F': ' '/^URL:/{print $2}')
 # Easier: just assert that subsequent WC-backed commands hit the new
 # server. Update with no edits should say "At revision <head>".
 out=$("$SVN_BIN" update)
-check "update after switch"  "1"                  "$(echo "$out" | grep -c 'At revision' || true)"
+tlib_check "update after switch"  "1"                  "$(echo "$out" | grep -c 'At revision' || true)"
 
 cd /
 rm -rf "$WC"
@@ -115,9 +90,9 @@ cd "$WC"
 # Modify a file that the other branch doesn't touch.
 echo "my local change" > src/main.c
 "$SVN_BIN" switch "$URL2" >/tmp/svnae_test_sw_out.log 2>&1 || true
-check "local edit preserved" "my local change"    "$(cat src/main.c)"
+tlib_check "local edit preserved" "my local change"    "$(cat src/main.c)"
 # README now has feature-x content.
-check "switched README"      "feature-x content"  "$(cat README)"
+tlib_check "switched README"      "feature-x content"  "$(cat README)"
 
 cd /
 rm -rf "$WC"
@@ -138,8 +113,8 @@ echo "local-bottom" >> README
 "$SVN_BIN" switch "$URL2" >/tmp/svnae_test_sw_out.log 2>&1 || true
 has_top=$(grep -c '^top-new$' README || true)
 has_local=$(grep -c '^local-bottom$' README || true)
-check "3-way merge kept top"   "1" "$has_top"
-check "3-way merge kept local" "1" "$has_local"
+tlib_check "3-way merge kept top"   "1" "$has_top"
+tlib_check "3-way merge kept local" "1" "$has_local"
 
 cd /
 
@@ -147,10 +122,4 @@ kill "$SRV" "$SRV2" 2>/dev/null || true
 wait "$SRV" "$SRV2" 2>/dev/null || true
 rm -rf "$REPO" "$REPO2" "$WC"
 
-if [ "$FAILS" -gt 0 ]; then
-    echo ""
-    echo "FAIL: $FAILS case(s)"
-    exit 1
-fi
-echo ""
-echo "test_wc_switch: OK"
+tlib_summary "test_wc_switch"

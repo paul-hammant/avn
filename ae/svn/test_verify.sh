@@ -1,19 +1,7 @@
 #!/bin/bash
 
 # Copyright 2026 Paul Hammant (portions).
-# Portions copyright Apache Subversion project contributors (2001-2026).
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
-# implied. See the License for the specific language governing
-# permissions and limitations under the License.
+# Apache License, Version 2.0 — see LICENSE.
 
 # Phase 6.2: Merkle verification.
 #
@@ -22,26 +10,12 @@
 #   (B) X-Svnae-Node-Hash header is present on cat/list/props responses
 #   (C) tampering with a stored .rep file causes verify to fail with -2
 #   (D) svn verify on a sha256 repo passes
-set -e
-cd "$(dirname "$0")/../.."
-ROOT="$(pwd)"
+
+source "$(dirname "$0")/../../tests/lib.sh"
 
 PORT="${PORT:-9530}"
-ADMIN_BIN="${ADMIN_BIN:-$ROOT/target/ae/svnadmin/bin/svnadmin}"
-SERVER_BIN="${SERVER_BIN:-$ROOT/target/ae/svnserver/bin/aether-svnserver}"
-SEED_BIN="${SEED_BIN:-$ROOT/target/ae/svnserver/bin/svnae-seed}"
-SVN_BIN="${SVN_BIN:-$ROOT/target/ae/svn/bin/svn}"
 
 trap 'pkill -f "${SERVER_BIN} .* ${PORT}" 2>/dev/null || true' EXIT
-
-
-FAILS=0
-check() {
-    local label="$1" expected="$2" actual="$3"
-    if [ "$expected" = "$actual" ]; then echo "  ok   $label"
-    else echo "  FAIL $label"; echo "    expected: $expected"; echo "    got:      $actual"; FAILS=$((FAILS+1))
-    fi
-}
 
 # --- (A) default (sha1) seeded repo — verify all revs. ---
 REPO=/tmp/svnae_verify_repo
@@ -55,21 +29,21 @@ URL="http://127.0.0.1:$PORT/demo"
 
 # Default (HEAD).
 out=$("$SVN_BIN" verify "$URL" 2>&1)
-check "verify HEAD prints OK"  "1"  "$(echo "$out" | grep -c '^verify: OK' || true)"
+tlib_check "verify HEAD prints OK"  "1"  "$(echo "$out" | grep -c '^verify: OK' || true)"
 
 # --rev 1 (smallest non-empty rev in the seed).
 out=$("$SVN_BIN" verify "$URL" --rev 1 2>&1)
-check "verify r1 prints OK"    "1"  "$(echo "$out" | grep -c '^verify: OK' || true)"
+tlib_check "verify r1 prints OK"    "1"  "$(echo "$out" | grep -c '^verify: OK' || true)"
 
 # --- (B) X-Svnae-Node-Hash headers present on cat and list. ---
 # Server doesn't handle HEAD requests, so use GET with header dump.
 hdrs=$(curl -sD - -o /dev/null "http://127.0.0.1:$PORT/repos/demo/rev/3/cat/src/main.c" 2>&1)
-check "cat has Node-Hash"   "1" "$(echo "$hdrs" | grep -ci 'X-Svnae-Node-Hash' || true)"
-check "cat has Hash-Algo"   "1" "$(echo "$hdrs" | grep -ci 'X-Svnae-Hash-Algo' || true)"
-check "cat has Node-Kind"   "1" "$(echo "$hdrs" | grep -ci 'X-Svnae-Node-Kind' || true)"
+tlib_check "cat has Node-Hash"   "1" "$(echo "$hdrs" | grep -ci 'X-Svnae-Node-Hash' || true)"
+tlib_check "cat has Hash-Algo"   "1" "$(echo "$hdrs" | grep -ci 'X-Svnae-Hash-Algo' || true)"
+tlib_check "cat has Node-Kind"   "1" "$(echo "$hdrs" | grep -ci 'X-Svnae-Node-Kind' || true)"
 
 hdrs=$(curl -sD - -o /dev/null "http://127.0.0.1:$PORT/repos/demo/rev/3/list/src" 2>&1)
-check "list has Node-Hash"  "1" "$(echo "$hdrs" | grep -ci 'X-Svnae-Node-Hash' || true)"
+tlib_check "list has Node-Hash"  "1" "$(echo "$hdrs" | grep -ci 'X-Svnae-Node-Hash' || true)"
 
 # --- (C) tamper: overwrite a specific raw file-content blob so the
 #     server hands back altered bytes but its dir-blob still
@@ -99,7 +73,7 @@ out=$("$SVN_BIN" verify "$URL" 2>&1 || true)
 got=0
 if echo "$out" | grep -q 'MISMATCH'; then got=1; fi
 if ! echo "$out" | grep -q '^verify: OK'; then got=1; fi
-check "tamper detected"      "1"  "$got"
+tlib_check "tamper detected"      "1"  "$got"
 # Restore so the server can be cleanly shut down.
 mv "$target.bak" "$target"
 
@@ -131,16 +105,10 @@ cd /
 rm -rf "$WC"
 
 out=$("$SVN_BIN" verify "$URL2" 2>&1)
-check "sha256 verify OK"    "1"  "$(echo "$out" | grep -c '^verify: OK.*sha256' || true)"
+tlib_check "sha256 verify OK"    "1"  "$(echo "$out" | grep -c '^verify: OK.*sha256' || true)"
 
 kill "$SRV2" 2>/dev/null || true
 wait "$SRV2" 2>/dev/null || true
 rm -rf "$REPO2"
 
-if [ "$FAILS" -gt 0 ]; then
-    echo ""
-    echo "FAIL: $FAILS case(s)"
-    exit 1
-fi
-echo ""
-echo "test_verify: OK"
+tlib_summary "test_verify"

@@ -1,19 +1,7 @@
 #!/bin/bash
 
 # Copyright 2026 Paul Hammant (portions).
-# Portions copyright Apache Subversion project contributors (2001-2026).
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
-# implied. See the License for the specific language governing
-# permissions and limitations under the License.
+# Apache License, Version 2.0 — see LICENSE.
 
 # Phase 7.5: multi-algo secondary verification.
 #
@@ -27,38 +15,24 @@
 #       secondary hashes verified.
 #   (F) tamper: corrupt a stored secondary hash; `svn verify` passes
 #       but `svn verify --secondaries` detects the mismatch.
-set -e
-cd "$(dirname "$0")/../.."
-ROOT="$(pwd)"
+
+source "$(dirname "$0")/../../tests/lib.sh"
 
 PORT="${PORT:-9602}"
 REPO=/tmp/svnae_test_sec_repo
 WC=/tmp/svnae_test_sec_wc
-ADMIN_BIN="${ADMIN_BIN:-$ROOT/target/ae/svnadmin/bin/svnadmin}"
-SERVER_BIN="${SERVER_BIN:-$ROOT/target/ae/svnserver/bin/aether-svnserver}"
-SEED_BIN="${SEED_BIN:-$ROOT/target/ae/svnserver/bin/svnae-seed}"
-SVN_BIN="${SVN_BIN:-$ROOT/target/ae/svn/bin/svn}"
 
 URL="http://127.0.0.1:$PORT/demo"
 
 trap 'pkill -f "${SERVER_BIN} .* ${PORT}" 2>/dev/null || true' EXIT
 
-
-FAILS=0
-check() {
-    local label="$1" expected="$2" actual="$3"
-    if [ "$expected" = "$actual" ]; then echo "  ok   $label"
-    else echo "  FAIL $label"; echo "    expected: $expected"; echo "    got:      $actual"; FAILS=$((FAILS+1))
-    fi
-}
-
 # --- (A) Create multi-algo repo. ---
 rm -rf "$REPO" "$WC"
 "$ADMIN_BIN" create "$REPO" --algos sha256,sha1 >/dev/null
-check "format line"          "svnae-fsfs-1 sha256,sha1"  "$(cat "$REPO/format")"
+tlib_check "format line"          "svnae-fsfs-1 sha256,sha1"  "$(cat "$REPO/format")"
 # First rep (empty blob) should have a 64-char name.
 rep_name=$(basename "$(ls "$REPO/reps"/*/*/*.rep | head -1)" .rep)
-check "rep name length"      "64"  "${#rep_name}"
+tlib_check "rep name length"      "64"  "${#rep_name}"
 
 # Populate with a known file so we have non-empty data to hash.
 "$SERVER_BIN" demo "$REPO" "$PORT" >/tmp/svnae_test_sec_srv.log 2>&1 &
@@ -74,8 +48,8 @@ cd /
 # --- (B) /rev/1/hashes/<path> advertises both hashes. ---
 body=$(curl -s "$URL/../repos/demo/rev/1/hashes/note.txt" 2>/dev/null || \
        curl -s "http://127.0.0.1:$PORT/repos/demo/rev/1/hashes/note.txt")
-check "hashes has sha256"    "1"  "$(echo "$body" | grep -c '"algo":"sha256"' || true)"
-check "hashes has sha1"      "1"  "$(echo "$body" | grep -c '"algo":"sha1"' || true)"
+tlib_check "hashes has sha256"    "1"  "$(echo "$body" | grep -c '"algo":"sha256"' || true)"
+tlib_check "hashes has sha1"      "1"  "$(echo "$body" | grep -c '"algo":"sha1"' || true)"
 
 # --- (C) rep_cache_sec table exists and has entries. ---
 secondaries=$(sqlite3 "$REPO/rep-cache.db" "SELECT COUNT(*) FROM rep_cache_sec")
@@ -87,13 +61,13 @@ secondaries=$(sqlite3 "$REPO/rep-cache.db" "SELECT COUNT(*) FROM rep_cache_sec")
 
 # --- (D) Default verify still works. ---
 out=$("$SVN_BIN" verify "$URL" --rev 1 2>&1)
-check "default verify OK"    "1"  "$(echo "$out" | grep -c '^verify: OK' || true)"
+tlib_check "default verify OK"    "1"  "$(echo "$out" | grep -c '^verify: OK' || true)"
 
 # --- (E) Verify --secondaries reports files + count. ---
 out=$("$SVN_BIN" verify "$URL" --rev 1 --secondaries 2>&1)
-check "secondaries verify OK" "1" "$(echo "$out" | grep -c 'secondary hash(es) verified' || true)"
+tlib_check "secondaries verify OK" "1" "$(echo "$out" | grep -c 'secondary hash(es) verified' || true)"
 # Should report at least 1 file (note.txt).
-check "secondaries file count" "1" "$(echo "$out" | grep -c '1 file(s)' || true)"
+tlib_check "secondaries file count" "1" "$(echo "$out" | grep -c '1 file(s)' || true)"
 
 # --- (F) Tamper: corrupt note.txt's secondary (sha1) hash in rep-cache.db.
 #     Default verify should still pass (it checks the primary only).
@@ -127,20 +101,14 @@ SRV=$!
 sleep 1.2
 
 out=$("$SVN_BIN" verify "$URL" --rev 1 2>&1)
-check "primary verify still ok" "1" "$(echo "$out" | grep -c '^verify: OK' || true)"
+tlib_check "primary verify still ok" "1" "$(echo "$out" | grep -c '^verify: OK' || true)"
 
 out=$("$SVN_BIN" verify "$URL" --rev 1 --secondaries 2>&1 || true)
 # Confirm verify NO LONGER says OK — any of the non-OK exit paths is fine.
-check "secondary tamper detected" "0" "$(echo "$out" | grep -c '^verify: OK' || true)"
+tlib_check "secondary tamper detected" "0" "$(echo "$out" | grep -c '^verify: OK' || true)"
 
 kill "$SRV" 2>/dev/null || true
 wait "$SRV" 2>/dev/null || true
 rm -rf "$REPO" "$WC"
 
-if [ "$FAILS" -gt 0 ]; then
-    echo ""
-    echo "FAIL: $FAILS case(s)"
-    exit 1
-fi
-echo ""
-echo "test_verify_secondaries: OK"
+tlib_summary "test_verify_secondaries"

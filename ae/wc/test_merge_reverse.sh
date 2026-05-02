@@ -1,19 +1,7 @@
 #!/bin/bash
 
 # Copyright 2026 Paul Hammant (portions).
-# Portions copyright Apache Subversion project contributors (2001-2026).
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
-# implied. See the License for the specific language governing
-# permissions and limitations under the License.
+# Apache License, Version 2.0 — see LICENSE.
 
 # svn merge — reverse merge + cherry-pick.
 #
@@ -25,20 +13,15 @@
 #     (B) reverse -c -r5     — r5's change undone; r4+r6 remain
 #     (C) reverse -r 6:4     — r6 and r5 both undone (range semantics)
 #     (D) mergeinfo format   — reverse range written with leading '-'
-set -e
-cd "$(dirname "$0")/../.."
-ROOT="$(pwd)"
+
+source "$(dirname "$0")/../../tests/lib.sh"
 
 PORT="${PORT:-9490}"
 REPO=/tmp/svnae_test_rmrg_repo
 WC=/tmp/svnae_test_rmrg_wc
-SERVER_BIN="${SERVER_BIN:-$ROOT/target/ae/svnserver/bin/aether-svnserver}"
-SEED_BIN="${SEED_BIN:-$ROOT/target/ae/svnserver/bin/svnae-seed}"
-SVN_BIN="${SVN_BIN:-$ROOT/target/ae/svn/bin/svn}"
 
 URL="http://127.0.0.1:$PORT/demo"
 trap 'pkill -f "${SERVER_BIN} demo ${REPO} ${PORT}" 2>/dev/null || true' EXIT
-
 
 rm -rf "$REPO" "$WC"
 "$SEED_BIN" "$REPO" >/dev/null
@@ -46,13 +29,6 @@ rm -rf "$REPO" "$WC"
 SRV=$!
 sleep 1.5
 
-FAILS=0
-check() {
-    local label="$1" expected="$2" actual="$3"
-    if [ "$expected" = "$actual" ]; then echo "  ok   $label"
-    else echo "  FAIL $label"; echo "    expected: $expected"; echo "    got:      $actual"; FAILS=$((FAILS+1))
-    fi
-}
 check_file() {
     local label="$1" expected="$2" path="$3"
     local tmp=$(mktemp)
@@ -107,7 +83,7 @@ check_file "pre-cherry r4 content"    "$R4"  src/main.c
 "$SVN_BIN" merge -c 5 "$URL/src" src >/tmp/rmrg.out 2>&1
 check_file "cherry-pick r5 content"   "$R5"  src/main.c
 mi=$("$SVN_BIN" propget svn:mergeinfo . 2>/dev/null || echo "")
-check "cherry mergeinfo"         "src:5-5"                              "$mi"
+tlib_check "cherry mergeinfo"         "src:5-5"                              "$mi"
 cd /
 rm -rf "$WC"
 
@@ -119,7 +95,7 @@ check_file "pre-reverse r6 content"   "$R6"          src/main.c
 "$SVN_BIN" merge -c -5 "$URL/src" src >/tmp/rmrg.out 2>&1
 check_file "reverse -c -5 drops mid"  "$R6_UNDO_R5"  src/main.c
 mi=$("$SVN_BIN" propget svn:mergeinfo . 2>/dev/null || echo "")
-check "reverse mergeinfo format" "src:-5-5"                             "$mi"
+tlib_check "reverse mergeinfo format" "src:-5-5"                             "$mi"
 cd /
 rm -rf "$WC"
 
@@ -129,17 +105,11 @@ cd "$WC"
 "$SVN_BIN" merge -r 6:4 "$URL/src" src >/tmp/rmrg.out 2>&1
 check_file "reverse -r 6:4 content"   "$R4"  src/main.c
 mi=$("$SVN_BIN" propget svn:mergeinfo . 2>/dev/null || echo "")
-check "range reverse mergeinfo"  "src:-5-6"                             "$mi"
+tlib_check "range reverse mergeinfo"  "src:-5-6"                             "$mi"
 
 cd /
 kill "$SRV" 2>/dev/null || true
 wait "$SRV" 2>/dev/null || true
 rm -rf "$REPO" "$WC"
 
-if [ "$FAILS" -gt 0 ]; then
-    echo ""
-    echo "FAIL: $FAILS case(s)"
-    exit 1
-fi
-echo ""
-echo "test_wc_merge_reverse: OK"
+tlib_summary "test_wc_merge_reverse"
