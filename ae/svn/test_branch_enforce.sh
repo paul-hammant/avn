@@ -24,13 +24,8 @@ REPO=/tmp/svnae_test_b82b_repo
 TOKEN="b82b-token"
 URL="http://127.0.0.1:$PORT/demo"
 
-trap 'pkill -f "${SERVER_BIN} .* ${PORT}" 2>/dev/null || true' EXIT
-
-rm -rf "$REPO"
-"$SEED_BIN" "$REPO" >/dev/null
-"$SERVER_BIN" demo "$REPO" "$PORT" --superuser-token "$TOKEN" >/tmp/svnae_test_b82b_srv.log 2>&1 &
-SRV=$!
-sleep 1.2
+tlib_seed "$REPO"
+tlib_start_server "$PORT" "$REPO" demo --superuser-token "$TOKEN"
 
 # Create two branches:
 #   readme-only: README only
@@ -129,8 +124,7 @@ tlib_check "main accepts arbitrary path"      "201"  "$code"
 code=$(put_branch_super readme-only "src/other.c" "x")
 tlib_check "super PUT readme-only src/other.c" "201"  "$code"
 
-kill "$SRV" 2>/dev/null || true
-wait "$SRV" 2>/dev/null || true
+tlib_stop_server
 rm -rf "$REPO"
 
 tlib_summary "test_branch_enforce"

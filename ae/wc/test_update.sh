@@ -15,13 +15,9 @@ WC2=/tmp/svnae_test_upd_wc2
 
 URL="http://127.0.0.1:$PORT/demo"
 
-trap 'pkill -f "${SERVER_BIN} demo ${REPO} ${PORT}" 2>/dev/null || true' EXIT
-
 rm -rf "$REPO" "$WC1" "$WC2"
-"$SEED_BIN" "$REPO" >/dev/null
-"$SERVER_BIN" demo "$REPO" "$PORT" >/tmp/svnae_test_upd_server.log 2>&1 &
-SRV=$!
-sleep 1.5
+tlib_seed "$REPO"
+tlib_start_server "$PORT" "$REPO"
 
 "$SVN_BIN" checkout "$URL" "$WC1" >/dev/null
 "$SVN_BIN" checkout "$URL" "$WC2" >/dev/null
@@ -130,8 +126,7 @@ tlib_check "update --rev 4"        "At revision 4."   "$out"
 tlib_check "wc2 README is rev-4"   "updated from wc1" "$(cat README)"
 
 cd /
-kill "$SRV" 2>/dev/null || true
-wait "$SRV" 2>/dev/null || true
+tlib_stop_server
 rm -rf "$REPO" "$WC1" "$WC2"
 
 tlib_summary "test_wc_update"

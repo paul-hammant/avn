@@ -27,13 +27,8 @@ REPO=/tmp/svnae_test_b82a_repo
 TOKEN="b82a-token"
 URL="http://127.0.0.1:$PORT/demo"
 
-trap 'pkill -f "${SERVER_BIN} .* ${PORT}" 2>/dev/null || true' EXIT
-
-rm -rf "$REPO"
-"$SEED_BIN" "$REPO" >/dev/null
-"$SERVER_BIN" demo "$REPO" "$PORT" --superuser-token "$TOKEN" >/tmp/svnae_test_b82a_srv.log 2>&1 &
-SRV=$!
-sleep 1.2
+tlib_seed "$REPO"
+tlib_start_server "$PORT" "$REPO" demo --superuser-token "$TOKEN"
 
 # --- (A) non-super create rejected ---
 out=$("$SVN_BIN" branch create foo "$URL" --from main --include README 2>&1 || true)
@@ -90,8 +85,7 @@ info=$(curl -s "http://127.0.0.1:$PORT/repos/demo/info")
 tlib_check "info has specs"         "1" "$(echo "$info" | grep -c '"specs":{' || true)"
 tlib_check "info specs readme-only" "1" "$(echo "$info" | grep -c '"readme-only":\["README"\]' || true)"
 
-kill "$SRV" 2>/dev/null || true
-wait "$SRV" 2>/dev/null || true
+tlib_stop_server
 rm -rf "$REPO"
 
 tlib_summary "test_branch_create"

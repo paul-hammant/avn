@@ -19,13 +19,9 @@ REPO=/tmp/svnae_test_clean_repo
 WC=/tmp/svnae_test_clean_wc
 
 URL="http://127.0.0.1:$PORT/demo"
-trap 'pkill -f "${SERVER_BIN} demo ${REPO} ${PORT}" 2>/dev/null || true' EXIT
-
 rm -rf "$REPO" "$WC"
-"$SEED_BIN" "$REPO" >/dev/null
-"$SERVER_BIN" demo "$REPO" "$PORT" >/tmp/svnae_test_clean_srv.log 2>&1 &
-SRV=$!
-sleep 1.2
+tlib_seed "$REPO"
+tlib_start_server "$PORT" "$REPO"
 
 # --- (A) non-WC path rejected. ---
 out=$("$SVN_BIN" cleanup /tmp/definitely_not_a_wc_$$ 2>&1 || true)
@@ -60,8 +56,7 @@ tlib_check "README survives"    "1" "$(test -f "$WC/README" && echo 1 || echo 0)
 tlib_check "src/main.c survives" "1" "$(test -f "$WC/src/main.c" && echo 1 || echo 0)"
 
 cd /
-kill "$SRV" 2>/dev/null || true
-wait "$SRV" 2>/dev/null || true
+tlib_stop_server
 rm -rf "$REPO" "$WC"
 
 tlib_summary "test_cleanup"

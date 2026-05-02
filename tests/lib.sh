@@ -43,3 +43,38 @@ tlib_summary() {
     echo ""
     echo "${1:-test}: OK"
 }
+
+# tlib_seed REPO — wipe and seed a repo with the canonical 3-commit
+# tree from svnae-seed. Most tests start with this.
+tlib_seed() {
+    local repo="$1"
+    rm -rf "$repo"
+    "$SEED_BIN" "$repo" >/dev/null
+}
+
+# tlib_start_server PORT REPO [REPO_NAME] [extra args...]
+# REPO_NAME defaults to "demo". Spawns aether-svnserver in background,
+# logs to /tmp/svnae_srv_PORT.log, sleeps 1.5s for startup. The pid
+# lands in $TLIB_SRV; for backwards-compat callers also set $SRV.
+# Sets a trap to pkill on EXIT.
+tlib_start_server() {
+    local port="$1" repo="$2" name="${3:-demo}"
+    shift 3 2>/dev/null || shift "$#"   # tolerate caller passing only 2 args
+    "$SERVER_BIN" "$name" "$repo" "$port" "$@" >"/tmp/svnae_srv_${port}.log" 2>&1 &
+    TLIB_SRV=$!
+    SRV=$TLIB_SRV
+    # shellcheck disable=SC2064
+    trap "pkill -f \"\${SERVER_BIN} .* ${port}\" 2>/dev/null || true" EXIT
+    sleep 1.5
+}
+
+# tlib_stop_server — kills $TLIB_SRV (set by tlib_start_server).
+# Tests that spin up multiple servers manage the others themselves.
+tlib_stop_server() {
+    if [ -n "$TLIB_SRV" ]; then
+        kill "$TLIB_SRV" 2>/dev/null || true
+        wait "$TLIB_SRV" 2>/dev/null || true
+        TLIB_SRV=""
+        SRV=""
+    fi
+}

@@ -17,8 +17,6 @@ source "$(dirname "$0")/../../tests/lib.sh"
 
 PORT="${PORT:-9520}"
 
-trap 'pkill -f "${SERVER_BIN} .* ${PORT}" 2>/dev/null || true' EXIT
-
 # --- (A) default (sha1) repo ---
 REPO_SHA1=/tmp/svnae_test_hash_repo_sha1
 rm -rf "$REPO_SHA1"
@@ -64,8 +62,7 @@ tlib_check "second WC saw NEW"   "payload on sha256 repo"  "$(cat "$WC/NEW.txt")
 cd /
 rm -rf "$WC"
 
-kill "$SRV" 2>/dev/null || true
-wait "$SRV" 2>/dev/null || true
+tlib_stop_server
 rm -rf "$REPO_SHA256"
 
 # --- (F) unknown algo rejected ---

@@ -27,13 +27,8 @@ REPO=/tmp/svnae_test_put_repo
 TOKEN="test-put-token"
 URL="http://127.0.0.1:$PORT/repos/demo"
 
-trap 'pkill -f "${SERVER_BIN} .* ${PORT}" 2>/dev/null || true' EXIT
-
-rm -rf "$REPO"
-"$SEED_BIN" "$REPO" >/dev/null
-"$SERVER_BIN" demo "$REPO" "$PORT" --superuser-token "$TOKEN" >/tmp/svnae_test_put_srv.log 2>&1 &
-SRV=$!
-sleep 1.2
+tlib_seed "$REPO"
+tlib_start_server "$PORT" "$REPO" demo --superuser-token "$TOKEN"
 
 # Helper: pull X-Svnae-Node-Hash out of a response headers dump.
 node_hash_of() {
@@ -151,8 +146,7 @@ tlib_check "curl -T 201"   "201" "$code"
 body=$(curl -s -H "X-Svnae-User: alice" "$URL/path/src/main.c")
 tlib_check "curl -T body"   "scripted" "$body"
 
-kill "$SRV" 2>/dev/null || true
-wait "$SRV" 2>/dev/null || true
+tlib_stop_server
 rm -rf "$REPO" /tmp/put_body /tmp/new_body /tmp/put_resp /tmp/put_hdrs /tmp/upload_me
 
 tlib_summary "test_rest_put"

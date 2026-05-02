@@ -17,13 +17,9 @@ REPO=/tmp/svnae_test_miar_repo
 WC=/tmp/svnae_test_miar_wc
 
 URL="http://127.0.0.1:$PORT/demo"
-trap 'pkill -f "${SERVER_BIN} demo ${REPO} ${PORT}" 2>/dev/null || true' EXIT
-
 rm -rf "$REPO" "$WC"
-"$SEED_BIN" "$REPO" >/dev/null
-"$SERVER_BIN" demo "$REPO" "$PORT" >/tmp/svnae_test_miar_server.log 2>&1 &
-SRV=$!
-sleep 1.5
+tlib_seed "$REPO"
+tlib_start_server "$PORT" "$REPO"
 
 # --- Build r4..r8: each adds its own line to src/main.c in a
 #     disjoint region so cherry-picks merge3-cleanly. ---
@@ -98,8 +94,7 @@ mi=$("$SVN_BIN" propget svn:mergeinfo . 2>/dev/null || echo "")
 tlib_check "partial cancel r6"      "src:5-5,7-7"    "$mi"
 
 cd /
-kill "$SRV" 2>/dev/null || true
-wait "$SRV" 2>/dev/null || true
+tlib_stop_server
 rm -rf "$REPO" "$WC"
 
 tlib_summary "test_mergeinfo_arith"

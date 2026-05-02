@@ -24,13 +24,9 @@ WC=/tmp/svnae_test_blame_wc
 
 TOKEN="blame-super-token"
 URL="http://127.0.0.1:$PORT/demo"
-trap 'pkill -f "${SERVER_BIN} .* ${PORT}" 2>/dev/null || true' EXIT
-
 rm -rf "$REPO" "$WC"
-"$SEED_BIN" "$REPO" >/dev/null
-"$SERVER_BIN" demo "$REPO" "$PORT" --superuser-token "$TOKEN" >/tmp/svnae_test_blame_srv.log 2>&1 &
-SRV=$!
-sleep 1.2
+tlib_seed "$REPO"
+tlib_start_server "$PORT" "$REPO" demo --superuser-token "$TOKEN"
 
 # --- Build history: r4 adds file, r5 edits line 2, r6 appends line 4,
 #     r7 inserts a new line between line 1 and line 2. ---
@@ -93,8 +89,7 @@ tlib_check "annotate = blame"  "4 alice line1"  "$(echo "$out" | sed -n '1p')"
 out=$("$SVN_BIN" praise "$URL" file.txt)
 tlib_check "praise = blame"    "4 alice line1"  "$(echo "$out" | sed -n '1p')"
 
-kill "$SRV" 2>/dev/null || true
-wait "$SRV" 2>/dev/null || true
+tlib_stop_server
 rm -rf "$REPO" "$WC"
 
 tlib_summary "test_blame"

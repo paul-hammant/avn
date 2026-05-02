@@ -24,14 +24,9 @@ PORT="${PORT:-9540}"
 
 TOKEN="test-super-token-42"
 
-trap 'pkill -f "${SERVER_BIN} .* ${PORT}" 2>/dev/null || true' EXIT
-
 REPO=/tmp/svnae_test_acl_repo
-rm -rf "$REPO"
-"$SEED_BIN" "$REPO" >/dev/null
-"$SERVER_BIN" demo "$REPO" "$PORT" --superuser-token "$TOKEN" >/tmp/svnae_test_acl_srv.log 2>&1 &
-SRV=$!
-sleep 1.2
+tlib_seed "$REPO"
+tlib_start_server "$PORT" "$REPO" demo --superuser-token "$TOKEN"
 
 URL="http://127.0.0.1:$PORT/demo"
 
@@ -124,8 +119,7 @@ tlib_check "branch cp succeeded" "1" "$(echo "$list_after_branch" | grep -c '"na
 
 rm -rf /tmp/acl_wc_bob
 
-kill "$SRV" 2>/dev/null || true
-wait "$SRV" 2>/dev/null || true
+tlib_stop_server
 rm -rf "$REPO"
 
 tlib_summary "test_acl"

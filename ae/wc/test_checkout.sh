@@ -14,14 +14,9 @@ WC=/tmp/svnae_test_co_wc
 
 URL="http://127.0.0.1:$PORT/demo"
 
-trap 'pkill -f "${SERVER_BIN} demo ${REPO} ${PORT}" 2>/dev/null || true' EXIT
-
-rm -rf "$REPO" "$WC"
-"$SEED_BIN" "$REPO" >/dev/null
-
-"$SERVER_BIN" demo "$REPO" "$PORT" >/tmp/svnae_test_co_server.log 2>&1 &
-SRV=$!
-sleep 1.5
+rm -rf "$WC"
+tlib_seed "$REPO"
+tlib_start_server "$PORT" "$REPO"
 
 # --- checkout head ---
 "$SVN_BIN" checkout "$URL" "$WC" >/dev/null
@@ -54,8 +49,7 @@ tlib_check "r1 main.c old"      "int main() { return 0; }" "$(cat "$WC1/src/main
 rev_info1=$(sqlite3 "$WC1/.svn/wc.db" "SELECT value FROM info WHERE key='base_rev'")
 tlib_check "r1 info base_rev"   "1"                        "$rev_info1"
 
-kill "$SRV" 2>/dev/null || true
-wait "$SRV" 2>/dev/null || true
+tlib_stop_server
 rm -rf "$REPO" "$WC" "$WC1"
 
 tlib_summary "test_wc_checkout"

@@ -13,14 +13,9 @@ WC=/tmp/svnae_test_mut_wc
 
 URL="http://127.0.0.1:$PORT/demo"
 
-trap 'pkill -f "${SERVER_BIN} demo ${REPO} ${PORT}" 2>/dev/null || true' EXIT
-
-rm -rf "$REPO" "$WC"
-"$SEED_BIN" "$REPO" >/dev/null
-
-"$SERVER_BIN" demo "$REPO" "$PORT" >/tmp/svnae_test_mut_server.log 2>&1 &
-SRV=$!
-sleep 1.5
+rm -rf "$WC"
+tlib_seed "$REPO"
+tlib_start_server "$PORT" "$REPO"
 
 "$SVN_BIN" checkout "$URL" "$WC" >/dev/null
 
@@ -65,8 +60,7 @@ out=$("$SVN_BIN" status)
 tlib_check "DRAFT back to ?" "1" "$(echo "$out" | grep -c '^?.*DRAFT' || true)"
 
 cd /
-kill "$SRV" 2>/dev/null || true
-wait "$SRV" 2>/dev/null || true
+tlib_stop_server
 rm -rf "$REPO" "$WC"
 
 tlib_summary "test_wc_mutate"

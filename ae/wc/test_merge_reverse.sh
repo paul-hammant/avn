@@ -21,13 +21,9 @@ REPO=/tmp/svnae_test_rmrg_repo
 WC=/tmp/svnae_test_rmrg_wc
 
 URL="http://127.0.0.1:$PORT/demo"
-trap 'pkill -f "${SERVER_BIN} demo ${REPO} ${PORT}" 2>/dev/null || true' EXIT
-
 rm -rf "$REPO" "$WC"
-"$SEED_BIN" "$REPO" >/dev/null
-"$SERVER_BIN" demo "$REPO" "$PORT" >/tmp/svnae_test_rmrg_server.log 2>&1 &
-SRV=$!
-sleep 1.5
+tlib_seed "$REPO"
+tlib_start_server "$PORT" "$REPO"
 
 check_file() {
     local label="$1" expected="$2" path="$3"
@@ -108,8 +104,7 @@ mi=$("$SVN_BIN" propget svn:mergeinfo . 2>/dev/null || echo "")
 tlib_check "range reverse mergeinfo"  "src:-5-6"                             "$mi"
 
 cd /
-kill "$SRV" 2>/dev/null || true
-wait "$SRV" 2>/dev/null || true
+tlib_stop_server
 rm -rf "$REPO" "$WC"
 
 tlib_summary "test_wc_merge_reverse"

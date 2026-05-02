@@ -15,15 +15,10 @@ source "$(dirname "$0")/../../tests/lib.sh"
 
 PORT="${PORT:-9530}"
 
-trap 'pkill -f "${SERVER_BIN} .* ${PORT}" 2>/dev/null || true' EXIT
-
 # --- (A) default (sha1) seeded repo — verify all revs. ---
 REPO=/tmp/svnae_verify_repo
-rm -rf "$REPO"
-"$SEED_BIN" "$REPO" >/dev/null
-"$SERVER_BIN" demo "$REPO" "$PORT" >/tmp/svnae_verify_srv.log 2>&1 &
-SRV=$!
-sleep 1.2
+tlib_seed "$REPO"
+tlib_start_server "$PORT" "$REPO"
 
 URL="http://127.0.0.1:$PORT/demo"
 
@@ -77,8 +72,7 @@ tlib_check "tamper detected"      "1"  "$got"
 # Restore so the server can be cleanly shut down.
 mv "$target.bak" "$target"
 
-kill "$SRV" 2>/dev/null || true
-wait "$SRV" 2>/dev/null || true
+tlib_stop_server
 rm -rf "$REPO"
 
 # --- (D) sha256 repo — same verify pipeline. ---

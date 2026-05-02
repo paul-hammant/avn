@@ -16,8 +16,6 @@ source "$(dirname "$0")/../../tests/lib.sh"
 PORT="${PORT:-9300}"
 REPO=/tmp/svnae_test_server_repo
 
-trap 'pkill -f "${SERVER_BIN} demo ${REPO} ${PORT}" 2>/dev/null || true' EXIT
-
 echo "[*] Seeding repo at $REPO ..."
 rm -rf "$REPO"
 "$SEED_BIN" "$REPO" >/dev/null
@@ -140,8 +138,7 @@ code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: applicat
     -d "$COMMIT_JSON" "http://127.0.0.1:$PORT/repos/nosuch/commit")
 tlib_check "commit missing repo" "404" "$code"
 
-kill "$SRV" 2>/dev/null || true
-wait "$SRV" 2>/dev/null || true
+tlib_stop_server
 rm -rf "$REPO"
 
 tlib_summary "test_server"

@@ -24,7 +24,6 @@ REPO=/tmp/svnae_test_b81_repo
 WC=/tmp/svnae_test_b81_wc
 
 URL="http://127.0.0.1:$PORT/demo"
-trap 'pkill -f "${SERVER_BIN} .* ${PORT}" 2>/dev/null || true' EXIT
 
 # --- (A) create lays down the per-branch layout. ---
 rm -rf "$REPO" "$WC"
@@ -117,8 +116,7 @@ tlib_check "branch URL doesn't crash CLI" "1" \
     "$(echo "$out" | grep -cE '(svn info|could not contact|no such revision|Revision:)' || true)"
 
 cd /
-kill "$SRV" 2>/dev/null || true
-wait "$SRV" 2>/dev/null || true
+tlib_stop_server
 rm -rf "$REPO" "$WC"
 
 tlib_summary "test_branches_phase81"

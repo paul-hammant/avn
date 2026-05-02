@@ -19,13 +19,9 @@ REPO=/tmp/svnae_test_logv_repo
 WC=/tmp/svnae_test_logv_wc
 
 URL="http://127.0.0.1:$PORT/demo"
-trap 'pkill -f "${SERVER_BIN} demo ${REPO} ${PORT}" 2>/dev/null || true' EXIT
-
 rm -rf "$REPO" "$WC"
-"$SEED_BIN" "$REPO" >/dev/null
-"$SERVER_BIN" demo "$REPO" "$PORT" >/tmp/svnae_test_logv_server.log 2>&1 &
-SRV=$!
-sleep 1.5
+tlib_seed "$REPO"
+tlib_start_server "$PORT" "$REPO"
 
 # --- Build known history: r4 adds NEW, r5 modifies README, r6 deletes NEW. ---
 "$SVN_BIN" checkout "$URL" "$WC" >/dev/null
@@ -72,8 +68,7 @@ tlib_check "log -v shows D NEW"       "1" "$(echo "$out" | grep -c '^   D /NEW$'
 out=$("$SVN_BIN" log "$URL")
 tlib_check "bare log no header"       "0" "$(echo "$out" | grep -c 'Changed paths:' || true)"
 
-kill "$SRV" 2>/dev/null || true
-wait "$SRV" 2>/dev/null || true
+tlib_stop_server
 rm -rf "$REPO" "$WC"
 
 tlib_summary "test_log_verbose"

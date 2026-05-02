@@ -13,13 +13,9 @@ REPO=/tmp/svnae_test_cpmv_repo
 WC=/tmp/svnae_test_cpmv_wc
 
 URL="http://127.0.0.1:$PORT/demo"
-trap 'pkill -f "${SERVER_BIN} demo ${REPO} ${PORT}" 2>/dev/null || true' EXIT
-
 rm -rf "$REPO" "$WC"
-"$SEED_BIN" "$REPO" >/dev/null
-"$SERVER_BIN" demo "$REPO" "$PORT" >/tmp/svnae_test_cpmv_server.log 2>&1 &
-SRV=$!
-sleep 1.5
+tlib_seed "$REPO"
+tlib_start_server "$PORT" "$REPO"
 
 "$SVN_BIN" checkout "$URL" "$WC" >/dev/null
 cd "$WC"
@@ -74,8 +70,7 @@ code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/repos/demo
 tlib_check "remote main.c gone"    "404" "$code"
 
 cd /
-kill "$SRV" 2>/dev/null || true
-wait "$SRV" 2>/dev/null || true
+tlib_stop_server
 rm -rf "$REPO" "$WC"
 
 tlib_summary "test_wc_cp_mv"

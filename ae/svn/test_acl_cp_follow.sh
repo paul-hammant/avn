@@ -26,13 +26,9 @@ WC=/tmp/svnae_test_cpacl_wc
 
 TOKEN="cpacl-token"
 URL="http://127.0.0.1:$PORT/demo"
-trap 'pkill -f "${SERVER_BIN} .* ${PORT}" 2>/dev/null || true' EXIT
-
 rm -rf "$REPO" "$WC"
-"$SEED_BIN" "$REPO" >/dev/null
-"$SERVER_BIN" demo "$REPO" "$PORT" --superuser-token "$TOKEN" >/tmp/svnae_test_cpacl_srv.log 2>&1 &
-SRV=$!
-sleep 1.2
+tlib_seed "$REPO"
+tlib_start_server "$PORT" "$REPO" demo --superuser-token "$TOKEN"
 
 # Add a nested directory so we can test recursive subtree ACL checks.
 "$SVN_BIN" checkout "$URL" "$WC" >/dev/null
@@ -108,8 +104,7 @@ rules=$(curl -s -H "X-Svnae-Superuser: $TOKEN" \
              "http://127.0.0.1:$PORT/repos/demo/rev/9/acl/src-branch2/nested")
 tlib_check "nested ACL rebased"     "1" "$(echo "$rules" | grep -c '"+alice:rw"' || true)"
 
-kill "$SRV" 2>/dev/null || true
-wait "$SRV" 2>/dev/null || true
+tlib_stop_server
 rm -rf "$REPO" "$WC"
 
 tlib_summary "test_acl_cp_follow"

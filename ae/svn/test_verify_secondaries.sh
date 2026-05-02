@@ -24,8 +24,6 @@ WC=/tmp/svnae_test_sec_wc
 
 URL="http://127.0.0.1:$PORT/demo"
 
-trap 'pkill -f "${SERVER_BIN} .* ${PORT}" 2>/dev/null || true' EXIT
-
 # --- (A) Create multi-algo repo. ---
 rm -rf "$REPO" "$WC"
 "$ADMIN_BIN" create "$REPO" --algos sha256,sha1 >/dev/null
@@ -72,8 +70,7 @@ tlib_check "secondaries file count" "1" "$(echo "$out" | grep -c '1 file(s)' || 
 # --- (F) Tamper: corrupt note.txt's secondary (sha1) hash in rep-cache.db.
 #     Default verify should still pass (it checks the primary only).
 #     --secondaries verify should detect the mismatch and fail.
-kill "$SRV" 2>/dev/null || true
-wait "$SRV" 2>/dev/null || true
+tlib_stop_server
 
 # Corrupt the secondary hash of note.txt's content blob specifically.
 # Ask the server for note.txt's primary hash via the cat endpoint's
@@ -107,8 +104,7 @@ out=$("$SVN_BIN" verify "$URL" --rev 1 --secondaries 2>&1 || true)
 # Confirm verify NO LONGER says OK — any of the non-OK exit paths is fine.
 tlib_check "secondary tamper detected" "0" "$(echo "$out" | grep -c '^verify: OK' || true)"
 
-kill "$SRV" 2>/dev/null || true
-wait "$SRV" 2>/dev/null || true
+tlib_stop_server
 rm -rf "$REPO" "$WC"
 
 tlib_summary "test_verify_secondaries"

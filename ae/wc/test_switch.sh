@@ -19,13 +19,9 @@ WC=/tmp/svnae_test_sw_wc
 
 URL="http://127.0.0.1:$PORT/demo"
 
-trap 'pkill -f "${SERVER_BIN} demo ${REPO} ${PORT}" 2>/dev/null || true' EXIT
-
 rm -rf "$REPO" "$WC"
-"$SEED_BIN" "$REPO" >/dev/null
-"$SERVER_BIN" demo "$REPO" "$PORT" >/tmp/svnae_test_sw_server.log 2>&1 &
-SRV=$!
-sleep 1.5
+tlib_seed "$REPO"
+tlib_start_server "$PORT" "$REPO"
 
 # --- Build a second repo named 'alt' on the same server, used as the
 #     "branch" to switch to. The seeder only knows one layout, so we'll
@@ -52,7 +48,6 @@ rm -rf "$REPO2"
 "$SERVER_BIN" demo "$REPO2" "$PORT2" >/tmp/svnae_test_sw_server2.log 2>&1 &
 SRV2=$!
 sleep 1.0
-trap 'pkill -f "${SERVER_BIN} .* ${PORT}" 2>/dev/null || true' EXIT
 
 # Differentiate repo2 from repo1: commit a change there so switching
 # actually pulls something new.

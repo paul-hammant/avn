@@ -16,16 +16,11 @@ source "$(dirname "$0")/../../tests/lib.sh"
 PORT="${PORT:-9470}"
 REPO=/tmp/svnae_test_br_repo
 WC=/tmp/svnae_test_br_wc
-
 URL="http://127.0.0.1:$PORT/demo"
 
-trap 'pkill -f "${SERVER_BIN} demo ${REPO} ${PORT}" 2>/dev/null || true' EXIT
-
-rm -rf "$REPO" "$WC"
-"$SEED_BIN" "$REPO" >/dev/null
-"$SERVER_BIN" demo "$REPO" "$PORT" >/tmp/svnae_test_br_server.log 2>&1 &
-SRV=$!
-sleep 1.5
+rm -rf "$WC"
+tlib_seed "$REPO"
+tlib_start_server "$PORT" "$REPO"
 
 # Seeder creates head=3. Branch src -> src-branch.
 before=$(find "$REPO/reps" -name '*.rep' | wc -l)
@@ -86,8 +81,7 @@ tlib_check "branch final"             "branch change"            "$b"
 tlib_check "trunk and branch differ"  "differ"                   "$( [ "$a" = "$b" ] && echo same || echo differ)"
 
 cd /
-kill "$SRV" 2>/dev/null || true
-wait "$SRV" 2>/dev/null || true
+tlib_stop_server
 rm -rf "$REPO" "$WC"
 
 tlib_summary "test_wc_branch"

@@ -24,14 +24,9 @@ PORT="${PORT:-9550}"
 
 TOKEN="test-super-token-7-2"
 
-trap 'pkill -f "${SERVER_BIN} .* ${PORT}" 2>/dev/null || true' EXIT
-
 REPO=/tmp/svnae_test_aclw_repo
-rm -rf "$REPO"
-"$SEED_BIN" "$REPO" >/dev/null
-"$SERVER_BIN" demo "$REPO" "$PORT" --superuser-token "$TOKEN" >/tmp/svnae_test_aclw_srv.log 2>&1 &
-SRV=$!
-sleep 1.2
+tlib_seed "$REPO"
+tlib_start_server "$PORT" "$REPO" demo --superuser-token "$TOKEN"
 
 URL="http://127.0.0.1:$PORT/demo"
 
@@ -95,8 +90,7 @@ out=$(SVN_SUPERUSER_TOKEN="$TOKEN" "$SVN_BIN" cp "$URL/src" "$URL/src-mirror" \
         --author super --log "super copies" 2>&1)
 tlib_check "super-user copies denied subtree" "1" "$(echo "$out" | grep -c 'Committed revision' || true)"
 
-kill "$SRV" 2>/dev/null || true
-wait "$SRV" 2>/dev/null || true
+tlib_stop_server
 rm -rf "$REPO"
 
 tlib_summary "test_acl_write"

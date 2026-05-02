@@ -12,8 +12,6 @@ REPO=/tmp/svnae_test_cli_repo
 
 URL="http://127.0.0.1:$PORT/demo"
 
-trap 'pkill -f "${SERVER_BIN} demo ${REPO} ${PORT}" 2>/dev/null || true' EXIT
-
 echo "[*] Seeding..."
 rm -rf "$REPO"
 "$SEED_BIN" "$REPO" >/dev/null
@@ -87,8 +85,7 @@ else
     echo "  ok   unknown subcommand exits nonzero"
 fi
 
-kill "$SRV" 2>/dev/null || true
-wait "$SRV" 2>/dev/null || true
+tlib_stop_server
 rm -rf "$REPO"
 
 if [ "$FAILS" -gt 0 ]; then
