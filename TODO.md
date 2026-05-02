@@ -39,10 +39,21 @@ binary, but we want it long-term. Keep the .ae source.
   void* passed as parameter, multiple sequential calls, then
   `bytes.finish` reads the buffer.
 
-**Next debugger needs**: look at the generated C for `encode_window`
-and `emit_varint_`, run under valgrind, see if the writes go to
-the right buffer. Possibly file as an aether-team aetherc bug if
-the bug reproduces with a minimal repro outside svn-aether.
+**Round 226 update**: standalone C-level tracing pinpointed it.
+Bytes 4..7 of the encoded diff are correct (`00 0e 0e 02`) but
+when read by `decode_apply` via `string.char_at(diff, 4)` they
+come back as 0. Cause: aetherc's call-site lowering passes
+`aether_string_data(s)` (the data pointer past the AetherString
+header) across `extern` boundaries. Receiver's magic check fails,
+falls back to `strlen()`, truncates at the first NUL — which IS
+byte 4 of every svndiff diff (the always-zero `sview_offset`
+varint). Filed as
+`/home/paul/scm/aether/binary-string-extern-boundary.md`.
+
+Once that lands, the existing test fix in HEAD passes verbatim
+(test was already correctly using `string.length(got_str)` after
+Round 226). Recreate `ae/delta/.tests-svndiff.ae` and add to the
+aggregator.
 
 **Test fix kept**: ae/delta/test_svndiff.ae now reads
 `string.length(got_str)` for the length and `status` for the
