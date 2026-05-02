@@ -8,8 +8,7 @@
 
 source "$(dirname "$0")/../../tests/lib.sh"
 
-PORT="$test_update_PORT"
-REPO="$test_update_REPO"
+tlib_use_fixture test_update
 WC1=/tmp/svnae_test_upd_wc1
 WC2=/tmp/svnae_test_upd_wc2
 

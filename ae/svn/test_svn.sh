@@ -7,9 +7,7 @@
 
 source "$(dirname "$0")/../../tests/lib.sh"
 
-PORT="$test_svn_PORT"
-REPO="$test_svn_REPO"
-URL="http://127.0.0.1:$PORT/demo"
+tlib_use_fixture test_svn
 
 # --- info ---
 out=$("$SVN_BIN" info "$URL")

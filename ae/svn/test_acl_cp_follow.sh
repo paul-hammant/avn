@@ -20,8 +20,7 @@
 
 source "$(dirname "$0")/../../tests/lib.sh"
 
-PORT="$test_acl_cp_follow_PORT"
-REPO="$test_acl_cp_follow_REPO"
+tlib_use_fixture test_acl_cp_follow
 WC=/tmp/svnae_test_cpacl_wc
 
 TOKEN="cpacl-token"

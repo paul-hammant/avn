@@ -15,8 +15,7 @@ source "$(dirname "$0")/../../tests/lib.sh"
 
 # Server fixture spawned by aeb (.tests-server.ae). The fixture
 # exports test_server_PORT and test_server_REPO into our env.
-PORT="$test_server_PORT"
-REPO="$test_server_REPO"
+tlib_use_fixture test_server
 
 # --- info ---
 r=$(curl -sf "http://127.0.0.1:$PORT/repos/demo/info")

@@ -162,3 +162,16 @@ tlib_kill_servers() {
         TLIB_PIDS=""
     fi
 }
+
+# tlib_use_fixture NAME — convenience for tests using the svnae SDK
+# fixture. Reads ${NAME}_PORT and ${NAME}_REPO that the SDK's
+# pre_command exported, sets local PORT, REPO, URL for the test body.
+# URL is the standard demo URL (every fixture spawns the server with
+# repo name "demo" — see tlib_fixture_server).
+tlib_use_fixture() {
+    local name="$1"
+    local port_var="${name}_PORT" repo_var="${name}_REPO"
+    PORT="${!port_var}"
+    REPO="${!repo_var}"
+    URL="http://127.0.0.1:$PORT/demo"
+}

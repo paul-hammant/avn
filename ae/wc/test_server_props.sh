@@ -8,8 +8,7 @@
 
 source "$(dirname "$0")/../../tests/lib.sh"
 
-PORT="$test_server_props_PORT"
-REPO="$test_server_props_REPO"
+tlib_use_fixture test_server_props
 WC1=/tmp/svnae_test_sp_wc1
 WC2=/tmp/svnae_test_sp_wc2
 

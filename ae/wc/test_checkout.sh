@@ -8,11 +8,9 @@
 
 source "$(dirname "$0")/../../tests/lib.sh"
 
-PORT="$test_checkout_PORT"
-REPO="$test_checkout_REPO"
+tlib_use_fixture test_checkout
 WC=/tmp/svnae_test_co_wc
 
-URL="http://127.0.0.1:$PORT/demo"
 
 rm -rf "$WC"
 tlib_seed "$REPO"

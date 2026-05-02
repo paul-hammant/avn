@@ -21,8 +21,7 @@
 
 source "$(dirname "$0")/../../tests/lib.sh"
 
-PORT="$test_branch_create_PORT"
-REPO="$test_branch_create_REPO"
+tlib_use_fixture test_branch_create
 
 TOKEN="b82a-token"
 URL="http://127.0.0.1:$PORT/demo"

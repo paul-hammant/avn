@@ -7,11 +7,9 @@
 
 source "$(dirname "$0")/../../tests/lib.sh"
 
-PORT="$test_mutate_PORT"
-REPO="$test_mutate_REPO"
+tlib_use_fixture test_mutate
 WC=/tmp/svnae_test_mut_wc
 
-URL="http://127.0.0.1:$PORT/demo"
 
 rm -rf "$WC"
 tlib_seed "$REPO"

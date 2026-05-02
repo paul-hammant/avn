@@ -14,9 +14,7 @@
 source "$(dirname "$0")/../../tests/lib.sh"
 
 # Stage 1 fixture: sha1 seeded repo + server on $test_verify_PORT.
-PORT="$test_verify_PORT"
-REPO="$test_verify_REPO"
-URL="http://127.0.0.1:$PORT/demo"
+tlib_use_fixture test_verify
 
 # --- (A) default (sha1) seeded repo — verify all revs. ---
 

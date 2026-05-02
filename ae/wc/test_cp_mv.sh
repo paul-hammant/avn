@@ -8,11 +8,9 @@
 
 source "$(dirname "$0")/../../tests/lib.sh"
 
-PORT="$test_cp_mv_PORT"
-REPO="$test_cp_mv_REPO"
+tlib_use_fixture test_cp_mv
 WC=/tmp/svnae_test_cpmv_wc
 
-URL="http://127.0.0.1:$PORT/demo"
 rm -rf "$WC"
 
 "$SVN_BIN" checkout "$URL" "$WC" >/dev/null

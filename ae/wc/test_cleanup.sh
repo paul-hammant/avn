@@ -14,11 +14,9 @@
 
 source "$(dirname "$0")/../../tests/lib.sh"
 
-PORT="$test_cleanup_PORT"
-REPO="$test_cleanup_REPO"
+tlib_use_fixture test_cleanup
 WC=/tmp/svnae_test_clean_wc
 
-URL="http://127.0.0.1:$PORT/demo"
 rm -rf "$WC"
 
 # --- (A) non-WC path rejected. ---

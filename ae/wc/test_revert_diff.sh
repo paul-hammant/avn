@@ -7,11 +7,9 @@
 
 source "$(dirname "$0")/../../tests/lib.sh"
 
-PORT="$test_revert_diff_PORT"
-REPO="$test_revert_diff_REPO"
+tlib_use_fixture test_revert_diff
 WC=/tmp/svnae_test_rd_wc
 
-URL="http://127.0.0.1:$PORT/demo"
 
 rm -rf "$WC"
 

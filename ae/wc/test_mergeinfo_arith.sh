@@ -12,11 +12,9 @@
 
 source "$(dirname "$0")/../../tests/lib.sh"
 
-PORT="$test_mergeinfo_arith_PORT"
-REPO="$test_mergeinfo_arith_REPO"
+tlib_use_fixture test_mergeinfo_arith
 WC=/tmp/svnae_test_miar_wc
 
-URL="http://127.0.0.1:$PORT/demo"
 rm -rf "$WC"
 
 # --- Build r4..r8: each adds its own line to src/main.c in a

@@ -8,11 +8,9 @@
 
 source "$(dirname "$0")/../../tests/lib.sh"
 
-PORT="$test_ignore_PORT"
-REPO="$test_ignore_REPO"
+tlib_use_fixture test_ignore
 WC=/tmp/svnae_test_ig_wc
 
-URL="http://127.0.0.1:$PORT/demo"
 rm -rf "$WC"
 "$SVN_BIN" checkout "$URL" "$WC" >/dev/null
 cd "$WC"

@@ -18,8 +18,7 @@
 
 source "$(dirname "$0")/../../tests/lib.sh"
 
-PORT="$test_blame_PORT"
-REPO="$test_blame_REPO"
+tlib_use_fixture test_blame
 WC=/tmp/svnae_test_blame_wc
 
 TOKEN="blame-super-token"

@@ -7,11 +7,9 @@
 
 source "$(dirname "$0")/../../tests/lib.sh"
 
-PORT="$test_commit_PORT"
-REPO="$test_commit_REPO"
+tlib_use_fixture test_commit
 WC=/tmp/svnae_test_wcc_wc
 
-URL="http://127.0.0.1:$PORT/demo"
 
 rm -rf "$WC"
 

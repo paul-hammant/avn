@@ -14,11 +14,9 @@
 
 source "$(dirname "$0")/../../tests/lib.sh"
 
-PORT="$test_log_verbose_PORT"
-REPO="$test_log_verbose_REPO"
+tlib_use_fixture test_log_verbose
 WC=/tmp/svnae_test_logv_wc
 
-URL="http://127.0.0.1:$PORT/demo"
 rm -rf "$WC"
 
 # --- Build known history: r4 adds NEW, r5 modifies README, r6 deletes NEW. ---

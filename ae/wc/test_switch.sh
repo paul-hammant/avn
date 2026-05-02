@@ -15,8 +15,7 @@ source "$(dirname "$0")/../../tests/lib.sh"
 
 # Stage 1 fixture: primary repo + server. Stage 2 (alternate repo
 # on PORT+1) is managed inline by the test below.
-PORT="$test_sw_PORT"
-REPO="$test_sw_REPO"
+tlib_use_fixture test_sw
 WC=/tmp/svnae_test_sw_wc
 URL="http://127.0.0.1:$PORT/demo"
 rm -rf "$WC"

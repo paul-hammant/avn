@@ -13,8 +13,7 @@
 
 source "$(dirname "$0")/../../tests/lib.sh"
 
-PORT="$test_branch_PORT"
-REPO="$test_branch_REPO"
+tlib_use_fixture test_branch
 WC=/tmp/svnae_test_br_wc
 URL="http://127.0.0.1:$PORT/demo"
 

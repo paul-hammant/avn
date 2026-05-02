@@ -19,11 +19,9 @@
 
 source "$(dirname "$0")/../../tests/lib.sh"
 
-PORT="$test_b81_PORT"
-REPO="$test_b81_REPO"
+tlib_use_fixture test_b81
 WC=/tmp/svnae_test_b81_wc
 
-URL="http://127.0.0.1:$PORT/demo"
 rm -rf "$WC"
 
 # --- (A) create laid down the per-branch layout (fixture-created). ---

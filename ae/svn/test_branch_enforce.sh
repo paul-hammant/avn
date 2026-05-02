@@ -18,8 +18,7 @@
 
 source "$(dirname "$0")/../../tests/lib.sh"
 
-PORT="$test_branch_enforce_PORT"
-REPO="$test_branch_enforce_REPO"
+tlib_use_fixture test_branch_enforce
 
 TOKEN="b82b-token"
 URL="http://127.0.0.1:$PORT/demo"

@@ -22,10 +22,7 @@ source "$(dirname "$0")/../../tests/lib.sh"
 
 TOKEN="test-super-token-42"
 
-PORT="$test_acl_PORT"
-REPO="$test_acl_REPO"
-
-URL="http://127.0.0.1:$PORT/demo"
+tlib_use_fixture test_acl
 
 # --- (B) baseline — no ACL yet, alice reads everything ---
 out=$(SVN_USER=alice "$SVN_BIN" ls "$URL" src)

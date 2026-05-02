@@ -16,11 +16,9 @@
 
 source "$(dirname "$0")/../../tests/lib.sh"
 
-PORT="$test_merge_PORT"
-REPO="$test_merge_REPO"
+tlib_use_fixture test_merge
 WC=/tmp/svnae_test_mrg_wc
 
-URL="http://127.0.0.1:$PORT/demo"
 
 rm -rf "$WC"
 
