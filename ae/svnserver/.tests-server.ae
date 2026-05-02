@@ -1,0 +1,15 @@
+import build
+import bash
+import bash (script, pre_command, post_command)
+import svnae
+import svnae (svn_server)
+
+main() {
+    b = build.start()
+    build.dep(b, "ae/svnserver")
+    build.dep(b, "ae/svn")
+    bash.test(b) {
+        svn_server("test_server", "9300")
+        script("test_server.sh")
+    }
+}

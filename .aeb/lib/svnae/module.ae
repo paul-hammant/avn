@@ -1,0 +1,71 @@
+// svnae — port-local aeb SDK for the svn-aether build/test grammar.
+//
+// Provides setters that translate Subversion-port-shaped fixture
+// declarations into the generic bash.test pre_command/post_command
+// hooks that aetherBuild's bash module already provides.
+//
+// The actual lifecycle (spawn/seed/kill) lives in tests/lib.sh as bash
+// functions; this SDK just generates the right pre/post invocations.
+//
+// Usage from a .tests.ae file:
+//
+//     import build
+//     import bash
+//     import bash (script, jobs, pre_command, post_command)
+//     import svnae
+//     import svnae (svn_server, svn_server_with_token)
+//
+//     main() {
+//         b = build.start()
+//         bash.test(b) {
+//             jobs(1)
+//             svn_server("demo_fixture", "9300")
+//             script("test_server.sh")
+//         }
+//     }
+//
+// At fixture-spawn time the test script sees:
+//
+//   $DEMO_FIXTURE_PORT=9300
+//   $DEMO_FIXTURE_REPO=/tmp/svnae_aeb_demo_fixture_repo
+//   $DEMO_FIXTURE_PID=<spawned pid>
+//   $DEMO_FIXTURE_LOG=/tmp/svnae_srv_demo_fixture_9300.log
+
+import build
+import bash
+import bash (pre_command, post_command)
+import std.string
+
+// svn_server(NAME, PORT) — declare a vanilla aether-svnserver fixture.
+// Wipes /tmp/svnae_aeb_<NAME>_repo, seeds it via svnae-seed, spawns
+// aether-svnserver on PORT, kills it after the script.
+//
+// The repo path is derived from NAME so the test author doesn't have
+// to make one up. Multi-fixture tests use distinct names.
+svn_server(_ctx: ptr, name: string, port: string) {
+    repo = string.concat("/tmp/svnae_aeb_", string.concat(name, "_repo"))
+    pre = string.concat("source tests/lib.sh && tlib_seed_named ",
+                        string.concat(name, string.concat(" ", repo)))
+    pre = string.concat(pre, " && tlib_fixture_server ")
+    pre = string.concat(pre, name)
+    pre = string.concat(pre, " ")
+    pre = string.concat(pre, port)
+    pre_command(_ctx, pre)
+    post_command(_ctx, "source tests/lib.sh && tlib_kill_servers")
+}
+
+// svn_server_with_token(NAME, PORT, TOKEN) — like svn_server, but also
+// passes --superuser-token to the server. Used by ACL/auth tests.
+svn_server_with_token(_ctx: ptr, name: string, port: string, token: string) {
+    repo = string.concat("/tmp/svnae_aeb_", string.concat(name, "_repo"))
+    pre = string.concat("source tests/lib.sh && tlib_seed_named ",
+                        string.concat(name, string.concat(" ", repo)))
+    pre = string.concat(pre, " && tlib_fixture_server ")
+    pre = string.concat(pre, name)
+    pre = string.concat(pre, " ")
+    pre = string.concat(pre, port)
+    pre = string.concat(pre, " --superuser-token ")
+    pre = string.concat(pre, token)
+    pre_command(_ctx, pre)
+    post_command(_ctx, "source tests/lib.sh && tlib_kill_servers")
+}

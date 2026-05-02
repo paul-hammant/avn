@@ -5,5 +5,8 @@ target/
 # Never hand-edit these; they will be overwritten. See README.md.
 ae/**/*_generated.c
 
-# aetherBuild modules
-.aeb/
+# aetherBuild — ignore the symlinks aeb --init creates pointing at
+# /home/.../share/aeb/lib/{bash,aether,...}, but track the port-local
+# SDK at .aeb/lib/svnae/ which lives in this repo.
+/.aeb/lib/*
+!/.aeb/lib/svnae/

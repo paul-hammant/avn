@@ -13,17 +13,10 @@
 
 source "$(dirname "$0")/../../tests/lib.sh"
 
-PORT="${PORT:-9300}"
-REPO=/tmp/svnae_test_server_repo
-
-echo "[*] Seeding repo at $REPO ..."
-rm -rf "$REPO"
-"$SEED_BIN" "$REPO" >/dev/null
-
-echo "[*] Launching server on :$PORT ..."
-"$SERVER_BIN" demo "$REPO" "$PORT" >/tmp/svnae_server_out.log 2>&1 &
-SRV=$!
-sleep 1.5
+# Server fixture spawned by aeb (.tests-server.ae). The fixture
+# exports test_server_PORT and test_server_REPO into our env.
+PORT="$test_server_PORT"
+REPO="$test_server_REPO"
 
 # --- info ---
 r=$(curl -sf "http://127.0.0.1:$PORT/repos/demo/info")
@@ -137,8 +130,5 @@ tlib_check "malformed commit 400" "400" "$code"
 code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
     -d "$COMMIT_JSON" "http://127.0.0.1:$PORT/repos/nosuch/commit")
 tlib_check "commit missing repo" "404" "$code"
-
-tlib_stop_server
-rm -rf "$REPO"
 
 tlib_summary "test_server"
