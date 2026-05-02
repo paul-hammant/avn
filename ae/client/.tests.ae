@@ -1,12 +1,15 @@
 import build
 import bash
-import bash (jobs)
+import bash (script, pre_command, post_command)
+import svnae
+import svnae (svn_server)
 
 main() {
     b = build.start()
     build.dep(b, "ae/client")
     build.dep(b, "ae/svnserver")
     bash.test(b) {
-        jobs(8)
+        svn_server("test_client", "9320")
+        script("test_client.sh")
     }
 }
