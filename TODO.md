@@ -14,12 +14,40 @@ The .ae sources are still in the tree as scaffolding; the
 `.tests-<tag>.ae` wrappers are NOT in the aggregator (would break
 the green build). Each needs its own debugging round.
 
-### F1. ae/delta/test_svndiff.ae — 6 cases failing
-**Symptom**: `length 1 != N` mismatches across multiple svndiff
-encode shapes (target self-copy RLE, word replace, varint length).
-**Hypothesis**: encoder output buffer length is reported as 1
-when something else is expected — possibly TLS buffer accessor
-bug, or test using stale return contract.
+### F1. ae/delta/test_svndiff.ae — 6 cases failing (svndiff is real, not dead)
+
+**svndiff is production-bound**: it's the wire format for `svn diff`
+and the dump/load delta encoding. Currently used by no production
+binary, but we want it long-term. Keep the .ae source.
+
+**Investigated 2026-05-02 with debug instrumentation**:
+- The test was reading the second tuple element as length, but
+  `svndiff_decode_apply` returns `(string, status)` — fixed by
+  reading `string.length(got_str)` instead. (Test fix in HEAD; the
+  failures below are real bugs not test errors.)
+- Encoder reports correct values (source_len, target_len, etc).
+  Generated diff has the right length but the **header varints all
+  decode to 0**: bytes 4-10 of the encoded diff are all zero.
+- Decoder reads `tview_len=0` from the stream → allocates a 0-byte
+  target → succeeds → returns empty string.
+- `bytes.set(b, pos, val)` works correctly **in isolation** (pilot at
+  /tmp/bytes-pilot/test2 verifies). Same in svndiff_encode.ae:
+  `bytes.set` calls are identical to the pilot.
+- Bug must be in how `bytes.set` interacts with `emit_varint_`
+  (helper function) inside the `encode_window` body. Possibly an
+  aetherc code-gen issue specific to: helper-fn writes through a
+  void* passed as parameter, multiple sequential calls, then
+  `bytes.finish` reads the buffer.
+
+**Next debugger needs**: look at the generated C for `encode_window`
+and `emit_varint_`, run under valgrind, see if the writes go to
+the right buffer. Possibly file as an aether-team aetherc bug if
+the bug reproduces with a minimal repro outside svn-aether.
+
+**Test fix kept**: ae/delta/test_svndiff.ae now reads
+`string.length(got_str)` for the length and `status` for the
+encoder-status flag. The 6 cases still fail with `length 0 != N`
+(was `length 1 != N`), surfacing the real bug more clearly.
 
 ### F2. ae/delta/test_xdelta.ae — multiple cases
 **Symptom**: same shape (`length 1 != N`).
