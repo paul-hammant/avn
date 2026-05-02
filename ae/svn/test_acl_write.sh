@@ -20,11 +20,11 @@
 
 source "$(dirname "$0")/../../tests/lib.sh"
 
-PORT="${PORT:-9550}"
+PORT="$test_acl_write_PORT"
 
 TOKEN="test-super-token-7-2"
 
-REPO=/tmp/svnae_test_aclw_repo
+REPO="$test_acl_write_REPO"
 tlib_seed "$REPO"
 tlib_start_server "$PORT" "$REPO" demo --superuser-token "$TOKEN"
 
@@ -89,8 +89,5 @@ tlib_check "bob can't copy denied subtree" "0" "$(echo "$out" | grep -c 'Committ
 out=$(SVN_SUPERUSER_TOKEN="$TOKEN" "$SVN_BIN" cp "$URL/src" "$URL/src-mirror" \
         --author super --log "super copies" 2>&1)
 tlib_check "super-user copies denied subtree" "1" "$(echo "$out" | grep -c 'Committed revision' || true)"
-
-tlib_stop_server
-rm -rf "$REPO"
 
 tlib_summary "test_acl_write"

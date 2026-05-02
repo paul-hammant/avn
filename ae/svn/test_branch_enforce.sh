@@ -18,8 +18,8 @@
 
 source "$(dirname "$0")/../../tests/lib.sh"
 
-PORT="${PORT:-9666}"
-REPO=/tmp/svnae_test_b82b_repo
+PORT="$test_branch_enforce_PORT"
+REPO="$test_branch_enforce_REPO"
 
 TOKEN="b82b-token"
 URL="http://127.0.0.1:$PORT/demo"
@@ -123,8 +123,5 @@ tlib_check "main accepts arbitrary path"      "201"  "$code"
 # --- (I) super bypasses readme-only's spec ---
 code=$(put_branch_super readme-only "src/other.c" "x")
 tlib_check "super PUT readme-only src/other.c" "201"  "$code"
-
-tlib_stop_server
-rm -rf "$REPO"
 
 tlib_summary "test_branch_enforce"

@@ -21,8 +21,8 @@
 
 source "$(dirname "$0")/../../tests/lib.sh"
 
-PORT="${PORT:-9665}"
-REPO=/tmp/svnae_test_b82a_repo
+PORT="$test_branch_create_PORT"
+REPO="$test_branch_create_REPO"
 
 TOKEN="b82a-token"
 URL="http://127.0.0.1:$PORT/demo"
@@ -84,8 +84,5 @@ tlib_check "list shows src/** glob" "1" "$(echo "$out" | grep -c 'src/\*\*' || t
 info=$(curl -s "http://127.0.0.1:$PORT/repos/demo/info")
 tlib_check "info has specs"         "1" "$(echo "$info" | grep -c '"specs":{' || true)"
 tlib_check "info specs readme-only" "1" "$(echo "$info" | grep -c '"readme-only":\["README"\]' || true)"
-
-tlib_stop_server
-rm -rf "$REPO"
 
 tlib_summary "test_branch_create"

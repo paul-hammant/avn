@@ -18,15 +18,13 @@
 
 source "$(dirname "$0")/../../tests/lib.sh"
 
-PORT="${PORT:-9615}"
-REPO=/tmp/svnae_test_blame_repo
+PORT="$test_blame_PORT"
+REPO="$test_blame_REPO"
 WC=/tmp/svnae_test_blame_wc
 
 TOKEN="blame-super-token"
 URL="http://127.0.0.1:$PORT/demo"
-rm -rf "$REPO" "$WC"
-tlib_seed "$REPO"
-tlib_start_server "$PORT" "$REPO" demo --superuser-token "$TOKEN"
+rm -rf "$WC"
 
 # --- Build history: r4 adds file, r5 edits line 2, r6 appends line 4,
 #     r7 inserts a new line between line 1 and line 2. ---
@@ -88,8 +86,5 @@ out=$("$SVN_BIN" annotate "$URL" file.txt)
 tlib_check "annotate = blame"  "4 alice line1"  "$(echo "$out" | sed -n '1p')"
 out=$("$SVN_BIN" praise "$URL" file.txt)
 tlib_check "praise = blame"    "4 alice line1"  "$(echo "$out" | sed -n '1p')"
-
-tlib_stop_server
-rm -rf "$REPO" "$WC"
 
 tlib_summary "test_blame"

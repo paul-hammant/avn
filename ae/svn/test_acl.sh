@@ -20,13 +20,10 @@
 
 source "$(dirname "$0")/../../tests/lib.sh"
 
-PORT="${PORT:-9540}"
-
 TOKEN="test-super-token-42"
 
-REPO=/tmp/svnae_test_acl_repo
-tlib_seed "$REPO"
-tlib_start_server "$PORT" "$REPO" demo --superuser-token "$TOKEN"
+PORT="$test_acl_PORT"
+REPO="$test_acl_REPO"
 
 URL="http://127.0.0.1:$PORT/demo"
 
@@ -118,8 +115,5 @@ list_after_branch=$(curl -s -H "X-Svnae-Superuser: $TOKEN" \
 tlib_check "branch cp succeeded" "1" "$(echo "$list_after_branch" | grep -c '"name":"src-branch"' || true)"
 
 rm -rf /tmp/acl_wc_bob
-
-tlib_stop_server
-rm -rf "$REPO"
 
 tlib_summary "test_acl"
