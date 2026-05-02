@@ -1,5 +1,0 @@
-line1
-MIDDLE
-EDITED
-line3
-ADDED
