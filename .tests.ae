@@ -62,4 +62,6 @@ main() {
     build.dep(b, "ae/wc/.tests-db.ae")
     build.dep(b, "ae/wc/.tests-pristine.ae")
     build.dep(b, "ae/fs_fs/.tests-txn.ae")
+    build.dep(b, "ae/delta/.tests-svndiff.ae")
+    build.dep(b, "ae/delta/.tests-xdelta.ae")
 }

@@ -24,9 +24,9 @@ import std.string
 
 extern svndiff_encoder_new(source_len: int, target_len: int) -> ptr
 extern svndiff_encoder_add_op(enc: ptr, action: int, length: int, offset: int) -> int
-extern svndiff_encoder_finish(enc: ptr, new_data: string, new_data_len: int) -> (string, int)
+extern svndiff_encoder_finish(enc: ptr, new_data: @aether string, new_data_len: int) -> (string, int)
 
-extern svndiff_decode_apply(diff: string, diff_len: int, source: string, source_len: int) -> (string, int)
+extern svndiff_decode_apply(diff: @aether string, diff_len: int, source: @aether string, source_len: int) -> (string, int)
 
 const OP_SOURCE = 0
 const OP_TARGET = 1
@@ -37,13 +37,11 @@ const OP_NEW    = 2
 run_case(label: string, source: string, target: string, enc: ptr, new_data: string) {
     ndat = string.length(new_data)
     diff_data, diff_len = svndiff_encoder_finish(enc, new_data, ndat)
-    println("DEBUG ${label}: diff_len=${diff_len} diff_data.length=${string.length(diff_data)}")
     if diff_len == 0 {
         println("FAIL ${label}: encoder_finish returned empty")
         return 1
     }
     got_str, status = svndiff_decode_apply(diff_data, diff_len, source, string.length(source))
-    println("DEBUG ${label}: status=${status} got_str.length=${string.length(got_str)}")
     if status == 0 {
         println("FAIL ${label}: decode_apply returned status 0")
         return 1

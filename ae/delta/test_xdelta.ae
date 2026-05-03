@@ -20,11 +20,11 @@
 
 import std.string
 
-extern xdelta_compute(source: string, source_len: int,
-                            target: string, target_len: int) -> (string, int)
+extern xdelta_compute(source: @aether string, source_len: int,
+                            target: @aether string, target_len: int) -> (string, int)
 
-extern svndiff_decode_apply(diff: string, diff_len: int,
-                                  source: string, source_len: int) -> (string, int)
+extern svndiff_decode_apply(diff: @aether string, diff_len: int,
+                                  source: @aether string, source_len: int) -> (string, int)
 
 expect_str(label: string, got: string, want: string) {
     if string.equals(got, want) == 1 {
@@ -45,7 +45,12 @@ round_trip(label: string, source: string, target: string) {
         println("FAIL ${label}: xdelta_compute returned empty")
         return 1
     }
-    got, got_len = svndiff_decode_apply(ddata, dlen, source, slen)
+    got, status = svndiff_decode_apply(ddata, dlen, source, slen)
+    if status == 0 {
+        println("FAIL ${label}: decode_apply returned status 0")
+        return 1
+    }
+    got_len = string.length(got)
 
     rc = 0
     if got_len != tlen {

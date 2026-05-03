@@ -5,6 +5,36 @@ Tests are 32/32 green at HEAD (bash integration suite) plus 8/8
 Aether-native unit tests; 100% Aether (zero hand-written C); naming
 sweep finished through Round 206.
 
+## Round 228 update
+
+Aether 0.116 shipped the `@aether string` per-param extern annotation
+(opt-in, restores v0.97 header-preserving behaviour for
+Aether-to-Aether crossings). Aether 0.117 is the stable release.
+
+**F1 (svndiff) and F2 (xdelta) FIXED** in Round 228:
+- ae/delta/test_svndiff.ae: annotated the two binary string params
+  on `svndiff_encoder_finish` and `svndiff_decode_apply` externs.
+- ae/delta/test_xdelta.ae: annotated `xdelta_compute` and
+  `svndiff_decode_apply` externs; also fixed test's
+  status-vs-length confusion (was reading the int tuple element
+  as length; now reads `string.length(got)` directly).
+
+Both .tests-svndiff.ae and .tests-xdelta.ae added to the
+aggregator. 6/6 svndiff round-trip cases pass; xdelta likewise.
+
+**F3-F5 still parked**: investigated test_repo (F3); the failure
+isn't an Aether-to-Aether `@aether` annotation case. The blob
+read path goes `zlib.inflate` → `zlib_get_inflate_bytes` (a C
+extern returning `string`) → returned through Aether helpers
+back to the test caller. The C-to-Aether crossing isn't
+addressed by `@aether` (which only marks Aether-emitted
+receivers). To preserve length end-to-end, the C-side function
+would need to return the AetherString pointer directly (not the
+unwrapped data), or callers route through `string.substring_n`
+with explicit lengths. Defer until a production caller of
+test_repo's read path emerges, or we have time to refactor the
+zlib accessor pattern.
+
 ## Real failures surfaced by Round 225
 
 Five `test_*.ae` programs were declared as `[[bin]]` in aether.toml
