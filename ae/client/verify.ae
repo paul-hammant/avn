@@ -57,18 +57,18 @@ extern response_header(resp: ptr, name: string) -> string
 extern response_free(resp: ptr)
 
 // Server-info accessors (still C-side handle for now).
-extern ra_hash_algo(base_url: string, repo_name: string) -> string
-extern ra_info_rev(base_url: string, repo_name: string, rev: int) -> ptr
-extern ra_info_root(I: ptr) -> string
-extern ra_info_free(I: ptr)
-extern ra_free(p: string)
+extern remote_hash_algo(base_url: string, repo_name: string) -> string
+extern remote_info_rev(base_url: string, repo_name: string, rev: int) -> ptr
+extern remote_info_root(I: ptr) -> string
+extern remote_info_free(I: ptr)
+extern remote_free(p: string)
 
 // Path joiner: append `name` to `prefix` with a `/`, dropping the
 // separator when prefix is empty (so root-relative paths stay clean).
 extern path_join_rel(prefix: string, name: string) -> string
 
 // List parser already lives in ae/client/parse.ae + ae/client/packed.ae.
-extern ra_parse_list(body: string) -> string
+extern remote_parse_list(body: string) -> string
 extern packed_list_count(packed: string) -> int
 extern packed_list_name(packed: string, i: int) -> string
 extern packed_list_kind(packed: string, i: int) -> string
@@ -77,7 +77,7 @@ extern packed_list_kind(packed: string, i: int) -> string
 // "N\x02<algo>\x01<hex>\x02..." string that the C helpers below
 // walk; we re-use them so the secondary parser doesn't need its own
 // per-field accessors.
-extern ra_parse_hashes_secondaries(body: string) -> string
+extern remote_parse_hashes_secondaries(body: string) -> string
 
 // stderr writer for diagnostics.
 verify_stderr_(s: string) -> int {
@@ -201,7 +201,7 @@ verify_dir(base: string, repo: string, rev: int, algo: string, rel: string) -> s
     dir_hdr_owned = string.copy(dir_hdr)
     response_free(resp)
 
-    packed = ra_parse_list(body_owned)
+    packed = remote_parse_list(body_owned)
     if string.length(packed) == 0 { return "" }
     packed_owned = string.copy(packed)
 
@@ -301,7 +301,7 @@ verify_secondaries_in_dir(base: string, repo: string, rev: int,
     body_owned = string.copy(body)
     response_free(resp)
 
-    packed = ra_parse_list(body_owned)
+    packed = remote_parse_list(body_owned)
     if string.length(packed) == 0 { return -1 }
     packed_owned = string.copy(packed)
     n = packed_list_count(packed_owned)
@@ -359,7 +359,7 @@ verify_one_file_secondaries(base: string, repo: string, rev: int,
     hbody_owned = string.copy(hbody)
     response_free(hresp)
 
-    sec_packed = ra_parse_hashes_secondaries(hbody_owned)
+    sec_packed = remote_parse_hashes_secondaries(hbody_owned)
     if string.length(sec_packed) == 0 { return 0 }   // no secondaries
     sec_owned = string.copy(sec_packed)
 
@@ -400,26 +400,26 @@ verify_one_file_secondaries(base: string, repo: string, rev: int,
 
 // Public entry. Prints a one-line summary on success.
 export client_verify_full(base_url: string, repo_name: string, rev: int, with_secondaries: int) -> int {
-    algo_raw = ra_hash_algo(base_url, repo_name)
+    algo_raw = remote_hash_algo(base_url, repo_name)
     if algo_raw == null {
         verify_stderr_("verify: server info unavailable\n")
         return -1
     }
     algo = string.copy(algo_raw)
-    ra_free(algo_raw)
+    remote_free(algo_raw)
     if string.length(algo) == 0 {
         verify_stderr_("verify: server info unavailable\n")
         return -1
     }
 
-    info = ra_info_rev(base_url, repo_name, rev)
+    info = remote_info_rev(base_url, repo_name, rev)
     if info == null {
         verify_stderr_("verify: rev ${rev} info unavailable\n")
         return -1
     }
-    claimed_root = ra_info_root(info)
+    claimed_root = remote_info_root(info)
     claimed_root_owned = string.copy(claimed_root)
-    ra_info_free(info)
+    remote_info_free(info)
     if string.length(claimed_root_owned) == 0 {
         verify_stderr_("verify: rev ${rev} has no root sha in /info\n")
         return -1

@@ -47,7 +47,7 @@ extern wc_nodelist_count(L: ptr) -> int
 extern wc_nodelist_free(L: ptr)
 
 // RA: server's current head.
-extern ra_head_rev(base_url: string, repo_name: string) -> int
+extern remote_head_rev(base_url: string, repo_name: string) -> int
 
 // Remote-tree opaque storage primitive (C-side, update_shim.c). The
 // recursive RA walk in ae/working_copy/update_walk.ae populates it via
@@ -93,7 +93,7 @@ export wc_update(wc_root: string, target_rev: int) -> int {
     repo     = string.copy(repo)
 
     if target_rev < 0 {
-        target_rev = ra_head_rev(base_url, repo)
+        target_rev = remote_head_rev(base_url, repo)
         if target_rev < 0 {
             wc_db_close(db)
             return 0 - 1

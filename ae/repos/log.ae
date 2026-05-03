@@ -15,9 +15,9 @@
 
 // Server-side log enumeration: read every rev blob from rev 0 to HEAD,
 // pack author/date/msg into the same "<N>\x02<rev>\x01<author>\x01
-// <date>\x01<msg>\x02..." string shape that ae/client/parse.ae::ra_parse_log
+// <date>\x01<msg>\x02..." string shape that ae/client/parse.ae::remote_parse_log
 // produces for the client side. The C accessors in ae/repos/shim.c
-// consume it via the `ra_log_*` accessor family in ae/client/packed.ae
+// consume it via the `remote_log_*` accessor family in ae/client/packed.ae
 // (the record shapes are identical, so we reuse those rather than
 // duplicate the walkers here).
 
@@ -82,7 +82,7 @@ export repos_log_packed(repo: string) -> string {
         r = r + 1
     }
 
-    // Prepend "N\x02" — same shape as ra_parse_log emits.
+    // Prepend "N\x02" — same shape as remote_parse_log emits.
     header = string.concat(string.from_int(n), "\x02")
     if n == 0 { return header }
     return string.concat(header, out)
@@ -90,7 +90,7 @@ export repos_log_packed(repo: string) -> string {
 
 // Single-revision metadata. Returns a "\x01"-separated 4-field record
 // "<rev>\x01<author>\x01<date>\x01<msg>" matching the first four
-// fields of ra_parse_info_rev's output, so the C side can reuse
+// fields of remote_parse_info_rev's output, so the C side can reuse
 // packed_info_rev/author/date/msg accessors from ae/client/packed.ae.
 // Empty string on miss (no rev pointer, or rev blob missing "root").
 
@@ -140,8 +140,8 @@ export repos_info_packed(repo: string, rev: int) -> string {
 //       * otherwise: attribute to the current rev + author.
 //
 // Returns a packed "N\x02<rev>\x01<author>\x01<text>\x02..." string
-// matching ra_parse_blame's output, so the C side reuses the
-// ra_blame_* accessors from ae/client/packed.ae.
+// matching remote_parse_blame's output, so the C side reuses the
+// remote_blame_* accessors from ae/client/packed.ae.
 
 // ----------------------------------------------------------------------------
 // Content fetch: resolve (rev, path) to a file sha, then read its blob.
@@ -422,7 +422,7 @@ step_rev(rev: int, author: string,
 
 // ----------------------------------------------------------------------------
 // Public entry point. Returns packed "N\x02<rev>\x01<author>\x01
-// <text>\x02..." matching ra_parse_blame. "" on failure / path
+// <text>\x02..." matching remote_parse_blame. "" on failure / path
 // doesn't resolve at target_rev.
 
 export repos_blame_packed(repo: string, target_rev: int, path: string) -> string {

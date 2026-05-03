@@ -20,10 +20,10 @@
 //
 // 1. Walk wc.db nodes; refuse if any conflicted.
 // 2. Build an RA commit from pending edits:
-//      state=2 (deleted)            → ra_commit_delete
-//      state=1 (added) + kind=dir   → ra_commit_mkdir
-//      state=1 (added) + kind=file  → read disk, ra_commit_add_file
-//      state=0 + file + dirty       → ra_commit_add_file (modify wire shape)
+//      state=2 (deleted)            → remote_commit_delete
+//      state=1 (added) + kind=dir   → remote_commit_mkdir
+//      state=1 (added) + kind=file  → read disk, remote_commit_add_file
+//      state=0 + file + dirty       → remote_commit_add_file (modify wire shape)
 //                                     pristine-put the new bytes
 // 3. Send WC props (every tracked path with props) — server inherits
 //    by rep-sharing for paths we don't mention.
@@ -34,7 +34,7 @@
 // Round 71 (Gordian) ports wc_commit out of ae/working_copy/commit_shim.c.
 // Eliminates the parallel `roles[]` / `new_sha1s[]` arrays — pass 2
 // reclassifies from the nodelist directly (same logic as pass 1, but
-// only doing the wc.db reconcile rather than the wire-side ra_commit_*
+// only doing the wc.db reconcile rather than the wire-side remote_commit_*
 // calls). Re-hashing modified-file disk content costs nothing
 // observable (small files, in-page cache).
 
@@ -64,12 +64,12 @@ extern wc_pristine_put(wc_root: string, data: string, len: int) -> string
 extern wc_hash_file(wc_root: string, path: string) -> string
 
 // RA commit builder (C-side opaque).
-extern ra_commit_begin(base_rev: int, author: string, logmsg: string) -> ptr
-extern ra_commit_add_file(cb: ptr, path: string, content: string, len: int) -> int
-extern ra_commit_mkdir(cb: ptr, path: string) -> int
-extern ra_commit_delete(cb: ptr, path: string) -> int
-extern ra_commit_set_prop(cb: ptr, path: string, key: string, value: string) -> int
-extern ra_commit_finish(cb: ptr, base_url: string, repo_name: string) -> int
+extern remote_commit_begin(base_rev: int, author: string, logmsg: string) -> ptr
+extern remote_commit_add_file(cb: ptr, path: string, content: string, len: int) -> int
+extern remote_commit_mkdir(cb: ptr, path: string) -> int
+extern remote_commit_delete(cb: ptr, path: string) -> int
+extern remote_commit_set_prop(cb: ptr, path: string, key: string, value: string) -> int
+extern remote_commit_finish(cb: ptr, base_url: string, repo_name: string) -> int
 
 // WC proplist (Aether export, C-side handle).
 extern wc_proplist(wc_root: string, path: string) -> ptr
@@ -157,7 +157,7 @@ export wc_commit(wc_root: string, author: string, logmsg: string) -> int {
     }
 
     // Pass 1: build the RA commit.
-    cb = ra_commit_begin(base_rev, author, logmsg)
+    cb = remote_commit_begin(base_rev, author, logmsg)
     any_edits = 0
     i = 0
     while i < n {
@@ -171,18 +171,18 @@ export wc_commit(wc_root: string, author: string, logmsg: string) -> int {
         disk1 = "${wc_root}/${rel}"
         role = classify_(wc_root, rel, kind, st, base_sha)
         if role == 3 {
-            ra_commit_delete(cb, rel)
+            remote_commit_delete(cb, rel)
             any_edits = 1
         }
         if role == 2 {
-            ra_commit_mkdir(cb, rel)
+            remote_commit_mkdir(cb, rel)
             any_edits = 1
         }
         if role == 1 {
             data = read_file_(disk1)
             if string.length(data) >= 0 {
                 len = string.length(data)
-                ra_commit_add_file(cb, rel, data, len)
+                remote_commit_add_file(cb, rel, data, len)
                 wc_pristine_put(wc_root, data, len)
                 any_edits = 1
             }
@@ -205,7 +205,7 @@ export wc_commit(wc_root: string, author: string, logmsg: string) -> int {
                 pname = string.copy(pname)
                 pval  = wc_proplist_value(P, j)
                 pval  = string.copy(pval)
-                ra_commit_set_prop(cb, rel, pname, pval)
+                remote_commit_set_prop(cb, rel, pname, pval)
                 j = j + 1
             }
             wc_proplist_free(P)
@@ -217,13 +217,13 @@ export wc_commit(wc_root: string, author: string, logmsg: string) -> int {
         // Nothing to commit. We finish to free the builder; the server
         // produces a new rev for an empty edit list (matches HTTP-layer
         // behaviour). Tests want a meaningful sentinel, so return -2.
-        ra_commit_finish(cb, base_url, repo)
+        remote_commit_finish(cb, base_url, repo)
         wc_nodelist_free(L)
         wc_db_close(db)
         return 0 - 2
     }
 
-    new_rev = ra_commit_finish(cb, base_url, repo)
+    new_rev = remote_commit_finish(cb, base_url, repo)
     if new_rev < 0 {
         wc_nodelist_free(L)
         wc_db_close(db)

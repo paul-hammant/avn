@@ -54,149 +54,149 @@ extern packed_list_kind(packed: string, i: int) -> string
 
 // ---- log handle -------------------------------------------------
 
-export ra_log(base_url: string, repo_name: string) -> ptr {
+export remote_log(base_url: string, repo_name: string) -> ptr {
     p = fetch_log(base_url, repo_name)
     if string.length(p) == 0 { return null }
     return string.copy(p)
 }
-export ra_log_count (lg: ptr) -> int {
+export remote_log_count (lg: ptr) -> int {
     if lg == null { return 0 }
     return packed_log_count(lg)
 }
-export ra_log_rev   (lg: ptr, i: int) -> int {
+export remote_log_rev   (lg: ptr, i: int) -> int {
     if lg == null { return 0 - 1 }
     return packed_log_rev(lg, i)
 }
-export ra_log_author(lg: ptr, i: int) -> string {
+export remote_log_author(lg: ptr, i: int) -> string {
     if lg == null { return "" }
     return packed_log_author(lg, i)
 }
-export ra_log_date  (lg: ptr, i: int) -> string {
+export remote_log_date  (lg: ptr, i: int) -> string {
     if lg == null { return "" }
     return packed_log_date(lg, i)
 }
-export ra_log_msg   (lg: ptr, i: int) -> string {
+export remote_log_msg   (lg: ptr, i: int) -> string {
     if lg == null { return "" }
     return packed_log_msg(lg, i)
 }
-export ra_log_free  (lg: ptr) { return 0 }
+export remote_log_free  (lg: ptr) { return 0 }
 
 // ---- paths-changed handle --------------------------------------
 
-export ra_paths_changed(base_url: string, repo_name: string, rev: int) -> ptr {
+export remote_paths_changed(base_url: string, repo_name: string, rev: int) -> ptr {
     p = fetch_paths(base_url, repo_name, rev)
     if string.length(p) == 0 { return null }
     return string.copy(p)
 }
-export ra_paths_count (P: ptr) -> int {
+export remote_paths_count (P: ptr) -> int {
     if P == null { return 0 }
     return packed_paths_count(P)
 }
-export ra_paths_action(P: ptr, i: int) -> string {
+export remote_paths_action(P: ptr, i: int) -> string {
     if P == null { return "" }
     return packed_paths_action(P, i)
 }
-export ra_paths_path  (P: ptr, i: int) -> string {
+export remote_paths_path  (P: ptr, i: int) -> string {
     if P == null { return "" }
     return packed_paths_path(P, i)
 }
-export ra_paths_free  (P: ptr) { return 0 }
+export remote_paths_free  (P: ptr) { return 0 }
 
 // ---- blame handle ----------------------------------------------
 
-export ra_blame(base_url: string, repo_name: string, rev: int, path: string) -> ptr {
+export remote_blame(base_url: string, repo_name: string, rev: int, path: string) -> ptr {
     p = fetch_blame(base_url, repo_name, rev, path)
     if string.length(p) == 0 { return null }
     return string.copy(p)
 }
-export ra_blame_count (B: ptr) -> int {
+export remote_blame_count (B: ptr) -> int {
     if B == null { return 0 }
     return packed_blame_count(B)
 }
-export ra_blame_rev   (B: ptr, i: int) -> int {
+export remote_blame_rev   (B: ptr, i: int) -> int {
     if B == null { return 0 - 1 }
     return packed_blame_rev(B, i)
 }
-export ra_blame_author(B: ptr, i: int) -> string {
+export remote_blame_author(B: ptr, i: int) -> string {
     if B == null { return "" }
     return packed_blame_author(B, i)
 }
-export ra_blame_text  (B: ptr, i: int) -> string {
+export remote_blame_text  (B: ptr, i: int) -> string {
     if B == null { return "" }
     return packed_blame_text(B, i)
 }
-export ra_blame_free  (B: ptr) { return 0 }
+export remote_blame_free  (B: ptr) { return 0 }
 
 // ---- info handle (single-record) -------------------------------
 
-export ra_info_rev(base_url: string, repo_name: string, rev: int) -> ptr {
+export remote_info_rev(base_url: string, repo_name: string, rev: int) -> ptr {
     p = fetch_info(base_url, repo_name, rev)
     if string.length(p) == 0 { return null }
     return string.copy(p)
 }
-export ra_info_rev_num(I: ptr) -> int {
+export remote_info_rev_num(I: ptr) -> int {
     if I == null { return 0 - 1 }
     return packed_info_rev(I)
 }
-export ra_info_author(I: ptr) -> string {
+export remote_info_author(I: ptr) -> string {
     if I == null { return "" }
     return packed_info_author(I)
 }
-export ra_info_date  (I: ptr) -> string {
+export remote_info_date  (I: ptr) -> string {
     if I == null { return "" }
     return packed_info_date(I)
 }
-export ra_info_msg   (I: ptr) -> string {
+export remote_info_msg   (I: ptr) -> string {
     if I == null { return "" }
     return packed_info_msg(I)
 }
-export ra_info_root  (I: ptr) -> string {
+export remote_info_root  (I: ptr) -> string {
     if I == null { return "" }
     return packed_info_root(I)
 }
-export ra_info_free  (I: ptr) { return 0 }
+export remote_info_free  (I: ptr) { return 0 }
 
 // ---- props handle ----------------------------------------------
 
-export ra_get_props(base_url: string, repo_name: string, rev: int, path: string) -> ptr {
+export remote_get_props(base_url: string, repo_name: string, rev: int, path: string) -> ptr {
     p = fetch_props(base_url, repo_name, rev, path)
     if string.length(p) == 0 { return null }
     return string.copy(p)
 }
-export ra_props_count(P: ptr) -> int {
+export remote_props_count(P: ptr) -> int {
     if P == null { return 0 }
     return packed_props_count(P)
 }
-export ra_props_name (P: ptr, i: int) -> string {
+export remote_props_name (P: ptr, i: int) -> string {
     if P == null { return "" }
     return packed_props_name(P, i)
 }
-export ra_props_value(P: ptr, i: int) -> string {
+export remote_props_value(P: ptr, i: int) -> string {
     if P == null { return "" }
     return packed_props_value(P, i)
 }
-export ra_props_free (P: ptr) { return 0 }
+export remote_props_free (P: ptr) { return 0 }
 
 // ---- list handle -----------------------------------------------
 
-export ra_list(base_url: string, repo_name: string, rev: int, path: string) -> ptr {
+export remote_list(base_url: string, repo_name: string, rev: int, path: string) -> ptr {
     p = fetch_list(base_url, repo_name, rev, path)
     if string.length(p) == 0 { return null }
     return string.copy(p)
 }
-export ra_list_count(L: ptr) -> int {
+export remote_list_count(L: ptr) -> int {
     if L == null { return 0 }
     return packed_list_count(L)
 }
-export ra_list_name(L: ptr, i: int) -> string {
+export remote_list_name(L: ptr, i: int) -> string {
     if L == null { return "" }
     return packed_list_name(L, i)
 }
-export ra_list_kind(L: ptr, i: int) -> string {
+export remote_list_kind(L: ptr, i: int) -> string {
     if L == null { return "" }
     return packed_list_kind(L, i)
 }
-export ra_list_free(L: ptr) { return 0 }
+export remote_list_free(L: ptr) { return 0 }
 
 main() {
     println("ae/client/accessors.ae is a library; not meant to run standalone")

@@ -14,10 +14,10 @@
 // permissions and limitations under the License.
 
 // Server-side directory-listing in the same packed-string shape the
-// RA client side produces. Reuses the ra_list_* accessors from
+// RA client side produces. Reuses the remote_list_* accessors from
 // ae/client/packed.ae so the repos shim can fold the fifth handle type
 // (list) onto the shared repos_handle struct from round
-// 53. Same record shape as ra_parse_list:
+// 53. Same record shape as remote_parse_list:
 //
 //   "<N>\x02<name>\x01<kind>\x02<name>\x01<kind>...\x02"
 //
@@ -41,7 +41,7 @@ extern dir_entry_name(body: string, i: int) -> string
 
 // Build a packed listing string for the directory at (repo, rev, path),
 // or "" on miss. Empty directories produce "0\x02" (count 0 + sentinel),
-// which the ra_list_* accessors interpret correctly.
+// which the remote_list_* accessors interpret correctly.
 export repos_list_packed(repo: string, rev: int, path: string) -> string {
     root_sha = repos_rev_field(repo, rev, "root")
     if string.length(root_sha) == 0 { return "" }

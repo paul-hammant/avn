@@ -24,13 +24,13 @@
 
 import std.string
 
-extern ra_list(base_url: string, repo_name: string, rev: int, path: string) -> ptr
-extern ra_list_count(L: ptr) -> int
-extern ra_list_name(L: ptr, i: int) -> string
-extern ra_list_kind(L: ptr, i: int) -> string
-extern ra_list_free(L: ptr)
-extern ra_cat(base_url: string, repo_name: string, rev: int, path: string) -> string
-extern ra_free(p: string)
+extern remote_list(base_url: string, repo_name: string, rev: int, path: string) -> ptr
+extern remote_list_count(L: ptr) -> int
+extern remote_list_name(L: ptr, i: int) -> string
+extern remote_list_kind(L: ptr, i: int) -> string
+extern remote_list_free(L: ptr)
+extern remote_cat(base_url: string, repo_name: string, rev: int, path: string) -> string
+extern remote_free(p: string)
 
 extern path_join_rel(prefix: string, name: string) -> string
 
@@ -47,17 +47,17 @@ export merge_walk_remote(wc_root: string,
     full = path_join_rel(source_path, sub_prefix)
     full = string.copy(full)
 
-    L = ra_list(base_url, repo, rev, full)
+    L = remote_list(base_url, repo, rev, full)
     if L == null { return -1 }
 
-    n = ra_list_count(L)
+    n = remote_list_count(L)
     result = 0
     i = 0
     while i < n {
         if result == 0 {
-            name = ra_list_name(L, i)
+            name = remote_list_name(L, i)
             name = string.copy(name)
-            kind = ra_list_kind(L, i)
+            kind = remote_list_kind(L, i)
             kind = string.copy(kind)
             rel = path_join_rel(sub_prefix, name)
             rel = string.copy(rel)
@@ -72,19 +72,19 @@ export merge_walk_remote(wc_root: string,
             if string.equals(kind, "dir") == 0 {
                 remote_full = path_join_rel(full, name)
                 remote_full = string.copy(remote_full)
-                data = ra_cat(base_url, repo, rev, remote_full)
+                data = remote_cat(base_url, repo, rev, remote_full)
                 if string.length(data) == 0 {
                     result = -1
                 }
                 if result == 0 {
                     rtree_add_file(rt, rel, data, string.length(data), wc_root)
-                    ra_free(data)
+                    remote_free(data)
                 }
             }
         }
         i = i + 1
     }
-    ra_list_free(L)
+    remote_list_free(L)
     return result
 }
 

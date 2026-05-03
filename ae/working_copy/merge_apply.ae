@@ -91,10 +91,10 @@ export merge_apply_deletions(wc_root: string, target_path: string,
     n_a = rtree_count(a_rt)
     i = 0
     while i < n_a {
-        ra_path = rtree_path_at(a_rt, i)
-        ra_kind = rtree_kind_at(a_rt, i)
-        if rtree_find_by_path(b_rt, ra_path) < 0 {
-            wc_rel = map_wc_rel(target_path, ra_path)
+        remote_path = rtree_path_at(a_rt, i)
+        remote_kind = rtree_kind_at(a_rt, i)
+        if rtree_find_by_path(b_rt, remote_path) < 0 {
+            wc_rel = map_wc_rel(target_path, remote_path)
             disk = path_join_rel(wc_root, wc_rel)
             if wc_db_node_exists(db, wc_rel) == 1 {
                 n = wc_db_get_node(db, wc_rel)
@@ -107,8 +107,8 @@ export merge_apply_deletions(wc_root: string, target_path: string,
                     wc_node_free(n)
                     wc_db_upsert_node(db, wc_rel, kind, brev, bsha_copy, 2)
                 }
-                if ra_kind == 0 { io_unlink(disk) }
-                if ra_kind == 1 { io_rmdir(disk) }
+                if remote_kind == 0 { io_unlink(disk) }
+                if remote_kind == 1 { io_rmdir(disk) }
             }
         }
         i = i + 1

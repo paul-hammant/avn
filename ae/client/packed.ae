@@ -234,7 +234,7 @@ export packed_blame_text(packed: string, i: int) -> string {
 
 // ---- props ---------------------------------------------------------------
 //
-// Record shape: "<name>\x01<value>". Produced by ra_parse_props over a
+// Record shape: "<name>\x01<value>". Produced by remote_parse_props over a
 // JSON {k:v,...} object.
 
 export packed_props_count(packed: string) -> int {

@@ -29,7 +29,7 @@ import std.json
 
 // Parse {"head": N} → N. Returns -1 on malformed JSON or missing
 // field; the C caller maps that to "HTTP failure or absent head".
-export ra_parse_head_rev(body: string) -> int {
+export remote_parse_head_rev(body: string) -> int {
     if string.length(body) == 0 { return -1 }
     root, err = json.parse(body)
     if string.length(err) > 0 { return -1 }
@@ -40,10 +40,10 @@ export ra_parse_head_rev(body: string) -> int {
     return rv
 }
 
-// Parse {"rev": N} → N. Same shape as ra_parse_head_rev but for
+// Parse {"rev": N} → N. Same shape as remote_parse_head_rev but for
 // the commit/copy/branch-create response bodies. Returns -1 on any
 // failure.
-export ra_parse_rev_response(body: string) -> int {
+export remote_parse_rev_response(body: string) -> int {
     if string.length(body) == 0 { return -1 }
     root, err = json.parse(body)
     if string.length(err) > 0 { return -1 }
@@ -59,7 +59,7 @@ export ra_parse_rev_response(body: string) -> int {
 // servers (pre Phase 6.1) omit the field; in that case we default
 // to "sha1" so callers can forge ahead.
 // Returns "" only on malformed JSON / empty body.
-export ra_parse_hash_algo(body: string) -> string {
+export remote_parse_hash_algo(body: string) -> string {
     if string.length(body) == 0 { return "" }
     root, err = json.parse(body)
     if string.length(err) > 0 { return "" }
@@ -75,13 +75,13 @@ export ra_parse_hash_algo(body: string) -> string {
 
 // Parse a rev-info JSON response into a packed string:
 //   "<rev_int>\x01<author>\x01<date>\x01<msg>\x01<root>"
-// The C caller splits on \x01 and populates its ra_info
+// The C caller splits on \x01 and populates its remote_info
 // struct. Returns "" on malformed JSON so the caller can fail
 // the whole request.
 //
 // Absent individual string fields become empty segments; absent
 // rev becomes "-1".
-export ra_parse_info_rev(body: string) -> string {
+export remote_parse_info_rev(body: string) -> string {
     if string.length(body) == 0 { return "" }
     root, err = json.parse(body)
     if string.length(err) > 0 { return "" }
@@ -126,13 +126,13 @@ get_string_field(obj: ptr, key: string) -> string {
 // Parse a log-list JSON response into a packed string of entries
 // separated by \x02 (record separator). Each entry is itself
 // packed as "<rev>\x01<author>\x01<date>\x01<msg>" (same shape
-// as ra_parse_info_rev minus the root field).
+// as remote_parse_info_rev minus the root field).
 //
 // C caller splits on \x02 to get entries, then on \x01 to get
 // fields, populating struct log_entry[].
 //
 // Returns "" on malformed JSON or when entries[] is missing.
-export ra_parse_log(body: string) -> string {
+export remote_parse_log(body: string) -> string {
     if string.length(body) == 0 { return "" }
     root, err = json.parse(body)
     if string.length(err) > 0 { return "" }
@@ -180,7 +180,7 @@ export ra_parse_log(body: string) -> string {
 // Parse paths-changed JSON into packed "N\x02<entry>\x02<entry>..."
 // where each entry is "<action>\x01<path>". action is a single
 // char from {A,M,D,?}.
-export ra_parse_paths(body: string) -> string {
+export remote_parse_paths(body: string) -> string {
     if string.length(body) == 0 { return "" }
     root, err = json.parse(body)
     if string.length(err) > 0 { return "" }
@@ -217,7 +217,7 @@ export ra_parse_paths(body: string) -> string {
 
 // Parse a props JSON object {k: v, k: v, ...} into
 // "N\x02<key>\x01<value>\x02<key>\x01<value>..."
-export ra_parse_props(body: string) -> string {
+export remote_parse_props(body: string) -> string {
     if string.length(body) == 0 { return "" }
     root, err = json.parse(body)
     if string.length(err) > 0 { return "" }
@@ -248,7 +248,7 @@ export ra_parse_props(body: string) -> string {
 
 // Parse a blame JSON {"lines":[{rev,author,text}, ...]} into
 // "N\x02<rev>\x01<author>\x01<text>\x02..."
-export ra_parse_blame(body: string) -> string {
+export remote_parse_blame(body: string) -> string {
     if string.length(body) == 0 { return "" }
     root, err = json.parse(body)
     if string.length(err) > 0 { return "" }
@@ -291,8 +291,8 @@ export ra_parse_blame(body: string) -> string {
 // Parse a list JSON {"entries":[{name,kind}, ...]} into
 // "N\x02<name>\x01<kind-char>\x02..."
 // kind-char is 'd' for "dir", 'f' otherwise (the existing C
-// ra_list accessors only distinguish dir vs file).
-export ra_parse_list(body: string) -> string {
+// remote_list accessors only distinguish dir vs file).
+export remote_parse_list(body: string) -> string {
     if string.length(body) == 0 { return "" }
     root, err = json.parse(body)
     if string.length(err) > 0 { return "" }
@@ -330,9 +330,9 @@ export ra_parse_list(body: string) -> string {
 
 // Parse a /hashes JSON {"primary":..., "secondaries":[{algo,hash},...]}
 // into "N\x02<algo>\x01<hash>\x02..." (same two-separator shape as
-// the other ra_parse_* helpers). Returns "0\x02" on a hash response
+// the other remote_parse_* helpers). Returns "0\x02" on a hash response
 // with no secondaries, "" on malformed JSON or empty body.
-export ra_parse_hashes_secondaries(body: string) -> string {
+export remote_parse_hashes_secondaries(body: string) -> string {
     if string.length(body) == 0 { return "" }
     root, err = json.parse(body)
     if string.length(err) > 0 { return "" }

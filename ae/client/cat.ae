@@ -7,7 +7,7 @@
 //
 //     http://www.apache.org/licenses/LICENSE-2.0
 
-// ra_cat — GET /repos/<r>/rev/<n>/cat/<p> via std.http.client.
+// remote_cat — GET /repos/<r>/rev/<n>/cat/<p> via std.http.client.
 // Round 177 retires the C-side wrapper in ra/shim.c that did the
 // malloc-detach dance. The "binary fidelity" claim in the original
 // shim was a fiction (aether_string_length on the unwrapped char*
@@ -35,7 +35,7 @@ strip_leading_slash_(s: string) -> string {
     return ""
 }
 
-export ra_cat(base_url: string, repo_name: string, rev: int,
+export remote_cat(base_url: string, repo_name: string, rev: int,
                      path: string) -> string {
     clean_path = strip_leading_slash_(path)
     url = url_rev_cat(base_url, repo_name, rev, clean_path)
@@ -52,12 +52,12 @@ export ra_cat(base_url: string, repo_name: string, rev: int,
     return body_copy
 }
 
-// ra_free retained as an Aether-side no-op for back-compat
-// with callers that bracket their ra_cat result with a free.
+// remote_free retained as an Aether-side no-op for back-compat
+// with callers that bracket their remote_cat result with a free.
 // AetherString refcounting handles lifetime; the explicit free is
 // redundant but the call sites are too numerous to touch in one
 // round, so we leave the API surface intact.
-export ra_free(p: string) {
+export remote_free(p: string) {
     p = p
     return
 }

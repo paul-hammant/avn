@@ -14,7 +14,7 @@
 // permissions and limitations under the License.
 
 // RA client commit-body builder. Walks the in-memory struct
-// ra_commit *cb via C-side accessors and produces the JSON
+// remote_commit *cb via C-side accessors and produces the JSON
 // body the server expects:
 //
 //   { "base_rev": N, "author": "...", "log": "...",
@@ -29,22 +29,22 @@
 import std.string
 import std.json
 
-extern ra_cb_base_rev(cb: ptr) -> int
-extern ra_cb_author(cb: ptr) -> string
-extern ra_cb_logmsg(cb: ptr) -> string
-extern ra_cb_edits_packed(cb: ptr) -> string
-extern ra_cb_props_packed(cb: ptr) -> string
-extern ra_cb_acls_packed(cb: ptr) -> string
+extern remote_cb_base_rev(cb: ptr) -> int
+extern remote_cb_author(cb: ptr) -> string
+extern remote_cb_logmsg(cb: ptr) -> string
+extern remote_cb_edits_packed(cb: ptr) -> string
+extern remote_cb_props_packed(cb: ptr) -> string
+extern remote_cb_acls_packed(cb: ptr) -> string
 
-// Round 146: writers ported from C (ra_commit_add_file etc.
+// Round 146: writers ported from C (remote_commit_add_file etc.
 // in ra/shim.c). The struct stays C-side; setters below replace
 // the old pack_append + 5 add-op pile.
-extern ra_cb_set_edits_packed(cb: ptr, packed: string)
-extern ra_cb_set_props_packed(cb: ptr, packed: string)
-extern ra_cb_set_acls_packed(cb: ptr, packed: string)
-extern ra_cb_n_edits(cb: ptr) -> int
-extern ra_cb_n_props(cb: ptr) -> int
-extern ra_cb_n_acls(cb: ptr) -> int
+extern remote_cb_set_edits_packed(cb: ptr, packed: string)
+extern remote_cb_set_props_packed(cb: ptr, packed: string)
+extern remote_cb_set_acls_packed(cb: ptr, packed: string)
+extern remote_cb_n_edits(cb: ptr) -> int
+extern remote_cb_n_props(cb: ptr) -> int
+extern remote_cb_n_acls(cb: ptr) -> int
 
 // b64-encode (unpadded; the server's base64_decode handles both
 // padded and unpadded — see std.cryptography.base64_decode in the
@@ -76,7 +76,7 @@ pack_append_(cur: string, count: int, record: string) -> string {
 // pack_append_, and stashes the result back via the C-side setter.
 // Round 146 ported these from ra/shim.c. Returns 0 on success
 // (matching the prior C contract).
-export ra_commit_add_file(cb: ptr, path: string, content: string, len: int) -> int {
+export remote_commit_add_file(cb: ptr, path: string, content: string, len: int) -> int {
     b64 = ""
     if len > 0 {
         b64 = crypto_b64_encode(content, len)
@@ -85,56 +85,56 @@ export ra_commit_add_file(cb: ptr, path: string, content: string, len: int) -> i
     rec = string.concat(rec, path)
     rec = string.concat(rec, "\x01")
     rec = string.concat(rec, b64)
-    n = ra_cb_n_edits(cb)
-    cur = ra_cb_edits_packed(cb)
+    n = remote_cb_n_edits(cb)
+    cur = remote_cb_edits_packed(cb)
     new_packed = pack_append_(cur, n, rec)
-    ra_cb_set_edits_packed(cb, new_packed)
+    remote_cb_set_edits_packed(cb, new_packed)
     return 0
 }
 
-export ra_commit_mkdir(cb: ptr, path: string) -> int {
+export remote_commit_mkdir(cb: ptr, path: string) -> int {
     rec = "2\x01"
     rec = string.concat(rec, path)
     rec = string.concat(rec, "\x01")
-    n = ra_cb_n_edits(cb)
-    cur = ra_cb_edits_packed(cb)
+    n = remote_cb_n_edits(cb)
+    cur = remote_cb_edits_packed(cb)
     new_packed = pack_append_(cur, n, rec)
-    ra_cb_set_edits_packed(cb, new_packed)
+    remote_cb_set_edits_packed(cb, new_packed)
     return 0
 }
 
-export ra_commit_delete(cb: ptr, path: string) -> int {
+export remote_commit_delete(cb: ptr, path: string) -> int {
     rec = "3\x01"
     rec = string.concat(rec, path)
     rec = string.concat(rec, "\x01")
-    n = ra_cb_n_edits(cb)
-    cur = ra_cb_edits_packed(cb)
+    n = remote_cb_n_edits(cb)
+    cur = remote_cb_edits_packed(cb)
     new_packed = pack_append_(cur, n, rec)
-    ra_cb_set_edits_packed(cb, new_packed)
+    remote_cb_set_edits_packed(cb, new_packed)
     return 0
 }
 
-export ra_commit_acl_add(cb: ptr, path: string, rule: string) -> int {
+export remote_commit_acl_add(cb: ptr, path: string, rule: string) -> int {
     rec = path
     rec = string.concat(rec, "\x01")
     rec = string.concat(rec, rule)
-    n = ra_cb_n_acls(cb)
-    cur = ra_cb_acls_packed(cb)
+    n = remote_cb_n_acls(cb)
+    cur = remote_cb_acls_packed(cb)
     new_packed = pack_append_(cur, n, rec)
-    ra_cb_set_acls_packed(cb, new_packed)
+    remote_cb_set_acls_packed(cb, new_packed)
     return 0
 }
 
-export ra_commit_set_prop(cb: ptr, path: string, key: string, value: string) -> int {
+export remote_commit_set_prop(cb: ptr, path: string, key: string, value: string) -> int {
     rec = path
     rec = string.concat(rec, "\x01")
     rec = string.concat(rec, key)
     rec = string.concat(rec, "\x01")
     rec = string.concat(rec, value)
-    n = ra_cb_n_props(cb)
-    cur = ra_cb_props_packed(cb)
+    n = remote_cb_n_props(cb)
+    cur = remote_cb_props_packed(cb)
     new_packed = pack_append_(cur, n, rec)
-    ra_cb_set_props_packed(cb, new_packed)
+    remote_cb_set_props_packed(cb, new_packed)
     return 0
 }
 
@@ -167,15 +167,15 @@ records_(packed: string) -> ptr {
     return string.split(body, "\x02")
 }
 
-export ra_commit_build_body(cb: ptr) -> string {
+export remote_commit_build_body(cb: ptr) -> string {
     body = json_create_object()
-    json.object_set(body, "base_rev", json.create_number(ra_cb_base_rev(cb)))
-    json.object_set(body, "author", json_create_string(ra_cb_author(cb)))
-    json.object_set(body, "log", json_create_string(ra_cb_logmsg(cb)))
+    json.object_set(body, "base_rev", json.create_number(remote_cb_base_rev(cb)))
+    json.object_set(body, "author", json_create_string(remote_cb_author(cb)))
+    json.object_set(body, "log", json_create_string(remote_cb_logmsg(cb)))
 
     // edits: array of {op, path, [content]}. Records: "<op>\x01<path>\x01<b64>".
     edits = json_create_array()
-    epacked = ra_cb_edits_packed(cb)
+    epacked = remote_cb_edits_packed(cb)
     earr = records_(epacked)
     en = 0
     if string.length(epacked) > 0 { en = string.array_size(earr) }
@@ -213,7 +213,7 @@ export ra_commit_build_body(cb: ptr) -> string {
 
     // props: { path: {k:v, ...} } — group by path. Records:
     //   "<path>\x01<key>\x01<value>"
-    ppacked = ra_cb_props_packed(cb)
+    ppacked = remote_cb_props_packed(cb)
     parr = records_(ppacked)
     pn = 0
     if string.length(ppacked) > 0 { pn = string.array_size(parr) }
@@ -253,7 +253,7 @@ export ra_commit_build_body(cb: ptr) -> string {
     string.array_free(parr)
 
     // acl: { path: ["+alice","-eve"] }. Records: "<path>\x01<rule>".
-    apacked = ra_cb_acls_packed(cb)
+    apacked = remote_cb_acls_packed(cb)
     aarr = records_(apacked)
     an = 0
     if string.length(apacked) > 0 { an = string.array_size(aarr) }
@@ -299,7 +299,7 @@ export ra_commit_build_body(cb: ptr) -> string {
 // Build the /copy POST body:
 //   { "base_rev": N, "from_path": "...", "to_path": "...",
 //     "author": "...", "log": "..." }
-export ra_copy_build_body(base_rev: int, from_path: string, to_path: string,
+export remote_copy_build_body(base_rev: int, from_path: string, to_path: string,
                            author: string, logmsg: string) -> string {
     body = json_create_object()
     json.object_set(body, "base_rev", json.create_number(base_rev))
@@ -315,7 +315,7 @@ export ra_copy_build_body(base_rev: int, from_path: string, to_path: string,
 // Build the /branches/<NAME>/create POST body:
 //   { "base": "<sha-or-branch>", "include": ["glob", ...] }
 // `includes_joined` is a \n-separated list (empty lines skipped).
-export ra_branch_create_body(base: string, includes_joined: string) -> string {
+export remote_branch_create_body(base: string, includes_joined: string) -> string {
     body = json_create_object()
     json.object_set(body, "base", json_create_string(base))
 

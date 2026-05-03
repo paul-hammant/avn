@@ -38,54 +38,54 @@ extern aether_args_get(index: int) -> string
 
 // --- RA externs (same as test_client.ae) --------------------------------------
 
-extern ra_head_rev(base_url: string, repo_name: string) -> int
+extern remote_head_rev(base_url: string, repo_name: string) -> int
 
-extern ra_log(base_url: string, repo_name: string) -> ptr
-extern ra_log_count(lg: ptr) -> int
-extern ra_log_rev(lg: ptr, i: int) -> int
-extern ra_log_author(lg: ptr, i: int) -> string
-extern ra_log_date(lg: ptr, i: int) -> string
-extern ra_log_msg(lg: ptr, i: int) -> string
-extern ra_log_free(lg: ptr)
+extern remote_log(base_url: string, repo_name: string) -> ptr
+extern remote_log_count(lg: ptr) -> int
+extern remote_log_rev(lg: ptr, i: int) -> int
+extern remote_log_author(lg: ptr, i: int) -> string
+extern remote_log_date(lg: ptr, i: int) -> string
+extern remote_log_msg(lg: ptr, i: int) -> string
+extern remote_log_free(lg: ptr)
 
-extern ra_paths_changed(base_url: string, repo_name: string, rev: int) -> ptr
-extern ra_paths_count(P: ptr) -> int
-extern ra_paths_action(P: ptr, i: int) -> string
-extern ra_paths_path(P: ptr, i: int) -> string
-extern ra_paths_free(P: ptr)
+extern remote_paths_changed(base_url: string, repo_name: string, rev: int) -> ptr
+extern remote_paths_count(P: ptr) -> int
+extern remote_paths_action(P: ptr, i: int) -> string
+extern remote_paths_path(P: ptr, i: int) -> string
+extern remote_paths_free(P: ptr)
 
 extern client_verify(base_url: string, repo_name: string, rev: int) -> int
 extern client_verify_full(base_url: string, repo_name: string, rev: int, with_secondaries: int) -> int
 
-extern ra_blame(base_url: string, repo_name: string, rev: int, path: string) -> ptr
-extern ra_blame_count(B: ptr) -> int
-extern ra_blame_rev(B: ptr, i: int) -> int
-extern ra_blame_author(B: ptr, i: int) -> string
-extern ra_blame_text(B: ptr, i: int) -> string
-extern ra_blame_free(B: ptr)
+extern remote_blame(base_url: string, repo_name: string, rev: int, path: string) -> ptr
+extern remote_blame_count(B: ptr) -> int
+extern remote_blame_rev(B: ptr, i: int) -> int
+extern remote_blame_author(B: ptr, i: int) -> string
+extern remote_blame_text(B: ptr, i: int) -> string
+extern remote_blame_free(B: ptr)
 
-extern ra_info_rev(base_url: string, repo_name: string, rev: int) -> ptr
-extern ra_info_rev_num(I: ptr) -> int
-extern ra_info_author(I: ptr) -> string
-extern ra_info_date(I: ptr) -> string
-extern ra_info_msg(I: ptr) -> string
-extern ra_info_free(I: ptr)
+extern remote_info_rev(base_url: string, repo_name: string, rev: int) -> ptr
+extern remote_info_rev_num(I: ptr) -> int
+extern remote_info_author(I: ptr) -> string
+extern remote_info_date(I: ptr) -> string
+extern remote_info_msg(I: ptr) -> string
+extern remote_info_free(I: ptr)
 
-extern ra_cat(base_url: string, repo_name: string, rev: int, path: string) -> string
-extern ra_free(p: string)
+extern remote_cat(base_url: string, repo_name: string, rev: int, path: string) -> string
+extern remote_free(p: string)
 
-extern ra_list(base_url: string, repo_name: string, rev: int, path: string) -> ptr
-extern ra_list_count(L: ptr) -> int
-extern ra_list_name(L: ptr, i: int) -> string
-extern ra_list_kind(L: ptr, i: int) -> string
-extern ra_list_free(L: ptr)
+extern remote_list(base_url: string, repo_name: string, rev: int, path: string) -> ptr
+extern remote_list_count(L: ptr) -> int
+extern remote_list_name(L: ptr, i: int) -> string
+extern remote_list_kind(L: ptr, i: int) -> string
+extern remote_list_free(L: ptr)
 
-extern ra_commit_begin(base_rev: int, author: string, logmsg: string) -> ptr
-extern ra_commit_add_file(cb: ptr, path: string, content: string, len: int) -> int
-extern ra_commit_mkdir(cb: ptr, path: string) -> int
-extern ra_commit_delete(cb: ptr, path: string) -> int
-extern ra_commit_finish(cb: ptr, base_url: string, repo_name: string) -> int
-extern ra_commit_acl_add(cb: ptr, path: string, rule: string) -> int
+extern remote_commit_begin(base_rev: int, author: string, logmsg: string) -> ptr
+extern remote_commit_add_file(cb: ptr, path: string, content: string, len: int) -> int
+extern remote_commit_mkdir(cb: ptr, path: string) -> int
+extern remote_commit_delete(cb: ptr, path: string) -> int
+extern remote_commit_finish(cb: ptr, base_url: string, repo_name: string) -> int
+extern remote_commit_acl_add(cb: ptr, path: string, rule: string) -> int
 
 extern set_user(user: string)
 extern set_super_token(token: string)
@@ -111,8 +111,8 @@ extern wc_revert(wc_root: string, rel_path: string) -> int
 extern wc_diff(wc_root: string, rel_path_or_empty: string) -> int
 extern wc_cp(wc_root: string, src: string, dst: string) -> int
 extern wc_mv(wc_root: string, src: string, dst: string) -> int
-extern ra_server_copy(base_url: string, repo_name: string, base_rev: int, from_path: string, to_path: string, author: string, logmsg: string) -> int
-extern ra_branch_create(base_url: string, repo_name: string, name: string, base: string, includes_joined: string) -> int
+extern remote_server_copy(base_url: string, repo_name: string, base_rev: int, from_path: string, to_path: string, author: string, logmsg: string) -> int
+extern remote_branch_create(base_url: string, repo_name: string, name: string, base: string, includes_joined: string) -> int
 extern wc_merge(wc_root: string, source_path: string, rev_a: int, rev_b: int, target_path: string) -> int
 extern wc_resolve(wc_root: string, rel_path: string, accept: int) -> int
 
@@ -391,24 +391,24 @@ cmd_info(argv_start: int) {
             return 2
         }
     } else {
-        rev = ra_head_rev(base, repo)
+        rev = remote_head_rev(base, repo)
         if rev < 0 {
             println("svn info: could not contact server")
             return 1
         }
     }
 
-    I = ra_info_rev(base, repo, rev)
+    I = remote_info_rev(base, repo, rev)
     if I == 0 {
         println("svn info: no such revision")
         return 1
     }
     println("URL:         ${url}")
-    println("Revision:    ${ra_info_rev_num(I)}")
-    println("Author:      ${ra_info_author(I)}")
-    println("Date:        ${ra_info_date(I)}")
-    println("Log:         ${ra_info_msg(I)}")
-    ra_info_free(I)
+    println("Revision:    ${remote_info_rev_num(I)}")
+    println("Author:      ${remote_info_author(I)}")
+    println("Date:        ${remote_info_date(I)}")
+    println("Log:         ${remote_info_msg(I)}")
+    remote_info_free(I)
     return 0
 }
 
@@ -446,7 +446,7 @@ cmd_verify(argv_start: int) {
     if string.length(rev_str) > 0 {
         if string.try_int(rev_str) == 1 { rev = string.get_int(rev_str) }
     }
-    if rev < 0 { rev = ra_head_rev(base, repo) }
+    if rev < 0 { rev = remote_head_rev(base, repo) }
     if rev < 0 {
         println("svn verify: could not contact server")
         return 1
@@ -487,7 +487,7 @@ cmd_acl(argv_start: int) {
     path = aether_args_get(argv_start + 2)
     base = url_base(url)
     repo = url_repo(url)
-    head = ra_head_rev(base, repo)
+    head = remote_head_rev(base, repo)
     if head < 0 {
         println("svn acl: could not contact server")
         return 1
@@ -522,14 +522,14 @@ cmd_acl(argv_start: int) {
 }
 
 cmd_acl_set(head: int, base: string, repo: string, path: string, argv_start: int) {
-    cb = ra_commit_begin(head, "acl-admin", "svn acl set ${path}")
+    cb = remote_commit_begin(head, "acl-admin", "svn acl set ${path}")
     i = argv_start + 3
     n = aether_args_count()
     while i < n {
-        ra_commit_acl_add(cb, path, aether_args_get(i))
+        remote_commit_acl_add(cb, path, aether_args_get(i))
         i = i + 1
     }
-    new_rev = ra_commit_finish(cb, base, repo)
+    new_rev = remote_commit_finish(cb, base, repo)
     if new_rev < 0 {
         println("svn acl set: commit failed")
         return 1
@@ -539,9 +539,9 @@ cmd_acl_set(head: int, base: string, repo: string, path: string, argv_start: int
 }
 
 cmd_acl_clear(head: int, base: string, repo: string, path: string) {
-    cb = ra_commit_begin(head, "acl-admin", "svn acl clear ${path}")
-    ra_commit_acl_add(cb, path, "+*")
-    new_rev = ra_commit_finish(cb, base, repo)
+    cb = remote_commit_begin(head, "acl-admin", "svn acl clear ${path}")
+    remote_commit_acl_add(cb, path, "+*")
+    new_rev = remote_commit_finish(cb, base, repo)
     if new_rev < 0 {
         println("svn acl clear: commit failed")
         return 1
@@ -592,27 +592,27 @@ cmd_blame(argv_start: int) {
     if string.length(rev_str) > 0 {
         if string.try_int(rev_str) == 1 { rev = string.get_int(rev_str) }
     }
-    if rev < 0 { rev = ra_head_rev(base, repo) }
+    if rev < 0 { rev = remote_head_rev(base, repo) }
     if rev < 0 {
         println("svn blame: could not contact server")
         return 1
     }
-    B = ra_blame(base, repo, rev, path)
+    B = remote_blame(base, repo, rev, path)
     if B == 0 {
         println("svn blame: ${path} not found at r${rev}")
         return 1
     }
-    n = ra_blame_count(B)
+    n = remote_blame_count(B)
     i = 0
     while i < n {
-        r = ra_blame_rev(B, i)
-        au = ra_blame_author(B, i)
-        t = ra_blame_text(B, i)
+        r = remote_blame_rev(B, i)
+        au = remote_blame_author(B, i)
+        t = remote_blame_text(B, i)
         // Reference svn formats as "   <rev>   <author> <line>".
         println("${r} ${au} ${t}")
         i = i + 1
     }
-    ra_blame_free(B)
+    remote_blame_free(B)
     return 0
 }
 
@@ -645,41 +645,41 @@ cmd_log(argv_start: int) {
     base = url_base(url)
     repo = url_repo(url)
 
-    lg = ra_log(base, repo)
+    lg = remote_log(base, repo)
     if lg == 0 {
         println("svn log: could not contact server")
         return 1
     }
-    n = ra_log_count(lg)
+    n = remote_log_count(lg)
     // Print newest first (reverse), matching reference svn log's default.
     i = n - 1
     while i >= 0 {
         println("------------------------------------------------------------")
-        rev = ra_log_rev(lg, i)
-        au  = ra_log_author(lg, i)
-        dt  = ra_log_date(lg, i)
+        rev = remote_log_rev(lg, i)
+        au  = remote_log_author(lg, i)
+        dt  = remote_log_date(lg, i)
         println("r${rev} | ${au} | ${dt}")
         if verbose == 1 {
             println("Changed paths:")
-            P = ra_paths_changed(base, repo, rev)
+            P = remote_paths_changed(base, repo, rev)
             if P != 0 {
-                pn = ra_paths_count(P)
+                pn = remote_paths_count(P)
                 j = 0
                 while j < pn {
-                    act = ra_paths_action(P, j)
-                    pth = ra_paths_path(P, j)
+                    act = remote_paths_action(P, j)
+                    pth = remote_paths_path(P, j)
                     println("   ${act} /${pth}")
                     j = j + 1
                 }
-                ra_paths_free(P)
+                remote_paths_free(P)
             }
         }
         println("")
-        println(ra_log_msg(lg, i))
+        println(remote_log_msg(lg, i))
         i = i - 1
     }
     println("------------------------------------------------------------")
-    ra_log_free(lg)
+    remote_log_free(lg)
     return 0
 }
 
@@ -695,23 +695,23 @@ cmd_ls(argv_start: int) {
     if string.length(rev_str) > 0 {
         if string.try_int(rev_str) == 1 { rev = string.get_int(rev_str) }
     } else {
-        rev = ra_head_rev(base, repo)
+        rev = remote_head_rev(base, repo)
         if rev < 0 {
             println("svn ls: could not contact server")
             return 1
         }
     }
 
-    L = ra_list(base, repo, rev, path)
+    L = remote_list(base, repo, rev, path)
     if L == 0 {
         println("svn ls: not a directory (or revision missing)")
         return 1
     }
-    c = ra_list_count(L)
+    c = remote_list_count(L)
     i = 0
     while i < c {
-        name = ra_list_name(L, i)
-        kind = ra_list_kind(L, i)
+        name = remote_list_name(L, i)
+        kind = remote_list_kind(L, i)
         if string.equals(kind, "dir") == 1 {
             println("${name}/")
         } else {
@@ -719,7 +719,7 @@ cmd_ls(argv_start: int) {
         }
         i = i + 1
     }
-    ra_list_free(L)
+    remote_list_free(L)
     return 0
 }
 
@@ -739,14 +739,14 @@ cmd_cat(argv_start: int) {
     if string.length(rev_str) > 0 {
         if string.try_int(rev_str) == 1 { rev = string.get_int(rev_str) }
     } else {
-        rev = ra_head_rev(base, repo)
+        rev = remote_head_rev(base, repo)
         if rev < 0 {
             println("svn cat: could not contact server")
             return 1
         }
     }
 
-    data = ra_cat(base, repo, rev, path)
+    data = remote_cat(base, repo, rev, path)
     if data == 0 {
         println("svn cat: not found")
         return 1
@@ -756,7 +756,7 @@ cmd_cat(argv_start: int) {
     // correct. We don't append a newline — files already include their
     // own trailing newline when they want one.
     io.stdout_write(data, string.length(data))
-    ra_free(data)
+    remote_free(data)
     return 0
 }
 
@@ -814,13 +814,13 @@ cmd_commit(argv_start: int) {
         return 2
     }
 
-    base_rev = ra_head_rev(base, repo)
+    base_rev = remote_head_rev(base, repo)
     if base_rev < 0 {
         println("svn commit: could not contact server")
         return 1
     }
 
-    cb = ra_commit_begin(base_rev, author, logmsg)
+    cb = remote_commit_begin(base_rev, author, logmsg)
 
     // Scan argv for --add-file / --mkdir / --delete and add edits.
     n = aether_args_count()
@@ -835,7 +835,7 @@ cmd_commit(argv_start: int) {
                 if eq >= 0 {
                     path = string.substring(spec, 0, eq)
                     content = string.substring(spec, eq + 1, string.length(spec))
-                    ra_commit_add_file(cb, path, content, string.length(content))
+                    remote_commit_add_file(cb, path, content, string.length(content))
                 }
             }
             i = i + 2
@@ -843,14 +843,14 @@ cmd_commit(argv_start: int) {
         }
         if string.equals(a, "--mkdir") == 1 {
             if i + 1 < n {
-                ra_commit_mkdir(cb, aether_args_get(i + 1))
+                remote_commit_mkdir(cb, aether_args_get(i + 1))
             }
             i = i + 2
             continue
         }
         if string.equals(a, "--delete") == 1 {
             if i + 1 < n {
-                ra_commit_delete(cb, aether_args_get(i + 1))
+                remote_commit_delete(cb, aether_args_get(i + 1))
             }
             i = i + 2
             continue
@@ -858,7 +858,7 @@ cmd_commit(argv_start: int) {
         i = i + 1
     }
 
-    new_rev = ra_commit_finish(cb, base, repo)
+    new_rev = remote_commit_finish(cb, base, repo)
     if new_rev < 0 {
         println("svn commit: server rejected commit")
         return 1
@@ -1210,10 +1210,10 @@ cmd_cp(argv_start: int) {
         rev = parse_rev_suffix(src)
         if rev < 0 {
             // Default to head.
-            rev = ra_head_rev(base_src, repo_src)
+            rev = remote_head_rev(base_src, repo_src)
             if rev < 0 { println("svn cp: cannot contact server"); return 1 }
         }
-        new_rev = ra_server_copy(base_src, repo_src, rev, from_path, to_path, author, logmsg)
+        new_rev = remote_server_copy(base_src, repo_src, rev, from_path, to_path, author, logmsg)
         if new_rev < 0 { println("svn cp: server-side copy failed"); return 1 }
         println("Committed revision ${new_rev}.")
         return 0
@@ -1483,7 +1483,7 @@ cmd_branch_create(argv_start: int) {
 
     base_url = url_base(url)
     repo = url_repo(url)
-    rc = ra_branch_create(base_url, repo, name, from_branch, includes_joined)
+    rc = remote_branch_create(base_url, repo, name, from_branch, includes_joined)
     if rc < 0 {
         println("svn branch create: failed (branch exists, bad base, or not super-user?)")
         return 1
@@ -1594,7 +1594,7 @@ cmd_checkout(argv_start: int) {
     if string.length(rev_str) > 0 {
         if string.try_int(rev_str) == 1 { rev = string.get_int(rev_str) }
     } else {
-        rev = ra_head_rev(base, repo)
+        rev = remote_head_rev(base, repo)
         if rev < 0 {
             println("svn checkout: could not contact server")
             return 1

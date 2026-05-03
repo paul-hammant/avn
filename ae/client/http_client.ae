@@ -25,7 +25,7 @@
 // already use.
 //
 // Auth state (X-Svnae-User, X-Svnae-Superuser tokens) lives in C —
-// it's set via ra_set_user / ra_set_superuser_token and
+// it's set via remote_set_user / remote_set_superuser_token and
 // passed in to each of these calls.
 
 import std.string
