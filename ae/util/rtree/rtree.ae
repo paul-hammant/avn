@@ -7,7 +7,7 @@
 //
 //     http://www.apache.org/licenses/LICENSE-2.0
 
-// Remote-tree storage. Round 168 retires ae/subr/rtree/shim.c (75
+// Remote-tree storage. Round 168 retires ae/util/rtree/shim.c (75
 // lines C) using Aether 0.109's *StructName return-type fix.
 // Five parallel containers, all indexed by node position:
 //
@@ -166,5 +166,5 @@ export rtree_find_by_path(rt_ptr: ptr, path: string) -> int {
 }
 
 main() {
-    println("ae/subr/rtree/rtree.ae is a library; not meant to run standalone")
+    println("ae/util/rtree/rtree.ae is a library; not meant to run standalone")
 }

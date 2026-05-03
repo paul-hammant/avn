@@ -17,6 +17,6 @@ main() {
         regen("../../ae/working_copy/db_schema.ae")
         regen("../../ae/working_copy/db_nodes.ae")
         regen("../../ae/working_copy/db_node_packed.ae")
-        regen("../../ae/subr/io.ae")
+        regen("../../ae/util/io.ae")
     }
 }

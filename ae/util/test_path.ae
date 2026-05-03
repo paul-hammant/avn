@@ -13,11 +13,11 @@
 // implied. See the License for the specific language governing
 // permissions and limitations under the License.
 
-// Tests for ae/subr/path.ae. Same-file inclusion of the path logic so we
+// Tests for ae/util/path.ae. Same-file inclusion of the path logic so we
 // dodge Aether's cross-module typed-param bug; when that's fixed we can
 // move the logic back into path.ae and just `import path` here.
 //
-// Run:  ae run ae/subr/test_path.ae
+// Run:  ae run ae/util/test_path.ae
 
 import std.string
 

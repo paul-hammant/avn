@@ -39,7 +39,7 @@ import std.zlib
 
 // C-side byte helpers, shared with ae/working_copy/pristine.ae — same binary-
 // safe concat / slice over AetherString buffers. Defined once in
-// Binary-safe byte ops live in ae/subr/binbuf.ae.
+// Binary-safe byte ops live in ae/util/binbuf.ae.
 extern concat(prefix: string, prefix_len: int, suf: string, suf_len: int) -> string
 extern slice(s: string, s_len: int, start: int, end: int) -> string
 

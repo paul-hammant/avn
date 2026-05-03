@@ -98,7 +98,7 @@ Specifically, if the source buffer at `s` contains N real bytes followed
 by a NUL, but the source's internal length field says N-k or N+k, strlen
 reads whatever's in memory until the first NUL — could be too few, could
 be too many. This was caught in the FSFS port when `buf_new` in
-`ae/subr/compress/shim.c` didn't NUL-terminate its output buffer: strlen
+`ae/util/compress/shim.c` didn't NUL-terminate its output buffer: strlen
 walked past the 10000-byte payload into neighbouring heap memory and
 returned 10011.
 

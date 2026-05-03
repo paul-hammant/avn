@@ -13,7 +13,7 @@
 // implied. See the License for the specific language governing
 // permissions and limitations under the License.
 
-// Tests for ae/subr/checksum.ae. Logic inlined (see AETHER_ISSUES.md #2).
+// Tests for ae/util/checksum.ae. Logic inlined (see AETHER_ISSUES.md #2).
 //
 // Expected hex values computed by coreutils (sha1sum):
 //   "abc"                                              sha1 a9993e364706816aba3e25717850c26c9cd0d89d

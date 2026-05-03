@@ -147,7 +147,7 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
   Code-quality consolidation: the `pin_list` / `pin_str` /
   `pin_list_free` pattern for per-handle string memory management
   was identically implemented in both ra/shim.c (~28 LOC) and
-  repos/shim.c (~28 LOC). Moved to a shared ae/subr/pin_list.h
+  repos/shim.c (~28 LOC). Moved to a shared ae/util/pin_list.h
   included by both, eliminating ~56 LOC of duplication across the
   shims. No functional change, no port activity — just cleanup
   toward the natural end state at 36-37% C.
@@ -523,7 +523,7 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
 
 - **Round 8**: Aether shipped `--emit=lib --with=fs` after
   a feedback pass from this port (`~/scm/aether/stdlib_wish.md`), so
-  std.fs is now reachable from our `.ae` files. `ae/subr/io.ae`
+  std.fs is now reachable from our `.ae` files. `ae/util/io.ae`
   exports atomic-write / mkdir-p / slurp / file_size / is_regular
   / listdir / stat_kind / exists / unlink / rmdir / rename over
   `std.fs` and `std.dir`. **All direct I/O syscalls are gone from
@@ -771,7 +771,7 @@ for t in error path utf8 checksum compress io sqlite svndiff xdelta \
     svndiff|xdelta) f=ae/delta/test_$t.ae ;;
     repo|revisions|txn) f=ae/repo_storage/test_$t.ae ;;
     repos) f=ae/repos/test_$t.ae ;;
-    *) f=ae/subr/test_$t.ae ;;
+    *) f=ae/util/test_$t.ae ;;
   esac
   printf '%-27s ' "test_$t"
   "$AE" run "$f" 2>/dev/null | tail -1

@@ -13,7 +13,7 @@
 // implied. See the License for the specific language governing
 // permissions and limitations under the License.
 
-// Tests for ae/subr/io.ae. Inlined for Aether cross-module limits.
+// Tests for ae/util/io.ae. Inlined for Aether cross-module limits.
 //
 // Writes a file via atomic_write, reads it back, verifies content, then
 // overwrites it with different data and verifies. Cleans up the file at

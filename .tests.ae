@@ -54,11 +54,11 @@ main() {
     // Aether-native unit tests (aether.program_test wrappers).
     // Build, run, exit code is the test result. Cover pure helper
     // modules that don't need a server fixture.
-    build.dep(b, "ae/subr/.tests-error.ae")
-    build.dep(b, "ae/subr/.tests-checksum.ae")
-    build.dep(b, "ae/subr/.tests-compress.ae")
-    build.dep(b, "ae/subr/.tests-io.ae")
-    build.dep(b, "ae/subr/.tests-sqlite.ae")
+    build.dep(b, "ae/util/.tests-error.ae")
+    build.dep(b, "ae/util/.tests-checksum.ae")
+    build.dep(b, "ae/util/.tests-compress.ae")
+    build.dep(b, "ae/util/.tests-io.ae")
+    build.dep(b, "ae/util/.tests-sqlite.ae")
     build.dep(b, "ae/working_copy/.tests-db.ae")
     build.dep(b, "ae/working_copy/.tests-pristine.ae")
     build.dep(b, "ae/repo_storage/.tests-txn.ae")

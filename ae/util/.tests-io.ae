@@ -12,6 +12,6 @@ main() {
         link_flag("-lz")
         link_flag("-lssl")
         link_flag("-lcrypto")
-        regen("../../ae/subr/io.ae")
+        regen("../../ae/util/io.ae")
     }
 }

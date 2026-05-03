@@ -63,5 +63,5 @@ export pack_le32(v: int) -> string {
 }
 
 main() {
-    println("ae/subr/binbuf.ae is a library; not meant to run standalone")
+    println("ae/util/binbuf.ae is a library; not meant to run standalone")
 }

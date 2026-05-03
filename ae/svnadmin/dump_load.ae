@@ -50,7 +50,7 @@ extern admin_reps_size_at(packed: string, i: int) -> int
 // Rev pointer reader (ae/repos/rev_io.ae).
 extern repos_rev_blob_sha(repo: string, rev: int) -> string
 
-// Atomic file write (ae/subr/io.ae).
+// Atomic file write (ae/util/io.ae).
 extern io_write_atomic(path: string, data: string, length: int) -> int
 
 // Round 188: switched to std.io's full fd surface (Aether 0.110

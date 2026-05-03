@@ -8,7 +8,7 @@
 //     http://www.apache.org/licenses/LICENSE-2.0
 
 // Error chain for the svn-aether port. Round 165 retires
-// ae/subr/error/shim.c (73 lines C) — Aether 0.109 added
+// ae/util/error/shim.c (73 lines C) — Aether 0.109 added
 // self-referential structs via *Self pointer fields (see
 // fresh-aether-requests.md Section C / CHANGELOG [0.109.0]),
 // which is exactly the shape this needs.
@@ -93,5 +93,5 @@ export error_free(err: ptr) {
 }
 
 main() {
-    println("ae/subr/error/error.ae is a library; not meant to run standalone")
+    println("ae/util/error/error.ae is a library; not meant to run standalone")
 }

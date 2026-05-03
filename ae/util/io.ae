@@ -178,5 +178,5 @@ export io_rename(from: string, to: string) -> int {
 }
 
 main() {
-    println("ae/subr/io.ae is a library; not meant to run standalone")
+    println("ae/util/io.ae is a library; not meant to run standalone")
 }

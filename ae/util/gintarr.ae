@@ -98,5 +98,5 @@ export gintarr_free(a: ptr) {
 }
 
 main() {
-    println("ae/subr/gintarr.ae is a library; not meant to run standalone")
+    println("ae/util/gintarr.ae is a library; not meant to run standalone")
 }
