@@ -124,12 +124,147 @@ inline. Don't migrate them.
 
 ### Adding a new Aether-native unit test (Aeocha)
 
-Untrodden — we haven't done this yet. Aeocha is installed at
-`~/.local/share/aether/contrib/aeocha/` and `import contrib.aeocha`
+Untrodden in this repo — we haven't done this yet. Aeocha lives at
+`~/scm/aether/contrib/aeocha/` and `import contrib.aeocha`
 resolves via Aether's stdlib search path. The Aeocha README's
 `example_self_test.ae` is the model: `aeocha.init()`, then
 `describe`/`it` blocks with `assert_eq`/`assert_str_eq`.
 Wire it via `aether.program_test(b)` in a `.tests-<X>.ae`.
+
+### Migrating a bash integration test to Aether (`aether.driver_test`)
+
+Aeb shipped `aether.driver_test(b)` with closure-form fixture
+grammar. The shape replaces a `.sh` script body with an Aether
+*driver program* that spawns the production binary as a child
+process and asserts about stdout/exit/stderr via Aeocha's
+integration-shape matchers (`expect_exit`, `expect_stdout_line_field`,
+`expect_http_status`, ...).
+
+Skeleton `.tests-X.ae`:
+
+```aether
+import build
+import aether
+import aether (driver, output, binary_under_test,
+               fixture_seed, fixture_server,
+               path, env_var, repo, seed_bin, bin, args, port,
+               ready_after_ms)
+
+main() {
+    b = build.start()
+    build.dep(b, "svn")            // build the binary-under-test first
+    build.dep(b, "svnserver")
+    build.dep(b, "svnserver/.build-seed.ae")
+
+    aether.driver_test(b) {
+        driver("test_X_driver.ae")
+        output("X_driver")
+
+        binary_under_test(b, "svn") {
+            path("target/svn/bin/svn")
+            // env_var defaults to $SVN_BIN
+        }
+
+        fixture_seed(b, "primary") {
+            repo("/tmp/svnae_test_X_repo")
+            seed_bin("target/svnserver/bin/svnae-seed")
+        }
+        fixture_server(b, "primary") {
+            bin("target/svnserver/bin/aether-svnserver")
+            args("demo $PRIMARY_REPO 9540")
+            port(9540)
+            ready_after_ms(1500)
+        }
+    }
+}
+```
+
+Skeleton `test_X_driver.ae`:
+
+```aether
+import contrib.aeocha
+import std.os
+
+main() {
+    fw = aeocha.init()
+    svn_bin = os.getenv("SVN_BIN")
+    port    = os.getenv("PRIMARY_PORT")
+    url     = "http://127.0.0.1:${port}/demo"
+
+    aeocha.describe(fw, "svn cli vs demo repo") {
+        aeocha.it("info reports head rev 3") callback {
+            argv = os.argv_new("info")
+            os.argv_push(argv, url)
+            r = os.run_capture(svn_bin, argv, null)
+            aeocha.expect_exit(fw, r, 0, "svn exited 0")
+            aeocha.expect_stdout_line_field(fw, r, "Revision:", 1, "3",
+                "head rev")
+        }
+    }
+    aeocha.run_summary(fw)
+}
+```
+
+Required vs optional sub-setters:
+
+- `fixture_seed`: `repo` required, `seed_bin` optional (omit → just `mkdir -p`).
+- `fixture_server`: `bin` and `port` required, `args` defaults to "",
+  `ready_after_ms` defaults to 0.
+- `binary_under_test`: `path` required, `env_var` defaults to `<UPPER(name)>_BIN`.
+
+Env-var contract exposed to the driver:
+`$<NAME>_REPO`, `$<NAME>_PORT`, `$<NAME>_PID`, `$<NAME>_BIN`.
+
+Lifecycle: per-script seeds-then-servers spawn → sleep
+`ready_after_ms` → run driver → kill servers in reverse order →
+rm repos. Sequential test mode is forced when fixtures are present.
+
+`fixture_server`'s `args` string shell-interpolates at run time, so
+`args("demo $PRIMARY_REPO 9540")` picks up the seed's exported repo
+path.
+
+Two stragglers (`test_hash_algo`, `test_svnadmin`) are meta-tests
+of svnadmin itself — their fixture *is* the test, so they manage
+repo creation and server lifecycle inline. Don't migrate them.
+
+#### Driver-side gotchas (Round 234 canary findings)
+
+- **Raw externs need named imports.** `import std.os` exposes
+  *wrapper* functions like `os.run_capture` but NOT raw externs.
+  For `os_getenv`, `os_run`, `list_new`, `list_add_raw`, etc, you
+  need `import std.os (os_getenv)` and call them unqualified.
+  Compile error reads "Undefined function 'os.os_getenv'."
+- **Aeocha install path.** `import contrib.aeocha` resolves via
+  `/usr/local/share/aether/contrib/aeocha/` (the system PREFIX,
+  not `$HOME/.local/share`). The Aether build's `install-contrib`
+  target trims aeocha from the user-prefix install (Makefile line
+  ~1155) but the system install includes it. If `import
+  contrib.aeocha` doesn't resolve, check
+  `ls /usr/local/share/aether/contrib/aeocha/module.ae`.
+- **`extern list_new` collides with aeocha's import.** Aeocha
+  declares `extern list_new` / `extern list_add_raw` in its module.
+  When a driver also declares them at module scope, aetherc emits
+  conflicting prototypes (`void* list_new()` from aeocha after the
+  closures vs implicit-int from your closure bodies). Workaround:
+  declare the externs at module scope BUT call them only through a
+  thin Aether wrapper:
+  ```aether
+  extern list_new() -> ptr
+  extern list_add_raw(list: ptr, item: ptr) -> int
+  argv_new() -> { return list_new() }
+  argv_push(argv: ptr, s: string) { list_add_raw(argv, s) }
+  ```
+  Then `argv = argv_new()` / `argv_push(argv, "info")` in closures.
+  This keeps the implicit-int issue out of closure bodies.
+- **svnae SDK setters target `bash.test`, not `aether.driver_test`.**
+  Our `svn_server`/`empty_server` setters in `.aeb/lib/svnae/`
+  emit `pre_command`/`post_command` that `bash.test` consumes;
+  `aether.driver_test` only reads `fixture_seeds`/`fixture_servers`
+  map keys. For driver-test migrations, write the fixture inline
+  using aeb's native `fixture_seed(b, NAME) { repo(...); seed_bin(...) }`
+  and `fixture_server(b, NAME) { bin(...); args(...); port(...) }`
+  setters — see the skeleton above. Extending the svnae SDK with
+  driver-aware setters is a separate cleanup.
 
 ## What stays in C
 

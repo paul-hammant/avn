@@ -1,8 +1,7 @@
 import build
-import bash
-import bash (script, pre_command, post_command)
-import svnae
-import svnae (svn_server)
+import aether
+import aether (driver, output, binary_under_test, fixture_seed, fixture_server,
+               path, env_var, repo, seed_bin, bin, args, port, ready_after_ms)
 
 main() {
     b = build.start()
@@ -10,8 +9,24 @@ main() {
     build.dep(b, "svnadmin")
     build.dep(b, "svnserver")
     build.dep(b, "svnserver/.build-seed.ae")
-    bash.test(b) {
-        svn_server("test_svn", "9350")
-        script("test_svn.sh")
+
+    aether.driver_test(b) {
+        driver("test_svn_driver.ae")
+        output("test_svn_driver")
+
+        binary_under_test(b, "svn") {
+            path("target/svn/bin/svn")
+        }
+
+        fixture_seed(b, "test_svn") {
+            repo("/tmp/svnae_aeb_test_svn_repo")
+            seed_bin("target/svnserver/bin/svnae-seed")
+        }
+        fixture_server(b, "test_svn") {
+            bin("target/svnserver/bin/aether-svnserver")
+            args("demo $TEST_SVN_REPO 9350")
+            port(9350)
+            ready_after_ms(1500)
+        }
     }
 }

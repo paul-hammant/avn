@@ -1,0 +1,184 @@
+// Copyright 2026 Paul Hammant (portions).
+// Apache License, Version 2.0 — see LICENSE.
+//
+// Aether driver for svn CLI integration test. Migrated from the
+// bash test_svn.sh as the Round 234 canary for the
+// aether.driver_test + Aeocha integration-shape matchers shape.
+//
+// Reads $SVN_BIN (binary-under-test) and $TEST_SVN_PORT (fixture
+// server port), builds an `svn ... URL` argv and asserts about
+// stdout/exit via Aeocha.
+
+import contrib.aeocha
+import std.os
+import std.os (os_getenv)
+import std.string
+
+// Wrappers around list_new / list_add_raw. Aeocha's module already
+// declares these externs; we call them via these wrappers to keep the
+// extern decls in module scope and out of closure bodies (where
+// aetherc currently emits them as implicit-int, conflicting with
+// the late-emitted prototype from aeocha).
+extern list_new() -> ptr
+extern list_add_raw(list: ptr, item: ptr) -> int
+
+argv_new() -> {
+    return list_new()
+}
+
+argv_push(argv: ptr, s: string) {
+    list_add_raw(argv, s)
+}
+
+main() {
+    fw = aeocha.init()
+    svn_bin = os_getenv("SVN_BIN")
+    port    = os_getenv("TEST_SVN_PORT")
+    url     = string.concat("http://127.0.0.1:", string.concat(port, "/demo"))
+
+    aeocha.describe(fw, "svn cli vs demo repo") {
+
+        aeocha.it("info reports head rev 3") callback {
+            argv = argv_new()
+            argv_push(argv, "info")
+            argv_push(argv, url)
+            out, status, err = os.run_capture(svn_bin, argv, null)
+            aeocha.expect_no_spawn_error(fw, err, "spawn ok")
+            aeocha.expect_exit(fw, status, 0, "svn info exit 0")
+            aeocha.expect_stdout_contains(fw, out, "Revision:", "info has Revision line")
+            aeocha.expect_stdout_contains(fw, out, " 3\n", "head rev = 3")
+        }
+
+        aeocha.it("info --rev 1 has correct log message") callback {
+            argv = argv_new()
+            argv_push(argv, "info")
+            argv_push(argv, url)
+            argv_push(argv, "--rev")
+            argv_push(argv, "1")
+            out, status, err = os.run_capture(svn_bin, argv, null)
+            aeocha.expect_exit(fw, status, 0, "svn info --rev 1 exit 0")
+            aeocha.expect_stdout_contains(fw, out, "first commit",
+                "info r1 log line contains 'first commit'")
+        }
+
+        aeocha.it("log first entry is rev 3") callback {
+            argv = argv_new()
+            argv_push(argv, "log")
+            argv_push(argv, url)
+            out, status, err = os.run_capture(svn_bin, argv, null)
+            aeocha.expect_exit(fw, status, 0, "svn log exit 0")
+            // First line of `svn log` is "r3 | author | ...". Use
+            // expect_stdout_line_field with prefix "r" — first match wins.
+            aeocha.expect_stdout_contains(fw, out, "r3 |",
+                "log shows rev 3 first")
+        }
+
+        aeocha.it("ls at head shows 2 entries") callback {
+            // Head (r3) has README + src/ — LICENSE was dropped at r3.
+            argv = argv_new()
+            argv_push(argv, "ls")
+            argv_push(argv, url)
+            out, status, err = os.run_capture(svn_bin, argv, null)
+            aeocha.expect_exit(fw, status, 0, "svn ls exit 0")
+            aeocha.expect_stdout_line_count(fw, out, 2, "ls head 2 entries")
+        }
+
+        aeocha.it("ls at rev 1 shows 3 entries (LICENSE present)") callback {
+            argv = argv_new()
+            argv_push(argv, "ls")
+            argv_push(argv, url)
+            argv_push(argv, "--rev")
+            argv_push(argv, "1")
+            out, status, err = os.run_capture(svn_bin, argv, null)
+            aeocha.expect_exit(fw, status, 0, "svn ls r1 exit 0")
+            aeocha.expect_stdout_line_count(fw, out, 3, "ls r1 3 entries")
+        }
+
+        aeocha.it("cat r1 README returns Hello") callback {
+            argv = argv_new()
+            argv_push(argv, "cat")
+            argv_push(argv, url)
+            argv_push(argv, "--rev")
+            argv_push(argv, "1")
+            argv_push(argv, "README")
+            out, status, err = os.run_capture(svn_bin, argv, null)
+            aeocha.expect_exit(fw, status, 0, "svn cat exit 0")
+            aeocha.expect_stdout_contains(fw, out, "Hello", "cat r1 README")
+        }
+
+        aeocha.it("cat r2 src/main.c returns the seeded body") callback {
+            argv = argv_new()
+            argv_push(argv, "cat")
+            argv_push(argv, url)
+            argv_push(argv, "--rev")
+            argv_push(argv, "2")
+            argv_push(argv, "src/main.c")
+            out, status, err = os.run_capture(svn_bin, argv, null)
+            aeocha.expect_exit(fw, status, 0, "svn cat r2 exit 0")
+            aeocha.expect_stdout_contains(fw, out, "int main() { return 42; }",
+                "cat r2 main.c body")
+        }
+
+        aeocha.it("commit via URL creates rev 4 with NEWFILE") callback {
+            argv = argv_new()
+            argv_push(argv, "commit")
+            argv_push(argv, url)
+            argv_push(argv, "--author")
+            argv_push(argv, "cli-user")
+            argv_push(argv, "--log")
+            argv_push(argv, "via svn cli")
+            argv_push(argv, "--add-file")
+            argv_push(argv, "NEWFILE=hello from cli")
+            argv_push(argv, "--mkdir")
+            argv_push(argv, "dir1")
+            out, status, err = os.run_capture(svn_bin, argv, null)
+            aeocha.expect_exit(fw, status, 0, "svn commit exit 0")
+            aeocha.expect_stdout_contains(fw, out, "Committed revision 4",
+                "commit returned rev 4")
+        }
+
+        aeocha.it("post-commit info shows author and log") callback {
+            argv = argv_new()
+            argv_push(argv, "info")
+            argv_push(argv, url)
+            out, status, err = os.run_capture(svn_bin, argv, null)
+            aeocha.expect_exit(fw, status, 0, "svn info exit 0")
+            aeocha.expect_stdout_contains(fw, out, "cli-user",
+                "r4 author contains cli-user")
+            aeocha.expect_stdout_contains(fw, out, "via svn cli",
+                "r4 log contains 'via svn cli'")
+        }
+
+        aeocha.it("cat NEWFILE returns commit content") callback {
+            argv = argv_new()
+            argv_push(argv, "cat")
+            argv_push(argv, url)
+            argv_push(argv, "NEWFILE")
+            out, status, err = os.run_capture(svn_bin, argv, null)
+            aeocha.expect_exit(fw, status, 0, "svn cat NEWFILE exit 0")
+            aeocha.expect_stdout_contains(fw, out, "hello from cli",
+                "NEWFILE content")
+        }
+
+        aeocha.it("ls after commit shows 4 entries") callback {
+            argv = argv_new()
+            argv_push(argv, "ls")
+            argv_push(argv, url)
+            out, status, err = os.run_capture(svn_bin, argv, null)
+            aeocha.expect_exit(fw, status, 0, "svn ls exit 0")
+            aeocha.expect_stdout_line_count(fw, out, 4,
+                "ls after commit 4 entries")
+        }
+
+        aeocha.it("unknown subcommand exits non-zero") callback {
+            argv = argv_new()
+            argv_push(argv, "unknown")
+            out, status, err = os.run_capture(svn_bin, argv, null)
+            aeocha.expect_no_spawn_error(fw, err, "spawn ok")
+            aeocha.assert_not_eq(fw, status, 0,
+                "unknown subcommand should exit non-zero")
+        }
+    }
+
+    aeocha.run_summary(fw)
+}
