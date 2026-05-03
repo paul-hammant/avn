@@ -120,7 +120,7 @@ export format_secondary_hash(line: string, target: int) -> string {
 }
 
 // Rev-blob body formatter — ported from the three snprintf sites in
-// ae/fs_fs/commit_shim.c that all build the same 8-field header:
+// ae/repo_storage/commit_shim.c that all build the same 8-field header:
 //
 //   root: <sha>
 //   branch: <name>
@@ -155,7 +155,7 @@ export rev_blob_body(root: string, branch: string, props: string, acl: string,
 
 // Sort the "<sha> <path>" lines in `body` by path ascending, preserving
 // exact line contents. Used by paths-acl / paths-props blob builders in
-// ae/fs_fs/commit_shim.c.
+// ae/repo_storage/commit_shim.c.
 //
 // Input / output are newline-separated. Blank/malformed lines dropped.
 // O(n²) insertion sort — n is small (touched paths per commit).
@@ -270,5 +270,5 @@ pilins_insert_sorted(entries: string, path: string, line: string) -> string {
 }
 
 main() {
-    println("ae/fs_fs/format_line.ae is a library; not meant to run standalone")
+    println("ae/repo_storage/format_line.ae is a library; not meant to run standalone")
 }

@@ -14,7 +14,7 @@
 // permissions and limitations under the License.
 
 // Recursive txn → tree rebuilder. Ported from rebuild_dir_c in
-// ae/fs_fs/txn_shim.c (the long-standing structural port candidate).
+// ae/repo_storage/txn_shim.c (the long-standing structural port candidate).
 //
 // The algorithm:
 //   1. Start with the base dir's entries; for each, apply txn edits
@@ -370,5 +370,5 @@ base_dir_sha_was_empty_marker(sha: string) -> int {
 }
 
 main() {
-    println("ae/fs_fs/rebuild.ae is a library; not meant to run standalone")
+    println("ae/repo_storage/rebuild.ae is a library; not meant to run standalone")
 }

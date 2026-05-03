@@ -13,7 +13,7 @@
 // implied. See the License for the specific language governing
 // permissions and limitations under the License.
 
-// Recursive dir-blob filter for ae/fs_fs/commit_shim.c.
+// Recursive dir-blob filter for ae/repo_storage/commit_shim.c.
 //
 // Given a source tree (rooted at `src_sha`) and a newline-separated
 // list of include globs, produce a filtered tree and return its new
@@ -31,7 +31,7 @@ extern rep_read_blob(repo: string, sha_hex: string) -> string
 extern rep_write_blob(repo: string, data: string, length: int) -> string
 extern rep_free(p: string)
 
-// Dir-blob parsers ported earlier in ae/fs_fs/dirblob.ae.
+// Dir-blob parsers ported earlier in ae/repo_storage/dirblob.ae.
 extern dir_count_entries(body: string) -> int
 extern dir_entry_kind(body: string, i: int) -> int
 extern dir_entry_sha(body: string, i: int) -> string
@@ -123,5 +123,5 @@ export filter_dir(repo: string, src_sha: string, prefix: string,
 }
 
 main() {
-    println("ae/fs_fs/filter.ae is a library; not meant to run standalone")
+    println("ae/repo_storage/filter.ae is a library; not meant to run standalone")
 }

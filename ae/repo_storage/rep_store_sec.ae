@@ -20,7 +20,7 @@
 // sha1) for verification. Created on demand the first time a secondary
 // hash is written so legacy repos pay no schema cost.
 //
-// Round 59 moved these out of ae/fs_fs/rep_store_shim.c; the C side
+// Round 59 moved these out of ae/repo_storage/rep_store_shim.c; the C side
 // no longer carries any direct sqlite3 calls. Same shape as round 48
 // (rep_cache primary table) and round 55 (svnadmin's path_rev table).
 
@@ -82,5 +82,5 @@ export rep_cache_sec_lookup(repo: string, primary: string, algo: string) -> stri
 }
 
 main() {
-    println("ae/fs_fs/rep_store_sec.ae is a library; not meant to run standalone")
+    println("ae/repo_storage/rep_store_sec.ae is a library; not meant to run standalone")
 }

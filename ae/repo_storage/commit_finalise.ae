@@ -14,8 +14,8 @@
 // permissions and limitations under the License.
 
 // Round 64 (Gordian knot): port the orchestration of commit finalise
-// and branch create out of ae/fs_fs/commit_shim.c. The recursive
-// tree-rebuild lives in ae/fs_fs/rebuild.ae (called as
+// and branch create out of ae/repo_storage/commit_shim.c. The recursive
+// tree-rebuild lives in ae/repo_storage/rebuild.ae (called as
 // rebuild_dir); everything around it — load base root sha,
 // inherit props/acl, write rev blob, the 4-file pointer set,
 // path_rev index population — is pure orchestration here.
@@ -272,5 +272,5 @@ export branch_create(repo: string, name: string, base: string,
 }
 
 main() {
-    println("ae/fs_fs/commit_finalise.ae is a library; not meant to run standalone")
+    println("ae/repo_storage/commit_finalise.ae is a library; not meant to run standalone")
 }

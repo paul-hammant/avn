@@ -254,5 +254,5 @@ export rev_pointer_write(repo: string, branch: string, next_rev: int,
 }
 
 main() {
-    println("ae/fs_fs/branch_spec.ae is a library; not meant to run standalone")
+    println("ae/repo_storage/branch_spec.ae is a library; not meant to run standalone")
 }

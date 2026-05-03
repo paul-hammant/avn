@@ -13,7 +13,7 @@
 // implied. See the License for the specific language governing
 // permissions and limitations under the License.
 
-// Repo-path relational predicates, ported from ae/fs_fs/txn_shim.c.
+// Repo-path relational predicates, ported from ae/repo_storage/txn_shim.c.
 // These operate purely on paths (slash-separated, no leading slash,
 // no trailing slash, no scheme); they don't touch the filesystem.
 // The canonical callers are txn_shim.c's rebuild_dir helpers — we
@@ -109,5 +109,5 @@ export path_covers(path: string, prefix: string) -> int {
 }
 
 main() {
-    println("ae/fs_fs/pathutil.ae is a library; not meant to run standalone")
+    println("ae/repo_storage/pathutil.ae is a library; not meant to run standalone")
 }

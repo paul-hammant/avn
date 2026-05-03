@@ -15,7 +15,7 @@
 
 // "key: value" line extractor for rev-blob bodies — ported from
 // parse_field / rev_blob_field / load_rev_blob_field duplicated across
-// ae/repos/shim.c, ae/fs_fs/commit_shim.c, and ae/svnserver/shim.c.
+// ae/repos/shim.c, ae/repo_storage/commit_shim.c, and ae/svnserver/shim.c.
 //
 // Rev blobs are line-oriented text:
 //   root: <sha>\n

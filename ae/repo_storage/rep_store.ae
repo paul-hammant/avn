@@ -43,7 +43,7 @@ import std.zlib
 extern concat(prefix: string, prefix_len: int, suf: string, suf_len: int) -> string
 extern slice(s: string, s_len: int, start: int, end: int) -> string
 
-// Path builder already lives in ae/fs_fs/reppath.ae.
+// Path builder already lives in ae/repo_storage/reppath.ae.
 extern rep_path(repo: string, sha: string) -> string
 extern rep_dir(repo: string, sha: string) -> string
 extern rep_rel_path(sha: string) -> string
@@ -244,7 +244,7 @@ export rep_cache_insert(repo: string, sha: string, rel_path: string,
 // sec-table lookups work for clients that only know e.g. SHA-256.
 //
 // Returns the primary-hash hex on success, "" on failure. Round 105
-// hoisted this out of ae/fs_fs/rep_store_shim.c, where it was 50
+// hoisted this out of ae/repo_storage/rep_store_shim.c, where it was 50
 // lines of orchestration over Aether helpers — every step the C
 // side did was already a single extern call into Aether.
 
@@ -323,5 +323,5 @@ export rep_write_blob(repo: string, data: string, length: int) -> string {
 }
 
 main() {
-    println("ae/fs_fs/rep_store.ae is a library; not meant to run standalone")
+    println("ae/repo_storage/rep_store.ae is a library; not meant to run standalone")
 }

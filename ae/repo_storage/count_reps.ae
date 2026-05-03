@@ -66,5 +66,5 @@ count_reps_recurse(dir: string) -> int {
 }
 
 main() {
-    println("ae/fs_fs/count_reps.ae is a library; not meant to run standalone")
+    println("ae/repo_storage/count_reps.ae is a library; not meant to run standalone")
 }

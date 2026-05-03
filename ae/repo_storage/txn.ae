@@ -7,7 +7,7 @@
 //
 //     http://www.apache.org/licenses/LICENSE-2.0
 
-// Transaction edit-list. Round 169 retires ae/fs_fs/txn_shim.c
+// Transaction edit-list. Round 169 retires ae/repo_storage/txn_shim.c
 // (87 lines C) using Aether 0.109's *StructName return-type fix.
 //
 // Storage shape — six parallel containers, all indexed by edit
@@ -168,5 +168,5 @@ export txn_edit_copy_kind(t_ptr: ptr, i: int) -> int {
 }
 
 main() {
-    println("ae/fs_fs/txn.ae is a library; not meant to run standalone")
+    println("ae/repo_storage/txn.ae is a library; not meant to run standalone")
 }

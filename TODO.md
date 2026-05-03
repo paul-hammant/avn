@@ -109,13 +109,13 @@ encoder-status flag. The 6 cases still fail with `length 0 != N`
 **Symptom**: same shape (`length 1 != N`).
 **Hypothesis**: shares the same length-accessor as F1.
 
-### F3. ae/fs_fs/test_repo.ae — `read_blob` failures
+### F3. ae/repo_storage/test_repo.ae — `read_blob` failures
 **Symptom**: `read_blob big length: got 0, want 10000` and
 content mismatches.
 **Hypothesis**: blob read returns empty for large blobs.
 Could be related to F1/F2 if blob length accessor regressed.
 
-### F4. ae/fs_fs/test_revisions.ae — file-content mismatches
+### F4. ae/repo_storage/test_revisions.ae — file-content mismatches
 **Symptom**: `r1 README:` fails (left empty), same for main.c
 and notes.txt.
 **Hypothesis**: read path issue — possibly the same

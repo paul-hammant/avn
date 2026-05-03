@@ -122,7 +122,7 @@ export repos_rev_field(repo: string, rev: int, key: string) -> string {
 // and the field is absent on prev — callers that need to
 // distinguish should call load_rev_blob_field directly. Same
 // semantics as the C-side props/acl-inheritance block in
-// ae/fs_fs/commit_shim.c that used to call rev_blob_field in a
+// ae/repo_storage/commit_shim.c that used to call rev_blob_field in a
 // pair of NULL-or-empty-override branches.
 export repos_inherit_rev_field(repo: string, prev: int, key: string,
                                 override: string) -> string {

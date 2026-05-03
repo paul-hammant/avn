@@ -14,7 +14,7 @@
 // permissions and limitations under the License.
 
 // Branch include-spec matcher — ported from path_matches_any in
-// ae/fs_fs/commit_shim.c. This is the first C→Aether port under the
+// ae/repo_storage/commit_shim.c. This is the first C→Aether port under the
 // shim-snip initiative.
 //
 // Compiled with `aetherc --emit=lib`, so:
@@ -140,5 +140,5 @@ export spec_matches_any(path: string, specs_joined: string) {
 // main() is present so the file type-checks, but it's not used when
 // compiled with --emit=lib.
 main() {
-    println("ae/fs_fs/spec.ae is a library; not meant to run standalone")
+    println("ae/repo_storage/spec.ae is a library; not meant to run standalone")
 }

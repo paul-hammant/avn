@@ -520,7 +520,7 @@ build_acl_blob_joined(repo: string, rules_joined: string) -> string {
 
 // Build "<sha> <path>\n" sorted by path, write to rep store. Shared
 // shape for paths-props and paths-acl; sort delegated to
-// paths_index_sort (ae/fs_fs/format_line.ae).
+// paths_index_sort (ae/repo_storage/format_line.ae).
 build_paths_index_blob(repo: string, paths_joined: string, shas_joined: string) -> string {
     np = count_lines(paths_joined)
     ns = count_lines(shas_joined)

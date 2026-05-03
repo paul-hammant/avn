@@ -51,7 +51,7 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
   rebuilt at `~/scm/aether/build/ae`), which unblocks adding
   new `_generated.c` paths to svnserver's link line without
   triggering the silent truncation that sunk round 30.
-  - New `ae/fs_fs/rep_store.ae` (175 LOC) owns the blob
+  - New `ae/repo_storage/rep_store.ae` (175 LOC) owns the blob
     encode/decode half of the rep store: use_zlib decision
     with the 16-byte threshold, RAW/ZLIB-tagged envelope,
     binary-safe file write via fs.write_binary, inflate via
@@ -80,8 +80,8 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
   Attempted port of the fs_fs rep-store (sibling shape to round
   29's wc pristine port — same hash + zlib + binary-file-write
   pattern, using the now-ambient std.cryptography + std.zlib).
-  The Aether side (`ae/fs_fs/rep_store.ae`, 200 LOC) worked
-  end-to-end, but adding `ae/fs_fs/rep_store_generated.c` to
+  The Aether side (`ae/repo_storage/rep_store.ae`, 200 LOC) worked
+  end-to-end, but adding `ae/repo_storage/rep_store_generated.c` to
   the svnserver binary's `extra_sources` pushed the line over
   2 KiB, which silently truncated the gcc link command to
   `handler_copy_generat` and failed to link. Rolled back.
@@ -334,7 +334,7 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
   - svnadmin dump rev-pointer read → aether_repos_rev_blob_sha.
   - repos_info_rev + root_dir_sha1_for_rev both use the shared
     aether_repos_load_rev_blob_field helper now.
-  - count_reps_recurse → ae/fs_fs/count_reps.ae.
+  - count_reps_recurse → ae/repo_storage/count_reps.ae.
   - Dead trampolines gone from update_shim.c (ingest_props),
     svnserver/shim.c (acl_user_has_rw_subtree, 24 stale aether_*
     extern decls, 5 obsolete svnae_txn_*/commit_finalise forward
@@ -351,7 +351,7 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
   - ra_parse_rev_response collapses three inline four-line
     cJSON {"rev":N} parsers into one Aether helper.
   - svnae_env_get → std.os::getenv.
-  - svnae_branch_spec_allows → ae/fs_fs/branch_spec.ae.
+  - svnae_branch_spec_allows → ae/repo_storage/branch_spec.ae.
   - load_rev_root_sha1 + rev_blob_field both swap to the existing
     ae/repos/rev_io.ae two-hop reader (closes the round-14
     deferred port).
@@ -504,8 +504,8 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
 - **Round 9**: the Gordian knots fall. Three structural
   recursive walkers ported in a single session after `--emit=lib
   --with=fs` landed:
-  - `filter_dir_recursive` (fs_fs, 89 lines of C → ae/fs_fs/filter.ae)
-  - `rebuild_dir_c` (fs_fs, 292 lines of C → ae/fs_fs/rebuild.ae)
+  - `filter_dir_recursive` (fs_fs, 89 lines of C → ae/repo_storage/filter.ae)
+  - `rebuild_dir_c` (fs_fs, 292 lines of C → ae/repo_storage/rebuild.ae)
     — the core commit tree rebuilder that had been flagged as
     "weeks of work" earlier in the session
   - `compute_redacted_dir_sha` (svnserver, 50 lines → ae/svnserver/redact.ae)
@@ -769,7 +769,7 @@ for t in error path utf8 checksum compress io sqlite svndiff xdelta \
          repo revisions txn repos; do
   case $t in
     svndiff|xdelta) f=ae/delta/test_$t.ae ;;
-    repo|revisions|txn) f=ae/fs_fs/test_$t.ae ;;
+    repo|revisions|txn) f=ae/repo_storage/test_$t.ae ;;
     repos) f=ae/repos/test_$t.ae ;;
     *) f=ae/subr/test_$t.ae ;;
   esac

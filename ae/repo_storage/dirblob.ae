@@ -14,8 +14,8 @@
 // permissions and limitations under the License.
 
 // Dir-blob line parser — ported from the eight near-identical
-// "<kind> <sha> <name>\n" scanners across ae/fs_fs/commit_shim.c,
-// ae/fs_fs/txn_shim.c, ae/repos/shim.c, and ae/svnserver/shim.c.
+// "<kind> <sha> <name>\n" scanners across ae/repo_storage/commit_shim.c,
+// ae/repo_storage/txn_shim.c, ae/repos/shim.c, and ae/svnserver/shim.c.
 //
 // Blob format:
 //   f <sha-hex> README\n
@@ -227,5 +227,5 @@ export dir_entry_line(kind: int, sha: string, name: string) -> string {
 }
 
 main() {
-    println("ae/fs_fs/dirblob.ae is a library; not meant to run standalone")
+    println("ae/repo_storage/dirblob.ae is a library; not meant to run standalone")
 }

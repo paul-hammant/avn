@@ -20,7 +20,7 @@
 // read correctly (immutability), and checks that unchanged files in rev2
 // are rep-shared with rev1 (same SHA-1 → exactly one .rep file on disk).
 //
-// On-disk layout (see ae/fs_fs/shim.c for the shim-level helpers):
+// On-disk layout (see ae/repo_storage/shim.c for the shim-level helpers):
 //
 //   $repo/
 //     format, reps/, rep-cache.db     -- unchanged from Phase 3.1

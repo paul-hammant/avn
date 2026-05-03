@@ -25,7 +25,7 @@ main() {
         regen("../../ae/client/copy_branch.ae")
         regen("../../ae/client/info.ae")
         regen("../../ae/client/fetch.ae")
-        regen("../../ae/fs_fs/pathutil.ae")
+        regen("../../ae/repo_storage/pathutil.ae")
         regen("../../ae/subr/io.ae")
         regen("../../ae/ffi/openssl/crypto_helpers.ae")
     }

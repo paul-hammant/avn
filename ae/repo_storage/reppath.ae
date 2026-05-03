@@ -13,7 +13,7 @@
 // implied. See the License for the specific language governing
 // permissions and limitations under the License.
 
-// Rep-store path builders for ae/fs_fs/rep_store_shim.c.
+// Rep-store path builders for ae/repo_storage/rep_store_shim.c.
 //
 // Layout (inside a bare svn-aether repo):
 //   <repo>/reps/<s0s1>/<s2s3>/<sha>.rep        full file path
@@ -58,5 +58,5 @@ export rep_rel_path(sha: string) -> string {
 }
 
 main() {
-    println("ae/fs_fs/reppath.ae is a library; not meant to run standalone")
+    println("ae/repo_storage/reppath.ae is a library; not meant to run standalone")
 }

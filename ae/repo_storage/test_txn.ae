@@ -22,7 +22,7 @@
 //   - delete a file
 //   - add a new top-level file against a later base revision
 //
-// The recursive directory rebuild lives in C (ae/fs_fs/txn_shim.c), because
+// The recursive directory rebuild lives in C (ae/repo_storage/txn_shim.c), because
 // Aether's forward-reference return-type inference can't handle a recursive
 // function that returns string (AETHER_ISSUES.md #14). The Aether side
 // orchestrates: init the repo, build up txns, call commit_txn which runs

@@ -7,7 +7,7 @@
 //
 //     http://www.apache.org/licenses/LICENSE-2.0
 
-// Tree builder — Aether port of ae/fs_fs/shim.c's
+// Tree builder — Aether port of ae/repo_storage/shim.c's
 // tree_builder. Round 167 retires the C holder using
 // Aether 0.109's *StructName return-type fix (Section B of
 // fresh-aether-requests.md).
@@ -17,7 +17,7 @@
 //   contents      std.list      AetherString per entry (binary-safe)
 //   content_lens  std.gintarr
 //
-// Used by ae/fs_fs/test_revisions.ae's commit-rev fixture: build a
+// Used by ae/repo_storage/test_revisions.ae's commit-rev fixture: build a
 // flat (path, kind, content) list, then walk it to emit dir blobs
 // bottom-up.
 
@@ -113,5 +113,5 @@ export fsfs_tree_builder_content_data(tb_ptr: ptr, i: int) -> string {
 }
 
 main() {
-    println("ae/fs_fs/tree_builder.ae is a library; not meant to run standalone")
+    println("ae/repo_storage/tree_builder.ae is a library; not meant to run standalone")
 }

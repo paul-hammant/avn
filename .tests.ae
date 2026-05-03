@@ -61,7 +61,7 @@ main() {
     build.dep(b, "ae/subr/.tests-sqlite.ae")
     build.dep(b, "ae/working_copy/.tests-db.ae")
     build.dep(b, "ae/working_copy/.tests-pristine.ae")
-    build.dep(b, "ae/fs_fs/.tests-txn.ae")
+    build.dep(b, "ae/repo_storage/.tests-txn.ae")
     build.dep(b, "ae/delta/.tests-svndiff.ae")
     build.dep(b, "ae/delta/.tests-xdelta.ae")
 }
