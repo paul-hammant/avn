@@ -1,20 +1,42 @@
 import build
-import bash
-import bash (script, pre_command, post_command)
-import svnae
-import svnae (svn_server)
+import aether
+import aether (driver, output, binary_under_test, fixture_seed, fixture_server,
+               path, env_var, repo, seed_bin, bin, args, port, ready_after_ms)
 
 main() {
     b = build.start()
     build.dep(b, "svn")
     build.dep(b, "svnserver")
     build.dep(b, "svnserver/.build-seed.ae")
-    bash.test(b) {
-        // Stage 1 fixture: primary seeded repo on PORT.
-        // Stage 2 (alternate repo on PORT+1) is spawned inline by
-        // the test — it represents a *different* repo to switch to,
-        // not a different fixture role.
-        svn_server("test_sw", "9480")
-        script("test_switch.sh")
+
+    aether.driver_test(b) {
+        driver("test_switch_driver.ae")
+        output("test_switch_driver")
+
+        binary_under_test(b, "svn") {
+            path("target/svn/bin/svn")
+        }
+
+        // Two seeded repos + two servers — the multi-fixture shape.
+        fixture_seed(b, "test_sw_primary") {
+            repo("/tmp/svnae_aeb_test_sw_primary_repo")
+            seed_bin("target/svnserver/bin/svnae-seed")
+        }
+        fixture_seed(b, "test_sw_secondary") {
+            repo("/tmp/svnae_aeb_test_sw_secondary_repo")
+            seed_bin("target/svnserver/bin/svnae-seed")
+        }
+        fixture_server(b, "test_sw_primary") {
+            bin("target/svnserver/bin/aether-svnserver")
+            args("demo $TEST_SW_PRIMARY_REPO 9480")
+            port(9480)
+            ready_after_ms(1500)
+        }
+        fixture_server(b, "test_sw_secondary") {
+            bin("target/svnserver/bin/aether-svnserver")
+            args("demo $TEST_SW_SECONDARY_REPO 9481")
+            port(9481)
+            ready_after_ms(1500)
+        }
     }
 }

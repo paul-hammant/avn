@@ -1,0 +1,147 @@
+// Copyright 2026 Paul Hammant (portions).
+// Apache License, Version 2.0 — see LICENSE.
+//
+// Aether driver for svn switch test. Round 236 canary for the
+// multi-fixture shape — two seeded servers running concurrently,
+// driven via aeb's fixture_seed/fixture_server grammar.
+//
+// Migrated from working_copy/test_switch.sh. The bash test
+// inline-spawned the second server; this driver declares both
+// up front so aeb manages spawn/kill for both.
+//
+// Reads $SVN_BIN, $TEST_SW_PRIMARY_PORT, $TEST_SW_PRIMARY_REPO,
+// $TEST_SW_SECONDARY_PORT, $TEST_SW_SECONDARY_REPO.
+
+import contrib.aeocha
+import std.os
+import std.os (os_getenv)
+import std.string
+
+// Closure-extern-ordering workarounds (Round 234 finding).
+extern list_new() -> ptr
+extern list_add_raw(list: ptr, item: ptr) -> int
+
+argv_new() -> { return list_new() }
+argv_push(argv: ptr, s: string) { list_add_raw(argv, s) }
+
+sh(cmd: string) -> {
+    argv = argv_new()
+    argv_push(argv, "-c")
+    argv_push(argv, cmd)
+    out, status, err = os.run_capture("/bin/sh", argv, null)
+    return out, status, err
+}
+
+main() {
+    fw = aeocha.init()
+    svn_bin = os_getenv("SVN_BIN")
+    port1   = os_getenv("TEST_SW_PRIMARY_PORT")
+    port2   = os_getenv("TEST_SW_SECONDARY_PORT")
+    url1    = string.concat("http://127.0.0.1:", string.concat(port1, "/demo"))
+    url2    = string.concat("http://127.0.0.1:", string.concat(port2, "/demo"))
+    wc      = "/tmp/svnae_test_sw_wc"
+
+    // Differentiate the secondary repo: commit a different README via
+    // a throwaway WC. Build the shell command step-by-step (multi-arg
+    // string.concat would need a 12-deep nest).
+    setup_wc = "/tmp/svnae_test_sw_setup"
+    setup_cmd = string.concat("rm -rf ", setup_wc)
+    setup_cmd = string.concat(setup_cmd, " && ")
+    setup_cmd = string.concat(setup_cmd, svn_bin)
+    setup_cmd = string.concat(setup_cmd, " checkout ")
+    setup_cmd = string.concat(setup_cmd, url2)
+    setup_cmd = string.concat(setup_cmd, " ")
+    setup_cmd = string.concat(setup_cmd, setup_wc)
+    setup_cmd = string.concat(setup_cmd, " >/dev/null && cd ")
+    setup_cmd = string.concat(setup_cmd, setup_wc)
+    setup_cmd = string.concat(setup_cmd, " && echo 'feature-x content' > README && ")
+    setup_cmd = string.concat(setup_cmd, svn_bin)
+    setup_cmd = string.concat(setup_cmd, " commit --author bob --log 'feature-x edit' >/dev/null")
+    setup_out, setup_st, setup_err = sh(setup_cmd)
+
+    // Pre-compute per-test commands — same step-by-step pattern.
+    // These run inside it() blocks; the closure-extern-ordering bug
+    // wants string.concat out of the closure body anyway.
+
+    // Case 1 prep: rm WC, checkout primary, switch to secondary, cat README.
+    cmd1 = string.concat("rm -rf ", wc)
+    cmd1 = string.concat(cmd1, " && ")
+    cmd1 = string.concat(cmd1, svn_bin)
+    cmd1 = string.concat(cmd1, " checkout ")
+    cmd1 = string.concat(cmd1, url1)
+    cmd1 = string.concat(cmd1, " ")
+    cmd1 = string.concat(cmd1, wc)
+    cmd1 = string.concat(cmd1, " >/dev/null && cd ")
+    cmd1 = string.concat(cmd1, wc)
+    cmd1 = string.concat(cmd1, " && ")
+    cmd1 = string.concat(cmd1, svn_bin)
+    cmd1 = string.concat(cmd1, " switch ")
+    cmd1 = string.concat(cmd1, url2)
+    cmd1 = string.concat(cmd1, " >/dev/null 2>&1 && cat README")
+
+    // Case 1b: subsequent update on same WC.
+    cmd1b = string.concat("cd ", wc)
+    cmd1b = string.concat(cmd1b, " && ")
+    cmd1b = string.concat(cmd1b, svn_bin)
+    cmd1b = string.concat(cmd1b, " update")
+
+    // Case 2 prep: fresh WC, local edit on src/main.c, switch, cat both.
+    cmd2 = string.concat("rm -rf ", wc)
+    cmd2 = string.concat(cmd2, " && ")
+    cmd2 = string.concat(cmd2, svn_bin)
+    cmd2 = string.concat(cmd2, " checkout ")
+    cmd2 = string.concat(cmd2, url1)
+    cmd2 = string.concat(cmd2, " ")
+    cmd2 = string.concat(cmd2, wc)
+    cmd2 = string.concat(cmd2, " >/dev/null && cd ")
+    cmd2 = string.concat(cmd2, wc)
+    cmd2 = string.concat(cmd2, " && echo 'my local change' > src/main.c && ")
+    cmd2 = string.concat(cmd2, svn_bin)
+    cmd2 = string.concat(cmd2, " switch ")
+    cmd2 = string.concat(cmd2, url2)
+    cmd2 = string.concat(cmd2, " >/dev/null 2>&1 || true; cat src/main.c")
+
+    cmd2b = string.concat("cat ", wc)
+    cmd2b = string.concat(cmd2b, "/README")
+
+    aeocha.describe(fw, "svn switch — multi-server multi-fixture") {
+
+        aeocha.it("setup: secondary repo is differentiated") callback {
+            aeocha.expect_exit(fw, setup_st, 0,
+                "secondary repo setup commit ok")
+        }
+
+        aeocha.it("clean switch: WC tracks new branch's content") callback {
+            out, status, err = sh(cmd1)
+            aeocha.expect_no_spawn_error(fw, err, "spawn ok")
+            aeocha.expect_exit(fw, status, 0, "switch+cat exit 0")
+            aeocha.expect_stdout_contains(fw, out, "feature-x content",
+                "switched README has secondary content")
+        }
+
+        aeocha.it("clean switch: subsequent update reaches new server") callback {
+            out, status, err = sh(cmd1b)
+            aeocha.expect_exit(fw, status, 0, "update after switch exit 0")
+            aeocha.expect_stdout_contains(fw, out, "At revision",
+                "update announces a revision")
+        }
+
+        aeocha.it("non-overlapping local edit survives switch") callback {
+            out, status, err = sh(cmd2)
+            aeocha.expect_exit(fw, status, 0, "switch+cat src/main.c exit 0")
+            aeocha.expect_stdout_contains(fw, out, "my local change",
+                "local-only edit preserved")
+        }
+
+        aeocha.it("non-overlapping switch: README pulled from secondary") callback {
+            // After Case 2's switch, README in WC should now have
+            // secondary's content. (WC from previous it() persists.)
+            out, status, err = sh(cmd2b)
+            aeocha.expect_exit(fw, status, 0, "cat README exit 0")
+            aeocha.expect_stdout_contains(fw, out, "feature-x content",
+                "switched README has secondary content")
+        }
+    }
+
+    aeocha.run_summary(fw)
+}

@@ -280,6 +280,47 @@ repo creation and server lifecycle inline. Don't migrate them.
   Inline shell strings in the driver are fine for the
   per-test prep step. WC-prep happens before the `describe` block
   so prep failures surface as the first assertion in the suite.
+- **Multi-fixture pattern.** Tests needing N>1 servers (e.g.
+  `test_switch` switching between two repos) declare each
+  fixture explicitly:
+  ```aether
+  fixture_seed(b, "primary")   { repo("..."); seed_bin("...") }
+  fixture_seed(b, "secondary") { repo("..."); seed_bin("...") }
+  fixture_server(b, "primary")   { bin("..."); args("demo $PRIMARY_REPO 9480"); port(9480); ... }
+  fixture_server(b, "secondary") { bin("..."); args("demo $SECONDARY_REPO 9481"); port(9481); ... }
+  ```
+  Each fixture's name uppercases to a prefix: `$PRIMARY_PORT`,
+  `$PRIMARY_REPO`, `$SECONDARY_PORT`, etc. aeb spawns/kills both
+  per test invocation. Round 236 canary:
+  `working_copy/test_switch_driver.ae`.
+- **Token-auth pattern (svn_server_with_token replacement).** The
+  bash svnae SDK had `svn_server_with_token(name, port, token)`;
+  the closure-form way is to inline the token in `args`:
+  ```aether
+  fixture_server(b, "test_acl") {
+      bin("target/svnserver/bin/aether-svnserver")
+      args("demo $TEST_ACL_REPO 9540 --superuser-token test-super-token-42")
+      port(9540); ready_after_ms(1500)
+  }
+  ```
+  Round 236 canary: `svn/test_acl_driver.ae`. The svnae SDK could
+  grow a closure-form variant later but inlining is fine for now.
+- **Per-call env vars (SVN_USER=alice etc).** No `os.run_capture`
+  env-list builder helper yet. Use `/bin/sh -c` and prefix the
+  shell variables: `sh("SVN_USER=alice ${svn_bin} ls ${url}")`.
+  Composes with the `sh()` helper above.
+- **HTTP with custom headers.** `http_get_with_user(url, "alice")`
+  / `http_get_with_super(url, token)` wrappers around
+  `client.request → set_header → set_timeout → send_request →
+  request_free`. Same pattern as `http_get` but with a
+  `client.set_header(req, "X-Svnae-User", value)` step inserted
+  between request creation and send. See ACL driver.
+- **String concat helper hygiene.** Deeply nested
+  `string.concat(a, string.concat(b, ...))` becomes unreadable past
+  ~6 levels and easy to mis-balance parens. Pattern: build commands
+  step-by-step via `cmd = string.concat(cmd, "...")` re-assignment
+  in `main()`, then reference the resulting `cmd` string from the
+  closure. Same approach for URLs (`url_r4 = ...; url_r5 = ...`).
 - **svnae SDK setters target `bash.test`, not `aether.driver_test`.**
   Our `svn_server`/`empty_server` setters in `.aeb/lib/svnae/`
   emit `pre_command`/`post_command` that `bash.test` consumes;
