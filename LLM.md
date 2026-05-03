@@ -256,6 +256,30 @@ repo creation and server lifecycle inline. Don't migrate them.
   ```
   Then `argv = argv_new()` / `argv_push(argv, "info")` in closures.
   This keeps the implicit-int issue out of closure bodies.
+  **Same pattern bites `string.concat`, `client.request`,
+  `client.set_timeout`, `client.send_request`, `client.request_free`,
+  `client.response_body`, `client.response_free`** — anything
+  called inside a closure body whose extern decl ships in an
+  imported module. Round 235 HTTP canary uses `http_get(url)`,
+  `resp_free(resp)`, `resp_body(resp)` wrappers; pre-computes
+  URL strings outside closures via
+  `url_r4 = string.concat(paths_base, "4/paths")` to dodge the
+  `string.concat`-in-closure variant. Upstream ask:
+  `~/scm/aether/closure-extern-ordering.md`.
+- **No `os.chdir` in std.** Cwd-bound commands (`svn add NEW`
+  inside a WC) need `/bin/sh -c "cd $WC && svn ..."`. Driver
+  pattern:
+  ```aether
+  sh(cmd: string) -> {
+      argv = argv_new()
+      argv_push(argv, "-c"); argv_push(argv, cmd)
+      out, status, err = os.run_capture("/bin/sh", argv, null)
+      return out, status, err
+  }
+  ```
+  Inline shell strings in the driver are fine for the
+  per-test prep step. WC-prep happens before the `describe` block
+  so prep failures surface as the first assertion in the suite.
 - **svnae SDK setters target `bash.test`, not `aether.driver_test`.**
   Our `svn_server`/`empty_server` setters in `.aeb/lib/svnae/`
   emit `pre_command`/`post_command` that `bash.test` consumes;

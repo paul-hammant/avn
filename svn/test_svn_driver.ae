@@ -45,8 +45,8 @@ main() {
             out, status, err = os.run_capture(svn_bin, argv, null)
             aeocha.expect_no_spawn_error(fw, err, "spawn ok")
             aeocha.expect_exit(fw, status, 0, "svn info exit 0")
-            aeocha.expect_stdout_contains(fw, out, "Revision:", "info has Revision line")
-            aeocha.expect_stdout_contains(fw, out, " 3\n", "head rev = 3")
+            aeocha.expect_stdout_line_field(fw, out, "Revision:", 1, "3",
+                "head rev = 3")
         }
 
         aeocha.it("info --rev 1 has correct log message") callback {
@@ -57,8 +57,8 @@ main() {
             argv_push(argv, "1")
             out, status, err = os.run_capture(svn_bin, argv, null)
             aeocha.expect_exit(fw, status, 0, "svn info --rev 1 exit 0")
-            aeocha.expect_stdout_contains(fw, out, "first commit",
-                "info r1 log line contains 'first commit'")
+            aeocha.expect_stdout_line_after(fw, out, "Log:", "first commit",
+                "info r1 log line is 'first commit'")
         }
 
         aeocha.it("log first entry is rev 3") callback {
@@ -143,10 +143,10 @@ main() {
             argv_push(argv, url)
             out, status, err = os.run_capture(svn_bin, argv, null)
             aeocha.expect_exit(fw, status, 0, "svn info exit 0")
-            aeocha.expect_stdout_contains(fw, out, "cli-user",
-                "r4 author contains cli-user")
-            aeocha.expect_stdout_contains(fw, out, "via svn cli",
-                "r4 log contains 'via svn cli'")
+            aeocha.expect_stdout_line_after(fw, out, "Author:", "cli-user",
+                "r4 author")
+            aeocha.expect_stdout_line_after(fw, out, "Log:", "via svn cli",
+                "r4 log")
         }
 
         aeocha.it("cat NEWFILE returns commit content") callback {
