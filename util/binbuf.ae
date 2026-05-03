@@ -1,0 +1,67 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+
+// Binary-safe concat + slice + le32-pack over AetherString.
+// Length parameters are explicit because inputs may carry embedded
+// NULs — we must not strlen them.
+
+import std.bytes
+import std.string
+
+// Concatenate two byte ranges into a new length-aware AetherString.
+// `prefix_len` / `suf_len` are explicit because both inputs may be
+// raw binary (embedded NULs); we must not strlen them.
+export concat(prefix: string, prefix_len: int,
+              suf: string, suf_len: int) -> string {
+    if prefix_len < 0 { prefix_len = 0 }
+    if suf_len < 0 { suf_len = 0 }
+    total = prefix_len + suf_len
+    buf = bytes.new(total + 1)
+    if buf == null { return "" }
+    if prefix_len > 0 {
+        bytes.copy_from_string(buf, 0, prefix, prefix_len)
+    }
+    if suf_len > 0 {
+        bytes.copy_from_string(buf, prefix_len, suf, suf_len)
+    }
+    return bytes.finish(buf, total)
+}
+
+// Slice [start, end) out of a binary buffer. `s_len` is the
+// caller-known true byte length of `s` — passed explicitly so we
+// don't have to strlen `s` (which would truncate at NUL on binary
+// content post-#297 auto-unwrap). The substring_n primitive in
+// std.string takes the same explicit-length contract.
+export slice(s: string, s_len: int,
+             start: int, end: int) -> string {
+    if start < 0 { start = 0 }
+    if end < start { end = start }
+    if end > s_len { end = s_len }
+    return string.substring_n(s, s_len, start, end)
+}
+
+// Pack a 32-bit value little-endian into a 4-byte AetherString.
+// Used by the pristine writer to encode the uncompressed-length
+// prefix; the produced AetherString must travel binary-safely
+// through downstream concat. We build the bytes via std.bytes
+// `set` (single-byte writes), then bytes.finish to get a length-
+// aware return — same shape as concat above.
+export pack_le32(v: int) -> string {
+    buf = bytes.new(5)
+    if buf == null { return "" }
+    bytes.set(buf, 0, v         & 255)
+    bytes.set(buf, 1, (v >> 8)  & 255)
+    bytes.set(buf, 2, (v >> 16) & 255)
+    bytes.set(buf, 3, (v >> 24) & 255)
+    return bytes.finish(buf, 4)
+}
+
+main() {
+    println("util/binbuf.ae is a library; not meant to run standalone")
+}

@@ -1,0 +1,258 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// permissions and limitations under the License.
+
+// Check whether `path` falls within branch `branch`'s include spec.
+//
+// The spec file at $repo/branches/<branch>/spec is a newline-
+// separated glob list. Empty file or missing file both mean "allow
+// everything" (compatible with legacy main-only seeded repos).
+//
+// Returns 1 = allowed, 0 = denied, -1 on bad args. (The old C
+// wrapper also distinguished I/O error but in practice every caller
+// treats -1 as deny; we simplify.)
+
+import std.string
+
+extern io_read_file(path: string) -> string
+extern io_file_size(path: string) -> int
+extern spec_matches_any(path: string, globs_joined: string) -> int
+
+export branch_spec_allows(repo: string, branch: string, path: string) -> int {
+    if string.length(branch) == 0 { return 1 }
+    if string.length(path) == 0 { return 1 }
+
+    spec_path = string.concat(string.concat(string.concat(repo, "/branches/"), branch), "/spec")
+    sz = io_file_size(spec_path)
+    if sz < 0 { return 1 }      // no spec → main-like allow-all
+    if sz == 0 { return 1 }      // empty spec → allow-all
+
+    buf = io_read_file(spec_path)
+    return spec_matches_any(path, buf)
+}
+
+// ---- branch head resolution -------------------------------------------
+//
+// Find the current rev of `base` branch, for branch_create's
+// "fork a new branch off <base>" step. Phase 8.1 introduced the
+// per-branch $repo/branches/<base>/head file; legacy repos seeded
+// before 8.1 still have $repo/head only and need a fallback.
+//
+// The fallback is only safe when `base == "main"` AND no other
+// branches exist — otherwise the legacy head file is the max rev
+// across all branches, not main's head specifically. On the
+// fallback path we also materialize $repo/branches/main/head so
+// subsequent branch-creates find the per-branch file even after
+// another branch bumps the legacy head.
+//
+// Returns the base rev on success, -1 on miss / malformed input.
+//
+// Ported from commit_shim.c's branch_create block.
+
+extern io_listdir(path: string) -> ptr
+extern io_listdir_count(h: ptr) -> int
+extern io_listdir_name(h: ptr, i: int) -> string
+extern io_listdir_free(h: ptr)
+extern io_mkdir_p(path: string) -> int
+extern io_write_atomic(path: string, data: string, length: int) -> int
+
+// Parse "rev=N" style per-branch head line. -1 on malformed input.
+parse_head_line(s: string) -> int {
+    n = string.length(s)
+    eq = string.index_of(s, "=")
+    if eq < 0 { return -1 }
+    i = eq + 1
+    val = 0
+    any = 0
+    while i < n {
+        ch = string.char_at(s, i)
+        if ch == 10 { break }           // '\n'
+        if ch < 48 { break }            // non-digit
+        if ch > 57 { break }
+        val = val * 10 + (ch - 48)
+        any = 1
+        i = i + 1
+    }
+    if any == 0 { return -1 }
+    return val
+}
+
+export branch_head_rev(repo: string, base: string) -> int {
+    // Preferred path: $repo/branches/<base>/head, "rev=N".
+    base_head_path = string.concat(string.concat(string.concat(repo, "/branches/"), base), "/head")
+    sz = io_file_size(base_head_path)
+    if sz >= 0 {
+        head_line = io_read_file(base_head_path)
+        rev = parse_head_line(head_line)
+        if rev >= 0 { return rev }
+    }
+
+    // Legacy fallback: only if base == "main" AND there are no
+    // other branches (so the legacy $repo/head is still main's
+    // head rather than the cross-branch max).
+    if string.equals(base, "main") == 0 { return -1 }
+
+    branches_root = string.concat(repo, "/branches")
+    bd = io_listdir(branches_root)
+    other_branches = 0
+    if bd != null {
+        n_br = io_listdir_count(bd)
+        i = 0
+        while i < n_br {
+            nm = io_listdir_name(bd, i)
+            if string.equals(nm, "main") == 1 {
+                i = i + 1
+                continue
+            }
+            other_branches = 1
+            break
+        }
+        io_listdir_free(bd)
+    }
+    if other_branches == 1 { return -1 }
+
+    legacy = string.concat(repo, "/head")
+    if io_file_size(legacy) < 0 { return -1 }
+    legacy_content = io_read_file(legacy)
+    // Legacy head is a plain "<N>\n" (no "rev=" prefix). Parse
+    // the leading integer.
+    ln = string.length(legacy_content)
+    val = 0
+    any = 0
+    i = 0
+    while i < ln {
+        ch = string.char_at(legacy_content, i)
+        if ch < 48 { break }
+        if ch > 57 { break }
+        val = val * 10 + (ch - 48)
+        any = 1
+        i = i + 1
+    }
+    if any == 0 { return -1 }
+    base_rev = val
+
+    // Materialize $repo/branches/main/head so future lookups
+    // don't hit this fallback again (another branch commit would
+    // bump the legacy head above main's).
+    main_dir = string.concat(repo, "/branches/main")
+    io_mkdir_p(main_dir)
+    main_head = string.concat(main_dir, "/head")
+    body = string.concat(string.concat("rev=", string.from_int(base_rev)), "\n")
+    io_write_atomic(main_head, body, string.length(body))
+
+    return base_rev
+}
+
+// ---- rev pointer + head file set --------------------------------------
+//
+// Every commit or branch-create writes four small files:
+//
+//   $repo/revs/NNNNNN                               (legacy rev pointer)
+//   $repo/branches/<branch>/revs/aa/bb/NNNNNN       (per-branch pointer
+//                                                    with two-level fanout)
+//   $repo/head                                      (legacy: "<N>\n")
+//   $repo/branches/<branch>/head                    (per-branch: "rev=<N>\n")
+//
+// Both commit_finalise and branch_create in
+// fs_fs/commit_shim.c had essentially the same block inlined — with a
+// real latent bug in branch_create's copy: it hard-coded the
+// per-branch pointer's aa/bb directory to "00/00" instead of deriving
+// from `next_rev`, so a branch-create at rev >= 256 would write to the
+// wrong fanout directory. Porting the file-writing here fixes the bug
+// and collapses both call sites to one extern.
+//
+// `rev_sha` is the content-addressed sha of the rev blob (what
+// rep_write_blob returned). Returns "" on success, a short
+// error string on failure.
+
+// Format: always emit 6-digit, zero-padded.
+branch_pad6(n: int) -> string {
+    s = string.from_int(n)
+    pad = ""
+    need = 6 - string.length(s)
+    i = 0
+    while i < need {
+        pad = string.concat(pad, "0")
+        i = i + 1
+    }
+    return string.concat(pad, s)
+}
+
+// Format: 2-digit, zero-padded, lowercase hex.
+branch_pad2hex(n: int) -> string {
+    digits = "0123456789abcdef"
+    high = (n >> 4) & 15
+    low  = n & 15
+    h = string.substring(digits, high, high + 1)
+    l = string.substring(digits, low,  low + 1)
+    return string.concat(h, l)
+}
+
+// Returns 0 on success, -1 on any write/mkdir failure. The err-message
+// shape would be nicer but crossing the FFI with an empty AetherString
+// from C requires an unwrap helper we can't rely on in every caller;
+// -1 on failure is enough — the caller aborts the commit anyway.
+export rev_pointer_write(repo: string, branch: string, next_rev: int,
+                              rev_sha: string) -> int {
+    if string.length(repo) == 0 { return -1 }
+    if string.length(branch) == 0 { return -1 }
+    if string.length(rev_sha) == 0 { return -1 }
+
+    // Pointer body: "<sha>\n". Written to both the per-branch and the
+    // legacy rev-pointer files.
+    ptr_body = string.concat(rev_sha, "\n")
+    ptr_len = string.length(ptr_body)
+
+    nn = branch_pad6(next_rev)
+
+    // Legacy $repo/revs/NNNNNN. Parent dir already exists — svnadmin
+    // create / seed ensure $repo/revs/ is present before the first
+    // commit writes into it.
+    legacy_ptr = string.concat(string.concat(repo, "/revs/"), nn)
+    if io_write_atomic(legacy_ptr, ptr_body, ptr_len) != 0 { return -1 }
+
+    // Per-branch $repo/branches/<branch>/revs/aa/bb/NNNNNN with
+    // two-level fanout. aa = (rev >> 16) & 0xff, bb = (rev >> 8) & 0xff.
+    aa = (next_rev >> 16) & 255
+    bb = (next_rev >> 8) & 255
+    branch_revs_dir = string.concat(string.concat(string.concat(string.concat(
+        repo, "/branches/"), branch), "/revs/"),
+        string.concat(string.concat(branch_pad2hex(aa), "/"), branch_pad2hex(bb)))
+    if io_mkdir_p(branch_revs_dir) != 0 { return -1 }
+    branch_ptr = string.concat(string.concat(branch_revs_dir, "/"), nn)
+    if io_write_atomic(branch_ptr, ptr_body, ptr_len) != 0 { return -1 }
+
+    // Legacy $repo/head: "<N>\n". Moves to the cross-branch max, which
+    // is always `next_rev` since rev numbers are monotonic repo-wide.
+    legacy_head_path = string.concat(repo, "/head")
+    legacy_head_body = string.concat(string.from_int(next_rev), "\n")
+    if io_write_atomic(legacy_head_path, legacy_head_body,
+                               string.length(legacy_head_body)) != 0 { return -1 }
+
+    // Per-branch $repo/branches/<branch>/head: "rev=<N>\n". Room for
+    // additional fields (tree-sha / spec-sha caching) in 8.2 without
+    // another format change.
+    br_head_path = string.concat(string.concat(string.concat(
+        repo, "/branches/"), branch), "/head")
+    br_head_body = string.concat(string.concat(
+        "rev=", string.from_int(next_rev)), "\n")
+    if io_write_atomic(br_head_path, br_head_body,
+                               string.length(br_head_body)) != 0 { return -1 }
+
+    return 0
+}
+
+main() {
+    println("repo_storage/branch_spec.ae is a library; not meant to run standalone")
+}

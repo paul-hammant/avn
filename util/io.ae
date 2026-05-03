@@ -1,0 +1,182 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// permissions and limitations under the License.
+
+// io.ae — durable-write / mkdir -p / small-file slurp primitives used
+// across every C shim in the port.
+//
+// Before Aether gained `--emit=lib --with=fs` (changelog [current]),
+// write_file_atomic + mkdir_p + read_small were duplicated verbatim in
+// commit_shim, rep_store_shim, pristine_shim, checkout_shim, svnadmin,
+// txn_shim, and merge_shim. This module delegates to std.fs so the
+// copies can go away.
+//
+// Must be compiled with `--with=fs` (the fs_fs/wc/svnserver Makefile
+// .regen files all pass that flag now).
+
+import std.fs
+import std.dir
+import std.string
+import std.bytes
+
+// Atomic write: stage to <path>.tmp.<pid>, fsync, rename. Binary-safe —
+// length is the byte count; embedded NULs fine. Returns 0 on success,
+// 1 on any failure.
+export io_write_atomic(path: string, data: string, length: int) -> int {
+    err = fs.write_atomic(path, data, length)
+    if string.length(err) > 0 { return 1 }
+    return 0
+}
+
+// Concatenate `header` (a short ASCII tag like "R" / "Z") and `body`
+// (which may contain embedded NULs) into one std.bytes buffer and
+// write atomically. Replaces the C-side write_header_and_body
+// shim that hand-rolled write()/fsync()/close() in a loop. Returns
+// 0 on success, 1 on failure.
+export io_write_header_and_body(path: string, header: string,
+                                 body: string, body_len: int) -> int {
+    hlen = string.length(header)
+    total = hlen + body_len
+    buf = bytes.new(total + 1)
+    if buf == null { return 1 }
+    if hlen > 0 {
+        bytes.copy_from_string(buf, 0, header, hlen)
+    }
+    if body_len > 0 {
+        bytes.copy_from_string(buf, hlen, body, body_len)
+    }
+    packed = bytes.finish(buf, total)
+    err = fs.write_atomic(path, packed, total)
+    if string.length(err) > 0 { return 1 }
+    return 0
+}
+
+// mkdir -p: create `path` and any missing parents, 0755. Treats
+// existing directory as success. Returns 0 on success, 1 on failure.
+export io_mkdir_p(path: string) -> int {
+    err = fs.mkdir_p(path)
+    if string.length(err) > 0 { return 1 }
+    return 0
+}
+
+// Slurp a file's entire contents. Returns "" on any error; callers
+// that need to distinguish empty-file from missing-file pair this
+// with io_file_exists.
+export io_read_file(path: string) -> string {
+    content, _n, err = fs.read_binary(path)
+    if string.length(err) > 0 { return "" }
+    return content
+}
+
+// Byte length of a file, or -1 if missing. Sidecar for io_read_file
+// so callers with binary content (rep blobs with embedded NULs) can
+// find the true length.
+export io_file_size(path: string) -> int {
+    _k, size, _m, err = fs.file_stat(path)
+    if string.length(err) > 0 { return 0 - 1 }
+    return size
+}
+
+// 1 if `path` exists and is a regular file, 0 otherwise.
+export io_is_regular_file(path: string) -> int {
+    kind, _s, _m, err = fs.file_stat(path)
+    if string.length(err) > 0 { return 0 }
+    if kind == 1 { return 1 }
+    return 0
+}
+
+// 1 if `path` exists and is a directory, 0 otherwise.
+io_is_directory(path: string) -> int {
+    kind, _s, _m, err = fs.file_stat(path)
+    if string.length(err) > 0 { return 0 }
+    if kind == 2 { return 1 }
+    return 0
+}
+
+// 1 if `path` exists (any kind: file, dir, symlink, etc.), 0 otherwise.
+export io_exists(path: string) -> int {
+    _k, _s, _m, err = fs.file_stat(path)
+    if string.length(err) > 0 { return 0 }
+    return 1
+}
+
+// Raw kind byte: 1=file, 2=dir, 3=symlink, 4=other, 0=missing.
+// Use this when the caller cares which kind — otherwise the more
+// specific io_is_regular_file / io_is_directory / io_exists suffice.
+export io_stat_kind(path: string) -> int {
+    kind, _s, _m, err = fs.file_stat(path)
+    if string.length(err) > 0 { return 0 }
+    return kind
+}
+
+// Directory listing. Returns an opaque handle (ptr). Returns null
+// if the directory can't be opened. Caller must:
+//   - iterate with io_listdir_count + io_listdir_name
+//   - free with io_listdir_free
+// Entries are filenames only ("file.txt", "subdir") with no "." or ".."
+// included. Order is filesystem-dependent (readdir order, not sorted).
+export io_listdir(path: string) -> ptr {
+    return dir_list_raw(path)
+}
+
+export io_listdir_count(handle: ptr) -> int {
+    return dir_list_count(handle)
+}
+
+export io_listdir_name(handle: ptr, index: int) -> string {
+    return dir_list_get(handle, index)
+}
+
+export io_listdir_free(handle: ptr) {
+    dir_list_free(handle)
+}
+
+// Remove a file. Returns 0 on success, 1 on failure.
+export io_unlink(path: string) -> int {
+    err = fs.delete(path)
+    if string.length(err) > 0 { return 1 }
+    return 0
+}
+
+// Idempotent unlink: missing file is success. Used by svn's "delete tmp
+// if present" cleanup paths, where a stale tmp may or may not exist.
+// Returns 0 on success or already-absent, 1 if the file exists but
+// can't be deleted.
+export io_remove(path: string) -> int {
+    _k, _s, _m, stat_err = fs.file_stat(path)
+    if string.length(stat_err) > 0 { return 0 }
+    err = fs.delete(path)
+    if string.length(err) > 0 { return 1 }
+    return 0
+}
+
+// Remove an empty directory. Returns 0 on success, 1 on failure
+// (includes "directory not empty").
+export io_rmdir(path: string) -> int {
+    err = fs.delete_dir(path)
+    if string.length(err) > 0 { return 1 }
+    return 0
+}
+
+// Rename from → to (atomic within one filesystem). Returns 0 on
+// success, 1 on failure.
+export io_rename(from: string, to: string) -> int {
+    err = fs.rename(from, to)
+    if string.length(err) > 0 { return 1 }
+    return 0
+}
+
+main() {
+    println("util/io.ae is a library; not meant to run standalone")
+}

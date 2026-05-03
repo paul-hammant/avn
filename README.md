@@ -6,7 +6,7 @@ we read the svn C tree as a *reference for behaviour contracts* and
 wrote our own on-disk format, wire protocol, and algorithms.
 
 The reference svn C code still lives at `libsvn_*/` in this repo,
-read-only. The port lives under `ae/`. The old Apache-svn README is
+read-only. The port lives at the repo root in per-area dirs (`client/`, `delta/`, `repo_storage/`, `working_copy/`, etc). The old Apache-svn README is
 preserved at [`README.apache-svn-upstream`](./README.apache-svn-upstream).
 
 [Apache Subversion]: https://subversion.apache.org/
@@ -45,21 +45,21 @@ full 32-test suite.
 aeb
 
 # Build a single binary
-aeb ae/svn         # just svn — output at target/ae/svn/bin/svn
+aeb svn         # just svn — output at target/svn/bin/svn
 
-# Outputs land under target/ae/<dir>/bin/<name>
-target/ae/svnadmin/bin/svnadmin create /srv/repo
-target/ae/svnserver/bin/svnae-seed   /srv/repo        # three-commit known tree
-target/ae/svnserver/bin/aether-svnserver demo /srv/repo 8080 &
-target/ae/svn/bin/svn checkout http://localhost:8080/demo wc
+# Outputs land under target/<dir>/bin/<name>
+target/svnadmin/bin/svnadmin create /srv/repo
+target/svnserver/bin/svnae-seed   /srv/repo        # three-commit known tree
+target/svnserver/bin/aether-svnserver demo /srv/repo 8080 &
+target/svn/bin/svn checkout http://localhost:8080/demo wc
 cd wc
 echo "hi" >> README
-../target/ae/svn/bin/svn commit --author alice --log "tweak"
+../target/svn/bin/svn commit --author alice --log "tweak"
 ```
 
 ### Generated sources
 
-Some `.c` files under `ae/` are produced by `aetherc --emit=lib` from
+Some `.c` files at the repo root in per-area dirs (`client/`, `delta/`, `repo_storage/`, `working_copy/`, etc) are produced by `aetherc --emit=lib` from
 paired `.ae` sources (grep for `_generated.c`). They're **not checked
 into git** — aeb's `aether.program(b) { regen(...) }` setter
 regenerates them on demand. Never hand-edit a `_generated.c`; the next
@@ -170,22 +170,22 @@ but diverges freely on the plumbing where doing so pays off.
 ## Where the code lives
 
 ```
-ae/
-  subr/           foundations — error, path, checksum, compress, io,
-                  sqlite, utf8proc bindings. Each is a C shim + .ae
-                  wrapper + a test.
-  delta/          svndiff1 encode/decode, xdelta match-finder.
-  fs_fs/          content-addressable blob store, revisions, txn,
-                  server-side copy, commit finalisation.
-  repos/          query API (log, cat, list, info) on top of fs_fs.
-  ra/             REST client (libcurl + cjson).
-  svnserver/      HTTP server wrapping repos/, per-route handlers,
-                  commit/copy POST endpoints.
-  wc/             working copy: db, pristine, checkout, status,
-                  mutate (add/rm), commit, update, revert, diff,
-                  cp/mv, props, merge.
-  svn/            the svn CLI.
-  svnadmin/       svnadmin CLI (create/dump/load).
+util/           foundations — error, path, checksum, compress, io,
+                sqlite, utf8proc bindings. Each is a C shim + .ae
+                wrapper + a test.
+delta/          svndiff1 encode/decode, xdelta match-finder.
+repo_storage/   content-addressable blob store, revisions, txn,
+                server-side copy, commit finalisation.
+repos/          query API (log, cat, list, info) on top of repo_storage.
+client/         REST client (libcurl + cjson).
+svnserver/      HTTP server wrapping repos/, per-route handlers,
+                commit/copy POST endpoints.
+working_copy/   working copy: db, pristine, checkout, status,
+                mutate (add/rm), commit, update, revert, diff,
+                cp/mv, props, merge.
+svn/            the svn CLI.
+svnadmin/       svnadmin CLI (create/dump/load).
+ffi/            third-party FFI bindings (openssl).
 ```
 
 Each module has one or two C `shim.c` files (the real implementation)

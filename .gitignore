@@ -3,7 +3,7 @@ target/
 
 # aetherc --emit=lib output — regenerated from *.ae by `aeb`.
 # Never hand-edit these; they will be overwritten. See README.md.
-ae/**/*_generated.c
+**/*_generated.c
 
 # aetherBuild — ignore the symlinks aeb --init creates pointing at
 # /home/.../share/aeb/lib/{bash,aether,...}, but track the port-local

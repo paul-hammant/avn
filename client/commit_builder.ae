@@ -1,0 +1,190 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+
+// Commit-builder state for libsvn_ra. Round 170 retires the
+// remote_commit struct + setters/getters from client/shim.c
+// using Aether 0.109's *StructName return-type fix.
+//
+// Storage shape — all six packed-record buffers plus three count
+// fields plus the three scalar fields (base_rev, author, logmsg)
+// live in this struct. remote_commit_build.ae walks the packed buffers
+// at build_body time.
+//
+// Lifecycle: remote_commit_begin → remote_commit_{add_file,
+// mkdir, delete, set_prop, acl_add} → remote_commit_finish
+// (which serialises + POSTs and frees the builder).
+
+import std.string
+
+extern malloc(size: int) -> ptr
+extern free(p: ptr)
+
+// HTTP plumbing + URL builder (still C-side / Aether-side modules).
+extern url_commit(base_url: string, repo_name: string) -> string
+extern post_for_rev(url: string, body: string, expected_status: int) -> int
+
+// Body builder lives in client/commit_build.ae; we drive it at
+// finish time. (The C side used to declare this as
+// `remote_commit_build_body` because of a historical port-side
+// naming convention; the Aether export is `remote_commit_build_body`
+// which the generated C also re-exports under the aether_-prefixed
+// alias for ABI back-compat.)
+extern remote_commit_build_body(cb: ptr) -> string
+
+struct RaCommit {
+    base_rev: int
+    n_edits: int
+    n_props: int
+    n_acls: int
+    author: string
+    logmsg: string
+    edits_packed: string
+    props_packed: string
+    acls_packed: string
+}
+
+export remote_commit_begin(base_rev: int, author: string, logmsg: string) -> ptr {
+    raw = malloc(128)
+    if raw == null { return null }
+    cb = raw as *RaCommit
+    cb.base_rev = base_rev
+    cb.n_edits = 0
+    cb.n_props = 0
+    cb.n_acls = 0
+    cb.author = string.copy(author)
+    cb.logmsg = string.copy(logmsg)
+    cb.edits_packed = string.copy("")
+    cb.props_packed = string.copy("")
+    cb.acls_packed = string.copy("")
+    return raw
+}
+
+export remote_commit_finish(cb_ptr: ptr, base_url: string, repo_name: string) -> int {
+    if cb_ptr == null { return 0 - 1 }
+    body_json = remote_commit_build_body(cb_ptr)
+    url = url_commit(base_url, repo_name)
+    new_rev = post_for_rev(url, body_json, 200)
+    free(cb_ptr)
+    return new_rev
+}
+
+// ---- accessors ---------------------------------------------------
+
+export remote_cb_base_rev(cb_ptr: ptr) -> int {
+    if cb_ptr == null { return 0 }
+    cb = cb_ptr as *RaCommit
+    return cb.base_rev
+}
+
+export remote_cb_author(cb_ptr: ptr) -> string {
+    if cb_ptr == null { return "" }
+    cb = cb_ptr as *RaCommit
+    return cb.author
+}
+
+export remote_cb_logmsg(cb_ptr: ptr) -> string {
+    if cb_ptr == null { return "" }
+    cb = cb_ptr as *RaCommit
+    return cb.logmsg
+}
+
+export remote_cb_edits_packed(cb_ptr: ptr) -> string {
+    if cb_ptr == null { return "" }
+    cb = cb_ptr as *RaCommit
+    return cb.edits_packed
+}
+
+export remote_cb_props_packed(cb_ptr: ptr) -> string {
+    if cb_ptr == null { return "" }
+    cb = cb_ptr as *RaCommit
+    return cb.props_packed
+}
+
+export remote_cb_acls_packed(cb_ptr: ptr) -> string {
+    if cb_ptr == null { return "" }
+    cb = cb_ptr as *RaCommit
+    return cb.acls_packed
+}
+
+export remote_cb_n_edits(cb_ptr: ptr) -> int {
+    if cb_ptr == null { return 0 }
+    cb = cb_ptr as *RaCommit
+    return cb.n_edits
+}
+
+export remote_cb_n_props(cb_ptr: ptr) -> int {
+    if cb_ptr == null { return 0 }
+    cb = cb_ptr as *RaCommit
+    return cb.n_props
+}
+
+export remote_cb_n_acls(cb_ptr: ptr) -> int {
+    if cb_ptr == null { return 0 }
+    cb = cb_ptr as *RaCommit
+    return cb.n_acls
+}
+
+// ---- setters: re-derive count from leading "<n>\x02" prefix -----
+
+// atoi-style: read leading decimal digits, stop at the first non-
+// digit. The packed shape is "<n>\x02..." so we want the prefix
+// integer. std.string.to_int errors on trailing garbage; this is
+// the deliberately-lax version.
+parse_count_(s: string) -> int {
+    n = 0
+    i = 0
+    slen = string.length(s)
+    while i < slen {
+        c = string.char_at(s, i)
+        if c < 48 { return n }    // '0' = 48
+        if c > 57 { return n }    // '9' = 57
+        n = n * 10 + c - 48
+        i = i + 1
+    }
+    return n
+}
+
+set_packed_(cb_ptr: ptr, slot_kind: int, str: string) {
+    if cb_ptr == null { return }
+    cb = cb_ptr as *RaCommit
+    s = string.copy(str)
+    n = parse_count_(s)
+    if slot_kind == 0 {
+        cb.edits_packed = s
+        cb.n_edits = n
+    }
+    if slot_kind == 1 {
+        cb.props_packed = s
+        cb.n_props = n
+    }
+    if slot_kind == 2 {
+        cb.acls_packed = s
+        cb.n_acls = n
+    }
+    return
+}
+
+export remote_cb_set_edits_packed(cb_ptr: ptr, str: string) {
+    set_packed_(cb_ptr, 0, str)
+    return
+}
+
+export remote_cb_set_props_packed(cb_ptr: ptr, str: string) {
+    set_packed_(cb_ptr, 1, str)
+    return
+}
+
+export remote_cb_set_acls_packed(cb_ptr: ptr, str: string) {
+    set_packed_(cb_ptr, 2, str)
+    return
+}
+
+main() {
+    println("client/commit_builder.ae is a library; not meant to run standalone")
+}

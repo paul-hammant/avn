@@ -1,0 +1,22 @@
+import build
+import aether
+import aether (source, output, regen, link_flag)
+
+main() {
+    b = build.start()
+    aether.program_test(b) {
+        source("test_db.ae")
+        output("test_wc_db")
+        link_flag("-laether_sqlite")
+        link_flag("-lsqlite3")
+        link_flag("-lz")
+        link_flag("-lssl")
+        link_flag("-lcrypto")
+        regen("../working_copy/db_accessors.ae")
+        regen("../working_copy/db_open.ae")
+        regen("../working_copy/db_schema.ae")
+        regen("../working_copy/db_nodes.ae")
+        regen("../working_copy/db_node_packed.ae")
+        regen("../util/io.ae")
+    }
+}

@@ -1,0 +1,70 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// permissions and limitations under the License.
+
+// Count .rep files under $repo/reps (recursively), skipping
+// hidden entries. Used by svnadmin for size reporting; every
+// rep-blob file lives under the two-level XX/YY fanout.
+
+import std.string
+
+extern io_listdir(path: string) -> ptr
+extern io_listdir_count(handle: ptr) -> int
+extern io_listdir_name(handle: ptr, index: int) -> string
+extern io_listdir_free(handle: ptr)
+extern io_stat_kind(path: string) -> int
+
+export fs_count_rep_files(repo: string) -> int {
+    return count_reps_recurse(string.concat(repo, "/reps"))
+}
+
+count_reps_recurse(dir: string) -> int {
+    d = io_listdir(dir)
+    if d == null { return 0 }
+    total = 0
+    n = io_listdir_count(d)
+    i = 0
+    while i < n {
+        name = io_listdir_name(d, i)
+        name = string.copy(name)
+        skip = 0
+        if string.length(name) == 0 { skip = 1 }
+        if skip == 0 {
+            if string.char_at(name, 0) == 46 { skip = 1 }   // '.'
+        }
+        if skip == 0 {
+            child = string.concat(string.concat(dir, "/"), name)
+            kind = io_stat_kind(child)
+            if kind == 2 {
+                total = total + count_reps_recurse(child)
+            }
+            if kind == 1 {
+                nl = string.length(name)
+                if nl > 4 {
+                    suffix = string.substring(name, nl - 4, nl)
+                    if string.equals(suffix, ".rep") == 1 {
+                        total = total + 1
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+    io_listdir_free(d)
+    return total
+}
+
+main() {
+    println("repo_storage/count_reps.ae is a library; not meant to run standalone")
+}

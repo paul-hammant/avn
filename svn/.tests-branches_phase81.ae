@@ -1,0 +1,17 @@
+import build
+import bash
+import bash (script, pre_command, post_command)
+import svnae
+import svnae (empty_server)
+
+main() {
+    b = build.start()
+    build.dep(b, "svn")
+    build.dep(b, "svnadmin")
+    build.dep(b, "svnserver")
+    build.dep(b, "svnserver/.build-seed.ae")
+    bash.test(b) {
+        empty_server("test_b81", "9660")
+        script("test_branches_phase81.sh")
+    }
+}

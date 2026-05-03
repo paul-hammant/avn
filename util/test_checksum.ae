@@ -1,0 +1,66 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// permissions and limitations under the License.
+
+// Tests for util/checksum.ae. Logic inlined (see AETHER_ISSUES.md #2).
+//
+// Expected hex values computed by coreutils (sha1sum):
+//   "abc"                                              sha1 a9993e364706816aba3e25717850c26c9cd0d89d
+//   "The quick brown fox jumps over the lazy dog"      sha1 2fd4e1c67a2d28fced849ee1bb76e7391b93eb12
+
+import std.string
+
+// Goes straight to the Aether-side wrapper over std.cryptography.
+// Round 106 retired the checksum/shim.c forwards (sha1_hex,
+// checksum_free_hex) — they were 1-line forwards onto
+// crypto_hash_hex with a malloc-detach trampoline that
+// AetherString already gives us for free.
+extern crypto_hash_hex(algo: string, data: string, length: int) -> string
+
+sha1_hex(data: string) {
+    return crypto_hash_hex("sha1", data, string.length(data))
+}
+
+// --- harness ---------------------------------------------------------------
+
+expect_str(label: string, got: string, want: string) {
+    if string.equals(got, want) == 1 {
+        println("ok   ${label}")
+        return 0
+    }
+    println("FAIL ${label}:")
+    println("  got:  ${got}")
+    println("  want: ${want}")
+    return 1
+}
+
+main() {
+    fails = 0
+
+    fails = fails + expect_str("sha1 abc",
+        sha1_hex("abc"),
+        "a9993e364706816aba3e25717850c26c9cd0d89d")
+
+    fails = fails + expect_str("sha1 fox",
+        sha1_hex("The quick brown fox jumps over the lazy dog"),
+        "2fd4e1c67a2d28fced849ee1bb76e7391b93eb12")
+
+    if fails > 0 {
+        println("")
+        println("FAIL: ${fails} case(s) failed")
+        exit(1)
+    }
+    println("")
+    println("test_checksum: OK")
+}

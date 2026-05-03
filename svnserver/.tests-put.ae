@@ -1,0 +1,16 @@
+import build
+import bash
+import bash (script, pre_command, post_command)
+import svnae
+import svnae (svn_server_with_token)
+
+main() {
+    b = build.start()
+    build.dep(b, "svnserver")
+    build.dep(b, "svnserver/.build-seed.ae")
+    build.dep(b, "svn")
+    bash.test(b) {
+        svn_server_with_token("test_put", "9580", "test-put-token")
+        script("test_rest_put.sh")
+    }
+}

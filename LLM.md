@@ -21,9 +21,11 @@ diverge freely on plumbing where doing so paid off.
 
 ## Layout
 
-- `ae/<area>/*.ae` — first-party Aether source. Compiled to C via
-  `aetherc --emit=lib`, linked into binaries by aeb's `regen(...)`
-  setter. Generated `_generated.c` is gitignored.
+- `<area>/*.ae` — first-party Aether source at the repo root (one
+  directory per area: `client/`, `delta/`, `repo_storage/`,
+  `working_copy/`, etc). Compiled to C via `aetherc --emit=lib`,
+  linked into binaries by aeb's `regen(...)` setter. Generated
+  `_generated.c` is gitignored.
 - `aether.toml` — `[build]` section + a handful of legacy `[[bin]]`
   entries for unused Aether-native test programs (test_wc_db,
   test_repos, etc — built but not exercised by anything). The four
@@ -75,11 +77,11 @@ aeb              # build every binary, run all 32 integration tests
 Per-directory targets work too:
 
 ```
-aeb ae/svn       # build the svn binary only
+aeb svn       # build the svn binary only
 aeb .tests.ae    # full test suite, target mode
 ```
 
-Outputs land under `target/ae/<dir>/bin/<name>`.
+Outputs land under `target/<dir>/bin/<name>`.
 
 ### Test grammar
 
@@ -95,8 +97,8 @@ import svnae (svn_server)
 
 main() {
     b = build.start()
-    build.dep(b, "ae/svnserver")
-    build.dep(b, "ae/svn")
+    build.dep(b, "svnserver")
+    build.dep(b, "svn")
     bash.test(b) {
         svn_server("acl", "9540")
         script("test_acl.sh")
@@ -115,9 +117,9 @@ inline. Don't migrate them.
 
 ### Adding a new bash integration test
 
-1. Write `ae/<area>/test_X.sh` with `source "$(dirname "$0")/../../tests/lib.sh"` then assertions calling `tlib_check`. End with `tlib_summary "test_X"`.
-2. Add `ae/<area>/.tests-X.ae` declaring the fixture.
-3. Add a `build.dep(b, "ae/<area>/.tests-X.ae")` line to the root `.tests.ae` aggregator.
+1. Write `<area>/test_X.sh` with `source "$(dirname "$0")/../tests/lib.sh"` then assertions calling `tlib_check`. End with `tlib_summary "test_X"`.
+2. Add `<area>/.tests-X.ae` declaring the fixture.
+3. Add a `build.dep(b, "<area>/.tests-X.ae")` line to the root `.tests.ae` aggregator.
 4. Run `aeb` — should pass.
 
 ### Adding a new Aether-native unit test (Aeocha)
@@ -162,13 +164,13 @@ in each `.build.ae`. Our own `.ae` source compiles to C via
 # from /home/paul/scm/subversion/subversion
 aeb                        # build + run 32 tests
 aeb .tests.ae              # same, target mode
-aeb ae/svn                 # build just the svn CLI
+aeb svn                 # build just the svn CLI
 
 # Run one bash test directly (interactively):
-bash ae/svn/test_acl.sh    # if its fixture is satisfied
+bash svn/test_acl.sh    # if its fixture is satisfied
 
 # Run all tests for one directory:
-aeb ae/svn                 # via the dir's .tests.ae (or first .tests-*.ae)
+aeb svn                 # via the dir's .tests.ae (or first .tests-*.ae)
 ```
 
 ## When stuck

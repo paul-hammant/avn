@@ -1,0 +1,170 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+
+// Remote-tree storage. Round 168 retires util/rtree/shim.c (75
+// lines C) using Aether 0.109's *StructName return-type fix.
+// Five parallel containers, all indexed by node position:
+//
+//   paths         std.list       AetherString per node
+//   kinds         std.gintarr    0=file 1=dir
+//   shas          std.list       40-char hex string, "" for dirs
+//   contents      std.list       AetherString per node (binary-safe)
+//   content_lens  std.gintarr    bytes in contents[i], 0 for dirs
+//
+// Used by the update walker (rtree_*) and the merge walker
+// (rtree_* read-only accessors).
+
+import std.string
+import std.list
+import std.intarr
+
+extern malloc(size: int) -> ptr
+extern free(p: ptr)
+
+extern gintarr_new(initial_cap: int) -> ptr
+extern gintarr_count(a: ptr) -> int
+extern gintarr_get(a: ptr, i: int) -> int
+extern gintarr_add(a: ptr, value: int) -> ptr
+extern gintarr_free(a: ptr)
+
+extern wc_hash_bytes(wc_root: string, data: string, length: int) -> string
+
+struct Rtree {
+    paths: ptr
+    kinds: ptr
+    shas: ptr
+    contents: ptr
+    content_lens: ptr
+}
+
+export rtree_new() -> ptr {
+    raw = malloc(64)
+    if raw == null { return null }
+    rt = raw as *Rtree
+    rt.paths        = list_new()
+    rt.kinds        = gintarr_new(16)
+    rt.shas         = list_new()
+    rt.contents     = list_new()
+    rt.content_lens = gintarr_new(16)
+    return raw
+}
+
+export rtree_free(rt_ptr: ptr) {
+    if rt_ptr == null { return }
+    rt = rt_ptr as *Rtree
+    list_free(rt.paths)
+    gintarr_free(rt.kinds)
+    list_free(rt.shas)
+    list_free(rt.contents)
+    gintarr_free(rt.content_lens)
+    free(rt_ptr)
+    return
+}
+
+// ---- public add ops ------------------------------------------
+
+export rtree_add_dir(rt_ptr: ptr, path: string) {
+    if rt_ptr == null { return 0 }
+    rt = rt_ptr as *Rtree
+    list_add_raw(rt.paths,    string.copy(path))
+    list_add_raw(rt.shas,     string.copy(""))
+    list_add_raw(rt.contents, string.copy(""))
+
+    rt.kinds        = gintarr_add(rt.kinds, 1)
+    rt.content_lens = gintarr_add(rt.content_lens, 0)
+    return 0
+}
+
+export rtree_add_file(rt_ptr: ptr, path: string,
+                             data: string, data_len: int,
+                             wc_root: string) {
+    if rt_ptr == null { return 0 }
+    if data_len < 0 { data_len = 0 }
+    rt = rt_ptr as *Rtree
+
+    sha = ""
+    if string.length(wc_root) > 0 {
+        sha = wc_hash_bytes(wc_root, data, data_len)
+    }
+
+    list_add_raw(rt.paths,    string.copy(path))
+    list_add_raw(rt.shas,     string.copy(sha))
+    list_add_raw(rt.contents, string.copy(data))
+
+    rt.kinds        = gintarr_add(rt.kinds, 0)
+    rt.content_lens = gintarr_add(rt.content_lens, data_len)
+    return 0
+}
+
+// ---- read accessors ---------------------------------------------
+
+export rtree_count(rt_ptr: ptr) -> int {
+    if rt_ptr == null { return 0 }
+    rt = rt_ptr as *Rtree
+    return gintarr_count(rt.kinds)
+}
+
+export rtree_path_at(rt_ptr: ptr, i: int) -> string {
+    if rt_ptr == null { return "" }
+    rt = rt_ptr as *Rtree
+    p = list_get_raw(rt.paths, i)
+    if p == null { return "" }
+    return p
+}
+
+export rtree_kind_at(rt_ptr: ptr, i: int) -> int {
+    if rt_ptr == null { return 0 - 1 }
+    rt = rt_ptr as *Rtree
+    n = gintarr_count(rt.kinds)
+    if i < 0 { return 0 - 1 }
+    if i >= n { return 0 - 1 }
+    return gintarr_get(rt.kinds, i)
+}
+
+export rtree_sha_at(rt_ptr: ptr, i: int) -> string {
+    if rt_ptr == null { return "" }
+    rt = rt_ptr as *Rtree
+    p = list_get_raw(rt.shas, i)
+    if p == null { return "" }
+    return p
+}
+
+export rtree_data_at(rt_ptr: ptr, i: int) -> string {
+    if rt_ptr == null { return "" }
+    rt = rt_ptr as *Rtree
+    p = list_get_raw(rt.contents, i)
+    if p == null { return "" }
+    return p
+}
+
+export rtree_data_len_at(rt_ptr: ptr, i: int) -> int {
+    if rt_ptr == null { return 0 }
+    rt = rt_ptr as *Rtree
+    return gintarr_get(rt.content_lens, i)
+}
+
+export rtree_find_by_path(rt_ptr: ptr, path: string) -> int {
+    if rt_ptr == null { return 0 - 1 }
+    rt = rt_ptr as *Rtree
+    n = gintarr_count(rt.kinds)
+    paths = rt.paths
+    i = 0
+    while i < n {
+        p = list_get_raw(paths, i)
+        if p != null {
+            if string.equals(p, path) == 1 { return i }
+        }
+        i = i + 1
+    }
+    return 0 - 1
+}
+
+main() {
+    println("util/rtree/rtree.ae is a library; not meant to run standalone")
+}

@@ -1,0 +1,32 @@
+import build
+import aether
+import aether (source, output, regen, extra_source, link_flag)
+
+main() {
+    b = build.start()
+    aether.program(b) {
+        source("test_client.ae")
+        output("test_client")
+        link_flag("-laether_sqlite")
+        link_flag("-lsqlite3")
+        link_flag("-lz")
+        link_flag("-lssl")
+        link_flag("-lcrypto")
+        regen("../client/accessors.ae")
+        regen("../client/http_client.ae")
+        regen("../client/verify.ae")
+        regen("../client/urls.ae")
+        regen("../client/parse.ae")
+        regen("../client/packed.ae")
+        regen("../client/commit_build.ae")
+        regen("../client/commit_builder.ae")
+        regen("../client/cat.ae")
+        regen("../client/auth_state.ae")
+        regen("../client/copy_branch.ae")
+        regen("../client/info.ae")
+        regen("../client/fetch.ae")
+        regen("../repo_storage/pathutil.ae")
+        regen("../util/io.ae")
+        regen("../ffi/openssl/crypto_helpers.ae")
+    }
+}

@@ -1,0 +1,353 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// permissions and limitations under the License.
+
+// RA client commit-body builder. Walks the in-memory struct
+// remote_commit *cb via C-side accessors and produces the JSON
+// body the server expects:
+//
+//   { "base_rev": N, "author": "...", "log": "...",
+//     "edits": [ {"op":"add-file|mkdir|delete", "path":p, "content"?:b64}, ...],
+//     "props": { path1: {key: value, ...}, ... },
+//     "acl":   { path1: ["+a","-b"], ... } }
+//
+// Uses std.json for construction — each node stands alone until
+// attached to its parent, matching std.json's deep-copy-on-set
+// semantics.
+
+import std.string
+import std.json
+
+extern remote_cb_base_rev(cb: ptr) -> int
+extern remote_cb_author(cb: ptr) -> string
+extern remote_cb_logmsg(cb: ptr) -> string
+extern remote_cb_edits_packed(cb: ptr) -> string
+extern remote_cb_props_packed(cb: ptr) -> string
+extern remote_cb_acls_packed(cb: ptr) -> string
+
+// Round 146: writers ported from C (remote_commit_add_file etc.
+// in ra/shim.c). The struct stays C-side; setters below replace
+// the old pack_append + 5 add-op pile.
+extern remote_cb_set_edits_packed(cb: ptr, packed: string)
+extern remote_cb_set_props_packed(cb: ptr, packed: string)
+extern remote_cb_set_acls_packed(cb: ptr, packed: string)
+extern remote_cb_n_edits(cb: ptr) -> int
+extern remote_cb_n_props(cb: ptr) -> int
+extern remote_cb_n_acls(cb: ptr) -> int
+
+// b64-encode (unpadded; the server's base64_decode handles both
+// padded and unpadded — see std.cryptography.base64_decode in the
+// Aether stdlib).
+extern crypto_b64_encode(data: string, length: int) -> string
+
+// Append `record` to the "<count>\x02<recs...>\x02" packed string
+// `cur`. count is passed in (caller stores it C-side); returns the
+// new packed string. The new record gets a trailing \x02 separator
+// — same shape client/parse.ae expects on the read side.
+pack_append_(cur: string, count: int, record: string) -> string {
+    new_count = count + 1
+    if string.length(cur) == 0 {
+        out = "${new_count}\x02"
+        out = string.concat(out, record)
+        out = string.concat(out, "\x02")
+        return out
+    }
+    sep = string.index_of(cur, "\x02")
+    body = string.substring(cur, sep + 1, string.length(cur))
+    out = "${new_count}\x02"
+    out = string.concat(out, body)
+    out = string.concat(out, record)
+    out = string.concat(out, "\x02")
+    return out
+}
+
+// Public add-ops. Each builds a record with the right op-tag, calls
+// pack_append_, and stashes the result back via the C-side setter.
+// Round 146 ported these from ra/shim.c. Returns 0 on success
+// (matching the prior C contract).
+export remote_commit_add_file(cb: ptr, path: string, content: string, len: int) -> int {
+    b64 = ""
+    if len > 0 {
+        b64 = crypto_b64_encode(content, len)
+    }
+    rec = "1\x01"
+    rec = string.concat(rec, path)
+    rec = string.concat(rec, "\x01")
+    rec = string.concat(rec, b64)
+    n = remote_cb_n_edits(cb)
+    cur = remote_cb_edits_packed(cb)
+    new_packed = pack_append_(cur, n, rec)
+    remote_cb_set_edits_packed(cb, new_packed)
+    return 0
+}
+
+export remote_commit_mkdir(cb: ptr, path: string) -> int {
+    rec = "2\x01"
+    rec = string.concat(rec, path)
+    rec = string.concat(rec, "\x01")
+    n = remote_cb_n_edits(cb)
+    cur = remote_cb_edits_packed(cb)
+    new_packed = pack_append_(cur, n, rec)
+    remote_cb_set_edits_packed(cb, new_packed)
+    return 0
+}
+
+export remote_commit_delete(cb: ptr, path: string) -> int {
+    rec = "3\x01"
+    rec = string.concat(rec, path)
+    rec = string.concat(rec, "\x01")
+    n = remote_cb_n_edits(cb)
+    cur = remote_cb_edits_packed(cb)
+    new_packed = pack_append_(cur, n, rec)
+    remote_cb_set_edits_packed(cb, new_packed)
+    return 0
+}
+
+export remote_commit_acl_add(cb: ptr, path: string, rule: string) -> int {
+    rec = path
+    rec = string.concat(rec, "\x01")
+    rec = string.concat(rec, rule)
+    n = remote_cb_n_acls(cb)
+    cur = remote_cb_acls_packed(cb)
+    new_packed = pack_append_(cur, n, rec)
+    remote_cb_set_acls_packed(cb, new_packed)
+    return 0
+}
+
+export remote_commit_set_prop(cb: ptr, path: string, key: string, value: string) -> int {
+    rec = path
+    rec = string.concat(rec, "\x01")
+    rec = string.concat(rec, key)
+    rec = string.concat(rec, "\x01")
+    rec = string.concat(rec, value)
+    n = remote_cb_n_props(cb)
+    cur = remote_cb_props_packed(cb)
+    new_packed = pack_append_(cur, n, rec)
+    remote_cb_set_props_packed(cb, new_packed)
+    return 0
+}
+
+// Round 62: the C builder accumulates each collection (edits / props /
+// acls) as a single packed string in the same shape client/parse.ae
+// produces on the read side:
+//   "<count>\x02<rec0>\x02<rec1>\x02..."   with records joined by \x01
+// Walking the buffer with split is one pass per buffer instead of 5
+// cross-FFI accessor calls per record.
+
+// Drop the leading "<count>\x02" header and the trailing "\x02"
+// sentinel, then split on \x02 to get record strings. Returns a ptr
+// to a string-array (caller frees via string.array_free, and reads
+// the count via string.array_size). Empty / malformed input yields
+// an empty array.
+records_(packed: string) -> ptr {
+    n = string.length(packed)
+    if n == 0 { return string.split("", "\x02") }
+    sep = string.index_of(packed, "\x02")
+    if sep < 0 { return string.split("", "\x02") }
+    body = string.substring(packed, sep + 1, n)
+    blen = string.length(body)
+    if blen > 0 {
+        last = string.char_at(body, blen - 1)
+        if last == 2 {
+            body = string.substring(body, 0, blen - 1)
+        }
+    }
+    if string.length(body) == 0 { return string.split("", "\x02") }
+    return string.split(body, "\x02")
+}
+
+export remote_commit_build_body(cb: ptr) -> string {
+    body = json_create_object()
+    json.object_set(body, "base_rev", json.create_number(remote_cb_base_rev(cb)))
+    json.object_set(body, "author", json_create_string(remote_cb_author(cb)))
+    json.object_set(body, "log", json_create_string(remote_cb_logmsg(cb)))
+
+    // edits: array of {op, path, [content]}. Records: "<op>\x01<path>\x01<b64>".
+    edits = json_create_array()
+    epacked = remote_cb_edits_packed(cb)
+    earr = records_(epacked)
+    en = 0
+    if string.length(epacked) > 0 { en = string.array_size(earr) }
+    i = 0
+    while i < en {
+        rec = string.array_get(earr, i)
+        fields = string.split(rec, "\x01")
+        op_s = string.array_get(fields, 0)
+        op   = string.get_int(op_s)
+        path = string.array_get(fields, 1)
+        path = string.copy(path)
+
+        e = json_create_object()
+        if op == 1 {
+            json.object_set(e, "op", json_create_string("add-file"))
+            json.object_set(e, "path", json_create_string(path))
+            b64 = string.array_get(fields, 2)
+            b64 = string.copy(b64)
+            json.object_set(e, "content", json_create_string(b64))
+        }
+        if op == 2 {
+            json.object_set(e, "op", json_create_string("mkdir"))
+            json.object_set(e, "path", json_create_string(path))
+        }
+        if op == 3 {
+            json.object_set(e, "op", json_create_string("delete"))
+            json.object_set(e, "path", json_create_string(path))
+        }
+        json.array_add(edits, e)
+        string.array_free(fields)
+        i = i + 1
+    }
+    string.array_free(earr)
+    json.object_set(body, "edits", edits)
+
+    // props: { path: {k:v, ...} } — group by path. Records:
+    //   "<path>\x01<key>\x01<value>"
+    ppacked = remote_cb_props_packed(cb)
+    parr = records_(ppacked)
+    pn = 0
+    if string.length(ppacked) > 0 { pn = string.array_size(parr) }
+    if pn > 0 {
+        jp = json_create_object()
+        pi = 0
+        while pi < pn {
+            rec = string.array_get(parr, pi)
+            f = string.split(rec, "\x01")
+            this_path = string.array_get(f, 0)
+            this_path = string.copy(this_path)
+            string.array_free(f)
+            already = json.object_has(jp, this_path)
+            if already == 0 {
+                per = json_create_object()
+                k = pi
+                while k < pn {
+                    rk = string.array_get(parr, k)
+                    fk = string.split(rk, "\x01")
+                    kpath = string.array_get(fk, 0)
+                    if string.equals(kpath, this_path) == 1 {
+                        key = string.array_get(fk, 1)
+                        key = string.copy(key)
+                        val = string.array_get(fk, 2)
+                        val = string.copy(val)
+                        json.object_set(per, key, json_create_string(val))
+                    }
+                    string.array_free(fk)
+                    k = k + 1
+                }
+                json.object_set(jp, this_path, per)
+            }
+            pi = pi + 1
+        }
+        json.object_set(body, "props", jp)
+    }
+    string.array_free(parr)
+
+    // acl: { path: ["+alice","-eve"] }. Records: "<path>\x01<rule>".
+    apacked = remote_cb_acls_packed(cb)
+    aarr = records_(apacked)
+    an = 0
+    if string.length(apacked) > 0 { an = string.array_size(aarr) }
+    if an > 0 {
+        ja = json_create_object()
+        ai = 0
+        while ai < an {
+            rec = string.array_get(aarr, ai)
+            f = string.split(rec, "\x01")
+            this_path = string.array_get(f, 0)
+            this_path = string.copy(this_path)
+            string.array_free(f)
+            already = json.object_has(ja, this_path)
+            if already == 0 {
+                arr = json_create_array()
+                k = ai
+                while k < an {
+                    rk = string.array_get(aarr, k)
+                    fk = string.split(rk, "\x01")
+                    kpath = string.array_get(fk, 0)
+                    if string.equals(kpath, this_path) == 1 {
+                        rule = string.array_get(fk, 1)
+                        rule = string.copy(rule)
+                        json.array_add(arr, json_create_string(rule))
+                    }
+                    string.array_free(fk)
+                    k = k + 1
+                }
+                json.object_set(ja, this_path, arr)
+            }
+            ai = ai + 1
+        }
+        json.object_set(body, "acl", ja)
+    }
+    string.array_free(aarr)
+
+    out, _ = json.stringify(body)
+    json.free(body)
+    return out
+}
+
+
+// Build the /copy POST body:
+//   { "base_rev": N, "from_path": "...", "to_path": "...",
+//     "author": "...", "log": "..." }
+export remote_copy_build_body(base_rev: int, from_path: string, to_path: string,
+                           author: string, logmsg: string) -> string {
+    body = json_create_object()
+    json.object_set(body, "base_rev", json.create_number(base_rev))
+    json.object_set(body, "from_path", json_create_string(from_path))
+    json.object_set(body, "to_path", json_create_string(to_path))
+    json.object_set(body, "author", json_create_string(author))
+    json.object_set(body, "log", json_create_string(logmsg))
+    out, _ = json.stringify(body)
+    json.free(body)
+    return out
+}
+
+// Build the /branches/<NAME>/create POST body:
+//   { "base": "<sha-or-branch>", "include": ["glob", ...] }
+// `includes_joined` is a \n-separated list (empty lines skipped).
+export remote_branch_create_body(base: string, includes_joined: string) -> string {
+    body = json_create_object()
+    json.object_set(body, "base", json_create_string(base))
+
+    arr = json_create_array()
+    n = string.length(includes_joined)
+    line_start = 0
+    i = 0
+    while i <= n {
+        at_end = 0
+        c = 0
+        if i == n { at_end = 1 } else { c = string.char_at(includes_joined, i) }
+        is_eol = 0
+        if at_end == 1 { is_eol = 1 }
+        if c == 10 { is_eol = 1 }
+        if is_eol == 1 {
+            if i > line_start {
+                seg = string.substring(includes_joined, line_start, i)
+                if string.length(seg) > 0 {
+                    json.array_add(arr, json_create_string(seg))
+                }
+            }
+            line_start = i + 1
+        }
+        i = i + 1
+    }
+    json.object_set(body, "include", arr)
+
+    out, _ = json.stringify(body)
+    json.free(body)
+    return out
+}
+
+main() {
+    println("client/commit_build.ae is a library; not meant to run standalone")
+}

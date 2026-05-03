@@ -1,0 +1,177 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// permissions and limitations under the License.
+
+// svndiff1 encode — port of the C encoder in
+// delta/svndiff/shim.c::svndiff_encode_window. The C side
+// keeps the encoder struct (a growable {action, length, offset}
+// triple list) because it owns the malloc/realloc lifecycle that
+// per-add_op grows. The encode-window body that walks those ops and
+// emits the wire-format bytes is what moves here.
+//
+// Output shape (svndiff1, single-window):
+//
+//   "SVN" 0x01                                  (4-byte signature)
+//   varint sview_offset (always 0)
+//   varint sview_len    (== source_len)
+//   varint tview_len    (== target_len)
+//   varint inst_len     (size of instruction section in bytes)
+//   varint newdata_len  (size of new-data section in bytes)
+//   <inst_len bytes of instructions>
+//   <newdata_len bytes of new data>
+//
+// Instructions are 1+ bytes each:
+//   byte 0: top 2 bits = action (0=src, 1=tgt-self, 2=new),
+//           bottom 6 bits = inline length, OR 0 = "varint follows".
+//   if length was 0 inline: varint length.
+//   if action != 2 (i.e. 0 or 1): varint offset.
+
+import std.string
+import std.bytes
+
+// C-side accessors over the encoder struct (defined in
+// delta/svndiff/shim.c). The struct stays C-side because per-
+// add_op realloc growth is a natural fit there; this module just
+// reads from it.
+extern encoder_count(e: ptr) -> int
+extern encoder_op_action(e: ptr, i: int) -> int
+extern encoder_op_length(e: ptr, i: int) -> int
+extern encoder_op_offset(e: ptr, i: int) -> int
+
+// Append the varint encoding of `v` to byte buffer `b`, starting at
+// the current logical length. Returns the new length, or -1 on
+// failure. Varint is base-128, MSB-continuation, big-endian — the
+// same wire format std.bytes... no, wait, std.bytes doesn't define
+// varint; svndiff1's own scheme. Top 7 bits of `v` first, with
+// continuation bit (0x80) set on every byte except the last.
+emit_varint_(b: ptr, pos: int, v: int) -> int {
+    // Determine how many 7-bit groups we need. Minimum 1 byte even
+    // for v == 0.
+    n = 1
+    t = v / 128
+    while t > 0 {
+        n = n + 1
+        t = t / 128
+    }
+    // Emit MSB-first. The least-significant 7 bits of v become the
+    // last byte (no continuation); higher groups go before with the
+    // continuation bit set.
+    i = n - 1
+    last_byte = v - 128 * (v / 128)         // v & 0x7f
+    bytes.set(b, pos + i, last_byte)
+    while i > 0 {
+        v = v / 128
+        i = i - 1
+        group = v - 128 * (v / 128)
+        bytes.set(b, pos + i, group + 128)  // group | 0x80
+    }
+    return pos + n
+}
+
+// Write one instruction at offset `pos` in `b`. Returns the new
+// position after the instruction, or -1 on failure. `has_offset`
+// is 1 for action 0 or 1, 0 for action 2.
+emit_inst_(b: ptr, pos: int, action: int, length: int, offset: int,
+            has_offset: int) -> int {
+    // Pack length into the bottom 6 bits if it fits, else emit a
+    // length-zero header byte and the full varint length.
+    if length < 64 {
+        bytes.set(b, pos, action * 64 + length)   // (action << 6) | length
+        pos = pos + 1
+    }
+    if length >= 64 {
+        bytes.set(b, pos, action * 64)            // (action << 6) | 0
+        pos = pos + 1
+        pos = emit_varint_(b, pos, length)
+    }
+    if has_offset == 1 {
+        pos = emit_varint_(b, pos, offset)
+    }
+    return pos
+}
+
+// Build the instruction section by walking the encoder's ops list.
+// Returns the section bytes as a length-aware AetherString. "" on
+// invalid action.
+build_inst_section_(e: ptr) -> string {
+    n = encoder_count(e)
+    // Instruction sections are bounded by 8 + 10 + 10 bytes per op
+    // (1 header + up to two 10-byte varints), so 30 per op is a
+    // safe upper bound for the buffer.
+    cap = n * 30 + 16
+    inst = bytes.new(cap)
+    if inst == null { return "" }
+    pos = 0
+    i = 0
+    while i < n {
+        action = encoder_op_action(e, i)
+        length = encoder_op_length(e, i)
+        offset = encoder_op_offset(e, i)
+        if action < 0 { bytes.free(inst); return "" }
+        if action > 2 { bytes.free(inst); return "" }
+        has_offset = 1
+        if action == 2 { has_offset = 0 }
+        pos = emit_inst_(inst, pos, action, length, offset, has_offset)
+        i = i + 1
+    }
+    return bytes.finish(inst, pos)
+}
+
+// Public: emit the full svndiff1 stream. Returns (bytes, status)
+// where status is 1 on success, 0 on failure. Aether 0.99+
+// accepts the `(string, int)` tuple-return syntax on `export`
+// (#285); pre-fix this used a leading-status-byte channel that
+// the C side stripped.
+export encode_window(e: ptr, source_len: int, target_len: int,
+                      new_data: string, new_data_len: int) -> (string, int) {
+    inst_section = build_inst_section_(e)
+    inst_len = string.length(inst_section)
+
+    // Worst case: signature (4) + 5 varints * 10 bytes (50) + inst
+    // section + new_data. 64-byte slack handles small edge cases
+    // without a second realloc.
+    cap = 4 + 50 + inst_len + new_data_len + 64
+    out = bytes.new(cap)
+    if out == null { return "", 0 }
+    pos = 0
+
+    // Signature: 'S' 'V' 'N' 0x01
+    bytes.set(out, pos, 83); pos = pos + 1
+    bytes.set(out, pos, 86); pos = pos + 1
+    bytes.set(out, pos, 78); pos = pos + 1
+    bytes.set(out, pos, 1);  pos = pos + 1
+
+    // Window header.
+    pos = emit_varint_(out, pos, 0)              // sview_offset
+    pos = emit_varint_(out, pos, source_len)
+    pos = emit_varint_(out, pos, target_len)
+    pos = emit_varint_(out, pos, inst_len)
+    pos = emit_varint_(out, pos, new_data_len)
+
+    // Instruction payload.
+    if inst_len > 0 {
+        bytes.copy_from_string(out, pos, inst_section, inst_len)
+        pos = pos + inst_len
+    }
+    // New-data payload.
+    if new_data_len > 0 {
+        bytes.copy_from_string(out, pos, new_data, new_data_len)
+        pos = pos + new_data_len
+    }
+    return bytes.finish(out, pos), 1
+}
+
+main() {
+    println("delta/svndiff_encode.ae is a library; not meant to run standalone")
+}

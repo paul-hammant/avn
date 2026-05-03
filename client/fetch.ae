@@ -1,0 +1,120 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// permissions and limitations under the License.
+
+// client/fetch.ae — per-domain "fetch URL + parse body → packed string"
+// helpers. Each pairs one URL builder (urls.ae) with one JSON parser
+// (parse.ae). The C-side packed-handle constructors (remote_log
+// etc. in ra/shim.c) call one of these and then wrap the returned
+// packed string in packed_handle_new — no more C-side
+// http_get_200 + parse indirection.
+//
+// Returning "" on any failure matches the C-side semantics: empty
+// packed string makes packed_handle_new return NULL, which
+// every existing caller already treats as "miss / give up."
+
+import std.string
+
+extern get_200(url: string) -> string
+extern post_json(url: string, body: string, body_len: int) -> ptr
+extern response_status(resp: ptr) -> int
+extern response_body(resp: ptr) -> string
+extern response_free(resp: ptr)
+extern remote_parse_rev_response(body: string) -> int
+extern url_info(base: string, repo: string) -> string
+extern url_log(base: string, repo: string) -> string
+extern url_rev_info(base: string, repo: string, rev: int) -> string
+extern url_rev_paths(base: string, repo: string, rev: int) -> string
+extern url_rev_list(base: string, repo: string, rev: int, path: string) -> string
+extern url_rev_props(base: string, repo: string, rev: int, path: string) -> string
+extern url_rev_blame(base: string, repo: string, rev: int, path: string) -> string
+extern remote_parse_log(body: string) -> string
+extern remote_parse_paths(body: string) -> string
+extern remote_parse_blame(body: string) -> string
+extern remote_parse_info_rev(body: string) -> string
+extern remote_parse_props(body: string) -> string
+extern remote_parse_list(body: string) -> string
+
+// Skip leading '/' so the URL the server sees doesn't double up its
+// own /repos/<r>/rev/<n>/ prefix. Matches what http_get_200 callers
+// in shim.c used to do at the boundary.
+strip_leading_slash_(p: string) -> string {
+    if string.length(p) == 0 { return p }
+    if string.char_at(p, 0) != 47 { return p }   // '/'
+    return string.substring(p, 1, string.length(p))
+}
+
+export fetch_log(base: string, repo: string) -> string {
+    body = get_200(url_log(base, repo))
+    if string.length(body) == 0 { return "" }
+    return remote_parse_log(body)
+}
+
+export fetch_paths(base: string, repo: string, rev: int) -> string {
+    body = get_200(url_rev_paths(base, repo, rev))
+    if string.length(body) == 0 { return "" }
+    return remote_parse_paths(body)
+}
+
+export fetch_blame(base: string, repo: string, rev: int, path: string) -> string {
+    p = strip_leading_slash_(path)
+    body = get_200(url_rev_blame(base, repo, rev, p))
+    if string.length(body) == 0 { return "" }
+    return remote_parse_blame(body)
+}
+
+export fetch_info(base: string, repo: string, rev: int) -> string {
+    body = get_200(url_rev_info(base, repo, rev))
+    if string.length(body) == 0 { return "" }
+    return remote_parse_info_rev(body)
+}
+
+export fetch_props(base: string, repo: string, rev: int, path: string) -> string {
+    p = strip_leading_slash_(path)
+    body = get_200(url_rev_props(base, repo, rev, p))
+    if string.length(body) == 0 { return "" }
+    return remote_parse_props(body)
+}
+
+export fetch_list(base: string, repo: string, rev: int, path: string) -> string {
+    p = strip_leading_slash_(path)
+    body = get_200(url_rev_list(base, repo, rev, p))
+    if string.length(body) == 0 { return "" }
+    return remote_parse_list(body)
+}
+
+// POST `body` (JSON) to `url`, expect HTTP <expected_status>, parse
+// rev from response. Returns -1 on any failure (transport, wrong
+// status, parse error). Shared by:
+//   - copy_branch.ae   (server-side copy / branch_create POSTs)
+//   - remote_commit_finish  (commit POST, in ra/shim.c)
+// Round 102 retired the C-side http_post_json + take_body helpers
+// in favour of this single shared post-and-parse-rev pipeline.
+export post_for_rev(url: string, body: string, expected_status: int) -> int {
+    resp = post_json(url, body, string.length(body))
+    if resp == null { return 0 - 1 }
+    status = response_status(resp)
+    if status != expected_status {
+        response_free(resp)
+        return 0 - 1
+    }
+    body_str = response_body(resp)
+    rev = remote_parse_rev_response(body_str)
+    response_free(resp)
+    return rev
+}
+
+main() {
+    println("client/fetch.ae is a library; not meant to run standalone")
+}

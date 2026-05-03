@@ -1,0 +1,20 @@
+import build
+import aether
+import aether (source, output, regen, link_flag)
+
+main() {
+    b = build.start()
+    aether.program_test(b) {
+        source("test_svndiff.ae")
+        output("test_svndiff")
+        link_flag("-laether_sqlite")
+        link_flag("-lsqlite3")
+        link_flag("-lz")
+        link_flag("-lssl")
+        link_flag("-lcrypto")
+        regen("../delta/svndiff/encoder.ae")
+        regen("../delta/svndiff_decode.ae")
+        regen("../delta/svndiff_encode.ae")
+        regen("../delta/xdelta.ae")
+    }
+}

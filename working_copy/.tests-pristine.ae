@@ -1,0 +1,33 @@
+import build
+import aether
+import aether (source, output, regen, link_flag)
+
+main() {
+    b = build.start()
+    aether.program_test(b) {
+        source("test_pristine.ae")
+        output("test_wc_pristine")
+        link_flag("-laether_sqlite")
+        link_flag("-lsqlite3")
+        link_flag("-lz")
+        link_flag("-lssl")
+        link_flag("-lcrypto")
+        regen("../working_copy/db_accessors.ae")
+        regen("../working_copy/db_open.ae")
+        regen("../working_copy/db_schema.ae")
+        regen("../working_copy/db_nodes.ae")
+        regen("../working_copy/db_node_packed.ae")
+        regen("../working_copy/pristine_path.ae")
+        regen("../working_copy/pristine.ae")
+        regen("../repo_storage/rep_store.ae")
+        regen("../repo_storage/rep_store_sec.ae")
+        regen("../repo_storage/reppath.ae")
+        regen("../repo_storage/count_reps.ae")
+        regen("../repo_storage/format_line.ae")
+        regen("../repos/rev_io.ae")
+        regen("../repos/blobfield.ae")
+        regen("../util/io.ae")
+        regen("../util/binbuf.ae")
+        regen("../ffi/openssl/crypto_helpers.ae")
+    }
+}

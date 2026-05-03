@@ -1,0 +1,144 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// permissions and limitations under the License.
+
+// Branch include-spec matcher — ported from path_matches_any in
+// repo_storage/commit_shim.c. This is the first C→Aether port under the
+// shim-snip initiative.
+//
+// Compiled with `aetherc --emit=lib`, so:
+//   - No file I/O here (std.fs is banned under --emit=lib).
+//   - The caller (branch_spec_allows in commit_shim.c) reads the
+//     spec file and passes its contents as `specs_joined` — globs
+//     separated by '\n'.
+//   - Exposed to C as `spec_matches_any(path, specs_joined)`.
+//
+// Glob grammar (kept compatible with the C version's contract):
+//   "prefix/**"  → subtree include; matches prefix and anything under it.
+//   "a/b/c.txt"  → literal path; also matches ancestor dirs (so the
+//                  filtered tree can hold the file).
+//   "a/*.txt"    → fnmatch-style pattern. Round 179 switched to
+//                  std.string.glob_match_pathname (Aether 0.110).
+
+import std.string
+
+// Is `path` an exact prefix of `glob` such that glob[len(path)] == '/'?
+// Used to decide "include `src/foo/bar.txt` implicitly keeps `src` and
+// `src/foo` around so the file has somewhere to live".
+path_is_ancestor_of_glob(path: string, glob: string) {
+    pn = string.length(path)
+    gn = string.length(glob)
+    if pn >= gn { return 0 }
+    if string.char_at(glob, pn) != 47 { return 0 }   // 47 = '/'
+    i = 0
+    while i < pn {
+        if string.char_at(path, i) != string.char_at(glob, i) { return 0 }
+        i = i + 1
+    }
+    return 1
+}
+
+// "prefix/**" subtree check. If `glob` ends in "/**", does `path` fall
+// under that prefix?
+subtree_glob_matches(path: string, glob: string) {
+    gn = string.length(glob)
+    if gn < 3 { return 0 }
+    // Trailing "/**"?
+    if string.char_at(glob, gn - 3) != 47 { return 0 }   // '/'
+    if string.char_at(glob, gn - 2) != 42 { return 0 }   // '*'
+    if string.char_at(glob, gn - 1) != 42 { return 0 }   // '*'
+    plen = gn - 3
+    pn = string.length(path)
+    if pn < plen { return 0 }
+    // path[0..plen] must equal glob[0..plen].
+    i = 0
+    while i < plen {
+        if string.char_at(path, i) != string.char_at(glob, i) { return 0 }
+        i = i + 1
+    }
+    // path == prefix OR path[plen] == '/'.
+    if pn == plen { return 1 }
+    if string.char_at(path, plen) == 47 { return 1 }
+    return 0
+}
+
+// Does `path` match the single `glob`? Returns 1/0.
+path_matches_glob(path: string, glob: string) {
+    // Subtree form first.
+    if subtree_glob_matches(path, glob) == 1 { return 1 }
+    // Exact fnmatch.
+    if string.glob_match_pathname(glob, path) == 1 { return 1 }
+    // Path is an ancestor of this exact glob (implicit parent-dir keep).
+    if path_is_ancestor_of_glob(path, glob) == 1 { return 1 }
+    return 0
+}
+
+// Given newline-separated globs in `specs_joined`, does `path` match
+// ANY of them? Returns 1 on match, 0 on no match.
+//
+// Empty spec (all-whitespace / empty string) returns 0 — the C caller
+// handles "no spec = allow all" above this function.
+export spec_matches_any(path: string, specs_joined: string) {
+    pn = string.length(path)
+    if pn == 0 { return 0 }
+    sn = string.length(specs_joined)
+    if sn == 0 { return 0 }
+
+    // Walk specs_joined line by line without allocating.
+    start = 0
+    i = 0
+    while i <= sn {
+        c = 0
+        if i < sn { c = string.char_at(specs_joined, i) }
+        // End of line: process [start, i).
+        if i == sn {
+            if i > start {
+                glob = string.substring(specs_joined, start, i)
+                if string.length(glob) > 0 {
+                    if path_matches_glob(path, glob) == 1 { return 1 }
+                }
+            }
+            i = i + 1
+        } else {
+            if c == 10 {   // '\n'
+                if i > start {
+                    glob = string.substring(specs_joined, start, i)
+                    if string.length(glob) > 0 {
+                        if path_matches_glob(path, glob) == 1 { return 1 }
+                    }
+                }
+                start = i + 1
+                i = i + 1
+            } else {
+                if c == 13 {   // '\r' — tolerate CRLF
+                    if i > start {
+                        glob = string.substring(specs_joined, start, i)
+                        if string.length(glob) > 0 {
+                            if path_matches_glob(path, glob) == 1 { return 1 }
+                        }
+                    }
+                    start = i + 1
+                }
+                i = i + 1
+            }
+        }
+    }
+    return 0
+}
+
+// main() is present so the file type-checks, but it's not used when
+// compiled with --emit=lib.
+main() {
+    println("repo_storage/spec.ae is a library; not meant to run standalone")
+}

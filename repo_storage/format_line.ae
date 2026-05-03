@@ -1,0 +1,274 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// permissions and limitations under the License.
+
+// $repo/format line parser. Was ported from C-side
+// repo_primary_hash + repo_secondary_hashes; both
+// retired (Rounds 132 / 136 respectively) once the .ae callers
+// switched to these accessors directly.
+//
+// Format line shapes (caller has already read the file, trimmed, and
+// passed the first line):
+//   "svnae-fsfs-1"                     (legacy — assumed sha1)
+//   "svnae-fsfs-1 sha256"              (primary = sha256)
+//   "svnae-fsfs-1 sha256,sha1"         (primary = sha256, sha1 secondary)
+//   "svnae-fsfs-1 sha256,sha1,blake"   (many secondaries)
+//
+// Exports:
+//   format_primary_hash(line) -> string   ("" if absent → caller uses "sha1")
+//   format_secondary_count(line) -> int
+//   format_secondary_hash(line, i) -> string  ("" if i out of range)
+
+import std.string
+
+// Find first space; return byte offset after it, or -1 if no space.
+after_first_space(line: string) -> int {
+    n = string.length(line)
+    i = 0
+    while i < n {
+        if string.char_at(line, i) == 32 { return i + 1 }
+        i = i + 1
+    }
+    return 0 - 1
+}
+
+export format_primary_hash(line: string) -> string {
+    start = after_first_space(line)
+    if start < 0 { return "" }
+    n = string.length(line)
+    // Primary is up to the first comma (or end).
+    i = start
+    while i < n {
+        if string.char_at(line, i) == 44 { break }
+        i = i + 1
+    }
+    return string.substring(line, start, i)
+}
+
+export format_secondary_count(line: string) -> int {
+    start = after_first_space(line)
+    if start < 0 { return 0 }
+    n = string.length(line)
+    // Skip primary.
+    i = start
+    while i < n {
+        if string.char_at(line, i) == 44 { break }
+        i = i + 1
+    }
+    if i >= n { return 0 }
+    // Count comma-separated tokens after the primary's trailing comma.
+    count = 0
+    i = i + 1   // past the first comma
+    tok_start = i
+    while i <= n {
+        at_end = 0
+        c = 0
+        if i == n { at_end = 1 } else { c = string.char_at(line, i) }
+        is_sep = 0
+        if at_end == 1 { is_sep = 1 }
+        if c == 44 { is_sep = 1 }
+        if is_sep == 1 {
+            if i > tok_start { count = count + 1 }
+            tok_start = i + 1
+        }
+        i = i + 1
+    }
+    return count
+}
+
+export format_secondary_hash(line: string, target: int) -> string {
+    start = after_first_space(line)
+    if start < 0 { return "" }
+    n = string.length(line)
+    i = start
+    while i < n {
+        if string.char_at(line, i) == 44 { break }
+        i = i + 1
+    }
+    if i >= n { return "" }
+    idx = 0
+    i = i + 1
+    tok_start = i
+    while i <= n {
+        at_end = 0
+        c = 0
+        if i == n { at_end = 1 } else { c = string.char_at(line, i) }
+        is_sep = 0
+        if at_end == 1 { is_sep = 1 }
+        if c == 44 { is_sep = 1 }
+        if is_sep == 1 {
+            if i > tok_start {
+                if idx == target { return string.substring(line, tok_start, i) }
+                idx = idx + 1
+            }
+            tok_start = i + 1
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// Rev-blob body formatter — ported from the three snprintf sites in
+// repo_storage/commit_shim.c that all build the same 8-field header:
+//
+//   root: <sha>
+//   branch: <name>
+//   props: <sha>
+//   acl: <sha>
+//   prev: <int>
+//   author: <user>
+//   date: <iso8601>
+//   log: <message>
+export rev_blob_body(root: string, branch: string, props: string, acl: string,
+                     prev: int, author: string, date: string, log: string) -> string {
+    out = "root: "
+    out = string.concat(out, root)
+    out = string.concat(out, "\nbranch: ")
+    out = string.concat(out, branch)
+    out = string.concat(out, "\nprops: ")
+    out = string.concat(out, props)
+    out = string.concat(out, "\nacl: ")
+    out = string.concat(out, acl)
+    out = string.concat(out, "\nprev: ")
+    out = string.concat(out, string.from_int(prev))
+    out = string.concat(out, "\nauthor: ")
+    out = string.concat(out, author)
+    out = string.concat(out, "\ndate: ")
+    out = string.concat(out, date)
+    out = string.concat(out, "\nlog: ")
+    out = string.concat(out, log)
+    out = string.concat(out, "\n")
+    return out
+}
+
+
+// Sort the "<sha> <path>" lines in `body` by path ascending, preserving
+// exact line contents. Used by paths-acl / paths-props blob builders in
+// repo_storage/commit_shim.c.
+//
+// Input / output are newline-separated. Blank/malformed lines dropped.
+// O(n²) insertion sort — n is small (touched paths per commit).
+export paths_index_sort(body: string) -> string {
+    // Split into lines.
+    n = string.length(body)
+    if n == 0 { return "" }
+    // Walk once collecting (path, full_line) pairs as pipe-joined string:
+    //   path1\t fullline1 \n path2 \t fullline2 \n ...
+    // Sort with insertion sort on path. Final output: fullline1 \n fullline2 \n ...
+    //
+    // We store the structured list in a single pipe/newline-encoded string.
+    entries = ""
+    line_start = 0
+    i = 0
+    while i <= n {
+        at_end = 0
+        c = 0
+        if i == n { at_end = 1 } else { c = string.char_at(body, i) }
+        is_eol = 0
+        if at_end == 1 { is_eol = 1 }
+        if c == 10 { is_eol = 1 }
+        if is_eol == 1 {
+            if i > line_start {
+                // Find first space.
+                sp = line_start
+                while sp < i {
+                    if string.char_at(body, sp) == 32 { break }
+                    sp = sp + 1
+                }
+                if sp > line_start && sp < i {
+                    path = string.substring(body, sp + 1, i)
+                    line = string.substring(body, line_start, i)
+                    entries = pilins_insert_sorted(entries, path, line)
+                }
+            }
+            line_start = i + 1
+        }
+        i = i + 1
+    }
+    // Strip path prefixes — entries format is "path\tline\n".
+    out = ""
+    m = string.length(entries)
+    start = 0
+    j = 0
+    while j < m {
+        cc = string.char_at(entries, j)
+        if cc == 9 {   // tab: everything after up to newline is the line
+            k = j + 1
+            while k < m {
+                if string.char_at(entries, k) == 10 { break }
+                k = k + 1
+            }
+            out = string.concat(out, string.substring(entries, j + 1, k))
+            out = string.concat(out, "\n")
+            j = k + 1
+            start = j
+        } else {
+            j = j + 1
+        }
+    }
+    return out
+}
+
+// Insert (path, line) into `entries` (path\tline\n ...) keeping sorted
+// ascending by path. Returns new entries string.
+pilins_insert_sorted(entries: string, path: string, line: string) -> string {
+    n = string.length(entries)
+    plen = string.length(path)
+    if n == 0 {
+        out = string.concat(path, "\t")
+        out = string.concat(out, line)
+        return string.concat(out, "\n")
+    }
+    out = ""
+    inserted = 0
+    line_start = 0
+    i = 0
+    while i < n {
+        // Current entry: entries[line_start..eol], path is [line_start..tab]
+        tab = line_start
+        while tab < n {
+            if string.char_at(entries, tab) == 9 { break }
+            tab = tab + 1
+        }
+        eol = tab
+        while eol < n {
+            if string.char_at(entries, eol) == 10 { break }
+            eol = eol + 1
+        }
+        this_path = string.substring(entries, line_start, tab)
+        if inserted == 0 {
+            if string.compare(path, this_path) < 0 {
+                one = string.concat(path, "\t")
+                one = string.concat(one, line)
+                one = string.concat(one, "\n")
+                out = string.concat(out, one)
+                inserted = 1
+            }
+        }
+        out = string.concat(out, string.substring(entries, line_start, eol + 1))
+        line_start = eol + 1
+        i = line_start
+    }
+    if inserted == 0 {
+        one = string.concat(path, "\t")
+        one = string.concat(one, line)
+        one = string.concat(one, "\n")
+        out = string.concat(out, one)
+    }
+    return out
+}
+
+main() {
+    println("repo_storage/format_line.ae is a library; not meant to run standalone")
+}

@@ -12,9 +12,9 @@ Aether 0.116 shipped the `@aether string` per-param extern annotation
 Aether-to-Aether crossings). Aether 0.117 is the stable release.
 
 **F1 (svndiff) and F2 (xdelta) FIXED** in Round 228:
-- ae/delta/test_svndiff.ae: annotated the two binary string params
+- delta/test_svndiff.ae: annotated the two binary string params
   on `svndiff_encoder_finish` and `svndiff_decode_apply` externs.
-- ae/delta/test_xdelta.ae: annotated `xdelta_compute` and
+- delta/test_xdelta.ae: annotated `xdelta_compute` and
   `svndiff_decode_apply` externs; also fixed test's
   status-vs-length confusion (was reading the int tuple element
   as length; now reads `string.length(got)` directly).
@@ -44,7 +44,7 @@ The .ae sources are still in the tree as scaffolding; the
 `.tests-<tag>.ae` wrappers are NOT in the aggregator (would break
 the green build). Each needs its own debugging round.
 
-### F1. ae/delta/test_svndiff.ae — 6 cases failing (svndiff is real, not dead)
+### F1. delta/test_svndiff.ae — 6 cases failing (svndiff is real, not dead)
 
 **svndiff is production-bound**: it's the wire format for `svn diff`
 and the dump/load delta encoding. Currently used by no production
@@ -100,35 +100,35 @@ adoption work.
 Reproducer + Nic's redirect documented at
 `~/scm/aether/binary-string-extern-boundary.md`.
 
-**Test fix kept**: ae/delta/test_svndiff.ae now reads
+**Test fix kept**: delta/test_svndiff.ae now reads
 `string.length(got_str)` for the length and `status` for the
 encoder-status flag. The 6 cases still fail with `length 0 != N`
 (was `length 1 != N`), surfacing the real bug more clearly.
 
-### F2. ae/delta/test_xdelta.ae — multiple cases
+### F2. delta/test_xdelta.ae — multiple cases
 **Symptom**: same shape (`length 1 != N`).
 **Hypothesis**: shares the same length-accessor as F1.
 
-### F3. ae/repo_storage/test_repo.ae — `read_blob` failures
+### F3. repo_storage/test_repo.ae — `read_blob` failures
 **Symptom**: `read_blob big length: got 0, want 10000` and
 content mismatches.
 **Hypothesis**: blob read returns empty for large blobs.
 Could be related to F1/F2 if blob length accessor regressed.
 
-### F4. ae/repo_storage/test_revisions.ae — file-content mismatches
+### F4. repo_storage/test_revisions.ae — file-content mismatches
 **Symptom**: `r1 README:` fails (left empty), same for main.c
 and notes.txt.
 **Hypothesis**: read path issue — possibly the same
 length-accessor or rev-blob seeding contract broke.
 
-### F5. ae/repos/test_repos.ae — at least 2 cases
+### F5. repos/test_repos.ae — at least 2 cases
 **Symptom**: `cat r3 LICENSE: expected null/missing, got something`
 — pre-r3 file should not exist, but does.
 **Hypothesis**: rev resolution returns the wrong content for
 deleted-in-rev paths.
 
 To debug: pick one (F1 is the smallest), run
-`aeb ae/delta/.tests-svndiff.ae` (need to recreate the file —
+`aeb delta/.tests-svndiff.ae` (need to recreate the file —
 it was deleted in Round 225), instrument the test, find the
 length-accessor regression. Each is probably 30-60 lines of
 investigation.
@@ -146,14 +146,14 @@ only indirectly. Each is small.
 The long form is exercised in existing tests; the alias form is
 not. A regression that broke an alias would land in a user's
 muscle-memory `svn co` and surprise them.
-**Shape**: `ae/svn/test_aliases.sh` — for each alias pair, run
+**Shape**: `svn/test_aliases.sh` — for each alias pair, run
 both forms against the same in-process server, diff stdout/stderr.
 
 ### T2. `svn help` and unknown-subcommand error path (single test, ~10 lines)
 **Why**: `svn help` should print usage and exit 0; `svn nosuchcmd`
 should print an error and exit non-zero. Neither path is exercised
 by any test today.
-**Shape**: `ae/svn/test_help.sh`.
+**Shape**: `svn/test_help.sh`.
 
 ### T3. paths_index_lookup empty-path branch (unit test in test_*.ae form)
 **Why**: Round 206 merged `paths_index_lookup_impl` into the
@@ -161,7 +161,7 @@ exported `paths_index_lookup`, adding an extra branch that handles
 empty `path` (the "<sha> \n" entry shape used for root-level ACL
 rules). ACL tests hit this path indirectly when walking down to
 root, but the branch isn't exercised in isolation.
-**Shape**: `ae/svnserver/test_paths_index.ae` — build a fixture
+**Shape**: `svnserver/test_paths_index.ae` — build a fixture
 body, call `paths_index_lookup(body, "")` and assert the right sha
 is returned.
 
@@ -170,7 +170,7 @@ is returned.
 aether-svnserver is multi-threaded under std.http; an actor-related
 data race would survive every existing test. `std.config`'s
 reader/writer lock is the kind of thing that would hide a bug here.
-**Shape**: `ae/svnserver/test_concurrent.sh` — spawn server, fire
+**Shape**: `svnserver/test_concurrent.sh` — spawn server, fire
 20 parallel `curl` GETs at /repos/X/log, assert all return 200 with
 matching bodies. (Cheap insurance against a lock regression.)
 
@@ -178,7 +178,7 @@ matching bodies. (Cheap insurance against a lock regression.)
 **Why**: `test_svnadmin.sh` tests dump and load separately. A
 round-trip property check would catch dump-format bugs that
 preserve loadability but mutate content.
-**Shape**: `ae/svnadmin/test_roundtrip.sh` — seed a repo, dump it,
+**Shape**: `svnadmin/test_roundtrip.sh` — seed a repo, dump it,
 load into a fresh repo, dump that, assert byte-identical dumps.
 
 ---

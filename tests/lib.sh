@@ -1,15 +1,15 @@
 # Shared bash test helpers. Sourced from two contexts:
 #
-#  1. A test_*.sh script under ae/<dir>/    (BASH_SOURCE[1] points there)
+#  1. A test_*.sh script under <dir>/        (BASH_SOURCE[1] points there)
 #  2. aeb's pre_command via .aeb/lib/svnae/  (cwd is already repo root)
 #
 # After sourcing, $ROOT is the repo root and these are pre-set with
 # canonical default paths to the four port binaries (env-overridable):
 #
-#   $ADMIN_BIN   target/ae/svnadmin/bin/svnadmin
-#   $SERVER_BIN  target/ae/svnserver/bin/aether-svnserver
-#   $SEED_BIN    target/ae/svnserver/bin/svnae-seed
-#   $SVN_BIN     target/ae/svn/bin/svn
+#   $ADMIN_BIN   target/svnadmin/bin/svnadmin
+#   $SERVER_BIN  target/svnserver/bin/aether-svnserver
+#   $SEED_BIN    target/svnserver/bin/svnae-seed
+#   $SVN_BIN     target/svn/bin/svn
 #
 # Test bodies (inside test_*.sh):
 #
@@ -31,7 +31,7 @@
 #   tlib_kill_servers                      # kill every fixture server
 
 if [ -n "${BASH_SOURCE[1]:-}" ] && [ -f "${BASH_SOURCE[1]}" ]; then
-    cd "$(dirname "${BASH_SOURCE[1]}")/../.."
+    cd "$(dirname "${BASH_SOURCE[1]}")/.."
     # Sourced from a test script — fail-fast so a bad cd or failed
     # binary launch doesn't leak files to cwd. (Pre_command from the
     # SDK isn't a real script, so we skip this in that mode.)
@@ -39,10 +39,10 @@ if [ -n "${BASH_SOURCE[1]:-}" ] && [ -f "${BASH_SOURCE[1]}" ]; then
 fi
 ROOT="$(pwd)"
 
-ADMIN_BIN="${ADMIN_BIN:-$ROOT/target/ae/svnadmin/bin/svnadmin}"
-SERVER_BIN="${SERVER_BIN:-$ROOT/target/ae/svnserver/bin/aether-svnserver}"
-SEED_BIN="${SEED_BIN:-$ROOT/target/ae/svnserver/bin/svnae-seed}"
-SVN_BIN="${SVN_BIN:-$ROOT/target/ae/svn/bin/svn}"
+ADMIN_BIN="${ADMIN_BIN:-$ROOT/target/svnadmin/bin/svnadmin}"
+SERVER_BIN="${SERVER_BIN:-$ROOT/target/svnserver/bin/aether-svnserver}"
+SEED_BIN="${SEED_BIN:-$ROOT/target/svnserver/bin/svnae-seed}"
+SVN_BIN="${SVN_BIN:-$ROOT/target/svn/bin/svn}"
 
 TLIB_PIDS=""
 

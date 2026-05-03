@@ -1,0 +1,125 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// permissions and limitations under the License.
+
+// Per-path ACL rule evaluator — ported from acl_body_decide in
+// svnserver/shim.c. Compiled with --emit=lib (pure string logic).
+//
+// Rule grammar (one per line):
+//   +alice           allow read+write
+//   +alice:r         allow read only
+//   +alice:w         allow write only
+//   +alice:rw        allow read+write (explicit)
+//   -alice           deny both (modes on deny are ignored)
+//   +* / -*          wildcard
+//
+// Evaluation: walk the body, collect explicit-user and wildcard
+// allow/deny bits. Precedence: user > wildcard; deny beats allow at
+// the same level. Returns 1=allow, 0=deny, -1=no-match (caller treats
+// as "let a lower-precedence rule decide").
+
+import std.string
+
+// Return 1 (allow), 0 (deny), or -1 (no rule matched).
+export acl_decide(body: string, user: string, want_write: int) -> int {
+    n = string.length(body)
+    if n == 0 { return 0 - 1 }
+    ulen = string.length(user)
+    wild_allow = 0 - 1
+    wild_deny = 0 - 1
+    user_allow = 0 - 1
+    user_deny = 0 - 1
+    line_start = 0
+    i = 0
+    while i <= n {
+        at_end = 0
+        c = 0
+        if i == n { at_end = 1 } else { c = string.char_at(body, i) }
+        is_eol = 0
+        if at_end == 1 { is_eol = 1 }
+        if c == 10 { is_eol = 1 }
+        if is_eol == 1 {
+            if i > line_start {
+                sign = string.char_at(body, line_start)
+                // First char must be '+' or '-'; otherwise skip line.
+                if sign == 43 || sign == 45 {
+                    // Name segment: from line_start+1 until ':' or end.
+                    name_start = line_start + 1
+                    colon_at = 0 - 1
+                    k = name_start
+                    while k < i {
+                        if string.char_at(body, k) == 58 { colon_at = k; break }
+                        k = k + 1
+                    }
+                    name_end = i
+                    if colon_at >= 0 { name_end = colon_at }
+                    name = string.substring(body, name_start, name_end)
+                    // Parse mode suffix: default rw.
+                    has_r = 1
+                    has_w = 1
+                    if colon_at >= 0 {
+                        has_r = 0
+                        has_w = 0
+                        j = colon_at + 1
+                        while j < i {
+                            mc = string.char_at(body, j)
+                            if mc == 114 { has_r = 1 }   // 'r'
+                            if mc == 119 { has_w = 1 }   // 'w'
+                            j = j + 1
+                        }
+                    }
+                    matches_mode = has_r
+                    if want_write == 1 { matches_mode = has_w }
+                    // Classify: wildcard, user-match, or other.
+                    is_wild = 0
+                    if string.length(name) == 1 {
+                        if string.char_at(name, 0) == 42 { is_wild = 1 }   // '*'
+                    }
+                    is_user = 0
+                    if is_wild == 0 {
+                        if string.length(name) == ulen {
+                            if string.equals(name, user) == 1 { is_user = 1 }
+                        }
+                    }
+                    if is_wild == 1 {
+                        if sign == 43 {
+                            if matches_mode == 1 { wild_allow = 1 }
+                        } else {
+                            wild_deny = 1
+                        }
+                    }
+                    if is_user == 1 {
+                        if sign == 43 {
+                            if matches_mode == 1 { user_allow = 1 }
+                        } else {
+                            user_deny = 1
+                        }
+                    }
+                }
+            }
+            line_start = i + 1
+        }
+        i = i + 1
+    }
+    // Priority: user > wildcard. Deny beats allow at same level.
+    if user_deny == 1 { return 0 }
+    if user_allow == 1 { return 1 }
+    if wild_deny == 1 { return 0 }
+    if wild_allow == 1 { return 1 }
+    return 0 - 1
+}
+
+main() {
+    println("svnserver/acl.ae is a library; not meant to run standalone")
+}

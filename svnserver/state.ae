@@ -1,0 +1,65 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+
+// Per-process state for the svn-aether HTTP server. Round 190
+// retires svnserver/shim.c (69 lines) using std.config — Aether
+// 0.110+ shipped this as the canonical "set during init, read
+// everywhere" KV store.
+//
+// State held:
+//   - superuser-token: shared secret matched against
+//     X-Svnae-Superuser headers for ACL bypass.
+//   - single-repo registry: one (name → path) pair, set at
+//     startup via --repo argv.
+//
+// Setters fire once during argv parsing; getters fire on every
+// HTTP request handler entry. Reads are concurrent-safe (std.config
+// uses a reader/writer lock internally).
+
+import std.string
+import std.config
+import std.http
+
+const KEY_SUPER_TOKEN = "svnserver.super_token"
+const KEY_REPO_NAME   = "svnserver.repo_name"
+const KEY_REPO_PATH   = "svnserver.repo_path"
+
+export svnserver_set_super_token(token: string) {
+    if string.length(token) == 0 { return }
+    config.put(KEY_SUPER_TOKEN, token)
+    return
+}
+
+export svnserver_register_repo(name: string, path: string) {
+    config.put(KEY_REPO_NAME, name)
+    config.put(KEY_REPO_PATH, path)
+    return
+}
+
+// Returns "" for missing — Aether-style absent-is-empty.
+export svnserver_find_repo_path(name: string) -> string {
+    registered_name = config.get(KEY_REPO_NAME)
+    if string.length(registered_name) == 0 { return "" }
+    if string.equals(registered_name, name) == 0 { return "" }
+    return config.get(KEY_REPO_PATH)
+}
+
+// 1 if this request carries a valid X-Svnae-Superuser token, 0 otherwise.
+export svnserver_request_is_super(req: ptr) -> int {
+    expected = config.get(KEY_SUPER_TOKEN)
+    if string.length(expected) == 0 { return 0 }
+    hdr = http.get_header(req, "X-Svnae-Superuser")
+    if string.length(hdr) == 0 { return 0 }
+    if string.equals(hdr, expected) == 1 { return 1 }
+    return 0
+}
+
+main() {
+    println("svnserver/state.ae is a library; not meant to run standalone")
+}

@@ -1,0 +1,164 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// permissions and limitations under the License.
+
+// svn merge — linear rev-range forward / reverse merge.
+//
+//   wc_merge(wc_root, source_path, rev_a, rev_b, target_path)
+//
+// Apply the file-tree diff between two source-path revisions onto the
+// WC. Records the merged range in svn:mergeinfo on the WC's root
+// tracked node.
+//
+// rev_a < rev_b: forward merge — apply (source@A → source@B) to WC.
+// rev_a > rev_b: reverse merge — undo (source@B → source@A).
+// rev_a == rev_b: no-op.
+//
+// Round 70 (Gordian) ports the orchestration out of merge_shim.c.
+// The recursive walker is in working_copy/merge_walk.ae; the deletion +
+// add/mod two-pass apply is in working_copy/merge_apply.ae; mergeinfo
+// add/cancel is in working_copy/mergeinfo.ae. What was left in C was the
+// glue calling all three around the opaque rtree handles.
+
+import std.string
+
+extern wc_db_open(wc_root: string) -> ptr
+extern wc_db_close(db: ptr)
+extern wc_db_upsert_node(db: ptr, path: string, kind: int, base_rev: int, base_sha1: string, node_state: int) -> int
+extern wc_db_node_exists(db: ptr, path: string) -> int
+extern wc_db_get_info(db: ptr, key: string) -> string
+
+extern wc_propset(wc_root: string, path: string, name: string, value: string) -> int
+extern wc_propdel(wc_root: string, path: string, name: string) -> int
+extern propget_value(wc_root: string, path: string, name: string) -> string
+
+// Opaque rtree storage in C (merge_shim.c). The recursive walk fills
+// it via rtree_add_dir / _add_file; apply passes read it via
+// the mergert_* accessors.
+extern rtree_new() -> ptr
+extern rtree_free(rt: ptr)
+
+// Walker + apply passes (Aether-side helpers). wc_root is passed
+// explicitly through the walker so add_file can hash files at
+// add-time (Round 140 retired the C-side TLS pointer).
+extern merge_walk_remote(wc_root: string,
+                                 base_url: string, repo: string, rev: int,
+                                 source_path: string, sub_prefix: string,
+                                 rt: ptr) -> int
+extern merge_apply_deletions(wc_root: string, target_path: string,
+                                     a_rt: ptr, b_rt: ptr, db: ptr)
+extern merge_apply_adds_mods(wc_root: string, target_path: string,
+                                     rev_a: int, rev_b: int,
+                                     a_rt: ptr, b_rt: ptr, db: ptr)
+
+// Mergeinfo helpers.
+extern mergeinfo_add_range(existing: string, source: string,
+                                   lo: int, hi: int, reverse: int) -> string
+
+// Update the WC root's svn:mergeinfo property to include
+// (source, lo, hi, reverse). Ensures a tracked dir row exists at "".
+mergeinfo_add_range_(wc_root: string, source: string,
+                     lo: int, hi: int, reverse: int) -> int {
+    db = wc_db_open(wc_root)
+    if db == null { return 0 - 1 }
+    if wc_db_node_exists(db, "") == 0 {
+        wc_db_upsert_node(db, "", 1, 0, "", 0)
+    }
+    wc_db_close(db)
+
+    existing = propget_value(wc_root, "", "svn:mergeinfo")
+    existing = string.copy(existing)
+    new_val = mergeinfo_add_range(existing, source, lo, hi, reverse)
+    new_val = string.copy(new_val)
+    if string.length(new_val) > 0 {
+        return wc_propset(wc_root, "", "svn:mergeinfo", new_val)
+    }
+    // Empty result — delete the property entirely.
+    wc_propdel(wc_root, "", "svn:mergeinfo")
+    return 0
+}
+
+export wc_merge(wc_root: string, source_path: string,
+                       rev_a: int, rev_b: int,
+                       target_path: string) -> int {
+    if rev_a == rev_b { return 0 }
+    if string.length(target_path) == 0 { target_path = "" }
+
+    reverse = 0
+    if rev_a > rev_b { reverse = 1 }
+
+    // After the swap rev_base < rev_theirs; rev_a / rev_b stay
+    // intact for mergeinfo bookkeeping.
+    rev_base = rev_a
+    rev_theirs = rev_b
+    if reverse == 1 {
+        rev_base = rev_b
+        rev_theirs = rev_a
+    }
+
+    db = wc_db_open(wc_root)
+    if db == null { return 0 - 1 }
+    // get_info returns refcounted AetherString (Round 143).
+    base_url = wc_db_get_info(db, "base_url")
+    repo     = wc_db_get_info(db, "repo")
+    wc_db_close(db)
+    if string.length(base_url) == 0 { return 0 - 1 }
+    if string.length(repo) == 0 { return 0 - 1 }
+    base_url = string.copy(base_url)
+    repo     = string.copy(repo)
+
+    // Fetch the source tree at both endpoints. wc_root threads
+    // through so add_file can hash files at add-time.
+    a = rtree_new()
+    b = rtree_new()
+    arc = merge_walk_remote(wc_root, base_url, repo, rev_base, source_path, "", a)
+    brc = merge_walk_remote(wc_root, base_url, repo, rev_theirs, source_path, "", b)
+    if arc != 0 {
+        rtree_free(a)
+        rtree_free(b)
+        return 0 - 1
+    }
+    if brc != 0 {
+        rtree_free(a)
+        rtree_free(b)
+        return 0 - 1
+    }
+
+    // For reverse merges, swap so the apply pass uses (base=A=post-
+    // change, theirs=B=pre-change). The semantics: missing-from-base
+    // = ADDED, missing-from-theirs = REMOVED, differ = text-merge.
+    if reverse == 1 {
+        tmp = a
+        a = b
+        b = tmp
+    }
+
+    // Two-pass apply.
+    db = wc_db_open(wc_root)
+    merge_apply_deletions(wc_root, target_path, a, b, db)
+    merge_apply_adds_mods(wc_root, target_path, rev_a, rev_b, a, b, db)
+    wc_db_close(db)
+
+    rtree_free(a)
+    rtree_free(b)
+
+    // Record merged range in svn:mergeinfo. The reverse flag turns
+    // into the leading '-' on the emitted line.
+    mergeinfo_add_range_(wc_root, source_path, rev_base, rev_theirs, reverse)
+    return 0
+}
+
+main() {
+    println("working_copy/merge.ae is a library; not meant to run standalone")
+}

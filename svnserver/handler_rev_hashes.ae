@@ -1,0 +1,104 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// permissions and limitations under the License.
+
+// /rev/N/hashes[/<path>] handler body.
+//
+// Flow:
+//   - ACL check (read) on the target path
+//   - resolve (rev, path) → sha (existence check)
+//   - fetch newline-separated "algo hash" pairs for secondary digests
+//   - hashes_json builds the final {primary, secondaries} body
+//
+// Used by `svn verify --secondaries`: client fetches content bytes
+// separately (via /cat or /list child shas), rehashes under each
+// algorithm, compares with these server-reported digests.
+
+import std.string
+
+extern acl_allows_mode(repo: string, rev: int, user: string, target_path: string, want_write: int) -> int
+extern repos_resolve_kind(repo: string, rev: int, path: string) -> int
+extern repos_resolve_sha(repo: string, rev: int, path: string) -> string
+extern repo_primary_hash(repo: string) -> string
+
+// Round 136: secondary-pairs builder ported from C to Aether. The
+// underlying primitives (format_secondary_count / _hash and
+// rep_cache_sec_lookup) are all Aether-native already; the C
+// trampoline only existed because the prior shape required a
+// fixed-size char[4][32] array to land back on the C side.
+extern format_secondary_count(format_line: string) -> int
+extern format_secondary_hash(format_line: string, i: int) -> string
+extern repos_format_line(repo: string) -> string
+extern rep_cache_sec_lookup(repo: string, primary: string, algo: string) -> string
+
+extern hashes_json(algo: string, primary_sha: string,
+                          secondary_pairs: string) -> string
+
+extern svnserver_respond_error(res: ptr, code: int, msg: string)
+extern svnserver_respond_json_ok(res: ptr, body: string)
+
+// Build "<algo> <hash>\n"-joined pairs for each secondary digest the
+// repo has for `node_sha`. Returns "" if the repo has no secondaries
+// or none have a stored digest for this node.
+build_secondary_pairs_(repo: string, node_sha: string) -> string {
+    line = repos_format_line(repo)
+    if string.length(line) == 0 { return "" }
+    n = format_secondary_count(line)
+    if n == 0 { return "" }
+    pairs = ""
+    i = 0
+    while i < n {
+        algo = format_secondary_hash(line, i)
+        sec_hex = rep_cache_sec_lookup(repo, node_sha, algo)
+        if string.length(sec_hex) > 0 {
+            pairs = string.concat(pairs, algo)
+            pairs = string.concat(pairs, " ")
+            pairs = string.concat(pairs, sec_hex)
+            pairs = string.concat(pairs, "\n")
+        }
+        i = i + 1
+    }
+    return pairs
+}
+
+export hashes_handle(req: ptr, res: ptr, repo: string, rev: int,
+                     target: string, user: string, is_super: int) {
+    if is_super == 0 {
+        if acl_allows_mode(repo, rev, user, target, 0) == 0 {
+            svnserver_respond_error(res, 404, "not found")
+            return
+        }
+    }
+
+    // Any kind (file or dir) is valid — we report primary + secondaries
+    // of the node's content-sha. Just need existence.
+    kind = repos_resolve_kind(repo, rev, target)
+    if kind == 0 {
+        svnserver_respond_error(res, 404, "not found")
+        return
+    }
+    node_sha = repos_resolve_sha(repo, rev, target)
+    node_sha = string.copy(node_sha)          // TLS snapshot
+
+    algo = repo_primary_hash(repo)
+    pairs = build_secondary_pairs_(repo, node_sha)
+    body = hashes_json(algo, node_sha, pairs)
+
+    svnserver_respond_json_ok(res, body)
+}
+
+
+main() {
+    println("svnserver/handler_rev_hashes.ae is a library; not meant to run standalone")
+}

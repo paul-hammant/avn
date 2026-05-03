@@ -1,0 +1,17 @@
+import build
+import bash
+import bash (script, pre_command, post_command)
+import svnae
+import svnae (svn_server_with_token)
+
+main() {
+    b = build.start()
+    build.dep(b, "svn")
+    build.dep(b, "svnadmin")
+    build.dep(b, "svnserver")
+    build.dep(b, "svnserver/.build-seed.ae")
+    bash.test(b) {
+        svn_server_with_token("test_acl_cp_follow", "9625", "cpacl-token")
+        script("test_acl_cp_follow.sh")
+    }
+}

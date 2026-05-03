@@ -1,0 +1,113 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+
+// wc.db node + nodelist handle accessors — Aether port of
+// working_copy/db_shim.c's two packed-handle families. Same recipe as
+// Round 154 (repos) and Round 155 (ra).
+//
+// node       — single-record handle: a "<path>\x01<kind>\x01...
+//              \x01<state>\x01<conflicted>" string with no
+//              leading-count header.
+// nodelist   — array handle: "<n>\x02<rec0>\x02<rec1>\x02..." with
+//              the same record shape.
+//
+// Field accessors live in working_copy/db_node_packed.ae; this file just
+// surfaces the public ABI through which db_nodes.ae's get_node /
+// list_nodes producers feed into the accessors callers expect.
+
+import std.string
+
+extern node_count       (packed: string) -> int
+extern node_path        (packed: string) -> string
+extern node_kind        (packed: string) -> int
+extern node_base_rev    (packed: string) -> int
+extern node_base_sha1   (packed: string) -> string
+extern node_state       (packed: string) -> int
+extern node_conflicted  (packed: string) -> int
+
+extern node_path_at     (packed: string, i: int) -> string
+extern node_kind_at     (packed: string, i: int) -> int
+extern node_base_rev_at (packed: string, i: int) -> int
+extern node_base_sha1_at(packed: string, i: int) -> string
+extern node_state_at    (packed: string, i: int) -> int
+extern node_conflicted_at(packed: string, i: int) -> int
+
+// ---- node handle (single-record) -------------------------------
+
+export wc_node_handle(packed: string) -> ptr {
+    if string.length(packed) == 0 { return null }
+    return string.copy(packed)
+}
+
+export wc_node_path     (n: ptr) -> string {
+    if n == null { return "" }
+    return node_path(n)
+}
+export wc_node_kind     (n: ptr) -> int {
+    if n == null { return 0 - 1 }
+    return node_kind(n)
+}
+export wc_node_base_rev (n: ptr) -> int {
+    if n == null { return 0 - 1 }
+    return node_base_rev(n)
+}
+export wc_node_base_sha1(n: ptr) -> string {
+    if n == null { return "" }
+    return node_base_sha1(n)
+}
+export wc_node_state    (n: ptr) -> int {
+    if n == null { return 0 - 1 }
+    return node_state(n)
+}
+export wc_node_conflicted(n: ptr) -> int {
+    if n == null { return 0 }
+    return node_conflicted(n)
+}
+export wc_node_free     (n: ptr) { return 0 }
+
+// ---- nodelist handle ------------------------------------------
+
+export wc_nodelist_handle(packed: string) -> ptr {
+    if string.length(packed) == 0 { return null }
+    return string.copy(packed)
+}
+
+export wc_nodelist_count    (L: ptr) -> int {
+    if L == null { return 0 }
+    return node_count(L)
+}
+export wc_nodelist_path     (L: ptr, i: int) -> string {
+    if L == null { return "" }
+    return node_path_at(L, i)
+}
+export wc_nodelist_kind     (L: ptr, i: int) -> int {
+    if L == null { return 0 - 1 }
+    return node_kind_at(L, i)
+}
+export wc_nodelist_base_rev (L: ptr, i: int) -> int {
+    if L == null { return 0 - 1 }
+    return node_base_rev_at(L, i)
+}
+export wc_nodelist_base_sha1(L: ptr, i: int) -> string {
+    if L == null { return "" }
+    return node_base_sha1_at(L, i)
+}
+export wc_nodelist_state    (L: ptr, i: int) -> int {
+    if L == null { return 0 - 1 }
+    return node_state_at(L, i)
+}
+export wc_nodelist_conflicted(L: ptr, i: int) -> int {
+    if L == null { return 0 }
+    return node_conflicted_at(L, i)
+}
+export wc_nodelist_free     (L: ptr) { return 0 }
+
+main() {
+    println("working_copy/db_accessors.ae is a library; not meant to run standalone")
+}

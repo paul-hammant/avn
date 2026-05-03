@@ -98,7 +98,7 @@ Specifically, if the source buffer at `s` contains N real bytes followed
 by a NUL, but the source's internal length field says N-k or N+k, strlen
 reads whatever's in memory until the first NUL — could be too few, could
 be too many. This was caught in the FSFS port when `buf_new` in
-`ae/util/compress/shim.c` didn't NUL-terminate its output buffer: strlen
+`util/compress/shim.c` didn't NUL-terminate its output buffer: strlen
 walked past the 10000-byte payload into neighbouring heap memory and
 returned 10011.
 
@@ -184,7 +184,7 @@ Hit during round 30 (fs_fs rep-store port attempt). Adding one more
 `_generated.c` to the `[[bin]] extra_sources` line for the
 aether-svnserver binary — total 2271 chars on one logical line —
 caused the link command to be cut mid-filename, with the linker
-reporting `cannot find ae/svnserver/handler_copy_generat: No such
+reporting `cannot find svnserver/handler_copy_generat: No such
 file or directory`. Subtracting 40 chars from the line brought the
 build back.
 
@@ -217,7 +217,7 @@ the linker see a mangled command.
 
 **Workaround used in port:** inline the affected Aether module into
 a sibling that's already on the link list, so no new `_generated.c`
-path is added. Done previously for `ae/svnserver/blob_build.ae`
+path is added. Done previously for `svnserver/blob_build.ae`
 (round 23) — the cost starts to hurt the "one Aether module per
 concern" design once it happens repeatedly.
 

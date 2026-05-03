@@ -29,7 +29,7 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
 - **Rounds 4/5/6** (Aether 0.78.0/0.79.0): cjson was replaced with
   Aether's std.json in both `ra/shim.c` and `svnserver/shim.c` via a
   local compat layer; the `-lcjson` link-line dependency is gone
-  entirely. FFI shims consolidated into `ae/ffi/{openssl,sqlite,
+  entirely. FFI shims consolidated into `ffi/{openssl,sqlite,
   zlib,utf8proc}/`. WC conflict-sidecar classifier, svn-status
   decision table, dir-blob find-by-name, dir-blob parse helpers,
   repo-path predicates (is_immediate_child / basename_after /
@@ -40,10 +40,10 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
   **57%** of tracked source (generated `_generated.c` files are
   gitignored and not counted toward either side).
 - **Round 7**: ported the svnserver /rev/N URL-tail parser
-  (ae/svnserver/url_parse.ae), dropped four copies of hand-rolled
+  (svnserver/url_parse.ae), dropped four copies of hand-rolled
   `int_to_dec` + `digit_char` in favour of `std.string.from_int` now
   that it's available, and ported the WC pristine-store path builder
-  to ae/working_copy/pristine_path.ae (handles the two-level XX/YY/ fanout).
+  to working_copy/pristine_path.ae (handles the two-level XX/YY/ fanout).
 - **Round 31** (current): **36.00% C, 64.00% Aether.**
   Round-30's rep-store port landed — the upstream Aether
   toolchain's `extra_sources` assembly buffer was bumped
@@ -51,7 +51,7 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
   rebuilt at `~/scm/aether/build/ae`), which unblocks adding
   new `_generated.c` paths to svnserver's link line without
   triggering the silent truncation that sunk round 30.
-  - New `ae/repo_storage/rep_store.ae` (175 LOC) owns the blob
+  - New `repo_storage/rep_store.ae` (175 LOC) owns the blob
     encode/decode half of the rep store: use_zlib decision
     with the 16-byte threshold, RAW/ZLIB-tagged envelope,
     binary-safe file write via fs.write_binary, inflate via
@@ -80,8 +80,8 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
   Attempted port of the fs_fs rep-store (sibling shape to round
   29's wc pristine port — same hash + zlib + binary-file-write
   pattern, using the now-ambient std.cryptography + std.zlib).
-  The Aether side (`ae/repo_storage/rep_store.ae`, 200 LOC) worked
-  end-to-end, but adding `ae/repo_storage/rep_store_generated.c` to
+  The Aether side (`repo_storage/rep_store.ae`, 200 LOC) worked
+  end-to-end, but adding `repo_storage/rep_store_generated.c` to
   the svnserver binary's `extra_sources` pushed the line over
   2 KiB, which silently truncated the gcc link command to
   `handler_copy_generat` and failed to link. Rolled back.
@@ -102,7 +102,7 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
 - **Round 29**: **36.28% C, 63.72% Aether.** Ported
   the wc pristine store (sha + zlib + binary file I/O) now that
   std.cryptography (0.88) and std.zlib (0.90+) landed upstream.
-  - ae/working_copy/pristine.ae owns: wc_hash_bytes (dispatches
+  - working_copy/pristine.ae owns: wc_hash_bytes (dispatches
     sha1_hex/sha256_hex by the wc's configured algo),
     wc_hash_file (fs.read_binary + hash), wc_pristine_put
     (hash+dedup+zlib.deflate+fs.write_binary), wc_pristine_get
@@ -128,7 +128,7 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
   svnae_repos_blame — the last big knot in repos/shim.c, ~245
   LOC of C doing line-level LCS, paths-changed walk, and
   per-line annotation carry-forward.
-  - Aether side lives in ae/repos/log.ae::repos_blame_packed.
+  - Aether side lives in repos/log.ae::repos_blame_packed.
     Uses std.intarr for the O(na*nb) LCS dp table (2D flat
     indexing) and the per-line (offset, length) pairs (one
     packed intarr of size 2*n).
@@ -147,7 +147,7 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
   Code-quality consolidation: the `pin_list` / `pin_str` /
   `pin_list_free` pattern for per-handle string memory management
   was identically implemented in both ra/shim.c (~28 LOC) and
-  repos/shim.c (~28 LOC). Moved to a shared ae/util/pin_list.h
+  repos/shim.c (~28 LOC). Moved to a shared util/pin_list.h
   included by both, eliminating ~56 LOC of duplication across the
   shims. No functional change, no port activity — just cleanup
   toward the natural end state at 36-37% C.
@@ -161,7 +161,7 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
 
 - **Rounds 26-27**: **37.85% C, 62.15% Aether.** Leaf
   sweep after the structural passes:
-  - svnae_repos_info_rev: ported to ae/repos/log.ae's
+  - svnae_repos_info_rev: ported to repos/log.ae's
     repos_info_packed. One rev-blob read in Aether → packed
     "<rev>\x01<author>\x01<date>\x01<msg>" record → C reuses
     ra_info_* accessors from packed.ae verbatim. 4× fewer
@@ -198,7 +198,7 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
     list: Aether produces "<N>\x02<name>\x01<value>\x02...", C
     rebuilt a struct-of-arrays with per-field accessors.
     Collapsed to the {packed, n, pin_list} pattern + new
-    ra_props_count/name/value accessors in ae/client/packed.ae.
+    ra_props_count/name/value accessors in client/packed.ae.
   - `verify_dir` inside the verify client had an inline copy
     of the same reparse (~20 LOC) to populate its local
     `struct entry[]`. Swapped it for ra_list_count/name/kind
@@ -239,12 +239,12 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
   accessors" pattern — but worse than the RA client, because
   here the data is local and the builder was reading HEAD+1
   rev blobs in C with its own strdup/free plumbing.
-  - New `ae/repos/log.ae::repos_log_packed(repo)` does the whole
+  - New `repos/log.ae::repos_log_packed(repo)` does the whole
     rev walk in Aether, emitting the exact same "<N>\x02<rev>
     \x01<author>\x01<date>\x01<msg>\x02..." shape ra_parse_log
-    does. The C accessors reuse ra_log_* from ae/client/packed.ae
+    does. The C accessors reuse ra_log_* from client/packed.ae
     directly — same record shape, zero new walkers.
-  - `ae/repos/paths_changed.ae` gained `paths_changed_packed`
+  - `repos/paths_changed.ae` gained `paths_changed_packed`
     + `pack_amd_pairs` to produce the packed form from the
     existing "<action>\n<path>\n" merge output; C accessors
     reuse ra_paths_*.
@@ -254,7 +254,7 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
     free machinery. Added the same {packed, n, pin_list}
     handle + pin_str helper pattern round 21 established for
     ra/shim.c.
-  - Packed-accessor reuse: ae/client/packed_generated.c is now linked
+  - Packed-accessor reuse: client/packed_generated.c is now linked
     by svnadmin, svnserver, and test_repos in addition to the
     existing RA consumers. One set of walkers serves both
     sides of the wire.
@@ -265,7 +265,7 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
   blame, list) plus a 28-line single-record parser (info) all
   disappeared in favour of typed accessors over the packed
   string itself.
-  - New `ae/client/packed.ae` (366 LOC Aether) exposes
+  - New `client/packed.ae` (366 LOC Aether) exposes
     `ra_{log,paths,blame,list}_{count,rev,author,...}` and the
     five `ra_info_*` accessors. Each one walks the packed
     `<N>\x02<entry>\x02<entry>...` string on demand.
@@ -329,12 +329,12 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
 - **Round 18**: **40.33% C, 59.66% Aether.** Cleanup
   round focused on pulling one more layer of C-side trampolines
   up and pruning stale forward decls:
-  - svnae_repo_secondary_hashes parse → ae/repos/rev_io.ae
+  - svnae_repo_secondary_hashes parse → repos/rev_io.ae
     (\n-joined names; C splits into char[4][32]).
   - svnadmin dump rev-pointer read → aether_repos_rev_blob_sha.
   - repos_info_rev + root_dir_sha1_for_rev both use the shared
     aether_repos_load_rev_blob_field helper now.
-  - count_reps_recurse → ae/repo_storage/count_reps.ae.
+  - count_reps_recurse → repo_storage/count_reps.ae.
   - Dead trampolines gone from update_shim.c (ingest_props),
     svnserver/shim.c (acl_user_has_rw_subtree, 24 stale aether_*
     extern decls, 5 obsolete svnae_txn_*/commit_finalise forward
@@ -351,19 +351,19 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
   - ra_parse_rev_response collapses three inline four-line
     cJSON {"rev":N} parsers into one Aether helper.
   - svnae_env_get → std.os::getenv.
-  - svnae_branch_spec_allows → ae/repo_storage/branch_spec.ae.
+  - svnae_branch_spec_allows → repo_storage/branch_spec.ae.
   - load_rev_root_sha1 + rev_blob_field both swap to the existing
-    ae/repos/rev_io.ae two-hop reader (closes the round-14
+    repos/rev_io.ae two-hop reader (closes the round-14
     deferred port).
-  - svnae_repo_primary_hash → ae/repos/rev_io.ae.
+  - svnae_repo_primary_hash → repos/rev_io.ae.
   - Plus the 5.5 MB subversion/bindings/ reference tree deleted.
 
 - **Round 16**: **41.28% C, 58.71% Aether.** The 8 MB
   vendored `apr/` tree is deleted (zero Aether references). The
   two remaining svnserver C-side dispatchers move up:
-  - /rev/N/<sub> dispatcher: 140 LOC → ae/svnserver/handle_repo_rev.ae.
+  - /rev/N/<sub> dispatcher: 140 LOC → svnserver/handle_repo_rev.ae.
   - Top-level /repos/{r}/<...> dispatcher: 55 LOC →
-    ae/svnserver/dispatch.ae (std.http's route callback now points
+    svnserver/dispatch.ae (std.http's route callback now points
     directly at aether_svnserver_dispatch).
   - parse_field's "present but empty" rescan: dropped (no caller
     differentiates from absent).
@@ -387,12 +387,12 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
     (list and /hashes secondaries) switch to the already-ported
     `ra_parse_list` and a new `ra_parse_hashes_secondaries`.
   - `ingest_props` (svn update's per-path prop reconciliation)
-    → ae/working_copy/update_props.ae. Opaque-handle walk via already-
+    → working_copy/update_props.ae. Opaque-handle walk via already-
     Aether-callable ra/wc accessors.
   - `read_format_line` ($repo/format reader) →
-    ae/repos/rev_io.ae::repos_format_line.
+    repos/rev_io.ae::repos_format_line.
   - `based_on_check` (PUT/DELETE optimistic-concurrency) →
-    ae/svnserver/based_on_check.ae.
+    svnserver/based_on_check.ae.
   - Dead code sweep: `sb_*` JSON builder scaffolding in
     svnserver/shim.c and read_small / trim_trailing_newline /
     parse_int / rev_pointer_path in repos/shim.c.
@@ -400,15 +400,15 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
 - **Round 14**: **43.40% C, 56.59% Aether.** Focus
   shifts to the RA client side + repos helpers:
   - `svnae_ra_commit_finish`: 140 LOC of cJSON-heavy body
-    serialisation moves up to ae/client/commit_build.ae. std.json
+    serialisation moves up to client/commit_build.ae. std.json
     for construction; C-side accessors expose struct svnae_ra_commit.
   - `svnae_ra_server_copy` + `svnae_ra_branch_create` bodies:
     small cJSON builders, also Aether via std.json.
   - verify_dir: swapped inline cJSON walker for the already-ported
     ra_parse_list packed-string parser.
-  - `head_rev` + `rev_blob_sha1` → ae/repos/rev_io.ae.
-  - `walk_remote` (svn update) → ae/working_copy/update_walk.ae.
-  - `walk_remote` (svn merge) → ae/working_copy/merge_walk.ae.
+  - `head_rev` + `rev_blob_sha1` → repos/rev_io.ae.
+  - `walk_remote` (svn update) → working_copy/update_walk.ae.
+  - `walk_remote` (svn merge) → working_copy/merge_walk.ae.
 
   One attempted port deferred: fs_fs/commit_shim.c::load_rev_root_sha1
   via the new repos_load_rev_blob_field helper produced a runtime
@@ -419,18 +419,18 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
   std.json reachable from Aether, the three remaining
   cJSON-heavy server-side mutation handlers all move up:
   - `svnserver_branch_create_from_body` (45 LOC C → 80 LOC
-    ae/svnserver/branch_create_parse.ae). Includes the include-
+    svnserver/branch_create_parse.ae). Includes the include-
     globs array, passed to C as a newline-joined string.
   - `svnserver_copy_from_body` (60 LOC C → 130 LOC
-    ae/svnserver/copy_parse.ae). Whole-body parse + auth + ACL +
+    svnserver/copy_parse.ae). Whole-body parse + auth + ACL +
     spec + resolve + auto-follow + commit all Aether-side.
   - `svnserver_commit_from_body` (220 LOC C → 280 LOC
-    ae/svnserver/commit_parse.ae). Biggest JSON-walker in the
+    svnserver/commit_parse.ae). Biggest JSON-walker in the
     port: multi-edit txn + per-path props map + per-path ACL
     map. Four new "joined" C wrappers split newline-joined
     strings back into char** arrays for the blob builders that
     don't have an Aether-friendly signature.
-  - RA client (ae/client/shim.c) also got parse-side ports for
+  - RA client (client/shim.c) also got parse-side ports for
     head_rev, hash_algo, info_rev, log, paths_changed, props,
     blame, and list. C still owns curl + auth headers + struct
     allocation; std.json does the JSON walk.
@@ -451,16 +451,16 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
   (44 call sites, 12 files) a discoverable name.
 
   Four structural internals then ported on top of the cleanup:
-  - `acl_user_has_rw_subtree` (28 LOC C → ae/svnserver/acl_subtree.ae):
+  - `acl_user_has_rw_subtree` (28 LOC C → svnserver/acl_subtree.ae):
     the /copy handler's "you can only copy what you fully own at
     RO + RW" recursive walker.
-  - `load_rev_blob_field` (22 LOC C → ae/svnserver/rev_load.ae):
+  - `load_rev_blob_field` (22 LOC C → svnserver/rev_load.ae):
     the two-hop "read $repo/revs/NNNNNN → read rep blob → pull
     field" utility used by every rev-scoped ACL/props/root read.
   - `auto_follow_copy_acl` (21 LOC C → added to
-    ae/svnserver/copy_acl.ae): end-to-end ACL auto-follow for
+    svnserver/copy_acl.ae): end-to-end ACL auto-follow for
     svn cp — now composes copy_acl_follow alongside its users.
-  - `acl_allows_mode` (35 LOC C → ae/svnserver/acl_mode.ae): the
+  - `acl_allows_mode` (35 LOC C → svnserver/acl_mode.ae): the
     ancestry-walking mode check. Retires the last hand-written
     newline-string tokeniser in svnserver/shim.c.
 
@@ -492,7 +492,7 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
 
 - **Round 10**: svnserver JSON body builders move to Aether.
   Each handler's body-building logic lives in a dedicated
-  `ae/svnserver/<route>_json.ae` module. The C side is now pure
+  `svnserver/<route>_json.ae` module. The C side is now pure
   routing + ACL-check + extern call + respond. Ported: /info
   (info_json.ae), /log + /rev/N/paths + /rev/N/blame + /rev/N/hashes
   (all in log_json.ae), /rev/N/list with the body+redact-blob pair
@@ -504,17 +504,17 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
 - **Round 9**: the Gordian knots fall. Three structural
   recursive walkers ported in a single session after `--emit=lib
   --with=fs` landed:
-  - `filter_dir_recursive` (fs_fs, 89 lines of C → ae/repo_storage/filter.ae)
-  - `rebuild_dir_c` (fs_fs, 292 lines of C → ae/repo_storage/rebuild.ae)
+  - `filter_dir_recursive` (fs_fs, 89 lines of C → repo_storage/filter.ae)
+  - `rebuild_dir_c` (fs_fs, 292 lines of C → repo_storage/rebuild.ae)
     — the core commit tree rebuilder that had been flagged as
     "weeks of work" earlier in the session
-  - `compute_redacted_dir_sha` (svnserver, 50 lines → ae/svnserver/redact.ae)
+  - `compute_redacted_dir_sha` (svnserver, 50 lines → svnserver/redact.ae)
   Plus two more algorithmic ports:
-  - `svnae_wc_update` apply pipeline (wc, 135 lines → ae/working_copy/update_apply.ae)
-  - `svnae_wc_merge` apply pipeline (wc, 135 lines → ae/working_copy/merge_apply.ae)
+  - `svnae_wc_update` apply pipeline (wc, 135 lines → working_copy/update_apply.ae)
+  - `svnae_wc_merge` apply pipeline (wc, 135 lines → working_copy/merge_apply.ae)
   - `svnae_repos_paths_changed` flatten+diff (repos, 65 lines →
-    ae/repos/paths_changed.ae)
-  - `resolve_path` (repos, 70 lines → ae/repos/resolve.ae)
+    repos/paths_changed.ae)
+  - `resolve_path` (repos, 70 lines → repos/resolve.ae)
   Pattern: every recursive walker reads/writes blobs through C
   externs, represents its in-memory accumulator as a newline-
   separated string in the same `K SHA NAME\n` format the dir-blob
@@ -523,7 +523,7 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
 
 - **Round 8**: Aether shipped `--emit=lib --with=fs` after
   a feedback pass from this port (`~/scm/aether/stdlib_wish.md`), so
-  std.fs is now reachable from our `.ae` files. `ae/util/io.ae`
+  std.fs is now reachable from our `.ae` files. `util/io.ae`
   exports atomic-write / mkdir-p / slurp / file_size / is_regular
   / listdir / stat_kind / exists / unlink / rmdir / rename over
   `std.fs` and `std.dir`. **All direct I/O syscalls are gone from
@@ -560,8 +560,8 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
 ae=/home/paul/scm/aether/build/ae
 
 # Build what you need, or run the full test sweep:
-for f in ae/svn/main.ae ae/svnserver/main.ae ae/svnserver/seed.ae \
-         ae/svnadmin/main.ae; do
+for f in svn/main.ae svnserver/main.ae svnserver/seed.ae \
+         svnadmin/main.ae; do
     "$ae" build "$f" -o "/tmp/$(basename "${f%.ae}")"
 done
 
@@ -768,17 +768,17 @@ AE=/home/paul/scm/aether/build/ae
 for t in error path utf8 checksum compress io sqlite svndiff xdelta \
          repo revisions txn repos; do
   case $t in
-    svndiff|xdelta) f=ae/delta/test_$t.ae ;;
-    repo|revisions|txn) f=ae/repo_storage/test_$t.ae ;;
-    repos) f=ae/repos/test_$t.ae ;;
-    *) f=ae/util/test_$t.ae ;;
+    svndiff|xdelta) f=delta/test_$t.ae ;;
+    repo|revisions|txn) f=repo_storage/test_$t.ae ;;
+    repos) f=repos/test_$t.ae ;;
+    *) f=util/test_$t.ae ;;
   esac
   printf '%-27s ' "test_$t"
   "$AE" run "$f" 2>/dev/null | tail -1
 done
 for t in wc_db wc_pristine; do
   printf '%-27s ' "test_$t"
-  "$AE" run "ae/working_copy/test_${t#wc_}.ae" 2>/dev/null | tail -1
+  "$AE" run "working_copy/test_${t#wc_}.ae" 2>/dev/null | tail -1
 done
 
 # End-to-end shell suites (spin up a real server, hit it with curl + svn CLI)
@@ -787,11 +787,11 @@ for t in server ra svn wc_checkout wc_status wc_mutate wc_commit \
          wc_branch wc_merge svnadmin; do
   printf '%-27s ' "test_$t"
   case $t in
-    server)   s=ae/svnserver/test_server.sh ;;
-    ra)       s=ae/client/test_client.sh ;;
-    svn)      s=ae/svn/test_svn.sh ;;
-    wc_*)     s=ae/working_copy/test_${t#wc_}.sh ;;
-    svnadmin) s=ae/svnadmin/test_svnadmin.sh ;;
+    server)   s=svnserver/test_server.sh ;;
+    ra)       s=client/test_client.sh ;;
+    svn)      s=svn/test_svn.sh ;;
+    wc_*)     s=working_copy/test_${t#wc_}.sh ;;
+    svnadmin) s=svnadmin/test_svnadmin.sh ;;
   esac
   "$s" >/dev/null 2>&1 && echo "test_$t: OK" || echo "test_$t: FAIL"
 done

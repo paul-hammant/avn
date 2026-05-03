@@ -1,0 +1,156 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// permissions and limitations under the License.
+
+// xdelta — produce svndiff operations from (source, target). This
+// is the "compute the delta" half that the svndiff encoder
+// consumes. Walk T left-to-right; at each position scan S for the
+// longest matching prefix of length >= MIN_MATCH. Emit OP_SOURCE
+// for matches, accumulate non-matching bytes into a pending
+// new-data run that flushes as OP_NEW.
+//
+// Performance trade-off vs the legacy C version: the C used a
+// chained 4-byte hash table indexing every prefix of S, giving
+// O(N) average per lookup. This version does a plain O(N) linear
+// scan per target position — O(N²) overall. Fine for the kiB-
+// scale workloads xdelta sees in svnae's tests; if a real-size
+// repo ever shows up we can revisit using std.collections.map.
+//
+// We do NOT generate OP_TARGET (self-copy) ops. Same
+// correctness-without-them stance the C version had.
+
+import std.string
+import std.bytes
+
+const MIN_MATCH = 4
+
+// C-side svndiff encoder builder (defined in delta/svndiff/shim.c).
+// Stays C-side because per-add_op realloc growth fits naturally
+// there and the resulting encoder feeds into the also-C-side
+// svndiff_encoder_finish which produces the on-wire bytes.
+extern svndiff_encoder_new(source_len: int, target_len: int) -> ptr
+extern svndiff_encoder_add_op(enc: ptr, action: int, length: int, offset: int) -> int
+extern svndiff_encoder_finish(enc: ptr, new_data: string, new_data_len: int) -> (string, int)
+extern svndiff_encoder_free(enc: ptr)
+
+// Find the longest prefix of `target[tp..tp+max_match)` that
+// matches some position in `source`. Returns (best_len, best_sp);
+// best_len is 0 if no MIN_MATCH-or-better match exists.
+//
+// O(source_len * MIN_MATCH) per call; callers iterate over target.
+find_best_match_(source: string, source_len: int,
+                  target: string, tp: int, max_match: int) -> {
+    if max_match < MIN_MATCH { return 0, 0 - 1 }
+
+    best_len = 0
+    best_sp = 0 - 1
+
+    sp = 0
+    while sp + MIN_MATCH <= source_len {
+        // Quick reject on the first 4 bytes.
+        ok = 1
+        k = 0
+        while k < MIN_MATCH {
+            if string.char_at(source, sp + k) != string.char_at(target, tp + k) {
+                ok = 0
+                k = MIN_MATCH
+            }
+            k = k + 1
+        }
+        if ok == 1 {
+            // Extend the match. On mismatch at position `len`, we
+            // must stop without incrementing — the matched length
+            // is exactly `len`. Snap `len` to `max_extend` so the
+            // while-condition exits cleanly without bumping past.
+            len = MIN_MATCH
+            max_extend = source_len - sp
+            if max_match < max_extend { max_extend = max_match }
+            stopped = 0
+            while len < max_extend {
+                if stopped == 0 {
+                    if string.char_at(source, sp + len) != string.char_at(target, tp + len) {
+                        stopped = 1
+                        max_extend = len
+                    }
+                    if stopped == 0 { len = len + 1 }
+                }
+            }
+            if len > best_len {
+                best_len = len
+                best_sp = sp
+            }
+        }
+        sp = sp + 1
+    }
+
+    if best_len >= MIN_MATCH { return best_len, best_sp }
+    return 0, 0 - 1
+}
+
+// Public: compute a delta from (source, target) and return the
+// completed svndiff envelope as a length-aware (bytes, length)
+// tuple. Round 184: matched the new (string, int) shape of
+// svndiff_encoder_finish — no buf carrier needed.
+//
+// Returns ("", 0) on failure (encoder OOM).
+export xdelta_compute(source: string, source_len: int,
+                             target: string, target_len: int) -> (string, int) {
+    enc = svndiff_encoder_new(source_len, target_len)
+    if enc == null { return "", 0 }
+
+    // new-data accumulator: bytes the OP_NEW ops will reference.
+    // std.bytes — random-access write, length-aware finish.
+    nd = bytes.new(target_len + 64)
+    if nd == null { svndiff_encoder_free(enc); return "", 0 }
+    nd_len = 0
+
+    tp = 0
+    ndrun_start = 0
+
+    while tp < target_len {
+        max_match = target_len - tp
+        mlen, sp = find_best_match_(source, source_len, target, tp, max_match)
+        if mlen >= MIN_MATCH {
+            // Flush any pending new-data run up to tp.
+            run_len = tp - ndrun_start
+            if run_len > 0 {
+                slice = string.substring(target, ndrun_start, tp)
+                bytes.copy_from_string(nd, nd_len, slice, run_len)
+                nd_len = nd_len + run_len
+                svndiff_encoder_add_op(enc, 2, run_len, 0)
+            }
+            svndiff_encoder_add_op(enc, 0, mlen, sp)
+            tp = tp + mlen
+            ndrun_start = tp
+        }
+        if mlen < MIN_MATCH {
+            tp = tp + 1
+        }
+    }
+    // Trailing new-data run.
+    run_len = target_len - ndrun_start
+    if run_len > 0 {
+        slice = string.substring(target, ndrun_start, target_len)
+        bytes.copy_from_string(nd, nd_len, slice, run_len)
+        nd_len = nd_len + run_len
+        svndiff_encoder_add_op(enc, 2, run_len, 0)
+    }
+
+    new_data = bytes.finish(nd, nd_len)
+    return svndiff_encoder_finish(enc, new_data, nd_len)
+}
+
+main() {
+    println("delta/xdelta.ae is a library; not meant to run standalone")
+}

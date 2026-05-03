@@ -1,0 +1,84 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// permissions and limitations under the License.
+
+// Aether-side wrappers over std.cryptography v2 that the thin C
+// shim in ffi/openssl/shim.c calls back into. The C side keeps
+// its existing openssl_* signatures so every downstream
+// caller (ra/svnserver/svnadmin/fs_fs/checksum) links unchanged;
+// the bodies become 1-2 line wrappers that defer the EVP work to
+// std.cryptography.
+
+import std.string
+import std.cryptography
+
+// Return the lowercase-hex digest of data[0..length] using algo,
+// or "" on any failure (unknown algo, openssl unavailable, hash
+// failed). The C side checks for empty.
+export crypto_hash_hex(algo: string, data: string, length: int) -> string {
+    digest, err = cryptography.hash_hex(algo, data, length)
+    if string.length(err) > 0 { return "" }
+    return digest
+}
+
+// Probe whether `algo` is a recognised hash name. 1/0.
+export crypto_hash_supported(algo: string) -> int {
+    return cryptography.hash_supported(algo)
+}
+
+// Whether the algo is on the port's recognised list (sha1 or
+// sha256). 1/0. Keeps the answer stable independent of what
+// std.cryptography happens to support today.
+export openssl_hash_supported(algo: string) -> int {
+    if string.equals(algo, "sha1")   == 1 { return 1 }
+    if string.equals(algo, "sha256") == 1 { return 1 }
+    return 0
+}
+
+// Hex width produced by `algo`. 40 (sha1), 64 (sha256); 0 for
+// unsupported algos.
+export openssl_hash_hex_len(algo: string) -> int {
+    if string.equals(algo, "sha1")   == 1 { return 40 }
+    if string.equals(algo, "sha256") == 1 { return 64 }
+    return 0
+}
+
+// Base64-encode data[0..length]. Returns "" on failure.
+// Round 160: padded output via std.cryptography's
+// base64_encode_padded (which arrived in [current] after
+// std_cryptography_gaps.md asked for it). Matches the svn-port's
+// historical wire-format contract; OpenSSL base64_decode accepts
+// either form anyway, but padded is the conventional shape libcurl
+// + Apache base64 emit on the other side.
+export crypto_b64_encode(data: string, length: int) -> string {
+    out, err = cryptography.base64_encode_padded(data, length)
+    if string.length(err) > 0 { return "" }
+    return out
+}
+
+// Base64-decode b64. Returns (bytes, length, err) — empty err on
+// success, non-empty on malformed input or openssl unavailable.
+// Round 159 dropped the TLS-pair workaround that used to thread
+// `n` through a static int slot via crypto_b64_decode_set_len
+// + _len; for_porter_claude.md confirmed `export -> (T1, T2, T3)`
+// has worked since #285 in 0.99 and we'd been mis-diagnosing it.
+export crypto_b64_decode(b64: string) -> (string, int, string) {
+    out, n, err = cryptography.base64_decode(b64)
+    if string.length(err) > 0 { return "", 0, err }
+    return out, n, ""
+}
+
+main() {
+    println("ffi/openssl/crypto_helpers.ae is a library; not meant to run standalone")
+}

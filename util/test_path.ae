@@ -1,0 +1,323 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// permissions and limitations under the License.
+
+// Tests for util/path.ae. Same-file inclusion of the path logic so we
+// dodge Aether's cross-module typed-param bug; when that's fixed we can
+// move the logic back into path.ae and just `import path` here.
+//
+// Run:  ae run util/test_path.ae
+
+import std.string
+
+const SLASH = 47
+const DOT   = 46
+
+// --- copy of path.ae (inlined; TODO: switch to `import path` once the
+// subr module layout is unified) --------------------------------------------
+
+relpath_pop_last(p: string) {
+    n = string.length(p)
+    if n == 0 { return "" }
+    i = n - 1
+    while i >= 0 {
+        if string.char_at(p, i) == SLASH { return string.substring(p, 0, i) }
+        i = i - 1
+    }
+    return ""
+}
+
+relpath_canonicalize(p: string) {
+    n = string.length(p)
+    if n == 0 { return "" }
+    result = ""
+    i = 0
+    while i < n {
+        if string.char_at(p, i) != SLASH { break }
+        i = i + 1
+    }
+    seg_start = i
+    while i <= n {
+        at_slash = 0
+        if i < n {
+            if string.char_at(p, i) == SLASH { at_slash = 1 }
+        }
+        if i == n || at_slash == 1 {
+            seg_len = i - seg_start
+            if seg_len > 0 {
+                seg = string.substring(p, seg_start, i)
+                if string.equals(seg, ".") == 1 {
+                    // drop
+                } else if string.equals(seg, "..") == 1 {
+                    result = relpath_pop_last(result)
+                } else {
+                    if string.length(result) == 0 {
+                        result = seg
+                    } else {
+                        result = string.concat(result, string.concat("/", seg))
+                    }
+                }
+            }
+            i = i + 1
+            while i < n {
+                if string.char_at(p, i) != SLASH { break }
+                i = i + 1
+            }
+            seg_start = i
+        } else {
+            i = i + 1
+        }
+    }
+    return result
+}
+
+relpath_is_canonical(p: string) {
+    n = string.length(p)
+    if n == 0 { return 1 }
+    if string.char_at(p, 0) == SLASH { return 0 }
+    if string.char_at(p, n - 1) == SLASH { return 0 }
+    i = 0
+    seg_start = 0
+    while i <= n {
+        at_slash = 0
+        if i < n {
+            if string.char_at(p, i) == SLASH { at_slash = 1 }
+        }
+        if i == n || at_slash == 1 {
+            seg_len = i - seg_start
+            if seg_len == 0 { return 0 }
+            seg = string.substring(p, seg_start, i)
+            if string.equals(seg, ".") == 1 { return 0 }
+            if string.equals(seg, "..") == 1 { return 0 }
+            i = i + 1
+            seg_start = i
+        } else {
+            i = i + 1
+        }
+    }
+    return 1
+}
+
+relpath_join(base: string, component: string) {
+    if string.length(base) == 0 { return component }
+    if string.length(component) == 0 { return base }
+    return string.concat(base, string.concat("/", component))
+}
+
+relpath_basename(p: string) {
+    n = string.length(p)
+    if n == 0 { return "" }
+    i = n - 1
+    while i >= 0 {
+        if string.char_at(p, i) == SLASH { return string.substring(p, i + 1, n) }
+        i = i - 1
+    }
+    return p
+}
+
+relpath_dirname(p: string) {
+    n = string.length(p)
+    if n == 0 { return "" }
+    i = n - 1
+    while i >= 0 {
+        if string.char_at(p, i) == SLASH { return string.substring(p, 0, i) }
+        i = i - 1
+    }
+    return ""
+}
+
+relpath_is_ancestor(parent: string, child: string) {
+    pn = string.length(parent)
+    if pn == 0 { return 1 }
+    cn = string.length(child)
+    if cn < pn { return 0 }
+    i = 0
+    while i < pn {
+        if string.char_at(parent, i) != string.char_at(child, i) { return 0 }
+        i = i + 1
+    }
+    if cn == pn { return 1 }
+    if string.char_at(child, pn) != SLASH { return 0 }
+    return 1
+}
+
+relpath_skip_ancestor(parent: string, child: string) {
+    if relpath_is_ancestor(parent, child) == 0 { return child }
+    pn = string.length(parent)
+    cn = string.length(child)
+    if pn == 0 { return child }
+    if cn == pn { return "" }
+    return string.substring(child, pn + 1, cn)
+}
+
+dirent_is_absolute(p: string) {
+    if string.length(p) == 0 { return 0 }
+    if string.char_at(p, 0) == SLASH { return 1 }
+    return 0
+}
+
+dirent_join(base: string, component: string) {
+    if dirent_is_absolute(component) == 1 { return component }
+    if string.length(base) == 0 { return component }
+    if string.length(component) == 0 { return base }
+    bn = string.length(base)
+    if string.char_at(base, bn - 1) == SLASH {
+        return string.concat(base, component)
+    }
+    return string.concat(base, string.concat("/", component))
+}
+
+dirent_basename(p: string) {
+    n = string.length(p)
+    if n == 0 { return "" }
+    if n == 1 {
+        if string.char_at(p, 0) == SLASH { return "/" }
+    }
+    end = n
+    if string.char_at(p, end - 1) == SLASH { end = end - 1 }
+    i = end - 1
+    while i >= 0 {
+        if string.char_at(p, i) == SLASH { return string.substring(p, i + 1, end) }
+        i = i - 1
+    }
+    return string.substring(p, 0, end)
+}
+
+dirent_dirname(p: string) {
+    n = string.length(p)
+    if n == 0 { return "" }
+    if n == 1 {
+        if string.char_at(p, 0) == SLASH { return "/" }
+    }
+    end = n
+    if string.char_at(p, end - 1) == SLASH { end = end - 1 }
+    i = end - 1
+    while i >= 0 {
+        if string.char_at(p, i) == SLASH {
+            if i == 0 { return "/" }
+            return string.substring(p, 0, i)
+        }
+        i = i - 1
+    }
+    return ""
+}
+
+// --- test harness ----------------------------------------------------------
+//
+// Each expect_* helper returns 0 on pass, 1 on fail; main sums the returns.
+// Aether has no module-level mutable variables, so we thread the counter
+// through returns.
+
+expect_str(label: string, got: string, want: string) {
+    if string.equals(got, want) == 1 {
+        println("ok   ${label}: \"${got}\"")
+        return 0
+    }
+    println("FAIL ${label}: got \"${got}\", want \"${want}\"")
+    return 1
+}
+
+expect_int(label: string, got: int, want: int) {
+    if got == want {
+        println("ok   ${label}: ${got}")
+        return 0
+    }
+    println("FAIL ${label}: got ${got}, want ${want}")
+    return 1
+}
+
+main() {
+    fails = 0
+
+    // --- relpath_canonicalize ---
+    fails = fails + expect_str("canon empty",       relpath_canonicalize(""),                 "")
+    fails = fails + expect_str("canon simple",      relpath_canonicalize("a/b/c"),            "a/b/c")
+    fails = fails + expect_str("canon leading /",   relpath_canonicalize("/a/b"),             "a/b")
+    fails = fails + expect_str("canon trailing /",  relpath_canonicalize("a/b/"),             "a/b")
+    fails = fails + expect_str("canon double /",    relpath_canonicalize("a//b"),             "a/b")
+    fails = fails + expect_str("canon many /",      relpath_canonicalize("///a////b///"),     "a/b")
+    fails = fails + expect_str("canon dots",        relpath_canonicalize("a/./b"),            "a/b")
+    fails = fails + expect_str("canon dotdot",      relpath_canonicalize("a/b/../c"),         "a/c")
+    fails = fails + expect_str("canon dotdot-top",  relpath_canonicalize("a/../b"),           "b")
+    fails = fails + expect_str("canon overpop",     relpath_canonicalize("../a"),             "a")
+    fails = fails + expect_str("canon just-slash",  relpath_canonicalize("/"),                "")
+    fails = fails + expect_str("canon dot-only",    relpath_canonicalize("."),                "")
+
+    // --- relpath_is_canonical ---
+    fails = fails + expect_int("iscanon empty",     relpath_is_canonical(""),          1)
+    fails = fails + expect_int("iscanon good",      relpath_is_canonical("a/b/c"),     1)
+    fails = fails + expect_int("iscanon lead/",     relpath_is_canonical("/a"),        0)
+    fails = fails + expect_int("iscanon trail/",    relpath_is_canonical("a/"),        0)
+    fails = fails + expect_int("iscanon double/",   relpath_is_canonical("a//b"),      0)
+    fails = fails + expect_int("iscanon dot",       relpath_is_canonical("a/./b"),     0)
+    fails = fails + expect_int("iscanon dotdot",    relpath_is_canonical("a/../b"),    0)
+    fails = fails + expect_int("iscanon single",    relpath_is_canonical("foo"),       1)
+
+    // --- relpath_join ---
+    fails = fails + expect_str("join both",         relpath_join("a", "b"),            "a/b")
+    fails = fails + expect_str("join empty base",   relpath_join("", "b"),             "b")
+    fails = fails + expect_str("join empty comp",   relpath_join("a", ""),             "a")
+    fails = fails + expect_str("join both empty",   relpath_join("", ""),              "")
+    fails = fails + expect_str("join deep",         relpath_join("a/b", "c/d"),        "a/b/c/d")
+
+    // --- basename / dirname ---
+    fails = fails + expect_str("rel basename",      relpath_basename("a/b/c.txt"),     "c.txt")
+    fails = fails + expect_str("rel basename 1seg", relpath_basename("foo"),           "foo")
+    fails = fails + expect_str("rel basename empty",relpath_basename(""),              "")
+    fails = fails + expect_str("rel dirname",       relpath_dirname("a/b/c.txt"),      "a/b")
+    fails = fails + expect_str("rel dirname 1seg",  relpath_dirname("foo"),            "")
+    fails = fails + expect_str("rel dirname empty", relpath_dirname(""),               "")
+
+    // --- ancestor ---
+    fails = fails + expect_int("anc equal",         relpath_is_ancestor("a/b", "a/b"),        1)
+    fails = fails + expect_int("anc true",          relpath_is_ancestor("a", "a/b"),          1)
+    fails = fails + expect_int("anc deeper",        relpath_is_ancestor("a/b", "a/b/c/d"),    1)
+    fails = fails + expect_int("anc false prefix",  relpath_is_ancestor("foo", "foobar"),     0)
+    fails = fails + expect_int("anc empty parent",  relpath_is_ancestor("", "a/b"),           1)
+    fails = fails + expect_int("anc sibling",       relpath_is_ancestor("a/b", "a/c"),        0)
+
+    fails = fails + expect_str("skip equal",        relpath_skip_ancestor("a/b", "a/b"),      "")
+    fails = fails + expect_str("skip child",        relpath_skip_ancestor("a", "a/b/c"),      "b/c")
+    fails = fails + expect_str("skip unrelated",    relpath_skip_ancestor("x", "a/b"),        "a/b")
+    fails = fails + expect_str("skip empty parent", relpath_skip_ancestor("", "a/b"),         "a/b")
+
+    // --- dirent ---
+    fails = fails + expect_int("dir is_abs /x",     dirent_is_absolute("/x"),         1)
+    fails = fails + expect_int("dir is_abs /",      dirent_is_absolute("/"),          1)
+    fails = fails + expect_int("dir is_abs x",      dirent_is_absolute("x"),          0)
+    fails = fails + expect_int("dir is_abs empty",  dirent_is_absolute(""),           0)
+
+    fails = fails + expect_str("dir join rel",      dirent_join("/a", "b"),           "/a/b")
+    fails = fails + expect_str("dir join abs",      dirent_join("/a", "/b"),          "/b")
+    fails = fails + expect_str("dir join rootbase", dirent_join("/", "b"),            "/b")
+    fails = fails + expect_str("dir join empty",    dirent_join("", "b"),             "b")
+
+    fails = fails + expect_str("dir basename /x/y", dirent_basename("/x/y"),          "y")
+    fails = fails + expect_str("dir basename /",    dirent_basename("/"),             "/")
+    fails = fails + expect_str("dir basename x",    dirent_basename("x"),             "x")
+    fails = fails + expect_str("dir basename /x/",  dirent_basename("/x/"),           "x")
+
+    fails = fails + expect_str("dir dirname /x/y",  dirent_dirname("/x/y"),           "/x")
+    fails = fails + expect_str("dir dirname /",     dirent_dirname("/"),              "/")
+    fails = fails + expect_str("dir dirname x",     dirent_dirname("x"),              "")
+    fails = fails + expect_str("dir dirname /x",    dirent_dirname("/x"),             "/")
+
+    if fails > 0 {
+        println("")
+        println("FAIL: ${fails} case(s) failed")
+        exit(1)
+    }
+    println("")
+    println("test_path: OK")
+}

@@ -1,0 +1,116 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// permissions and limitations under the License.
+
+// Tests for working_copy/pristine_shim.c — content-addressable WC pristine store.
+
+import std.string
+
+extern os_getpid_raw() -> int
+extern system(cmd: string) -> int
+
+extern wc_db_open(wc_root: string) -> ptr
+extern wc_db_close(db: ptr)
+
+extern wc_pristine_put(wc_root: string, data: string, len: int) -> string
+extern wc_pristine_get(wc_root: string, sha1: string) -> string
+extern wc_pristine_has(wc_root: string, sha1: string) -> int
+extern wc_pristine_size(wc_root: string, sha1: string) -> int
+
+expect_int(label: string, got: int, want: int) {
+    if got == want { println("ok   ${label}: ${got}"); return 0 }
+    println("FAIL ${label}: got ${got}, want ${want}")
+    return 1
+}
+
+expect_str(label: string, got: string, want: string) {
+    if string.equals(got, want) == 1 { println("ok   ${label}"); return 0 }
+    println("FAIL ${label}: got [${got}] want [${want}]")
+    return 1
+}
+
+main() {
+    fails = 0
+    pid = os_getpid_raw()
+    wc = "/tmp/test_pristine_${pid}"
+    system("rm -rf ${wc}")
+    system("mkdir -p ${wc}")
+
+    // Open db so .svn dirs exist.
+    db = wc_db_open(wc)
+    wc_db_close(db)
+
+    // Small text blob — stored RAW (too small to benefit from zlib).
+    small = "hello\n"
+    sha = wc_pristine_put(wc, small, 6)
+    sha_copy = string.concat("", sha)
+    fails = fails + expect_int("sha length 40", string.length(sha_copy), 40)
+    // sha1sum "hello\n" => f572d396fae9206628714fb2ce00f72e94f2258f
+    fails = fails + expect_str("sha of 'hello\\n'", sha_copy,
+                               "f572d396fae9206628714fb2ce00f72e94f2258f")
+
+    fails = fails + expect_int("has() = 1",  wc_pristine_has (wc, sha_copy), 1)
+    fails = fails + expect_int("size() = 6", wc_pristine_size(wc, sha_copy), 6)
+
+    got = wc_pristine_get(wc, sha_copy)
+    fails = fails + expect_str("round-trip small", got, small)
+
+    // Large compressible blob — stored ZLIB.
+    big = ""
+    i = 0
+    while i < 200 {
+        big = string.concat(big, "the quick brown fox ")
+        i = i + 1
+    }
+    big_len = string.length(big)
+    fails = fails + expect_int("big len 4000", big_len, 4000)
+
+    sha_big = wc_pristine_put(wc, big, big_len)
+    sha_big_copy = string.concat("", sha_big)
+
+    fails = fails + expect_int("big has()",          wc_pristine_has (wc, sha_big_copy), 1)
+    fails = fails + expect_int("big size() = 4000",  wc_pristine_size(wc, sha_big_copy), 4000)
+
+    got_big = wc_pristine_get(wc, sha_big_copy)
+    fails = fails + expect_int("big round-trip len", string.length(got_big), 4000)
+    fails = fails + expect_str("big round-trip content", got_big, big)
+
+    // Dedup.
+    sha2 = wc_pristine_put(wc, small, 6)
+    fails = fails + expect_str("dedup same sha", string.concat("", sha2), sha_copy)
+
+    // Missing sha → empty AetherString (Aether-side wc_pristine_get's
+    // miss return; Round 129 dropped the C wrapper that mapped this
+    // to NULL — the only on-the-wire signal is length == 0 since
+    // pristine entries are never empty).
+    miss = wc_pristine_get(wc, "0000000000000000000000000000000000000000")
+    if string.length(miss) > 0 {
+        println("FAIL get missing: expected empty")
+        fails = fails + 1
+    } else {
+        println("ok   get missing returns empty")
+    }
+    fails = fails + expect_int("has missing = 0",
+        wc_pristine_has(wc, "0000000000000000000000000000000000000000"), 0)
+
+    system("rm -rf ${wc}")
+
+    if fails > 0 {
+        println("")
+        println("FAIL: ${fails} case(s)")
+        exit(1)
+    }
+    println("")
+    println("test_wc_pristine: OK")
+}

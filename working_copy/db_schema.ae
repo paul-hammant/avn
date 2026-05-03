@@ -1,0 +1,66 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// permissions and limitations under the License.
+
+// wc.db schema install + the Phase 5.13 conflicted-column migration.
+//
+// Called from wc_db_open (working_copy/db_shim.c) immediately after
+// the sqlite handle is opened. Installing the schema from Aether
+// keeps the DDL and the migration rule in one readable place; the
+// C side is left with just sqlite3_open_v2 + handoff.
+//
+// The handle we're given may be a freshly-created DB (install all
+// tables) or an existing one (IF NOT EXISTS keeps that idempotent).
+// The `conflicted` column was added mid-phase; old wc.db files
+// predating it need the ALTER TABLE, hence the PRAGMA probe first.
+
+import std.string
+import contrib.sqlite
+
+const SQLITE_ROW = 100
+
+// Run the CREATE TABLE IF NOT EXISTS statements and, if this wc.db
+// predates the `conflicted` column on `nodes`, add it with a
+// default of 0. Returns 0 on success, non-zero on any sqlite
+// failure along the way (caller closes the handle and bails).
+export wc_db_install_schema(db: ptr) -> int {
+    err = sqlite.exec(db,
+        "CREATE TABLE IF NOT EXISTS nodes (  path       TEXT PRIMARY KEY,  kind       INT NOT NULL,  base_rev   INT NOT NULL,  base_sha1  TEXT NOT NULL,  state      INT NOT NULL,  conflicted INT NOT NULL DEFAULT 0);CREATE TABLE IF NOT EXISTS info (  key   TEXT PRIMARY KEY,  value TEXT NOT NULL);")
+    if string.length(err) > 0 { return 1 }
+
+    // Migration: add `conflicted` on older wc.db files that have
+    // `nodes` without it. PRAGMA table_info row layout: (cid, name,
+    // type, notnull, dflt_value, pk) — name is column 1.
+    stmt, perr = sqlite.prepare(db, "PRAGMA table_info(nodes)")
+    if string.length(perr) > 0 { return 0 }
+    has_conflicted = 0
+    while sqlite.next_row(stmt, db) == 1 {
+        nm = sqlite.column_text(stmt, 1)
+        if string.equals(nm, "conflicted") == 1 { has_conflicted = 1 }
+    }
+    sqlite.finalize(stmt)
+    if has_conflicted == 0 {
+        // Ignore err — ALTER TABLE racing against a concurrent add
+        // returns "duplicate column"; harmless, PRAGMA's truth
+        // supersedes on the next open.
+        sqlite.exec(db,
+            "ALTER TABLE nodes ADD COLUMN conflicted INT NOT NULL DEFAULT 0")
+    }
+    return 0
+}
+
+
+main() {
+    println("working_copy/db_schema.ae is a library; not meant to run standalone")
+}

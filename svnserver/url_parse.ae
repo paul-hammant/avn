@@ -1,0 +1,107 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// permissions and limitations under the License.
+
+// URL-tail parsers for svnserver/shim.c.
+//
+// The HTTP routes are shaped like "/repos/{name}/rev/{N}/...". After
+// the caller strips off "/repos/{name}", the remaining tail always
+// starts with a slash. These two functions parse the "/rev/N" prefix:
+//
+//   parse_rev_prefix(tail)     -> revision number, or -1 on malformed
+//   parse_rev_prefix_end(tail) -> index of first char after the digits,
+//                                 or -1 on malformed
+//
+// Malformed means: tail doesn't start with "/rev/", or the char after
+// "/rev/" isn't an ASCII digit. The C caller used to unpack both
+// values from a single call; Aether doesn't return tuples, so we
+// expose two probes and let the caller do `tail + end` to recover the
+// "after" pointer it needs.
+
+import std.string
+
+// Shared: returns the length of the leading "/rev/<digits>" run on
+// success, or -1 if the tail is malformed. Internal — both exports
+// derive their answer from it.
+rev_prefix_len(tail: string) -> int {
+    n = string.length(tail)
+    // Need at least "/rev/" (5) + one digit.
+    if n < 6 { return -1 }
+    if string.char_at(tail, 0) != 47 { return -1 }   // '/'
+    if string.char_at(tail, 1) != 114 { return -1 }  // 'r'
+    if string.char_at(tail, 2) != 101 { return -1 }  // 'e'
+    if string.char_at(tail, 3) != 118 { return -1 }  // 'v'
+    if string.char_at(tail, 4) != 47 { return -1 }   // '/'
+    i = 5
+    // At least one digit required.
+    c = string.char_at(tail, i)
+    if c < 48 { return -1 }
+    if c > 57 { return -1 }
+    while i < n {
+        c = string.char_at(tail, i)
+        if c < 48 { return i }
+        if c > 57 { return i }
+        i = i + 1
+    }
+    return i
+}
+
+// Parse the rev number from "/rev/N...". -1 on malformed.
+parse_rev_prefix(tail: string) -> int {
+    end = rev_prefix_len(tail)
+    if end < 0 { return -1 }
+    // Accumulate digits from index 5 to end-1.
+    v = 0
+    i = 5
+    while i < end {
+        v = v * 10 + (string.char_at(tail, i) - 48)
+        i = i + 1
+    }
+    return v
+}
+
+// Index of first char after the "/rev/N" run. -1 on malformed.
+// Callers use tail + this to get the remainder string.
+parse_rev_prefix_end(tail: string) -> int {
+    return rev_prefix_len(tail)
+}
+
+// Parse the {name} from a "/repos/{name}/..." path. Returns the name
+// substring, or "" if the path doesn't have the expected prefix or
+// the name slot is empty. The caller typically checks the remainder
+// by length or exact substring compare.
+export parse_repo_name_in(path: string) -> string {
+    n = string.length(path)
+    // "/repos/" is 7 bytes.
+    if n < 8 { return "" }
+    if string.char_at(path, 0) != 47 { return "" }   // '/'
+    if string.char_at(path, 1) != 114 { return "" }  // 'r'
+    if string.char_at(path, 2) != 101 { return "" }  // 'e'
+    if string.char_at(path, 3) != 112 { return "" }  // 'p'
+    if string.char_at(path, 4) != 111 { return "" }  // 'o'
+    if string.char_at(path, 5) != 115 { return "" }  // 's'
+    if string.char_at(path, 6) != 47 { return "" }   // '/'
+    // Scan for the next '/' or end-of-string.
+    i = 7
+    while i < n {
+        if string.char_at(path, i) == 47 { break }
+        i = i + 1
+    }
+    if i == 7 { return "" }   // empty name
+    return string.substring(path, 7, i)
+}
+
+main() {
+    println("svnserver/url_parse.ae is a library; not meant to run standalone")
+}

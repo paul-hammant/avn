@@ -1,0 +1,102 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+
+// gintarr — growable wrapper around std.intarr.
+//
+// std.intarr is a fixed-size packed int buffer; svn-aether port
+// callers (txn edit list, rtree node list) need append-style
+// growth without knowing the final count up-front. This wraps
+// intarr with a (capacity, count) pair encoded so we can
+// double-and-copy on overflow.
+//
+// State is encoded as an intarr of (initial_cap + 2) slots:
+//   slot[0]            count       (number of valid entries)
+//   slot[1]            cap         (allocated capacity for entries)
+//   slot[2..2+cap)     entries
+// `cap` lives in slot[1] so we don't have to call intarr_size
+// (which returns the underlying allocation, not the user-facing
+// capacity, on every access).
+//
+// Returns/takes raw `ptr` handles. On out-of-memory the handle
+// stays valid but the value isn't recorded — caller should treat
+// any post-OOM read as undefined.
+
+import std.intarr
+
+const HEADER_SLOTS = 2
+
+// Allocate a new growable intarr with the given initial capacity.
+// Returns null on OOM.
+export gintarr_new(initial_cap: int) -> ptr {
+    if initial_cap < 4 { initial_cap = 4 }
+    a, _err = intarr.new(initial_cap + HEADER_SLOTS)
+    if a == null { return null }
+    intarr_set_unchecked(a, 0, 0)              // count
+    intarr_set_unchecked(a, 1, initial_cap)    // cap
+    return a
+}
+
+// How many entries are currently stored?
+export gintarr_count(a: ptr) -> int {
+    if a == null { return 0 }
+    return intarr_get_unchecked(a, 0)
+}
+
+// Read entry i. Returns 0 on OOB (caller-must-check via gintarr_count).
+export gintarr_get(a: ptr, i: int) -> int {
+    if a == null { return 0 }
+    n = intarr_get_unchecked(a, 0)
+    if i < 0 { return 0 }
+    if i >= n { return 0 }
+    return intarr_get_unchecked(a, i + HEADER_SLOTS)
+}
+
+// Append. Returns the same handle on success, OR a new handle if a
+// regrow was needed. Caller must update its variable to the
+// returned ptr. Returns null on OOM (callers can detect and bail).
+export gintarr_add(a: ptr, value: int) -> ptr {
+    if a == null { return null }
+    n   = intarr_get_unchecked(a, 0)
+    cap = intarr_get_unchecked(a, 1)
+
+    if n < cap {
+        intarr_set_unchecked(a, n + HEADER_SLOTS, value)
+        intarr_set_unchecked(a, 0, n + 1)
+        return a
+    }
+
+    // Grow: double capacity. Allocate, copy header + entries, free
+    // old, write new value, return new handle.
+    new_cap = cap * 2
+    if new_cap < 16 { new_cap = 16 }
+    fresh, _err = intarr.new(new_cap + HEADER_SLOTS)
+    if fresh == null { return null }
+    intarr_set_unchecked(fresh, 0, n + 1)
+    intarr_set_unchecked(fresh, 1, new_cap)
+    i = 0
+    while i < n {
+        intarr_set_unchecked(fresh, i + HEADER_SLOTS,
+                             intarr_get_unchecked(a, i + HEADER_SLOTS))
+        i = i + 1
+    }
+    intarr_set_unchecked(fresh, n + HEADER_SLOTS, value)
+    intarr_free(a)
+    return fresh
+}
+
+
+// Release.
+export gintarr_free(a: ptr) {
+    if a != null { intarr_free(a) }
+    return 0
+}
+
+main() {
+    println("util/gintarr.ae is a library; not meant to run standalone")
+}

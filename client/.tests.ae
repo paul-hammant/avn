@@ -1,0 +1,16 @@
+import build
+import bash
+import bash (script, pre_command, post_command)
+import svnae
+import svnae (svn_server)
+
+main() {
+    b = build.start()
+    build.dep(b, "client")
+    build.dep(b, "svnserver")
+    build.dep(b, "svnserver/.build-seed.ae")
+    bash.test(b) {
+        svn_server("test_client", "9320")
+        script("test_client.sh")
+    }
+}
