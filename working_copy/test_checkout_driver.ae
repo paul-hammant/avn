@@ -1,0 +1,148 @@
+// Copyright 2026 Paul Hammant (portions).
+// Apache License, Version 2.0 — see LICENSE.
+//
+// Aether driver for svn checkout test. Round 237.
+// Migrated from working_copy/test_checkout.sh.
+//
+// Asserts disk state via `cat`/`test` (through /bin/sh -c), and
+// wc.db rows via `sqlite3 -cmd "..."`.
+
+import contrib.aeocha
+import std.os
+import std.os (os_getenv)
+import std.string
+
+extern list_new() -> ptr
+extern list_add_raw(list: ptr, item: ptr) -> int
+
+argv_new() -> { return list_new() }
+argv_push(argv: ptr, s: string) { list_add_raw(argv, s) }
+
+sh(cmd: string) -> {
+    argv = argv_new()
+    argv_push(argv, "-c")
+    argv_push(argv, cmd)
+    out, status, err = os.run_capture("/bin/sh", argv, null)
+    return out, status, err
+}
+
+main() {
+    fw = aeocha.init()
+    svn_bin = os_getenv("SVN_BIN")
+    port    = os_getenv("TEST_CHECKOUT_PORT")
+    url     = string.concat("http://127.0.0.1:", string.concat(port, "/demo"))
+    wc      = "/tmp/svnae_test_co_wc"
+    wc1     = "/tmp/svnae_test_co_wc_r1"
+
+    // --- prep: head checkout, then r1 checkout ---
+    head_co = string.concat("rm -rf ", wc)
+    head_co = string.concat(head_co, " && ")
+    head_co = string.concat(head_co, svn_bin)
+    head_co = string.concat(head_co, " checkout ")
+    head_co = string.concat(head_co, url)
+    head_co = string.concat(head_co, " ")
+    head_co = string.concat(head_co, wc)
+    head_co = string.concat(head_co, " >/dev/null")
+    head_out, head_st, head_err = sh(head_co)
+
+    r1_co = string.concat("rm -rf ", wc1)
+    r1_co = string.concat(r1_co, " && ")
+    r1_co = string.concat(r1_co, svn_bin)
+    r1_co = string.concat(r1_co, " checkout ")
+    r1_co = string.concat(r1_co, url)
+    r1_co = string.concat(r1_co, " ")
+    r1_co = string.concat(r1_co, wc1)
+    r1_co = string.concat(r1_co, " --rev 1 >/dev/null")
+    r1_out, r1_st, r1_err = sh(r1_co)
+
+    // Pre-compute query commands.
+    q_readme       = string.concat("cat ", string.concat(wc, "/README"))
+    q_main_c       = string.concat("cat ", string.concat(wc, "/src/main.c"))
+    q_license_test = string.concat("test -f ", string.concat(wc, "/LICENSE && echo present || echo absent"))
+    q_src_dir_test = string.concat("test -d ", string.concat(wc, "/src && echo dir || echo nondir"))
+    q_node_count   = string.concat("sqlite3 ", string.concat(wc, "/.svn/wc.db 'SELECT COUNT(*) FROM nodes'"))
+    q_url          = string.concat("sqlite3 ", string.concat(wc, "/.svn/wc.db \"SELECT value FROM info WHERE key='url'\""))
+    q_base_rev     = string.concat("sqlite3 ", string.concat(wc, "/.svn/wc.db \"SELECT value FROM info WHERE key='base_rev'\""))
+    q_pristine     = string.concat("find ", string.concat(wc, "/.svn/pristine -name '*.rep' | wc -l"))
+
+    q_r1_license   = string.concat("cat ", string.concat(wc1, "/LICENSE"))
+    q_r1_main      = string.concat("cat ", string.concat(wc1, "/src/main.c"))
+    q_r1_base_rev  = string.concat("sqlite3 ", string.concat(wc1, "/.svn/wc.db \"SELECT value FROM info WHERE key='base_rev'\""))
+
+    aeocha.describe(fw, "svn checkout") {
+
+        aeocha.it("checkouts at HEAD and r1 succeed") callback {
+            aeocha.expect_exit(fw, head_st, 0, "head checkout exit 0")
+            aeocha.expect_exit(fw, r1_st, 0, "r1 checkout exit 0")
+        }
+
+        aeocha.it("HEAD WC has README content") callback {
+            out, status, _ = sh(q_readme)
+            aeocha.expect_exit(fw, status, 0, "cat README exit 0")
+            aeocha.expect_stdout_contains(fw, out, "Hello", "README is 'Hello'")
+        }
+
+        aeocha.it("HEAD WC has src/main.c content") callback {
+            out, status, _ = sh(q_main_c)
+            aeocha.expect_exit(fw, status, 0, "cat main.c exit 0")
+            aeocha.expect_stdout_contains(fw, out, "int main() { return 42; }",
+                "main.c body")
+        }
+
+        aeocha.it("HEAD WC has no LICENSE (dropped at r3)") callback {
+            out, _, _ = sh(q_license_test)
+            aeocha.expect_stdout_contains(fw, out, "absent", "LICENSE absent")
+        }
+
+        aeocha.it("HEAD WC src is a directory") callback {
+            out, _, _ = sh(q_src_dir_test)
+            aeocha.expect_stdout_contains(fw, out, "dir", "src is dir")
+        }
+
+        aeocha.it("wc.db has 3 nodes") callback {
+            out, status, _ = sh(q_node_count)
+            aeocha.expect_exit(fw, status, 0, "sqlite3 nodes count exit 0")
+            aeocha.expect_stdout_contains(fw, out, "3", "nodes count = 3")
+        }
+
+        aeocha.it("wc.db info url matches checkout url") callback {
+            out, status, _ = sh(q_url)
+            aeocha.expect_exit(fw, status, 0, "sqlite3 url query exit 0")
+            aeocha.expect_stdout_contains(fw, out, url, "info.url matches")
+        }
+
+        aeocha.it("wc.db info base_rev = 3") callback {
+            out, status, _ = sh(q_base_rev)
+            aeocha.expect_exit(fw, status, 0, "sqlite3 base_rev exit 0")
+            aeocha.expect_stdout_contains(fw, out, "3", "base_rev = 3")
+        }
+
+        aeocha.it("pristine count = 2") callback {
+            out, status, _ = sh(q_pristine)
+            aeocha.expect_exit(fw, status, 0, "find pristine exit 0")
+            aeocha.expect_stdout_contains(fw, out, "2", "2 pristine files")
+        }
+
+        aeocha.it("r1 WC has LICENSE") callback {
+            out, status, _ = sh(q_r1_license)
+            aeocha.expect_exit(fw, status, 0, "cat LICENSE exit 0")
+            aeocha.expect_stdout_contains(fw, out, "Apache-2.0",
+                "r1 LICENSE has Apache-2.0")
+        }
+
+        aeocha.it("r1 WC has old main.c (return 0)") callback {
+            out, status, _ = sh(q_r1_main)
+            aeocha.expect_exit(fw, status, 0, "cat r1 main.c exit 0")
+            aeocha.expect_stdout_contains(fw, out, "int main() { return 0; }",
+                "r1 main.c body")
+        }
+
+        aeocha.it("r1 WC base_rev = 1") callback {
+            out, status, _ = sh(q_r1_base_rev)
+            aeocha.expect_exit(fw, status, 0, "sqlite3 r1 base_rev exit 0")
+            aeocha.expect_stdout_contains(fw, out, "1", "r1 base_rev = 1")
+        }
+    }
+
+    aeocha.run_summary(fw)
+}

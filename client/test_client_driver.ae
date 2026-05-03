@@ -1,0 +1,40 @@
+// Copyright 2026 Paul Hammant (portions).
+// Apache License, Version 2.0 — see LICENSE.
+//
+// Aether driver for client/ end-to-end test. Round 237 canary
+// for "binary-under-test is itself an Aether unit-test program."
+//
+// Migrated from client/test_client.sh — runs the test_client
+// binary against a seeded server, expects exit 0.
+
+import contrib.aeocha
+import std.os
+import std.os (os_getenv)
+import std.string
+
+extern list_new() -> ptr
+extern list_add_raw(list: ptr, item: ptr) -> int
+
+argv_new() -> { return list_new() }
+argv_push(argv: ptr, s: string) { list_add_raw(argv, s) }
+
+main() {
+    fw = aeocha.init()
+    test_client_bin = os_getenv("TEST_CLIENT_DRIVER_BIN")
+    port            = os_getenv("TEST_CLIENT_PORT")
+    server_url      = string.concat("http://127.0.0.1:", port)
+
+    aeocha.describe(fw, "client/ binary against seeded fixture") {
+
+        aeocha.it("test_client exits 0 against http server") callback {
+            argv = argv_new()
+            argv_push(argv, server_url)
+            argv_push(argv, "demo")
+            out, status, err = os.run_capture(test_client_bin, argv, null)
+            aeocha.expect_no_spawn_error(fw, err, "spawn ok")
+            aeocha.expect_exit(fw, status, 0, "test_client rc=0")
+        }
+    }
+
+    aeocha.run_summary(fw)
+}

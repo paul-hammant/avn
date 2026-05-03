@@ -321,6 +321,21 @@ repo creation and server lifecycle inline. Don't migrate them.
   step-by-step via `cmd = string.concat(cmd, "...")` re-assignment
   in `main()`, then reference the resulting `cmd` string from the
   closure. Same approach for URLs (`url_r4 = ...; url_r5 = ...`).
+- **`binary_under_test` and `fixture_server` env_var name collision.**
+  When the binary-under-test name matches the fixture name, both
+  default to `$<UPPER>_BIN`. The fixture_server's export wins
+  (overwrites the binary_under_test export); the driver then
+  spawns the server binary thinking it's the under-test. Symptom:
+  aeb hangs forever after build because the spawned process is
+  the wrong binary. Fix: explicit `env_var("X_DRIVER_BIN")` on
+  the binary_under_test block. Round 237 finding (canary:
+  `client/.tests.ae`).
+- **`/bin/sh` vs `/bin/bash`.** `/bin/sh` is dash on Linux and
+  doesn't support `$'...'` ANSI-C escapes. If you need newlines
+  inside a string passed to a tool (e.g. multi-pattern svn:ignore
+  values), invoke `/bin/bash -c` instead of `/bin/sh -c`. The
+  `sh()` wrapper in our drivers should target bash for that
+  reason. Round 237 finding.
 - **svnae SDK setters target `bash.test`, not `aether.driver_test`.**
   Our `svn_server`/`empty_server` setters in `.aeb/lib/svnae/`
   emit `pre_command`/`post_command` that `bash.test` consumes;

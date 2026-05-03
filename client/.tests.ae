@@ -1,16 +1,37 @@
 import build
-import bash
-import bash (script, pre_command, post_command)
-import svnae
-import svnae (svn_server)
+import aether
+import aether (driver, output, binary_under_test, fixture_seed, fixture_server,
+               path, env_var, repo, seed_bin, bin, args, port, ready_after_ms)
 
 main() {
     b = build.start()
     build.dep(b, "client")
     build.dep(b, "svnserver")
     build.dep(b, "svnserver/.build-seed.ae")
-    bash.test(b) {
-        svn_server("test_client", "9320")
-        script("test_client.sh")
+
+    aether.driver_test(b) {
+        driver("test_client_driver.ae")
+        output("test_client_driver")
+
+        // Note the env_var override: by default binary_under_test(b,
+        // "test_client") would export $TEST_CLIENT_BIN — same name
+        // the fixture_server with name "test_client" exports for its
+        // server bin. Override to $TEST_CLIENT_DRIVER_BIN to avoid the
+        // collision. (Round 237 finding.)
+        binary_under_test(b, "test_client") {
+            path("target/client/bin/test_client")
+            env_var("TEST_CLIENT_DRIVER_BIN")
+        }
+
+        fixture_seed(b, "test_client") {
+            repo("/tmp/svnae_aeb_test_client_repo")
+            seed_bin("target/svnserver/bin/svnae-seed")
+        }
+        fixture_server(b, "test_client") {
+            bin("target/svnserver/bin/aether-svnserver")
+            args("demo $TEST_CLIENT_REPO 9320")
+            port(9320)
+            ready_after_ms(1500)
+        }
     }
 }

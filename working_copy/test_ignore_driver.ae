@@ -1,0 +1,145 @@
+// Copyright 2026 Paul Hammant (portions).
+// Apache License, Version 2.0 — see LICENSE.
+//
+// Aether driver for svn:ignore test. Round 237.
+// Migrated from working_copy/test_ignore.sh.
+//
+// Each step does setup-and-assert in one shell pipeline through
+// /bin/sh -c (cd + svn ops + status capture + grep).
+
+import contrib.aeocha
+import std.os
+import std.os (os_getenv)
+import std.string
+
+extern list_new() -> ptr
+extern list_add_raw(list: ptr, item: ptr) -> int
+
+argv_new() -> { return list_new() }
+argv_push(argv: ptr, s: string) { list_add_raw(argv, s) }
+
+// Use bash (not /bin/sh) — we need $'...' ANSI-C escape support for
+// embedding newlines in svn:ignore property values without external
+// printf. dash (Linux's /bin/sh) doesn't support $'...'.
+sh(cmd: string) -> {
+    argv = argv_new()
+    argv_push(argv, "-c")
+    argv_push(argv, cmd)
+    out, status, err = os.run_capture("/bin/bash", argv, null)
+    return out, status, err
+}
+
+main() {
+    fw = aeocha.init()
+    svn_bin = os_getenv("SVN_BIN")
+    port    = os_getenv("TEST_IGNORE_PORT")
+    url     = string.concat("http://127.0.0.1:", string.concat(port, "/demo"))
+    wc      = "/tmp/svnae_test_ig_wc"
+
+    // --- prep: fresh WC, three unversioned files in src/ ---
+    prep = string.concat("rm -rf ", wc)
+    prep = string.concat(prep, " && ")
+    prep = string.concat(prep, svn_bin)
+    prep = string.concat(prep, " checkout ")
+    prep = string.concat(prep, url)
+    prep = string.concat(prep, " ")
+    prep = string.concat(prep, wc)
+    prep = string.concat(prep, " >/dev/null && cd ")
+    prep = string.concat(prep, wc)
+    prep = string.concat(prep, " && echo a > src/something.o && echo b > src/other.o && echo c > src/notes.txt")
+    prep_out, prep_st, prep_err = sh(prep)
+
+    // svn status from inside the WC
+    cd_status = string.concat("cd ", string.concat(wc, " && "))
+    cd_status = string.concat(cd_status, svn_bin)
+    cd_status = string.concat(cd_status, " status | grep -c '^?' || true")
+
+    // svn propset svn:ignore '*.o' src
+    set_o = string.concat("cd ", string.concat(wc, " && "))
+    set_o = string.concat(set_o, svn_bin)
+    set_o = string.concat(set_o, " propset svn:ignore '*.o' src >/dev/null")
+
+    // svn propset svn:ignore $'*.o\nnotes.txt' src — multi-pattern
+    set_both = string.concat("cd ", string.concat(wc, " && "))
+    set_both = string.concat(set_both, svn_bin)
+    set_both = string.concat(set_both, " propset svn:ignore $'*.o\\nnotes.txt' src >/dev/null")
+
+    // svn propset with leading/trailing blank lines (tolerated)
+    set_blanks = string.concat("cd ", string.concat(wc, " && "))
+    set_blanks = string.concat(set_blanks, svn_bin)
+    set_blanks = string.concat(set_blanks, " propset svn:ignore $'\\n*.o\\n\\n' src >/dev/null")
+
+    // status output capture (full line)
+    cd_status_full = string.concat("cd ", string.concat(wc, " && "))
+    cd_status_full = string.concat(cd_status_full, svn_bin)
+    cd_status_full = string.concat(cd_status_full, " status")
+
+    // create top-level *.o (no ignore at root)
+    salt_top = string.concat("cd ", string.concat(wc, " && echo x > top-ignore-me.o"))
+
+    // cleanup unversioned files + propdel + final status
+    cleanup = string.concat("cd ", string.concat(wc, " && rm -f top-ignore-me.o src/something.o src/other.o src/notes.txt && "))
+    cleanup = string.concat(cleanup, svn_bin)
+    cleanup = string.concat(cleanup, " propdel svn:ignore src >/dev/null")
+
+    aeocha.describe(fw, "svn:ignore") {
+
+        aeocha.it("prep WC + unversioned files succeeded") callback {
+            aeocha.expect_exit(fw, prep_st, 0, "checkout + write files exit 0")
+        }
+
+        aeocha.it("3 unversioned ?-entries before ignore") callback {
+            out, _, _ = sh(cd_status)
+            aeocha.expect_stdout_contains(fw, out, "3", "3 unversioned")
+        }
+
+        aeocha.it("svn:ignore '*.o' filters .o files from status") callback {
+            // set ignore, then status should show only 1 ?-entry (notes.txt)
+            _, st, _ = sh(set_o)
+            aeocha.expect_exit(fw, st, 0, "propset exit 0")
+            out, _, _ = sh(cd_status)
+            aeocha.expect_stdout_contains(fw, out, "1", "1 unversioned after *.o")
+        }
+
+        aeocha.it("notes.txt still listed after *.o ignore") callback {
+            out, _, _ = sh(cd_status_full)
+            aeocha.expect_stdout_contains(fw, out, "notes.txt",
+                "notes.txt visible")
+        }
+
+        aeocha.it("multi-pattern svn:ignore filters both") callback {
+            _, st, _ = sh(set_both)
+            aeocha.expect_exit(fw, st, 0, "propset both patterns exit 0")
+            out, _, _ = sh(cd_status)
+            aeocha.expect_stdout_contains(fw, out, "0",
+                "0 unversioned with *.o + notes.txt")
+        }
+
+        aeocha.it("blank lines in svn:ignore are tolerated") callback {
+            // Now only *.o filtered; notes.txt should reappear.
+            _, st, _ = sh(set_blanks)
+            aeocha.expect_exit(fw, st, 0, "propset blank-line patterns exit 0")
+            out, _, _ = sh(cd_status_full)
+            aeocha.expect_stdout_contains(fw, out, "notes.txt",
+                "notes.txt visible again")
+        }
+
+        aeocha.it("root-level *.o not affected by src/ ignore") callback {
+            _, st, _ = sh(salt_top)
+            aeocha.expect_exit(fw, st, 0, "salt top *.o exit 0")
+            out, _, _ = sh(cd_status_full)
+            aeocha.expect_stdout_contains(fw, out, "top-ignore-me.o",
+                "root *.o still visible")
+        }
+
+        aeocha.it("clean WC after cleanup + propdel") callback {
+            _, st, _ = sh(cleanup)
+            aeocha.expect_exit(fw, st, 0, "cleanup + propdel exit 0")
+            out, st2, _ = sh(cd_status_full)
+            aeocha.expect_exit(fw, st2, 0, "final status exit 0")
+            aeocha.assert_str_eq(fw, out, "", "status is empty")
+        }
+    }
+
+    aeocha.run_summary(fw)
+}

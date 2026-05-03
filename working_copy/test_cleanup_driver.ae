@@ -1,0 +1,138 @@
+// Copyright 2026 Paul Hammant (portions).
+// Apache License, Version 2.0 — see LICENSE.
+//
+// Aether driver for svn cleanup test. Round 237.
+// Migrated from working_copy/test_cleanup.sh.
+
+import contrib.aeocha
+import std.os
+import std.os (os_getenv)
+import std.string
+
+extern list_new() -> ptr
+extern list_add_raw(list: ptr, item: ptr) -> int
+
+argv_new() -> { return list_new() }
+argv_push(argv: ptr, s: string) { list_add_raw(argv, s) }
+
+sh(cmd: string) -> {
+    argv = argv_new()
+    argv_push(argv, "-c")
+    argv_push(argv, cmd)
+    out, status, err = os.run_capture("/bin/bash", argv, null)
+    return out, status, err
+}
+
+main() {
+    fw = aeocha.init()
+    svn_bin = os_getenv("SVN_BIN")
+    port    = os_getenv("TEST_CLEANUP_PORT")
+    url     = string.concat("http://127.0.0.1:", string.concat(port, "/demo"))
+    wc      = "/tmp/svnae_test_clean_wc"
+
+    // --- (B) prep: fresh checkout ---
+    co_cmd = string.concat("rm -rf ", wc)
+    co_cmd = string.concat(co_cmd, " && ")
+    co_cmd = string.concat(co_cmd, svn_bin)
+    co_cmd = string.concat(co_cmd, " checkout ")
+    co_cmd = string.concat(co_cmd, url)
+    co_cmd = string.concat(co_cmd, " ")
+    co_cmd = string.concat(co_cmd, wc)
+    co_cmd = string.concat(co_cmd, " >/dev/null")
+    co_out, co_st, co_err = sh(co_cmd)
+
+    // --- (A) non-WC path rejection ---
+    bogus = string.concat(svn_bin, " cleanup /tmp/definitely_not_a_wc_$$ 2>&1 || true")
+
+    // --- (B) clean WC reports 0 stale ---
+    clean_b = string.concat(svn_bin, " cleanup ")
+    clean_b = string.concat(clean_b, wc)
+
+    // --- (C) salt then cleanup ---
+    salt_c = string.concat("mkdir -p ", string.concat(wc, "/.svn/pristine/aa/bb && touch "))
+    salt_c = string.concat(salt_c, wc)
+    salt_c = string.concat(salt_c, "/.svn/pristine/aa/bb/README.tmp.12345 && touch ")
+    salt_c = string.concat(salt_c, wc)
+    salt_c = string.concat(salt_c, "/src/main.c.tmp.999 && touch ")
+    salt_c = string.concat(salt_c, wc)
+    salt_c = string.concat(salt_c, "/README.tmp.not-digits")
+
+    // After cleanup: 2 stale removed; the not-digits one stays.
+    chk_real_tmp = string.concat("test -f ", string.concat(wc, "/README.tmp.not-digits && echo 1 || echo 0"))
+    chk_pristine_gone = string.concat("test -f ", string.concat(wc, "/.svn/pristine/aa/bb/README.tmp.12345 && echo 1 || echo 0"))
+    chk_src_tmp_gone  = string.concat("test -f ", string.concat(wc, "/src/main.c.tmp.999 && echo 1 || echo 0"))
+
+    // --- (D) wc.db-journal removal ---
+    salt_d = string.concat("touch ", string.concat(wc, "/.svn/wc.db-journal"))
+    chk_journal = string.concat("test -f ", string.concat(wc, "/.svn/wc.db-journal && echo 1 || echo 0"))
+
+    // Survivors
+    chk_readme = string.concat("test -f ", string.concat(wc, "/README && echo 1 || echo 0"))
+    chk_main_c = string.concat("test -f ", string.concat(wc, "/src/main.c && echo 1 || echo 0"))
+
+    aeocha.describe(fw, "svn cleanup") {
+
+        aeocha.it("prep checkout succeeded") callback {
+            aeocha.expect_exit(fw, co_st, 0, "checkout exit 0")
+        }
+
+        aeocha.it("(A) non-WC path rejected with 'not a working copy'") callback {
+            out, _, _ = sh(bogus)
+            aeocha.expect_stdout_contains(fw, out, "not a working copy",
+                "rejection message present")
+        }
+
+        aeocha.it("(B) clean WC reports 0 stale") callback {
+            out, status, _ = sh(clean_b)
+            aeocha.expect_exit(fw, status, 0, "cleanup clean exit 0")
+            aeocha.expect_stdout_contains(fw, out, "0 stale",
+                "0 stale on clean WC")
+        }
+
+        aeocha.it("(C) salt + cleanup reports 2 stale removed") callback {
+            _, salt_st, _ = sh(salt_c)
+            aeocha.expect_exit(fw, salt_st, 0, "salt exit 0")
+            out, _, _ = sh(clean_b)
+            aeocha.expect_stdout_contains(fw, out, "2 stale",
+                "2 stale removed (pristine .tmp + src .tmp)")
+        }
+
+        aeocha.it("(C) the .not-digits file is preserved") callback {
+            out, _, _ = sh(chk_real_tmp)
+            aeocha.expect_stdout_contains(fw, out, "1",
+                ".tmp.not-digits kept")
+        }
+
+        aeocha.it("(C) salted pristine .tmp file is gone") callback {
+            out, _, _ = sh(chk_pristine_gone)
+            aeocha.expect_stdout_contains(fw, out, "0",
+                "pristine .tmp.12345 removed")
+        }
+
+        aeocha.it("(C) salted src .tmp file is gone") callback {
+            out, _, _ = sh(chk_src_tmp_gone)
+            aeocha.expect_stdout_contains(fw, out, "0",
+                "src/main.c.tmp.999 removed")
+        }
+
+        aeocha.it("(D) wc.db-journal is removed") callback {
+            _, salt_st, _ = sh(salt_d)
+            aeocha.expect_exit(fw, salt_st, 0, "salt journal exit 0")
+            out, _, _ = sh(clean_b)
+            aeocha.expect_stdout_contains(fw, out, "1 stale",
+                "1 stale (the journal)")
+            chk_out, _, _ = sh(chk_journal)
+            aeocha.expect_stdout_contains(fw, chk_out, "0",
+                "journal removed from disk")
+        }
+
+        aeocha.it("real user files survive cleanup") callback {
+            out_r, _, _ = sh(chk_readme)
+            aeocha.expect_stdout_contains(fw, out_r, "1", "README survives")
+            out_m, _, _ = sh(chk_main_c)
+            aeocha.expect_stdout_contains(fw, out_m, "1", "src/main.c survives")
+        }
+    }
+
+    aeocha.run_summary(fw)
+}
