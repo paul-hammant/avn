@@ -47,13 +47,28 @@ come back as 0. Cause: aetherc's call-site lowering passes
 header) across `extern` boundaries. Receiver's magic check fails,
 falls back to `strlen()`, truncates at the first NUL — which IS
 byte 4 of every svndiff diff (the always-zero `sview_offset`
-varint). Filed as
-`/home/paul/scm/aether/binary-string-extern-boundary.md`.
+varint).
 
-Once that lands, the existing test fix in HEAD passes verbatim
-(test was already correctly using `string.length(got_str)` after
-Round 226). Recreate `ae/delta/.tests-svndiff.ae` and add to the
-aggregator.
+**Round 227 update**: Nic (Aether maintainer) replied: "use
+std.config + std.actors.register/whereis as the way through this."
+The extern-boundary unwrap is by-design; binary data that needs
+to flow through callback shapes routes via the registry/config
+mechanisms instead. No aetherc fix coming.
+
+For svndiff specifically (a pure function call, not a callback
+shape), the practical paths are:
+1. **Collapse** encoder + decoder + caller into one .ae module
+   so binary stays in one TU. ~380 LOC of merging; doable when
+   svndiff actually has a production caller.
+2. **Defer**. svndiff has no production caller today. Tests stay
+   broken (not in aggregator); .ae source stays in tree.
+
+Going with (2) until something needs `svn diff` against a remote
+or dump-format delta encoding. Then tackle (1) as part of the
+adoption work.
+
+Reproducer + Nic's redirect documented at
+`~/scm/aether/binary-string-extern-boundary.md`.
 
 **Test fix kept**: ae/delta/test_svndiff.ae now reads
 `string.length(got_str)` for the length and `status` for the
