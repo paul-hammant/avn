@@ -1,0 +1,197 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// permissions and limitations under the License.
+
+// svn resolve — clear the `conflicted` flag on a WC node, optionally
+// choosing which version becomes the working-copy content:
+//
+//   wc_resolve(wc_root, path, accept)
+//     accept 0 = "working"      — keep WC file as-is (user hand-resolved)
+//     accept 1 = "mine-full"    — replace WC file with the `.mine` sidecar
+//     accept 2 = "theirs-full"  — replace WC file with `.r<theirs_rev>` sidecar
+//
+// In all cases: sidecar files (`.mine`, `.r<N>`) are deleted and
+// the node's conflicted=0 is persisted.
+//
+// Returns 0 on success, -1 if the path isn't conflicted or on error.
+
+import std.fs
+import std.string
+
+// wc.db lifecycle + helpers.
+extern wc_db_open(wc_root: string) -> ptr
+extern wc_db_close(db: ptr)
+extern wc_db_set_conflicted(db: ptr, path: string, conflicted: int) -> int
+extern wc_db_get_node(db: ptr, path: string) -> ptr
+extern wc_node_conflicted(n: ptr) -> int
+extern wc_node_free(n: ptr)
+
+// Sidecar suffix probes (ae/working_copy/sidecar.ae).
+extern is_sidecar_suffix(s: string) -> int
+extern sidecar_rev(suffix: string) -> int
+
+// Listdir + io.
+extern io_listdir(path: string) -> ptr
+extern io_listdir_count(handle: ptr) -> int
+extern io_listdir_name(handle: ptr, index: int) -> string
+extern io_listdir_free(handle: ptr)
+extern io_unlink(path: string) -> int
+
+// Split rel_path at the last '/'. Returns (dir-part-relative-to-wc-root,
+// basename). If rel_path has no '/', dir-part is "" so caller composes
+// just wc_root.
+split_dir_base_(wc_root: string, rel_path: string) -> ptr {
+    n = string.length(rel_path)
+    last_slash = 0 - 1
+    i = 0
+    while i < n {
+        if string.char_at(rel_path, i) == 47 {   // '/'
+            last_slash = i
+        }
+        i = i + 1
+    }
+    arr_in = ""
+    if last_slash >= 0 {
+        dir = string.substring(rel_path, 0, last_slash)
+        base = string.substring(rel_path, last_slash + 1, n)
+        arr_in = "${wc_root}/${dir}\x01${base}"
+    } else {
+        arr_in = "${wc_root}\x01${rel_path}"
+    }
+    return string.split(arr_in, "\x01")
+}
+
+// Binary-safe file copy via std.fs read_binary + write_atomic.
+copy_overwrite_(src: string, dst: string) -> int {
+    data, n, rerr = fs.read_binary(src)
+    if string.length(rerr) > 0 { return 0 - 1 }
+    werr = fs.write_atomic(dst, data, n)
+    if string.length(werr) > 0 { return 0 - 1 }
+    return 0
+}
+
+// Delete every sidecar (`.mine`, `.r<N>`) in the containing directory
+// whose stem matches `base`.
+remove_sidecars_(dirpath: string, base: string) {
+    blen = string.length(base)
+    d = io_listdir(dirpath)
+    if d == null { return 0 }
+    n_entries = io_listdir_count(d)
+    i = 0
+    while i < n_entries {
+        name = io_listdir_name(d, i)
+        nlen = string.length(name)
+        if nlen > blen + 1 {
+            stem = string.substring(name, 0, blen)
+            if string.equals(stem, base) == 1 {
+                if string.char_at(name, blen) == 46 {   // '.'
+                    suffix = string.substring(name, blen + 1, nlen)
+                    if is_sidecar_suffix(suffix) == 1 {
+                        io_unlink("${dirpath}/${name}")
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+    io_listdir_free(d)
+    return 0
+}
+
+// Find the `<base>.r<N>` sidecar with the largest N. There are
+// typically two: common-ancestor and theirs. We take the larger N
+// (which by construction is theirs).
+//
+// Returns the full path to the chosen sidecar, or "" on miss.
+find_theirs_sidecar_(dirpath: string, base: string) -> string {
+    blen = string.length(base)
+    best_rev = 0 - 1
+    d = io_listdir(dirpath)
+    if d == null { return "" }
+    n_entries = io_listdir_count(d)
+    i = 0
+    while i < n_entries {
+        name = io_listdir_name(d, i)
+        nlen = string.length(name)
+        if nlen > blen + 1 {
+            stem = string.substring(name, 0, blen)
+            if string.equals(stem, base) == 1 {
+                if string.char_at(name, blen) == 46 {
+                    suffix = string.substring(name, blen + 1, nlen)
+                    nv = sidecar_rev(suffix)
+                    if nv > best_rev { best_rev = nv }
+                }
+            }
+        }
+        i = i + 1
+    }
+    io_listdir_free(d)
+    if best_rev < 0 { return "" }
+    return "${dirpath}/${base}.r${best_rev}"
+}
+
+export wc_resolve(wc_root: string, rel_path: string, accept: int) -> int {
+    db = wc_db_open(wc_root)
+    if db == null { return 0 - 1 }
+
+    n = wc_db_get_node(db, rel_path)
+    if n == null { wc_db_close(db); return 0 - 1 }
+    is_conflicted = wc_node_conflicted(n)
+    wc_node_free(n)
+    if is_conflicted == 0 {
+        wc_db_close(db)
+        return 0 - 1
+    }
+
+    parts = split_dir_base_(wc_root, rel_path)
+    dirpath = string.array_get(parts, 0)
+    base    = string.array_get(parts, 1)
+    dirpath = string.copy(dirpath)
+    base    = string.copy(base)
+    string.array_free(parts)
+
+    disk = "${wc_root}/${rel_path}"
+
+    if accept == 1 {
+        // mine-full: copy .mine over the file.
+        mine = "${disk}.mine"
+        if copy_overwrite_(mine, disk) != 0 {
+            wc_db_close(db)
+            return 0 - 1
+        }
+    }
+    if accept == 2 {
+        // theirs-full: copy the highest-rev sidecar over the file.
+        theirs = find_theirs_sidecar_(dirpath, base)
+        if string.length(theirs) == 0 {
+            wc_db_close(db)
+            return 0 - 1
+        }
+        if copy_overwrite_(theirs, disk) != 0 {
+            wc_db_close(db)
+            return 0 - 1
+        }
+    }
+    // accept == 0 (working): leave the file alone.
+
+    remove_sidecars_(dirpath, base)
+    rc = wc_db_set_conflicted(db, rel_path, 0)
+    wc_db_close(db)
+    if rc == 0 { return 0 }
+    return 0 - 1
+}
+
+main() {
+    println("ae/working_copy/resolve.ae is a library; not meant to run standalone")
+}

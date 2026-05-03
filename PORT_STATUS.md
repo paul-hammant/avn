@@ -43,7 +43,7 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
   (ae/svnserver/url_parse.ae), dropped four copies of hand-rolled
   `int_to_dec` + `digit_char` in favour of `std.string.from_int` now
   that it's available, and ported the WC pristine-store path builder
-  to ae/wc/pristine_path.ae (handles the two-level XX/YY/ fanout).
+  to ae/working_copy/pristine_path.ae (handles the two-level XX/YY/ fanout).
 - **Round 31** (current): **36.00% C, 64.00% Aether.**
   Round-30's rep-store port landed — the upstream Aether
   toolchain's `extra_sources` assembly buffer was bumped
@@ -102,7 +102,7 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
 - **Round 29**: **36.28% C, 63.72% Aether.** Ported
   the wc pristine store (sha + zlib + binary file I/O) now that
   std.cryptography (0.88) and std.zlib (0.90+) landed upstream.
-  - ae/wc/pristine.ae owns: wc_hash_bytes (dispatches
+  - ae/working_copy/pristine.ae owns: wc_hash_bytes (dispatches
     sha1_hex/sha256_hex by the wc's configured algo),
     wc_hash_file (fs.read_binary + hash), wc_pristine_put
     (hash+dedup+zlib.deflate+fs.write_binary), wc_pristine_get
@@ -387,7 +387,7 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
     (list and /hashes secondaries) switch to the already-ported
     `ra_parse_list` and a new `ra_parse_hashes_secondaries`.
   - `ingest_props` (svn update's per-path prop reconciliation)
-    → ae/wc/update_props.ae. Opaque-handle walk via already-
+    → ae/working_copy/update_props.ae. Opaque-handle walk via already-
     Aether-callable ra/wc accessors.
   - `read_format_line` ($repo/format reader) →
     ae/repos/rev_io.ae::repos_format_line.
@@ -407,8 +407,8 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
   - verify_dir: swapped inline cJSON walker for the already-ported
     ra_parse_list packed-string parser.
   - `head_rev` + `rev_blob_sha1` → ae/repos/rev_io.ae.
-  - `walk_remote` (svn update) → ae/wc/update_walk.ae.
-  - `walk_remote` (svn merge) → ae/wc/merge_walk.ae.
+  - `walk_remote` (svn update) → ae/working_copy/update_walk.ae.
+  - `walk_remote` (svn merge) → ae/working_copy/merge_walk.ae.
 
   One attempted port deferred: fs_fs/commit_shim.c::load_rev_root_sha1
   via the new repos_load_rev_blob_field helper produced a runtime
@@ -510,8 +510,8 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
     "weeks of work" earlier in the session
   - `compute_redacted_dir_sha` (svnserver, 50 lines → ae/svnserver/redact.ae)
   Plus two more algorithmic ports:
-  - `svnae_wc_update` apply pipeline (wc, 135 lines → ae/wc/update_apply.ae)
-  - `svnae_wc_merge` apply pipeline (wc, 135 lines → ae/wc/merge_apply.ae)
+  - `svnae_wc_update` apply pipeline (wc, 135 lines → ae/working_copy/update_apply.ae)
+  - `svnae_wc_merge` apply pipeline (wc, 135 lines → ae/working_copy/merge_apply.ae)
   - `svnae_repos_paths_changed` flatten+diff (repos, 65 lines →
     ae/repos/paths_changed.ae)
   - `resolve_path` (repos, 70 lines → ae/repos/resolve.ae)
@@ -778,7 +778,7 @@ for t in error path utf8 checksum compress io sqlite svndiff xdelta \
 done
 for t in wc_db wc_pristine; do
   printf '%-27s ' "test_$t"
-  "$AE" run "ae/wc/test_${t#wc_}.ae" 2>/dev/null | tail -1
+  "$AE" run "ae/working_copy/test_${t#wc_}.ae" 2>/dev/null | tail -1
 done
 
 # End-to-end shell suites (spin up a real server, hit it with curl + svn CLI)
@@ -790,7 +790,7 @@ for t in server ra svn wc_checkout wc_status wc_mutate wc_commit \
     server)   s=ae/svnserver/test_server.sh ;;
     ra)       s=ae/client/test_client.sh ;;
     svn)      s=ae/svn/test_svn.sh ;;
-    wc_*)     s=ae/wc/test_${t#wc_}.sh ;;
+    wc_*)     s=ae/working_copy/test_${t#wc_}.sh ;;
     svnadmin) s=ae/svnadmin/test_svnadmin.sh ;;
   esac
   "$s" >/dev/null 2>&1 && echo "test_$t: OK" || echo "test_$t: FAIL"

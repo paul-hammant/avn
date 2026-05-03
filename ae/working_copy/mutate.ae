@@ -1,0 +1,215 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// permissions and limitations under the License.
+
+// WC-level structural ops: add / rm / cp / mv.
+//
+// These are tiny: they only change wc.db state rows plus on-disk
+// file presence. The actual file write (for add) is the user's
+// responsibility — they create the file first and then `svn add
+// PATH` registers it. `svn rm PATH` removes from disk AND marks
+// the node deleted in the db.
+//
+// State transitions (matching the legacy mutate_shim.c / cp_shim.c
+// pre-Round 63 behaviour):
+//   add(path):
+//     - file must exist on disk, must not already be tracked
+//     - upsert nodes(path, kind, 0, "", 1=added)
+//   rm(path):
+//     - if untracked, return -1
+//     - if state=added, delete the row entirely (revert the add).
+//       Do NOT delete the on-disk file — user just added it.
+//     - else mark state=deleted, keep base_rev / base_sha1 so revert
+//       can restore from pristine. Then unlink/rmdir on disk
+//       best-effort.
+//   cp(src, dst):
+//     - src must be tracked (file kind only — Phase 5.9 limitation)
+//       and present on disk
+//     - dst must not be tracked nor present on disk
+//     - copy bytes src→dst atomically, register dst with state=added
+//   mv(src, dst):
+//     - cp(src, dst), then rm(src). One atomic-ish sequence.
+
+import std.fs
+import std.string
+
+// db lifecycle stays in C (db_shim.c sqlite3_open + close).
+extern wc_db_open(wc_root: string) -> ptr
+extern wc_db_close(db: ptr)
+
+// Node CRUD lives in db_nodes.ae (already an Aether export).
+extern wc_db_node_exists(db: ptr, path: string) -> int
+extern wc_db_get_node(db: ptr, path: string) -> ptr
+extern wc_db_upsert_node(db: ptr, path: string, kind: int, base_rev: int, base_sha1: string, node_state: int) -> int
+extern wc_db_delete_node(db: ptr, path: string) -> int
+
+// Node-handle accessors live in db_shim.c.
+extern wc_node_kind(n: ptr) -> int
+extern wc_node_state(n: ptr) -> int
+extern wc_node_base_rev(n: ptr) -> int
+extern wc_node_base_sha1(n: ptr) -> string
+extern wc_node_free(n: ptr)
+
+// io helpers come from subr/io.ae.
+extern io_stat_kind(path: string) -> int
+extern io_exists(path: string) -> int
+extern io_unlink(path: string) -> int
+extern io_rmdir(path: string) -> int
+extern io_write_atomic(path: string, data: string, length: int) -> int
+
+// Return 0 on success, -1 if path already tracked, -2 if not on disk,
+// -3 on db error.
+export wc_add(wc_root: string, rel_path: string) -> int {
+    disk = "${wc_root}/${rel_path}"
+    skind = io_stat_kind(disk)
+    if skind == 0 { return 0 - 2 }
+
+    kind = 0
+    if skind == 2 { kind = 1 }   // dir
+
+    db = wc_db_open(wc_root)
+    if db == null { return 0 - 3 }
+
+    if wc_db_node_exists(db, rel_path) == 1 {
+        // Already tracked — could be a previously-scheduled delete
+        // we're un-deleting. Phase 5 just rejects; user can `svn rm`
+        // first to re-add.
+        wc_db_close(db)
+        return 0 - 1
+    }
+
+    rc = wc_db_upsert_node(db, rel_path, kind, 0, "", 1)   // 1 = added
+    wc_db_close(db)
+    if rc == 0 { return 0 }
+    return 0 - 3
+}
+
+
+// Return 0 on success, -1 if not tracked, -2 on db error.
+export wc_rm(wc_root: string, rel_path: string) -> int {
+    db = wc_db_open(wc_root)
+    if db == null { return 0 - 2 }
+
+    n = wc_db_get_node(db, rel_path)
+    if n == null {
+        wc_db_close(db)
+        return 0 - 1
+    }
+
+    state    = wc_node_state(n)
+    kind     = wc_node_kind(n)
+    base_rev = wc_node_base_rev(n)
+    base_sha = wc_node_base_sha1(n)
+    base_sha = string.copy(base_sha)
+    wc_node_free(n)
+
+    if state == 1 {
+        // Revert the add — drop the row. Keep the on-disk file; user
+        // didn't intend to lose content they just added.
+        rc = wc_db_delete_node(db, rel_path)
+        wc_db_close(db)
+        if rc == 0 { return 0 }
+        return 0 - 2
+    }
+
+    // Normal or already-deleted: mark deleted but keep base_rev /
+    // base_sha so revert can restore from pristine later.
+    rc = wc_db_upsert_node(db, rel_path, kind, base_rev, base_sha, 2)   // 2 = deleted
+    wc_db_close(db)
+    if rc != 0 { return 0 - 2 }
+
+    // Remove file/dir from disk best-effort. Reference svn keeps
+    // deleted files until commit in some cases; we remove now since
+    // this CLI is scoped for "commit soon".
+    disk = "${wc_root}/${rel_path}"
+    if kind == 0 { io_unlink(disk) } else { io_rmdir(disk) }
+
+    return 0
+}
+
+
+// Binary-safe file copy via std.fs.read_binary + write_atomic.
+// Returns 0 on success, -1 on any failure.
+copy_file_(src: string, dst: string) -> int {
+    data, n, rerr = fs.read_binary(src)
+    if string.length(rerr) > 0 { return 0 - 1 }
+    werr = fs.write_atomic(dst, data, n)
+    if string.length(werr) > 0 { return 0 - 1 }
+    return 0
+}
+
+// Return: 0 ok, -1 src not tracked, -2 dst already exists,
+//         -3 src not on disk, -4 other error.
+export wc_cp(wc_root: string, src: string, dst: string) -> int {
+    db = wc_db_open(wc_root)
+    if db == null { return 0 - 4 }
+
+    sn = wc_db_get_node(db, src)
+    if sn == null {
+        wc_db_close(db)
+        return 0 - 1
+    }
+    src_kind = wc_node_kind(sn)
+    wc_node_free(sn)
+    if src_kind != 0 {
+        // Directory copy not supported in Phase 5.9.
+        wc_db_close(db)
+        return 0 - 4
+    }
+
+    if wc_db_node_exists(db, dst) == 1 {
+        wc_db_close(db)
+        return 0 - 2
+    }
+
+    src_disk = "${wc_root}/${src}"
+    dst_disk = "${wc_root}/${dst}"
+
+    if io_exists(src_disk) == 0 {
+        wc_db_close(db)
+        return 0 - 3
+    }
+    if io_exists(dst_disk) == 1 {
+        wc_db_close(db)
+        return 0 - 2
+    }
+
+    if copy_file_(src_disk, dst_disk) != 0 {
+        wc_db_close(db)
+        return 0 - 4
+    }
+
+    // Register dst as state=added. Content sha1 unknown to the db
+    // at this stage — leave empty; next commit will compute it from
+    // the on-disk file (same path as any freshly-added node).
+    rc = wc_db_upsert_node(db, dst, 0, 0, "", 1)   // file, added
+    wc_db_close(db)
+    if rc == 0 { return 0 }
+    return 0 - 4
+}
+
+
+// mv = cp + rm. Phase 5.9 best-effort: a failed rm leaves a half-
+// finished state (dst copy with src still tracked).
+export wc_mv(wc_root: string, src: string, dst: string) -> int {
+    rc = wc_cp(wc_root, src, dst)
+    if rc != 0 { return rc }
+    rc = wc_rm(wc_root, src)
+    if rc != 0 { return 0 - 4 }
+    return 0
+}
+
+main() {
+    println("ae/working_copy/mutate.ae is a library; not meant to run standalone")
+}

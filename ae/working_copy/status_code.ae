@@ -1,0 +1,58 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// permissions and limitations under the License.
+
+// svn status classification — the pure decision table mapping the
+// wc.db node st + on-disk reality to a single-char code.
+//
+// The C side of ae/working_copy/status_shim.c gathers the inputs (is the node
+// tracked? what's its db st? does the file exist on disk? do
+// checksums match?) and calls this classifier to turn them into the
+// traditional svn-style code character.
+//
+// Return codes (ASCII values):
+//   'C' (67) = conflicted  (trumps everything)
+//   'A' (65) = added
+//   'D' (68) = deleted
+//   '!' (33) = missing (tracked but gone from disk, or unreadable)
+//   'M' (77) = modified (content sha differs from base)
+//   ' ' (32) = no change
+//
+// Inputs:
+//   conflicted: 0 or 1
+//   st:      0=normal, 1=added, 2=deleted
+//   kind:       0=file, 1=dir
+//   on_disk:    0 or 1
+//   sha_ok:     0=couldn't hash OR doesn't match base_sha, 1=match
+//   sha_read:   0=file content was not readable (hash call failed),
+//               1=file read cleanly
+//
+// For dirs (kind=1): no content hash is possible, so sha_ok and
+// sha_read are ignored on the 'normal' path — only on_disk drives.
+export status_code(conflicted: int, st: int, kind: int,
+                   on_disk: int, sha_read: int, sha_ok: int) -> int {
+    if conflicted == 1 { return 67 }          // 'C'
+    if st == 1      { return 65 }          // 'A'
+    if st == 2      { return 68 }          // 'D'
+    // st == 0 (normal)
+    if on_disk == 0    { return 33 }          // '!'
+    if kind == 1       { return 32 }          // ' ' (dir — no compare)
+    if sha_read == 0   { return 33 }          // '!'
+    if sha_ok == 0     { return 77 }          // 'M'
+    return 32                                  // ' '
+}
+
+main() {
+    println("ae/working_copy/status_code.ae is a library; not meant to run standalone")
+}
