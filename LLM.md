@@ -341,6 +341,23 @@ repo creation and server lifecycle inline. Don't migrate them.
   `libaether.a` needs `link_flag("-lnghttp2")`. Symptom: `gcc link
   failed` with a long list of `undefined reference to
   nghttp2_*`. Round 238 svnserver build hit this.
+- **Tuple-destructure shadow collision.** If main() destructures
+  a wrapper's tuple return `(out, status, err) = sh(...)` AND a
+  closure body destructures with overlapping names (`out, status,
+  _ = sh(...)`), aetherc miscompiles the closure-local slot and
+  the binary segfaults at startup with no output. Workaround:
+  rename main()'s outer destructure to non-overlapping names
+  (e.g. `prep_out_`, `prep_st_`, `prep_err_`) so closure-local
+  `out`/`status` shadows don't collide. Symptom: no test output,
+  `signal 11 segmentation fault (core dumped)` in the driver run
+  before the `describe` block prints. Round 238 commit driver
+  blocked on this for a session; minimal repro at
+  `~/scm/aether/closure-shadow-tuple-destructure.md`.
+- **`ae cache clear`** when in doubt. aetherc's content-addressed
+  cache at `~/.aether/cache/` doesn't always invalidate when an
+  imported module changes transitively. If you see "Built (cache
+  hit)" but suspect old code is being run, `ae cache clear`
+  forces a re-emit.
 - **svnae SDK setters target `bash.test`, not `aether.driver_test`.**
   Our `svn_server`/`empty_server` setters in `.aeb/lib/svnae/`
   emit `pre_command`/`post_command` that `bash.test` consumes;

@@ -1,0 +1,141 @@
+// Copyright 2026 Paul Hammant (portions).
+// Apache License, Version 2.0 — see LICENSE.
+//
+// Aether driver for WC-backed commit test. Round 238.
+// Migrated from working_copy/test_commit.sh.
+
+import contrib.aeocha
+import std.os
+import std.os (os_getenv)
+import std.string
+
+extern list_new() -> ptr
+extern list_add_raw(list: ptr, item: ptr) -> int
+
+argv_new() -> { return list_new() }
+argv_push(argv: ptr, s: string) { list_add_raw(argv, s) }
+
+sh(cmd: string) -> {
+    argv = argv_new()
+    argv_push(argv, "-c")
+    argv_push(argv, cmd)
+    out, status, err = os.run_capture("/bin/bash", argv, null)
+    return out, status, err
+}
+
+main() {
+    fw = aeocha.init()
+    svn_bin = os_getenv("SVN_BIN")
+    port    = os_getenv("TEST_COMMIT_PORT")
+    url     = string.concat("http://127.0.0.1:", string.concat(port, "/demo"))
+    base    = string.concat("http://127.0.0.1:", string.concat(port, "/repos/demo"))
+    wc      = "/tmp/svnae_test_wcc_wc"
+
+    // --- prep: checkout + edit + add + rm + commit (one big shell pipeline) ---
+    prep = string.concat("rm -rf ", wc)
+    prep = string.concat(prep, " && ")
+    prep = string.concat(prep, svn_bin)
+    prep = string.concat(prep, " checkout ")
+    prep = string.concat(prep, url)
+    prep = string.concat(prep, " ")
+    prep = string.concat(prep, wc)
+    prep = string.concat(prep, " >/dev/null && cd ")
+    prep = string.concat(prep, wc)
+    prep = string.concat(prep, " && echo 'new hello content' > README && echo 'new file body' > NEWFILE && ")
+    prep = string.concat(prep, svn_bin)
+    prep = string.concat(prep, " add NEWFILE >/dev/null && ")
+    prep = string.concat(prep, svn_bin)
+    prep = string.concat(prep, " rm src/main.c >/dev/null && ")
+    prep = string.concat(prep, svn_bin)
+    prep = string.concat(prep, " commit --author wc-user --log 'WC-backed commit demo'")
+    prep_out_, prep_st_, prep_err_ = sh(prep)
+
+    // status from inside WC
+    cd_status = string.concat("cd ", wc)
+    cd_status = string.concat(cd_status, " && ")
+    cd_status = string.concat(cd_status, svn_bin)
+    cd_status = string.concat(cd_status, " status")
+
+    // base_rev query
+    q_base_rev = string.concat("sqlite3 ", wc)
+    q_base_rev = string.concat(q_base_rev, "/.svn/wc.db \"SELECT value FROM info WHERE key='base_rev'\"")
+
+    // remote cat README + NEWFILE
+    cat_readme  = string.concat(svn_bin, " cat ")
+    cat_readme  = string.concat(cat_readme, url)
+    cat_readme  = string.concat(cat_readme, " README")
+    cat_newfile = string.concat(svn_bin, " cat ")
+    cat_newfile = string.concat(cat_newfile, url)
+    cat_newfile = string.concat(cat_newfile, " NEWFILE")
+
+    // info --rev 4 author + log
+    info_r4 = string.concat(svn_bin, " info ")
+    info_r4 = string.concat(info_r4, url)
+    info_r4 = string.concat(info_r4, " --rev 4")
+
+    // remote 404 for src/main.c at r4 (curl shells out — http.client
+    // dropped here to keep the driver simple)
+    main_c_curl = string.concat("curl -s -o /dev/null -w '%{http_code}' ", base)
+    main_c_curl = string.concat(main_c_curl, "/rev/4/cat/src/main.c")
+
+    // No-op commit message
+    cd_noop_commit = string.concat("cd ", wc)
+    cd_noop_commit = string.concat(cd_noop_commit, " && ")
+    cd_noop_commit = string.concat(cd_noop_commit, svn_bin)
+    cd_noop_commit = string.concat(cd_noop_commit, " commit --author foo --log empty")
+
+    aeocha.describe(fw, "WC-backed commit") {
+
+        aeocha.it("prep: commit returns rev 4") callback {
+            aeocha.expect_exit(fw, prep_st_, 0, "checkout+edit+commit exit 0")
+        }
+
+        aeocha.it("WC clean after commit (status empty)") callback {
+            out, status, _ = sh(cd_status)
+            aeocha.expect_exit(fw, status, 0, "status exit 0")
+            aeocha.assert_str_eq(fw, out, "", "status is empty")
+        }
+
+        aeocha.it("wc.db base_rev advanced to 4") callback {
+            out, _, _ = sh(q_base_rev)
+            aeocha.expect_stdout_contains(fw, out, "4", "base_rev = 4")
+        }
+
+        aeocha.it("remote README has new content") callback {
+            out, status, _ = sh(cat_readme)
+            aeocha.expect_exit(fw, status, 0, "cat README exit 0")
+            aeocha.expect_stdout_contains(fw, out, "new hello content",
+                "remote README updated")
+        }
+
+        aeocha.it("remote NEWFILE exists with new body") callback {
+            out, status, _ = sh(cat_newfile)
+            aeocha.expect_exit(fw, status, 0, "cat NEWFILE exit 0")
+            aeocha.expect_stdout_contains(fw, out, "new file body",
+                "remote NEWFILE present")
+        }
+
+        aeocha.it("remote src/main.c at r4 → 404") callback {
+            out, _, _ = sh(main_c_curl)
+            aeocha.expect_stdout_contains(fw, out, "404",
+                "main.c gone at r4 (curl reports 404)")
+        }
+
+        aeocha.it("rev 4 author + log via svn info") callback {
+            out, status, _ = sh(info_r4)
+            aeocha.expect_exit(fw, status, 0, "info exit 0")
+            aeocha.expect_stdout_line_after(fw, out, "Author:", "wc-user",
+                "rev 4 author")
+            aeocha.expect_stdout_line_after(fw, out, "Log:", "WC-backed commit demo",
+                "rev 4 log")
+        }
+
+        aeocha.it("no-op commit prints 'No changes to commit.'") callback {
+            out, _, _ = sh(cd_noop_commit)
+            aeocha.expect_stdout_contains(fw, out, "No changes to commit.",
+                "no-op message")
+        }
+    }
+
+    aeocha.run_summary(fw)
+}
