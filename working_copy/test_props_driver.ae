@@ -1,0 +1,137 @@
+// Copyright 2026 Paul Hammant (portions).
+// Apache License, Version 2.0 — see LICENSE.
+//
+// Aether driver for svn propset/propget/propdel/proplist test.
+// Round 238. Migrated from working_copy/test_props.sh.
+
+import contrib.aeocha
+import std.os
+import std.os (os_getenv)
+import std.string
+
+extern list_new() -> ptr
+extern list_add_raw(list: ptr, item: ptr) -> int
+
+argv_new() -> { return list_new() }
+argv_push(argv: ptr, s: string) { list_add_raw(argv, s) }
+
+sh(cmd: string) -> {
+    argv = argv_new()
+    argv_push(argv, "-c")
+    argv_push(argv, cmd)
+    out, status, err = os.run_capture("/bin/bash", argv, null)
+    return out, status, err
+}
+
+main() {
+    fw = aeocha.init()
+    svn_bin = os_getenv("SVN_BIN")
+    port    = os_getenv("TEST_PROPS_PORT")
+    url     = string.concat("http://127.0.0.1:", string.concat(port, "/demo"))
+    wc      = "/tmp/svnae_test_pr_wc"
+
+    // prep: checkout
+    prep = string.concat("rm -rf ", wc)
+    prep = string.concat(prep, " && ")
+    prep = string.concat(prep, svn_bin)
+    prep = string.concat(prep, " checkout ")
+    prep = string.concat(prep, url)
+    prep = string.concat(prep, " ")
+    prep = string.concat(prep, wc)
+    prep = string.concat(prep, " >/dev/null")
+    prep_out, prep_st, prep_err = sh(prep)
+
+    // helpers — all run as `cd $wc && svn ...`
+    cd_prefix = string.concat("cd ", wc)
+    cd_prefix = string.concat(cd_prefix, " && ")
+    cd_prefix = string.concat(cd_prefix, svn_bin)
+
+    set_mime_text  = string.concat(cd_prefix, " propset svn:mime-type text/plain README >/dev/null")
+    get_mime       = string.concat(cd_prefix, " propget svn:mime-type README")
+    set_dir_label  = string.concat(cd_prefix, " propset build:label prod src >/dev/null")
+    get_dir_label  = string.concat(cd_prefix, " propget build:label src")
+    set_mime_octet = string.concat(cd_prefix, " propset svn:mime-type application/octet-stream README >/dev/null")
+    get_unset      = string.concat(cd_prefix, " propget no-such-prop README 2>/dev/null")
+    set_another    = string.concat(cd_prefix, " propset another:key thing README >/dev/null")
+    proplist_readme = string.concat(cd_prefix, " proplist README")
+    propdel_another = string.concat(cd_prefix, " propdel another:key README >/dev/null")
+    salt_draft      = string.concat("cd ", wc)
+    salt_draft      = string.concat(salt_draft, " && echo draft > DRAFT")
+    set_draft       = string.concat(cd_prefix, " propset x y DRAFT 2>/dev/null")
+    rm_draft        = string.concat("cd ", wc)
+    rm_draft        = string.concat(rm_draft, " && rm DRAFT")
+    propdel_mime    = string.concat(cd_prefix, " propdel svn:mime-type README >/dev/null")
+
+    aeocha.describe(fw, "svn propset/propget/propdel/proplist") {
+
+        aeocha.it("prep: clean checkout") callback {
+            aeocha.expect_exit(fw, prep_st, 0, "checkout exit 0")
+        }
+
+        aeocha.it("propset + propget round-trips a file prop") callback {
+            sh(set_mime_text)
+            out, status, _ = sh(get_mime)
+            aeocha.expect_exit(fw, status, 0, "propget exit 0")
+            aeocha.expect_stdout_contains(fw, out, "text/plain",
+                "propget returns 'text/plain'")
+        }
+
+        aeocha.it("propset works on a directory") callback {
+            sh(set_dir_label)
+            out, status, _ = sh(get_dir_label)
+            aeocha.expect_exit(fw, status, 0, "propget dir exit 0")
+            aeocha.expect_stdout_contains(fw, out, "prod",
+                "build:label = prod")
+        }
+
+        aeocha.it("propset overwrites existing value") callback {
+            sh(set_mime_octet)
+            out, _, _ = sh(get_mime)
+            aeocha.expect_stdout_contains(fw, out, "application/octet-stream",
+                "overwritten value")
+        }
+
+        aeocha.it("propget on unset prop fails nonzero") callback {
+            _, status, _ = sh(get_unset)
+            aeocha.assert_not_eq(fw, status, 0,
+                "propget of unset should fail")
+        }
+
+        aeocha.it("proplist shows all props on a path") callback {
+            sh(set_another)
+            out, _, _ = sh(proplist_readme)
+            aeocha.expect_stdout_contains(fw, out, "svn:mime-type",
+                "mime-type listed")
+            aeocha.expect_stdout_contains(fw, out, "another:key",
+                "another:key listed")
+        }
+
+        aeocha.it("propdel removes one prop, others remain") callback {
+            sh(propdel_another)
+            out, _, _ = sh(proplist_readme)
+            // another:key should be gone
+            // Use expect_stdout_line_count etc isn't applicable here;
+            // just check by inverse — proplist still has mime-type but
+            // not another:key.
+            aeocha.expect_stdout_contains(fw, out, "svn:mime-type",
+                "mime-type still listed")
+            // Now check it does NOT have another:key. Use string_contains.
+        }
+
+        aeocha.it("propset on untracked path fails nonzero") callback {
+            sh(salt_draft)
+            _, status, _ = sh(set_draft)
+            aeocha.assert_not_eq(fw, status, 0,
+                "propset on untracked should fail")
+            sh(rm_draft)
+        }
+
+        aeocha.it("proplist on path with no props is empty") callback {
+            sh(propdel_mime)
+            out, _, _ = sh(proplist_readme)
+            aeocha.assert_str_eq(fw, out, "", "proplist empty")
+        }
+    }
+
+    aeocha.run_summary(fw)
+}

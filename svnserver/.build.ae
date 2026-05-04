@@ -12,6 +12,7 @@ main() {
         link_flag("-lz")
         link_flag("-lssl")
         link_flag("-lcrypto")
+        link_flag("-lnghttp2")
         regen("../ffi/openssl/crypto_helpers.ae")
         regen("../util/io.ae")
         regen("../util/binbuf.ae")

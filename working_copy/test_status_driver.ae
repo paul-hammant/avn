@@ -1,0 +1,108 @@
+// Copyright 2026 Paul Hammant (portions).
+// Apache License, Version 2.0 — see LICENSE.
+//
+// Aether driver for svn status test. Round 238.
+// Migrated from working_copy/test_status.sh.
+
+import contrib.aeocha
+import std.os
+import std.os (os_getenv)
+import std.string
+
+extern list_new() -> ptr
+extern list_add_raw(list: ptr, item: ptr) -> int
+
+argv_new() -> { return list_new() }
+argv_push(argv: ptr, s: string) { list_add_raw(argv, s) }
+
+sh(cmd: string) -> {
+    argv = argv_new()
+    argv_push(argv, "-c")
+    argv_push(argv, cmd)
+    out, status, err = os.run_capture("/bin/bash", argv, null)
+    return out, status, err
+}
+
+main() {
+    fw = aeocha.init()
+    svn_bin = os_getenv("SVN_BIN")
+    port    = os_getenv("TEST_STATUS_PORT")
+    url     = string.concat("http://127.0.0.1:", string.concat(port, "/demo"))
+    wc      = "/tmp/svnae_test_st_wc"
+
+    // --- prep: fresh checkout ---
+    co = string.concat("rm -rf ", wc)
+    co = string.concat(co, " && ")
+    co = string.concat(co, svn_bin)
+    co = string.concat(co, " checkout ")
+    co = string.concat(co, url)
+    co = string.concat(co, " ")
+    co = string.concat(co, wc)
+    co = string.concat(co, " >/dev/null")
+    co_out, co_st, co_err = sh(co)
+
+    // svn status $WC (always run from /, pass $WC explicitly)
+    status_cmd = string.concat(svn_bin, " status ")
+    status_cmd = string.concat(status_cmd, wc)
+
+    // status sorted (for line-count + presence checks after multi changes)
+    status_sorted = string.concat(status_cmd, " | sort")
+
+    // mutators
+    mod_readme = string.concat("echo 'different content' > ", string.concat(wc, "/README"))
+    add_unver  = string.concat("echo 'new stuff' > ", string.concat(wc, "/newfile"))
+    rm_main    = string.concat("rm ", string.concat(wc, "/src/main.c"))
+
+    // restore
+    restore_readme = string.concat("printf 'Hello\\n' > ", string.concat(wc, "/README"))
+    restore_main_c = string.concat("printf 'int main() { return 42; }\\n' > ", string.concat(wc, "/src/main.c"))
+    rm_newfile     = string.concat("rm ", string.concat(wc, "/newfile"))
+
+    aeocha.describe(fw, "svn status") {
+
+        aeocha.it("prep: clean checkout") callback {
+            aeocha.expect_exit(fw, co_st, 0, "checkout exit 0")
+        }
+
+        aeocha.it("clean WC has empty status") callback {
+            out, _, _ = sh(status_cmd)
+            aeocha.assert_str_eq(fw, out, "", "no status output")
+        }
+
+        aeocha.it("modified file shows M") callback {
+            sh(mod_readme)
+            out, _, _ = sh(status_cmd)
+            aeocha.expect_stdout_contains(fw, out, "M",
+                "M flag present")
+            aeocha.expect_stdout_contains(fw, out, "README",
+                "README in status")
+        }
+
+        aeocha.it("modified + unversioned shows 2 lines") callback {
+            sh(add_unver)
+            out, _, _ = sh(status_sorted)
+            aeocha.expect_stdout_line_count(fw, out, 2, "2 status lines")
+            aeocha.expect_stdout_contains(fw, out, "M", "M for README")
+            aeocha.expect_stdout_contains(fw, out, "?", "? for newfile")
+            aeocha.expect_stdout_contains(fw, out, "newfile", "newfile listed")
+        }
+
+        aeocha.it("missing tracked file shows !") callback {
+            sh(rm_main)
+            out, _, _ = sh(status_cmd)
+            aeocha.expect_stdout_contains(fw, out, "!", "! flag present")
+            aeocha.expect_stdout_contains(fw, out, "src/main.c",
+                "src/main.c shown missing")
+        }
+
+        aeocha.it("fully restored WC has empty status") callback {
+            sh(restore_readme)
+            sh(restore_main_c)
+            sh(rm_newfile)
+            out, _, _ = sh(status_cmd)
+            aeocha.assert_str_eq(fw, out, "", "status empty after restore")
+        }
+    }
+
+    aeocha.run_summary(fw)
+}

@@ -336,6 +336,11 @@ repo creation and server lifecycle inline. Don't migrate them.
   values), invoke `/bin/bash -c` instead of `/bin/sh -c`. The
   `sh()` wrapper in our drivers should target bash for that
   reason. Round 237 finding.
+- **`-lnghttp2` link flag.** The Aether stdlib's HTTP/2 surface
+  pulls libnghttp2 into `libaether.a`, so any binary linking
+  `libaether.a` needs `link_flag("-lnghttp2")`. Symptom: `gcc link
+  failed` with a long list of `undefined reference to
+  nghttp2_*`. Round 238 svnserver build hit this.
 - **svnae SDK setters target `bash.test`, not `aether.driver_test`.**
   Our `svn_server`/`empty_server` setters in `.aeb/lib/svnae/`
   emit `pre_command`/`post_command` that `bash.test` consumes;
