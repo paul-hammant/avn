@@ -1,0 +1,226 @@
+// Copyright 2026 Paul Hammant (portions).
+// Apache License, Version 2.0 — see LICENSE.
+//
+// Aether driver for multi-algo secondary verification.
+// Round 253. Migrated from svn/test_verify_secondaries.sh.
+
+import contrib.aeocha
+import std.os
+import std.os (os_getenv)
+import std.string
+
+extern list_new() -> ptr
+extern list_add_raw(list: ptr, item: ptr) -> int
+
+argv_new() -> { return list_new() }
+argv_push(argv: ptr, s: string) { list_add_raw(argv, s) }
+
+sh(cmd: string) -> {
+    argv = argv_new()
+    argv_push(argv, "-c")
+    argv_push(argv, cmd)
+    out, status, err = os.run_capture("/bin/bash", argv, null)
+    return out, status, err
+}
+
+main() {
+    fw = aeocha.init()
+    svn_bin    = os_getenv("SVN_BIN")
+    admin_bin  = os_getenv("ADMIN_BIN")
+    server_bin = os_getenv("SERVER_BIN")
+
+    // Test owns server lifecycle entirely. We pick a port + repo path
+    // and bring up servers as needed via background sh() invocations.
+    repo  = "/tmp/svnae_aeb_test_verify_sec_repo"
+    port  = "9602"
+    wc    = "/tmp/svnae_test_sec_wc"
+    url   = string.concat("http://127.0.0.1:", string.concat(port, "/demo"))
+    base  = string.concat("http://127.0.0.1:", string.concat(port, "/repos/demo"))
+    pidf  = "/tmp/svnae_test_sec_srv.pid"
+
+    // Setup: rm + svnadmin create --algos sha256,sha1
+    setup = string.concat("rm -rf ", repo)
+    setup = string.concat(setup, " ")
+    setup = string.concat(setup, wc)
+    setup = string.concat(setup, " && ")
+    setup = string.concat(setup, admin_bin)
+    setup = string.concat(setup, " create ")
+    setup = string.concat(setup, repo)
+    setup = string.concat(setup, " --algos sha256,sha1 >/dev/null")
+
+    cat_format = string.concat("cat ", repo)
+    cat_format = string.concat(cat_format, "/format")
+
+    rep_name_len = string.concat("basename $(ls ", repo)
+    rep_name_len = string.concat(rep_name_len, "/reps/*/*/*.rep | head -1) .rep | awk '{print length}'")
+
+    // Spawn server (background, write pid to file, sleep 1.5s for ready)
+    spawn_srv = "(nohup "
+    spawn_srv = string.concat(spawn_srv, server_bin)
+    spawn_srv = string.concat(spawn_srv, " demo ")
+    spawn_srv = string.concat(spawn_srv, repo)
+    spawn_srv = string.concat(spawn_srv, " ")
+    spawn_srv = string.concat(spawn_srv, port)
+    spawn_srv = string.concat(spawn_srv, " >/tmp/svnae_test_sec_srv.log 2>&1 & echo $! > ")
+    spawn_srv = string.concat(spawn_srv, pidf)
+    spawn_srv = string.concat(spawn_srv, "; disown); sleep 1.5")
+
+    kill_srv = "kill $(cat "
+    kill_srv = string.concat(kill_srv, pidf)
+    kill_srv = string.concat(kill_srv, ") 2>/dev/null || true; sleep 0.3")
+
+    // Populate via WC
+    populate = string.concat(svn_bin, " checkout ")
+    populate = string.concat(populate, url)
+    populate = string.concat(populate, " ")
+    populate = string.concat(populate, wc)
+    populate = string.concat(populate, " >/dev/null && cd ")
+    populate = string.concat(populate, wc)
+    populate = string.concat(populate, " && echo 'hello secondary' > note.txt && ")
+    populate = string.concat(populate, svn_bin)
+    populate = string.concat(populate, " add note.txt >/dev/null && ")
+    populate = string.concat(populate, svn_bin)
+    populate = string.concat(populate, " commit --author alice --log 'with content' >/dev/null")
+
+    hashes_curl = string.concat("curl -s ", base)
+    hashes_curl = string.concat(hashes_curl, "/rev/1/hashes/note.txt")
+
+    sql_count_sec = string.concat("sqlite3 ", repo)
+    sql_count_sec = string.concat(sql_count_sec, "/rep-cache.db 'SELECT COUNT(*) FROM rep_cache_sec'")
+
+    verify_default = string.concat(svn_bin, " verify ")
+    verify_default = string.concat(verify_default, url)
+    verify_default = string.concat(verify_default, " --rev 1 2>&1 | grep -c '^verify: OK' || true")
+
+    verify_secs = string.concat(svn_bin, " verify ")
+    verify_secs = string.concat(verify_secs, url)
+    verify_secs = string.concat(verify_secs, " --rev 1 --secondaries 2>&1")
+    verify_secs_grep_msg   = string.concat(verify_secs, " | grep -c 'secondary hash(es) verified' || true")
+    verify_secs_grep_count = string.concat(verify_secs, " | grep -c '1 file(s)' || true")
+
+    // (F) tamper. Stop server, look up note.txt's primary hash via cat
+    // header (need server up briefly), corrupt rep_cache_sec, restart.
+    fetch_sha = "sha=$(curl -sD - -o /dev/null "
+    fetch_sha = string.concat(fetch_sha, base)
+    fetch_sha = string.concat(fetch_sha, "/rev/1/cat/note.txt | awk 'BEGIN{IGNORECASE=1} /X-Svnae-Node-Hash:/{gsub(/\\r/,\"\"); print $2}'); echo $sha > /tmp/svnae_test_sec_sha")
+    cat_sha = "cat /tmp/svnae_test_sec_sha"
+
+    corrupt_sec_for_sha = "sha=$(cat /tmp/svnae_test_sec_sha); sqlite3 "
+    corrupt_sec_for_sha = string.concat(corrupt_sec_for_sha, repo)
+    corrupt_sec_for_sha = string.concat(corrupt_sec_for_sha, "/rep-cache.db \"UPDATE rep_cache_sec SET secondary_hash='0000000000000000000000000000000000000000' WHERE algo='sha1' AND primary_hash='$sha'\"")
+
+    verify_default_after_tamper = string.concat(svn_bin, " verify ")
+    verify_default_after_tamper = string.concat(verify_default_after_tamper, url)
+    verify_default_after_tamper = string.concat(verify_default_after_tamper, " --rev 1 2>&1 | grep -c '^verify: OK' || true")
+
+    verify_secs_after_tamper = string.concat(svn_bin, " verify ")
+    verify_secs_after_tamper = string.concat(verify_secs_after_tamper, url)
+    verify_secs_after_tamper = string.concat(verify_secs_after_tamper, " --rev 1 --secondaries 2>&1 | grep -c '^verify: OK' || true")
+
+    cleanup = string.concat("rm -rf ", repo)
+    cleanup = string.concat(cleanup, " ")
+    cleanup = string.concat(cleanup, wc)
+
+    aeocha.describe(fw, "multi-algo secondary verification") {
+
+        // (A) repo creation + format + rep file widths
+        aeocha.it("setup: create sha256,sha1 repo via svnadmin") callback {
+            _, st, _ = sh(setup)
+            aeocha.expect_exit(fw, st, 0, "svnadmin create exit 0")
+        }
+
+        aeocha.it("(A) format line is 'svnae-fsfs-1 sha256,sha1'") callback {
+            out, _, _ = sh(cat_format)
+            aeocha.expect_stdout_contains(fw, out, "svnae-fsfs-1 sha256,sha1",
+                "format line")
+        }
+
+        aeocha.it("(A) initial rep filename is 64 hex (sha256-wide)") callback {
+            out, _, _ = sh(rep_name_len)
+            aeocha.expect_stdout_contains(fw, out, "64",
+                "rep name length 64")
+        }
+
+        // populate
+        aeocha.it("populate: spawn_srv server + commit note.txt") callback {
+            sh(spawn_srv)
+            _, st, _ = sh(populate)
+            aeocha.expect_exit(fw, st, 0, "populate exit 0")
+        }
+
+        // (B) /hashes/<path> shows both
+        aeocha.it("(B) /hashes/note.txt shows sha256 + sha1") callback {
+            out, _, _ = sh(hashes_curl)
+            aeocha.expect_stdout_contains(fw, out, "\"algo\":\"sha256\"",
+                "sha256 advertised")
+            aeocha.expect_stdout_contains(fw, out, "\"algo\":\"sha1\"",
+                "sha1 advertised")
+        }
+
+        // (C) rep_cache_sec table populated
+        aeocha.it("(C) rep_cache_sec table is non-empty") callback {
+            out, _, _ = sh(sql_count_sec)
+            // Just check it's not "0".
+            aeocha.assert_not_eq(fw, string.length(out), 0, "got a count")
+            // crude non-zero check via grep -v 0
+            check_nonzero = "out=$(sqlite3 "
+            check_nonzero = string.concat(check_nonzero, repo)
+            check_nonzero = string.concat(check_nonzero, "/rep-cache.db 'SELECT COUNT(*) FROM rep_cache_sec'); [ \"$out\" -gt 0 ] && echo nonzero || echo zero")
+            r2, _, _ = sh(check_nonzero)
+            aeocha.expect_stdout_contains(fw, r2, "nonzero",
+                "rep_cache_sec count > 0")
+        }
+
+        // (D) default verify still works
+        aeocha.it("(D) default verify --rev 1 prints OK") callback {
+            out, _, _ = sh(verify_default)
+            aeocha.expect_stdout_contains(fw, out, "1", "1 OK line")
+        }
+
+        // (E) --secondaries reports verified count
+        aeocha.it("(E) --secondaries verifies hashes + reports 1 file") callback {
+            r1, _, _ = sh(verify_secs_grep_msg)
+            aeocha.expect_stdout_contains(fw, r1, "1",
+                "secondary verified message present")
+            r2, _, _ = sh(verify_secs_grep_count)
+            aeocha.expect_stdout_contains(fw, r2, "1",
+                "1 file(s) reported")
+        }
+
+        // (F) tamper: corrupt sha1 secondary for note.txt
+        aeocha.it("(F) capture note.txt primary hash") callback {
+            _, st, _ = sh(fetch_sha)
+            aeocha.expect_exit(fw, st, 0, "fetch sha exit 0")
+            out, _, _ = sh(cat_sha)
+            // sha is at least non-empty
+            aeocha.assert_not_eq(fw, string.length(out), 0, "non-empty sha")
+        }
+
+        aeocha.it("(F) stop server, corrupt rep_cache_sec, restart") callback {
+            sh(kill_srv)
+            _, st, _ = sh(corrupt_sec_for_sha)
+            aeocha.expect_exit(fw, st, 0, "sqlite UPDATE exit 0")
+            sh(spawn_srv)
+        }
+
+        aeocha.it("(F) default verify still passes (primary unchanged)") callback {
+            out, _, _ = sh(verify_default_after_tamper)
+            aeocha.expect_stdout_contains(fw, out, "1",
+                "default verify still OK")
+        }
+
+        aeocha.it("(F) --secondaries detects mismatch (no OK)") callback {
+            out, _, _ = sh(verify_secs_after_tamper)
+            aeocha.expect_stdout_contains(fw, out, "0",
+                "no 'verify: OK' from --secondaries after tamper")
+        }
+
+        aeocha.it("cleanup: kill server + rm repo/WC") callback {
+            sh(kill_srv)
+            sh(cleanup)
+            aeocha.assert_eq(fw, 1, 1, "trivial — best-effort cleanup")
+        }
+    }
+
+    aeocha.run_summary(fw)
+}
