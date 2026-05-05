@@ -1,16 +1,31 @@
 import build
-import bash
-import bash (script, pre_command, post_command)
-import svnae
-import svnae (svn_server_with_token)
+import aether
+import aether (driver, output, binary_under_test, fixture_seed, fixture_server,
+               path, repo, seed_bin, bin, args, port, ready_after_ms)
 
 main() {
     b = build.start()
     build.dep(b, "svnserver")
     build.dep(b, "svnserver/.build-seed.ae")
     build.dep(b, "svn")
-    bash.test(b) {
-        svn_server_with_token("test_put", "9580", "test-put-token")
-        script("test_rest_put.sh")
+
+    aether.driver_test(b) {
+        driver("test_rest_put_driver.ae")
+        output("test_rest_put_driver")
+
+        binary_under_test(b, "svn") {
+            path("target/svn/bin/svn")
+        }
+
+        fixture_seed(b, "test_put") {
+            repo("/tmp/svnae_aeb_test_put_repo")
+            seed_bin("target/svnserver/bin/svnae-seed")
+        }
+        fixture_server(b, "test_put") {
+            bin("target/svnserver/bin/aether-svnserver")
+            args("demo $TEST_PUT_REPO 9580 --superuser-token test-put-token")
+            port(9580)
+            ready_after_ms(1500)
+        }
     }
 }
