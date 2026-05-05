@@ -1,0 +1,216 @@
+// Copyright 2026 Paul Hammant (portions).
+// Apache License, Version 2.0 — see LICENSE.
+//
+// Aether driver for svn merge — reverse + cherry-pick.
+// Round 246. Migrated from working_copy/test_merge_reverse.sh.
+
+import contrib.aeocha
+import std.os
+import std.os (os_getenv)
+import std.string
+
+extern list_new() -> ptr
+extern list_add_raw(list: ptr, item: ptr) -> int
+
+argv_new() -> { return list_new() }
+argv_push(argv: ptr, s: string) { list_add_raw(argv, s) }
+
+sh(cmd: string) -> {
+    argv = argv_new()
+    argv_push(argv, "-c")
+    argv_push(argv, cmd)
+    out, status, err = os.run_capture("/bin/bash", argv, null)
+    return out, status, err
+}
+
+main() {
+    fw = aeocha.init()
+    svn_bin = os_getenv("SVN_BIN")
+    port    = os_getenv("TEST_MERGE_REVERSE_PORT")
+    url     = string.concat("http://127.0.0.1:", string.concat(port, "/demo"))
+    wc      = "/tmp/svnae_test_rmrg_wc"
+
+    // Expected file contents at r4, r5, r6, and after reverse r5 from r6.
+    // Bake them into /tmp/svnae_test_rmrg_expected.* files in prep so we
+    // can diff against them later.
+    write_expected = "rm -f /tmp/svnae_test_rmrg_expected.* && "
+    write_expected = string.concat(write_expected, "printf 'head 1\\nhead 2\\nbody 3\\ntail 4\\ntail 5\\n' > /tmp/svnae_test_rmrg_expected.r4 && ")
+    write_expected = string.concat(write_expected, "printf 'head 1\\nhead 2\\nmid-edit\\nbody 3\\ntail 4\\ntail 5\\n' > /tmp/svnae_test_rmrg_expected.r5 && ")
+    write_expected = string.concat(write_expected, "printf 'head 1\\nhead 2\\nmid-edit\\nbody 3\\ntail 4\\ntail 5\\ntail-edit\\n' > /tmp/svnae_test_rmrg_expected.r6 && ")
+    write_expected = string.concat(write_expected, "printf 'head 1\\nhead 2\\nbody 3\\ntail 4\\ntail 5\\ntail-edit\\n' > /tmp/svnae_test_rmrg_expected.r6_undo_r5")
+
+    // Setup: r4..r6 on src/main.c via a temp WC.
+    setup = "rm -rf /tmp/svnae_test_rmrg_setup && "
+    setup = string.concat(setup, svn_bin)
+    setup = string.concat(setup, " checkout ")
+    setup = string.concat(setup, url)
+    setup = string.concat(setup, " /tmp/svnae_test_rmrg_setup >/dev/null && cd /tmp/svnae_test_rmrg_setup && ")
+    setup = string.concat(setup, "cp /tmp/svnae_test_rmrg_expected.r4 src/main.c && ")
+    setup = string.concat(setup, svn_bin)
+    setup = string.concat(setup, " commit --author u --log 'r4: base' >/dev/null && ")
+    setup = string.concat(setup, "cp /tmp/svnae_test_rmrg_expected.r5 src/main.c && ")
+    setup = string.concat(setup, svn_bin)
+    setup = string.concat(setup, " commit --author u --log 'r5: mid-edit' >/dev/null && ")
+    setup = string.concat(setup, "cp /tmp/svnae_test_rmrg_expected.r6 src/main.c && ")
+    setup = string.concat(setup, svn_bin)
+    setup = string.concat(setup, " commit --author u --log 'r6: tail-edit' >/dev/null && ")
+    setup = string.concat(setup, "rm -rf /tmp/svnae_test_rmrg_setup")
+
+    o0, prep0_st, e0 = sh(write_expected)
+    o1, prep1_st, e1 = sh(setup)
+
+    // Helper: diff expected vs WC src/main.c, echo same/diff
+    diff_to_expected = "diff -q "
+    diff_eq = "diff -q $1 $2 >/dev/null 2>&1 && echo same || echo diff"
+
+    // === (A) Cherry-pick r5 onto WC at r4 ===
+    case_a = string.concat("rm -rf ", wc)
+    case_a = string.concat(case_a, " && ")
+    case_a = string.concat(case_a, svn_bin)
+    case_a = string.concat(case_a, " checkout ")
+    case_a = string.concat(case_a, url)
+    case_a = string.concat(case_a, " ")
+    case_a = string.concat(case_a, wc)
+    case_a = string.concat(case_a, " >/dev/null && cd ")
+    case_a = string.concat(case_a, wc)
+    case_a = string.concat(case_a, " && ")
+    case_a = string.concat(case_a, svn_bin)
+    case_a = string.concat(case_a, " update --rev 4 >/dev/null")
+
+    case_a_pre  = string.concat("diff -q /tmp/svnae_test_rmrg_expected.r4 ", wc)
+    case_a_pre  = string.concat(case_a_pre, "/src/main.c >/dev/null 2>&1 && echo same || echo diff")
+
+    case_a_merge = string.concat("cd ", wc)
+    case_a_merge = string.concat(case_a_merge, " && ")
+    case_a_merge = string.concat(case_a_merge, svn_bin)
+    case_a_merge = string.concat(case_a_merge, " merge -c 5 ")
+    case_a_merge = string.concat(case_a_merge, url)
+    case_a_merge = string.concat(case_a_merge, "/src src >/dev/null 2>&1")
+
+    case_a_post = string.concat("diff -q /tmp/svnae_test_rmrg_expected.r5 ", wc)
+    case_a_post = string.concat(case_a_post, "/src/main.c >/dev/null 2>&1 && echo same || echo diff")
+
+    case_a_mi   = string.concat("cd ", wc)
+    case_a_mi   = string.concat(case_a_mi, " && ")
+    case_a_mi   = string.concat(case_a_mi, svn_bin)
+    case_a_mi   = string.concat(case_a_mi, " propget svn:mergeinfo . 2>/dev/null || echo ''")
+
+    cleanup_wc  = string.concat("cd / && rm -rf ", wc)
+
+    // === (B) Reverse cherry-pick -c -5 at HEAD (r6) ===
+    case_b_co = string.concat(cleanup_wc, " && ")
+    case_b_co = string.concat(case_b_co, svn_bin)
+    case_b_co = string.concat(case_b_co, " checkout ")
+    case_b_co = string.concat(case_b_co, url)
+    case_b_co = string.concat(case_b_co, " ")
+    case_b_co = string.concat(case_b_co, wc)
+    case_b_co = string.concat(case_b_co, " >/dev/null")
+
+    case_b_pre  = string.concat("diff -q /tmp/svnae_test_rmrg_expected.r6 ", wc)
+    case_b_pre  = string.concat(case_b_pre, "/src/main.c >/dev/null 2>&1 && echo same || echo diff")
+
+    case_b_merge = string.concat("cd ", wc)
+    case_b_merge = string.concat(case_b_merge, " && ")
+    case_b_merge = string.concat(case_b_merge, svn_bin)
+    case_b_merge = string.concat(case_b_merge, " merge -c -5 ")
+    case_b_merge = string.concat(case_b_merge, url)
+    case_b_merge = string.concat(case_b_merge, "/src src >/dev/null 2>&1")
+
+    case_b_post = string.concat("diff -q /tmp/svnae_test_rmrg_expected.r6_undo_r5 ", wc)
+    case_b_post = string.concat(case_b_post, "/src/main.c >/dev/null 2>&1 && echo same || echo diff")
+
+    // === (C) Reverse range -r 6:4 ===
+    case_c_co = string.concat(cleanup_wc, " && ")
+    case_c_co = string.concat(case_c_co, svn_bin)
+    case_c_co = string.concat(case_c_co, " checkout ")
+    case_c_co = string.concat(case_c_co, url)
+    case_c_co = string.concat(case_c_co, " ")
+    case_c_co = string.concat(case_c_co, wc)
+    case_c_co = string.concat(case_c_co, " >/dev/null")
+
+    case_c_merge = string.concat("cd ", wc)
+    case_c_merge = string.concat(case_c_merge, " && ")
+    case_c_merge = string.concat(case_c_merge, svn_bin)
+    case_c_merge = string.concat(case_c_merge, " merge -r 6:4 ")
+    case_c_merge = string.concat(case_c_merge, url)
+    case_c_merge = string.concat(case_c_merge, "/src src >/dev/null 2>&1")
+
+    case_c_post = string.concat("diff -q /tmp/svnae_test_rmrg_expected.r4 ", wc)
+    case_c_post = string.concat(case_c_post, "/src/main.c >/dev/null 2>&1 && echo same || echo diff")
+
+    aeocha.describe(fw, "svn merge — reverse + cherry-pick") {
+
+        aeocha.it("prep: write expected fixtures + r4..r6 setup") callback {
+            aeocha.expect_exit(fw, prep0_st, 0, "expected fixtures written")
+            aeocha.expect_exit(fw, prep1_st, 0, "r4..r6 setup committed")
+        }
+
+        // (A) Cherry-pick r5
+        aeocha.it("(A) checkout WC + downgrade to r4") callback {
+            _, st, _ = sh(case_a)
+            aeocha.expect_exit(fw, st, 0, "case A setup exit 0")
+        }
+
+        aeocha.it("(A) WC at r4 has R4 content") callback {
+            out, _, _ = sh(case_a_pre)
+            aeocha.expect_stdout_contains(fw, out, "same",
+                "WC src/main.c == R4")
+        }
+
+        aeocha.it("(A) cherry-pick -c 5 yields R5 content") callback {
+            _, st, _ = sh(case_a_merge)
+            aeocha.expect_exit(fw, st, 0, "merge -c 5 exit 0")
+            out, _, _ = sh(case_a_post)
+            aeocha.expect_stdout_contains(fw, out, "same",
+                "WC src/main.c == R5 after cherry-pick")
+        }
+
+        aeocha.it("(A) mergeinfo records src:5-5") callback {
+            out, _, _ = sh(case_a_mi)
+            aeocha.expect_stdout_contains(fw, out, "src:5-5",
+                "cherry mergeinfo")
+        }
+
+        // (B) Reverse cherry-pick -c -5 at HEAD
+        aeocha.it("(B) fresh checkout at HEAD has R6 content") callback {
+            _, st, _ = sh(case_b_co)
+            aeocha.expect_exit(fw, st, 0, "case B checkout exit 0")
+            out, _, _ = sh(case_b_pre)
+            aeocha.expect_stdout_contains(fw, out, "same",
+                "WC src/main.c == R6 pre-reverse")
+        }
+
+        aeocha.it("(B) reverse -c -5 drops mid-edit → R6_UNDO_R5") callback {
+            _, st, _ = sh(case_b_merge)
+            aeocha.expect_exit(fw, st, 0, "merge -c -5 exit 0")
+            out, _, _ = sh(case_b_post)
+            aeocha.expect_stdout_contains(fw, out, "same",
+                "WC src/main.c == R6_UNDO_R5")
+        }
+
+        aeocha.it("(B) reverse mergeinfo recorded as src:-5-5") callback {
+            out, _, _ = sh(case_a_mi)
+            aeocha.expect_stdout_contains(fw, out, "src:-5-5",
+                "reverse mergeinfo")
+        }
+
+        // (C) Reverse range -r 6:4 → undo r5 AND r6
+        aeocha.it("(C) fresh checkout + merge -r 6:4 → R4 content") callback {
+            _, st1, _ = sh(case_c_co)
+            aeocha.expect_exit(fw, st1, 0, "case C checkout exit 0")
+            _, st2, _ = sh(case_c_merge)
+            aeocha.expect_exit(fw, st2, 0, "merge -r 6:4 exit 0")
+            out, _, _ = sh(case_c_post)
+            aeocha.expect_stdout_contains(fw, out, "same",
+                "WC src/main.c == R4")
+        }
+
+        aeocha.it("(C) range reverse mergeinfo recorded as src:-5-6") callback {
+            out, _, _ = sh(case_a_mi)
+            aeocha.expect_stdout_contains(fw, out, "src:-5-6",
+                "range reverse mergeinfo")
+        }
+    }
+
+    aeocha.run_summary(fw)
+}
