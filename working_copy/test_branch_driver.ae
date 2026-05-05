@@ -1,0 +1,161 @@
+// Copyright 2026 Paul Hammant (portions).
+// Apache License, Version 2.0 — see LICENSE.
+//
+// Aether driver for server-side copy = branching.
+// Round 243. Migrated from working_copy/test_branch.sh.
+
+import contrib.aeocha
+import std.os
+import std.os (os_getenv)
+import std.string
+
+extern list_new() -> ptr
+extern list_add_raw(list: ptr, item: ptr) -> int
+
+argv_new() -> { return list_new() }
+argv_push(argv: ptr, s: string) { list_add_raw(argv, s) }
+
+sh(cmd: string) -> {
+    argv = argv_new()
+    argv_push(argv, "-c")
+    argv_push(argv, cmd)
+    out, status, err = os.run_capture("/bin/bash", argv, null)
+    return out, status, err
+}
+
+main() {
+    fw = aeocha.init()
+    svn_bin = os_getenv("SVN_BIN")
+    port    = os_getenv("TEST_BRANCH_PORT")
+    repo    = os_getenv("TEST_BRANCH_REPO")
+    url     = string.concat("http://127.0.0.1:", string.concat(port, "/demo"))
+    base    = string.concat("http://127.0.0.1:", string.concat(port, "/repos/demo"))
+    wc      = "/tmp/svnae_test_br_wc"
+
+    // One-shot: count reps before, branch, count reps after, print
+    // `Committed ...` plus DELTA=N. Assertions then grep this output.
+    // Workaround: outer-scope string captured into a closure env
+    // gets mistyped as int by aetherc 0.126 (closure-tuple-destructure
+    // with mixed int/string slots). Tee output to a file; assertion
+    // closures cat it back. Constant-string `cat ...` doesn't trip
+    // the typer.
+    branch_log = "/tmp/svnae_test_branch_log"
+    branch_pipeline = string.concat("rm -f ", branch_log)
+    branch_pipeline = string.concat(branch_pipeline, " && before=$(find ")
+    branch_pipeline = string.concat(branch_pipeline, repo)
+    branch_pipeline = string.concat(branch_pipeline, "/reps -name '*.rep' | wc -l) && ")
+    branch_pipeline = string.concat(branch_pipeline, svn_bin)
+    branch_pipeline = string.concat(branch_pipeline, " cp ")
+    branch_pipeline = string.concat(branch_pipeline, url)
+    branch_pipeline = string.concat(branch_pipeline, "/src ")
+    branch_pipeline = string.concat(branch_pipeline, url)
+    branch_pipeline = string.concat(branch_pipeline, "/src-branch --author alice --log 'branch off src' | tee ")
+    branch_pipeline = string.concat(branch_pipeline, branch_log)
+    branch_pipeline = string.concat(branch_pipeline, " && after=$(find ")
+    branch_pipeline = string.concat(branch_pipeline, repo)
+    branch_pipeline = string.concat(branch_pipeline, "/reps -name '*.rep' | wc -l) && ")
+    branch_pipeline = string.concat(branch_pipeline, "echo \"DELTA=$((after - before))\" >> ")
+    branch_pipeline = string.concat(branch_pipeline, branch_log)
+
+    branch_out_, branch_st_, branch_err_ = sh(branch_pipeline)
+    cat_branch_log = "cat /tmp/svnae_test_branch_log"
+
+    ls_root         = string.concat(svn_bin, " ls ")
+    ls_root         = string.concat(ls_root, url)
+    cat_trunk_main  = string.concat(svn_bin, " cat ")
+    cat_trunk_main  = string.concat(cat_trunk_main, url)
+    cat_trunk_main  = string.concat(cat_trunk_main, " src/main.c")
+    cat_branch_main = string.concat(svn_bin, " cat ")
+    cat_branch_main = string.concat(cat_branch_main, url)
+    cat_branch_main = string.concat(cat_branch_main, " src-branch/main.c")
+    r3_branch_curl  = string.concat("curl -s -o /dev/null -w '%{http_code}' ", base)
+    r3_branch_curl  = string.concat(r3_branch_curl, "/rev/3/list/src-branch")
+
+    co_wc = string.concat("rm -rf ", wc)
+    co_wc = string.concat(co_wc, " && ")
+    co_wc = string.concat(co_wc, svn_bin)
+    co_wc = string.concat(co_wc, " checkout ")
+    co_wc = string.concat(co_wc, url)
+    co_wc = string.concat(co_wc, " ")
+    co_wc = string.concat(co_wc, wc)
+    co_wc = string.concat(co_wc, " >/dev/null")
+
+    edit_trunk = string.concat("cd ", wc)
+    edit_trunk = string.concat(edit_trunk, " && echo 'trunk change' > src/main.c && ")
+    edit_trunk = string.concat(edit_trunk, svn_bin)
+    edit_trunk = string.concat(edit_trunk, " commit --author alice --log 'trunk edit'")
+
+    edit_branch = string.concat("cd ", wc)
+    edit_branch = string.concat(edit_branch, " && echo 'branch change' > src-branch/main.c && ")
+    edit_branch = string.concat(edit_branch, svn_bin)
+    edit_branch = string.concat(edit_branch, " commit --author alice --log 'branch edit'")
+
+    aeocha.describe(fw, "server-side copy = branching") {
+
+        aeocha.it("branch commit returns rev 4") callback {
+            aeocha.expect_exit(fw, branch_st_, 0, "branch pipeline exit 0")
+            out, _, _ = sh(cat_branch_log)
+            aeocha.expect_stdout_contains(fw, out, "Committed revision 4.",
+                "branch lands at rev 4")
+        }
+
+        aeocha.it("only 2 new .rep files (root-dir + revision)") callback {
+            out, _, _ = sh(cat_branch_log)
+            aeocha.expect_stdout_contains(fw, out, "DELTA=2",
+                "rep-count delta is 2")
+        }
+
+        aeocha.it("ls shows src-branch/") callback {
+            out, status, _ = sh(ls_root)
+            aeocha.expect_exit(fw, status, 0, "ls exit 0")
+            aeocha.expect_stdout_contains(fw, out, "src-branch/",
+                "src-branch/ in ls")
+        }
+
+        aeocha.it("branch main.c matches trunk at r4") callback {
+            a, _, _ = sh(cat_trunk_main)
+            b, _, _ = sh(cat_branch_main)
+            aeocha.assert_str_eq(fw, a, b,
+                "trunk and branch main.c content equal")
+        }
+
+        aeocha.it("r3 has no src-branch (curl 404)") callback {
+            out, _, _ = sh(r3_branch_curl)
+            aeocha.expect_stdout_contains(fw, out, "404",
+                "src-branch absent at r3")
+        }
+
+        aeocha.it("checkout + trunk edit lands at rev 5") callback {
+            _, st1, _ = sh(co_wc)
+            aeocha.expect_exit(fw, st1, 0, "checkout exit 0")
+            out, status, _ = sh(edit_trunk)
+            aeocha.expect_exit(fw, status, 0, "trunk commit exit 0")
+            aeocha.expect_stdout_contains(fw, out, "Committed revision 5.",
+                "trunk commit at r5")
+        }
+
+        aeocha.it("branch main.c unaffected by trunk edit") callback {
+            b, _, _ = sh(cat_branch_main)
+            aeocha.expect_stdout_contains(fw, b, "int main() { return 42; }",
+                "branch still has pristine main.c")
+        }
+
+        aeocha.it("branch edit lands at rev 6") callback {
+            out, status, _ = sh(edit_branch)
+            aeocha.expect_exit(fw, status, 0, "branch commit exit 0")
+            aeocha.expect_stdout_contains(fw, out, "Committed revision 6.",
+                "branch commit at r6")
+        }
+
+        aeocha.it("trunk and branch evolved independently") callback {
+            a, _, _ = sh(cat_trunk_main)
+            b, _, _ = sh(cat_branch_main)
+            aeocha.expect_stdout_contains(fw, a, "trunk change",
+                "trunk has trunk-change content")
+            aeocha.expect_stdout_contains(fw, b, "branch change",
+                "branch has branch-change content")
+        }
+    }
+
+    aeocha.run_summary(fw)
+}
