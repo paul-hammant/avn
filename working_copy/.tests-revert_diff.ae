@@ -1,16 +1,31 @@
 import build
-import bash
-import bash (script, pre_command, post_command)
-import svnae
-import svnae (svn_server)
+import aether
+import aether (driver, output, binary_under_test, fixture_seed, fixture_server,
+               path, repo, seed_bin, bin, args, port, ready_after_ms)
 
 main() {
     b = build.start()
     build.dep(b, "svn")
     build.dep(b, "svnserver")
     build.dep(b, "svnserver/.build-seed.ae")
-    bash.test(b) {
-        svn_server("test_revert_diff", "9420")
-        script("test_revert_diff.sh")
+
+    aether.driver_test(b) {
+        driver("test_revert_diff_driver.ae")
+        output("test_revert_diff_driver")
+
+        binary_under_test(b, "svn") {
+            path("target/svn/bin/svn")
+        }
+
+        fixture_seed(b, "test_revert_diff") {
+            repo("/tmp/svnae_aeb_test_revert_diff_repo")
+            seed_bin("target/svnserver/bin/svnae-seed")
+        }
+        fixture_server(b, "test_revert_diff") {
+            bin("target/svnserver/bin/aether-svnserver")
+            args("demo $TEST_REVERT_DIFF_REPO 9420")
+            port(9420)
+            ready_after_ms(1500)
+        }
     }
 }
