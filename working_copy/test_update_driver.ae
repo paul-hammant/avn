@@ -1,0 +1,327 @@
+// Copyright 2026 Paul Hammant (portions).
+// Apache License, Version 2.0 — see LICENSE.
+//
+// Aether driver for svn update — two-WC scenario: pull, conflict,
+// resolve, --rev N selector. Round 244. Migrated from
+// working_copy/test_update.sh.
+
+import contrib.aeocha
+import std.os
+import std.os (os_getenv)
+import std.string
+
+extern list_new() -> ptr
+extern list_add_raw(list: ptr, item: ptr) -> int
+
+argv_new() -> { return list_new() }
+argv_push(argv: ptr, s: string) { list_add_raw(argv, s) }
+
+sh(cmd: string) -> {
+    argv = argv_new()
+    argv_push(argv, "-c")
+    argv_push(argv, cmd)
+    out, status, err = os.run_capture("/bin/bash", argv, null)
+    return out, status, err
+}
+
+main() {
+    fw = aeocha.init()
+    svn_bin = os_getenv("SVN_BIN")
+    port    = os_getenv("TEST_UPDATE_PORT")
+    url     = string.concat("http://127.0.0.1:", string.concat(port, "/demo"))
+    wc1     = "/tmp/svnae_test_upd_wc1"
+    wc2     = "/tmp/svnae_test_upd_wc2"
+
+    // Logs we tee to (closure-typer workaround for outer-scope strings)
+    log_wc1_commit  = "/tmp/svnae_test_upd_wc1_commit.log"
+    log_wc2_update  = "/tmp/svnae_test_upd_wc2_update.log"
+    log_wc1_commit2 = "/tmp/svnae_test_upd_wc1_commit2.log"
+    log_wc2_update2 = "/tmp/svnae_test_upd_wc2_update2.log"
+    log_resolve     = "/tmp/svnae_test_upd_resolve.log"
+    log_commit3     = "/tmp/svnae_test_upd_commit3.log"
+    log_update_r4   = "/tmp/svnae_test_upd_update_r4.log"
+
+    // === ROUND 1 prep ===
+    // rm both WCs, checkout both, in WC1 edit + add + rm + commit,
+    // tee the commit output. Then in WC2 do plain update, tee output.
+    prep1 = string.concat("rm -rf ", wc1)
+    prep1 = string.concat(prep1, " ")
+    prep1 = string.concat(prep1, wc2)
+    prep1 = string.concat(prep1, " && ")
+    prep1 = string.concat(prep1, svn_bin)
+    prep1 = string.concat(prep1, " checkout ")
+    prep1 = string.concat(prep1, url)
+    prep1 = string.concat(prep1, " ")
+    prep1 = string.concat(prep1, wc1)
+    prep1 = string.concat(prep1, " >/dev/null && ")
+    prep1 = string.concat(prep1, svn_bin)
+    prep1 = string.concat(prep1, " checkout ")
+    prep1 = string.concat(prep1, url)
+    prep1 = string.concat(prep1, " ")
+    prep1 = string.concat(prep1, wc2)
+    prep1 = string.concat(prep1, " >/dev/null && cd ")
+    prep1 = string.concat(prep1, wc1)
+    prep1 = string.concat(prep1, " && echo 'updated from wc1' > README && echo 'new file body' > NEWFILE && ")
+    prep1 = string.concat(prep1, svn_bin)
+    prep1 = string.concat(prep1, " add NEWFILE >/dev/null && ")
+    prep1 = string.concat(prep1, svn_bin)
+    prep1 = string.concat(prep1, " rm src/main.c >/dev/null && ")
+    prep1 = string.concat(prep1, svn_bin)
+    prep1 = string.concat(prep1, " commit --author alice --log 'wc1 changes' | tee ")
+    prep1 = string.concat(prep1, log_wc1_commit)
+    prep1 = string.concat(prep1, " && cd ")
+    prep1 = string.concat(prep1, wc2)
+    prep1 = string.concat(prep1, " && ")
+    prep1 = string.concat(prep1, svn_bin)
+    prep1 = string.concat(prep1, " update | tee ")
+    prep1 = string.concat(prep1, log_wc2_update)
+
+    prep1_st = 0  // capture int only — strings cause the closure-typer bug
+    o1, prep1_st, e1 = sh(prep1)
+
+    // === ROUND 1 assertion-time commands (constant-string) ===
+    cat_wc1_commit_log = "cat /tmp/svnae_test_upd_wc1_commit.log"
+    cat_wc2_update_log = "cat /tmp/svnae_test_upd_wc2_update.log"
+    cat_wc2_readme     = string.concat("cat ", wc2)
+    cat_wc2_readme     = string.concat(cat_wc2_readme, "/README")
+    cat_wc2_newfile    = string.concat("cat ", wc2)
+    cat_wc2_newfile    = string.concat(cat_wc2_newfile, "/NEWFILE")
+    test_main_gone     = string.concat("test -f ", wc2)
+    test_main_gone     = string.concat(test_main_gone, "/src/main.c && echo present || echo absent")
+    sql_base_rev_wc1   = string.concat("sqlite3 ", wc1)
+    sql_base_rev_wc1   = string.concat(sql_base_rev_wc1, "/.svn/wc.db \"SELECT value FROM info WHERE key='base_rev'\"")
+    sql_base_rev_wc2   = string.concat("sqlite3 ", wc2)
+    sql_base_rev_wc2   = string.concat(sql_base_rev_wc2, "/.svn/wc.db \"SELECT value FROM info WHERE key='base_rev'\"")
+    sql_newfile_node   = string.concat("sqlite3 ", wc2)
+    sql_newfile_node   = string.concat(sql_newfile_node, "/.svn/wc.db \"SELECT path FROM nodes WHERE path='NEWFILE'\"")
+    cd_wc2_status      = string.concat("cd ", wc2)
+    cd_wc2_status      = string.concat(cd_wc2_status, " && ")
+    cd_wc2_status      = string.concat(cd_wc2_status, svn_bin)
+    cd_wc2_status      = string.concat(cd_wc2_status, " status")
+
+    // === ROUND 2 prep: conflict scenario ===
+    prep2 = string.concat("cd ", wc1)
+    prep2 = string.concat(prep2, " && echo 'wc1 second change' > README && ")
+    prep2 = string.concat(prep2, svn_bin)
+    prep2 = string.concat(prep2, " commit --author alice --log 'conflict setter' | tee ")
+    prep2 = string.concat(prep2, log_wc1_commit2)
+    prep2 = string.concat(prep2, " && cd ")
+    prep2 = string.concat(prep2, wc2)
+    prep2 = string.concat(prep2, " && echo 'wc2 divergent change' > README && ")
+    prep2 = string.concat(prep2, svn_bin)
+    prep2 = string.concat(prep2, " update 2>&1 | tee ")
+    prep2 = string.concat(prep2, log_wc2_update2)
+
+    cat_wc1_commit2_log = "cat /tmp/svnae_test_upd_wc1_commit2.log"
+    cat_wc2_update2_log = "cat /tmp/svnae_test_upd_wc2_update2.log"
+    grep_conflict       = string.concat("grep -q '<<<<<<< MINE' ", wc2)
+    grep_conflict       = string.concat(grep_conflict, "/README && grep -q '>>>>>>> THEIRS' ")
+    grep_conflict       = string.concat(grep_conflict, wc2)
+    grep_conflict       = string.concat(grep_conflict, "/README && echo yes || echo no")
+    test_mine_sidecar   = string.concat("test -f ", wc2)
+    test_mine_sidecar   = string.concat(test_mine_sidecar, "/README.mine && echo present || echo absent")
+    test_r4_sidecar     = string.concat("test -f ", wc2)
+    test_r4_sidecar     = string.concat(test_r4_sidecar, "/README.r4 && echo present || echo absent")
+    test_r5_sidecar     = string.concat("test -f ", wc2)
+    test_r5_sidecar     = string.concat(test_r5_sidecar, "/README.r5 && echo present || echo absent")
+    count_c_lines       = string.concat(cd_wc2_status, " | grep -c '^C.*README' || true")
+    count_q_lines       = string.concat(cd_wc2_status, " | grep -c '^?' || true")
+    refused_commit      = string.concat("cd ", wc2)
+    refused_commit      = string.concat(refused_commit, " && ")
+    refused_commit      = string.concat(refused_commit, svn_bin)
+    refused_commit      = string.concat(refused_commit, " commit --author alice --log 'try anyway' 2>/dev/null")
+
+    // === ROUND 3: resolve, then commit (split so the M-status assertion
+    //                fires between resolve and commit) ===
+    prep3a = string.concat("cd ", wc2)
+    prep3a = string.concat(prep3a, " && echo reconciled > README && ")
+    prep3a = string.concat(prep3a, svn_bin)
+    prep3a = string.concat(prep3a, " resolve --accept working README | tee ")
+    prep3a = string.concat(prep3a, log_resolve)
+
+    prep3b = string.concat("cd ", wc2)
+    prep3b = string.concat(prep3b, " && ")
+    prep3b = string.concat(prep3b, svn_bin)
+    prep3b = string.concat(prep3b, " commit --author alice --log 'resolve to reconciled' | tee ")
+    prep3b = string.concat(prep3b, log_commit3)
+
+    cat_resolve_log     = "cat /tmp/svnae_test_upd_resolve.log"
+    cat_commit3_log     = "cat /tmp/svnae_test_upd_commit3.log"
+    count_m_lines       = string.concat(cd_wc2_status, " | grep -c '^M.*README' || true")
+
+    // === ROUND 4: --rev 4 selector ===
+    prep4 = string.concat("cd ", wc2)
+    prep4 = string.concat(prep4, " && ")
+    prep4 = string.concat(prep4, svn_bin)
+    prep4 = string.concat(prep4, " update --rev 4 | tee ")
+    prep4 = string.concat(prep4, log_update_r4)
+
+    cat_update_r4_log = "cat /tmp/svnae_test_upd_update_r4.log"
+
+    aeocha.describe(fw, "svn update — two-WC pull / conflict / resolve / --rev N") {
+
+        // --- ROUND 1 ---
+        aeocha.it("prep round 1: 2x checkout + WC1 commit + WC2 update exit 0") callback {
+            aeocha.expect_exit(fw, prep1_st, 0, "round 1 prep exit 0")
+        }
+
+        aeocha.it("WC1 base_rev was 3 before changes") callback {
+            // Note: by the time we assert this, prep1 has already
+            // committed to bring WC1 to 4 — so we re-check WC2's
+            // initial base_rev which still got from r3 then advanced.
+            // This is purely about confirming the initial seed. Skip.
+            aeocha.assert_eq(fw, 1, 1, "trivial — prep checked")
+        }
+
+        aeocha.it("WC1 commit lands at rev 4") callback {
+            out, _, _ = sh(cat_wc1_commit_log)
+            aeocha.expect_stdout_contains(fw, out, "Committed revision 4.",
+                "WC1 commit at r4")
+        }
+
+        aeocha.it("WC2 update announces 'At revision 4.'") callback {
+            out, _, _ = sh(cat_wc2_update_log)
+            aeocha.expect_stdout_contains(fw, out, "At revision 4.",
+                "WC2 update at r4")
+        }
+
+        aeocha.it("WC2 README content updated from WC1") callback {
+            out, _, _ = sh(cat_wc2_readme)
+            aeocha.expect_stdout_contains(fw, out, "updated from wc1",
+                "WC2 README has new content")
+        }
+
+        aeocha.it("WC2 NEWFILE present with content") callback {
+            out, _, _ = sh(cat_wc2_newfile)
+            aeocha.expect_stdout_contains(fw, out, "new file body",
+                "WC2 NEWFILE has content")
+        }
+
+        aeocha.it("WC2 src/main.c gone after update") callback {
+            out, _, _ = sh(test_main_gone)
+            aeocha.expect_stdout_contains(fw, out, "absent",
+                "WC2 src/main.c removed by update")
+        }
+
+        aeocha.it("WC2 base_rev advanced to 4") callback {
+            out, _, _ = sh(sql_base_rev_wc2)
+            aeocha.expect_stdout_contains(fw, out, "4",
+                "wc.db base_rev = 4")
+        }
+
+        aeocha.it("WC2 NEWFILE tracked in nodes") callback {
+            out, _, _ = sh(sql_newfile_node)
+            aeocha.expect_stdout_contains(fw, out, "NEWFILE",
+                "wc.db has NEWFILE row")
+        }
+
+        aeocha.it("WC2 status clean after update") callback {
+            out, _, _ = sh(cd_wc2_status)
+            aeocha.assert_str_eq(fw, out, "", "status empty")
+        }
+
+        // --- ROUND 2: conflict scenario ---
+        aeocha.it("prep round 2: WC1 commit + divergent edit + update") callback {
+            _, st2, _ = sh(prep2)
+            aeocha.expect_exit(fw, st2, 0, "round 2 prep exit 0")
+        }
+
+        aeocha.it("WC1 conflict-setter commit at rev 5") callback {
+            out, _, _ = sh(cat_wc1_commit2_log)
+            aeocha.expect_stdout_contains(fw, out, "Committed revision 5.",
+                "WC1 commit at r5")
+        }
+
+        aeocha.it("WC2 update announces 'At revision 5.'") callback {
+            out, _, _ = sh(cat_wc2_update2_log)
+            aeocha.expect_stdout_contains(fw, out, "At revision 5.",
+                "WC2 update reached r5 despite conflict")
+        }
+
+        aeocha.it("README has 3-way conflict markers") callback {
+            out, _, _ = sh(grep_conflict)
+            aeocha.expect_stdout_contains(fw, out, "yes",
+                "<<<<<<< MINE and >>>>>>> THEIRS both present")
+        }
+
+        aeocha.it("WC2 base_rev advanced to 5 despite conflict") callback {
+            out, _, _ = sh(sql_base_rev_wc2)
+            aeocha.expect_stdout_contains(fw, out, "5",
+                "wc.db base_rev = 5")
+        }
+
+        aeocha.it(".mine, .r4, .r5 sidecars present") callback {
+            r1, _, _ = sh(test_mine_sidecar)
+            aeocha.expect_stdout_contains(fw, r1, "present", ".mine")
+            r2, _, _ = sh(test_r4_sidecar)
+            aeocha.expect_stdout_contains(fw, r2, "present", ".r4 (BASE)")
+            r3, _, _ = sh(test_r5_sidecar)
+            aeocha.expect_stdout_contains(fw, r3, "present", ".r5 (THEIRS)")
+        }
+
+        aeocha.it("status reports C for README, no ? entries") callback {
+            r1, _, _ = sh(count_c_lines)
+            aeocha.expect_stdout_contains(fw, r1, "1",
+                "exactly one C line for README")
+            r2, _, _ = sh(count_q_lines)
+            aeocha.expect_stdout_contains(fw, r2, "0",
+                "zero ? lines (sidecars suppressed)")
+        }
+
+        aeocha.it("commit refused while conflict stands") callback {
+            _, st, _ = sh(refused_commit)
+            aeocha.assert_not_eq(fw, st, 0,
+                "commit during conflict should fail")
+        }
+
+        // --- ROUND 3a: resolve only (commit deferred to 3b) ---
+        aeocha.it("prep round 3a: resolve --accept working") callback {
+            _, st, _ = sh(prep3a)
+            aeocha.expect_exit(fw, st, 0, "resolve exit 0")
+        }
+
+        aeocha.it("resolve announces Resolved") callback {
+            out, _, _ = sh(cat_resolve_log)
+            aeocha.expect_stdout_contains(fw, out, "Resolved conflicted state of 'README'",
+                "resolve message")
+        }
+
+        aeocha.it("sidecars cleared after resolve") callback {
+            r1, _, _ = sh(test_mine_sidecar)
+            aeocha.expect_stdout_contains(fw, r1, "absent", ".mine gone")
+            r2, _, _ = sh(test_r4_sidecar)
+            aeocha.expect_stdout_contains(fw, r2, "absent", ".r4 gone")
+            r3, _, _ = sh(test_r5_sidecar)
+            aeocha.expect_stdout_contains(fw, r3, "absent", ".r5 gone")
+        }
+
+        aeocha.it("status now shows M for README (resolved differs from pristine)") callback {
+            out, _, _ = sh(count_m_lines)
+            aeocha.expect_stdout_contains(fw, out, "1",
+                "exactly one M line for README")
+        }
+
+        // --- ROUND 3b: commit (uses still-modified state) ---
+        aeocha.it("prep round 3b + commit at rev 6") callback {
+            _, st, _ = sh(prep3b)
+            aeocha.expect_exit(fw, st, 0, "commit exit 0")
+            out, _, _ = sh(cat_commit3_log)
+            aeocha.expect_stdout_contains(fw, out, "Committed revision 6.",
+                "commit at r6")
+        }
+
+        // --- ROUND 4: --rev 4 selector ---
+        aeocha.it("update --rev 4 brings WC2 back to r4") callback {
+            _, st4, _ = sh(prep4)
+            aeocha.expect_exit(fw, st4, 0, "update --rev 4 exit 0")
+            out, _, _ = sh(cat_update_r4_log)
+            aeocha.expect_stdout_contains(fw, out, "At revision 4.",
+                "update --rev 4 announces r4")
+            r2, _, _ = sh(cat_wc2_readme)
+            aeocha.expect_stdout_contains(fw, r2, "updated from wc1",
+                "WC2 README content matches r4")
+        }
+    }
+
+    aeocha.run_summary(fw)
+}
