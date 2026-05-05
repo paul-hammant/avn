@@ -1,0 +1,145 @@
+// Copyright 2026 Paul Hammant (portions).
+// Apache License, Version 2.0 — see LICENSE.
+//
+// Aether driver for server-side prop round-trips via two WCs.
+// Round 240. Migrated from working_copy/test_server_props.sh.
+
+import contrib.aeocha
+import std.os
+import std.os (os_getenv)
+import std.string
+
+extern list_new() -> ptr
+extern list_add_raw(list: ptr, item: ptr) -> int
+
+argv_new() -> { return list_new() }
+argv_push(argv: ptr, s: string) { list_add_raw(argv, s) }
+
+sh(cmd: string) -> {
+    argv = argv_new()
+    argv_push(argv, "-c")
+    argv_push(argv, cmd)
+    out, status, err = os.run_capture("/bin/bash", argv, null)
+    return out, status, err
+}
+
+main() {
+    fw = aeocha.init()
+    svn_bin = os_getenv("SVN_BIN")
+    port    = os_getenv("TEST_SERVER_PROPS_PORT")
+    url     = string.concat("http://127.0.0.1:", string.concat(port, "/demo"))
+    wc1     = "/tmp/svnae_test_sp_wc1"
+    wc2     = "/tmp/svnae_test_sp_wc2"
+
+    // --- prep round 1: WC1 checkout, propset on file + dir + empty,
+    //     commit. Then WC2 fresh checkout — picks up the props. ---
+    prep1 = string.concat("rm -rf ", wc1)
+    prep1 = string.concat(prep1, " ")
+    prep1 = string.concat(prep1, wc2)
+    prep1 = string.concat(prep1, " && ")
+    prep1 = string.concat(prep1, svn_bin)
+    prep1 = string.concat(prep1, " checkout ")
+    prep1 = string.concat(prep1, url)
+    prep1 = string.concat(prep1, " ")
+    prep1 = string.concat(prep1, wc1)
+    prep1 = string.concat(prep1, " >/dev/null && cd ")
+    prep1 = string.concat(prep1, wc1)
+    prep1 = string.concat(prep1, " && ")
+    prep1 = string.concat(prep1, svn_bin)
+    prep1 = string.concat(prep1, " propset svn:mime-type text/plain README >/dev/null && ")
+    prep1 = string.concat(prep1, svn_bin)
+    prep1 = string.concat(prep1, " propset build:label prod src >/dev/null && ")
+    prep1 = string.concat(prep1, svn_bin)
+    prep1 = string.concat(prep1, " propset kv:empty '' README >/dev/null && ")
+    prep1 = string.concat(prep1, svn_bin)
+    prep1 = string.concat(prep1, " commit --author alice --log 'set props' >/dev/null && ")
+    prep1 = string.concat(prep1, svn_bin)
+    prep1 = string.concat(prep1, " checkout ")
+    prep1 = string.concat(prep1, url)
+    prep1 = string.concat(prep1, " ")
+    prep1 = string.concat(prep1, wc2)
+    prep1 = string.concat(prep1, " >/dev/null")
+    prep1_out_, prep1_st_, prep1_err_ = sh(prep1)
+
+    // WC2 propget commands (round 1 verification)
+    cd_wc2 = string.concat("cd ", wc2)
+    cd_wc2 = string.concat(cd_wc2, " && ")
+    cd_wc2 = string.concat(cd_wc2, svn_bin)
+    get_mime_wc2  = string.concat(cd_wc2, " propget svn:mime-type README")
+    get_label_wc2 = string.concat(cd_wc2, " propget build:label src")
+    get_empty_wc2 = string.concat(cd_wc2, " propget kv:empty README")
+
+    // --- prep round 2: from WC1, change mime, add owner, propdel
+    //     build:label, commit. Then `svn update` in WC2. ---
+    prep2 = string.concat("cd ", wc1)
+    prep2 = string.concat(prep2, " && ")
+    prep2 = string.concat(prep2, svn_bin)
+    prep2 = string.concat(prep2, " propset svn:mime-type application/octet-stream README >/dev/null && ")
+    prep2 = string.concat(prep2, svn_bin)
+    prep2 = string.concat(prep2, " propset owner alice README >/dev/null && ")
+    prep2 = string.concat(prep2, svn_bin)
+    prep2 = string.concat(prep2, " propdel build:label src >/dev/null && ")
+    prep2 = string.concat(prep2, svn_bin)
+    prep2 = string.concat(prep2, " commit --author alice --log 'edit props' >/dev/null && cd ")
+    prep2 = string.concat(prep2, wc2)
+    prep2 = string.concat(prep2, " && ")
+    prep2 = string.concat(prep2, svn_bin)
+    prep2 = string.concat(prep2, " update >/dev/null")
+
+    get_owner_wc2  = string.concat(cd_wc2, " propget owner README")
+    get_label_after = string.concat(cd_wc2, " propget build:label src 2>/dev/null")
+
+    aeocha.describe(fw, "server-side props round-trip via two WCs") {
+
+        aeocha.it("prep round 1: checkout+propset+commit+checkout exit 0") callback {
+            aeocha.expect_exit(fw, prep1_st_, 0, "prep1 exit 0")
+        }
+
+        aeocha.it("file prop round-trip (svn:mime-type)") callback {
+            out, status, _ = sh(get_mime_wc2)
+            aeocha.expect_exit(fw, status, 0, "propget exit 0")
+            aeocha.expect_stdout_contains(fw, out, "text/plain",
+                "WC2 sees text/plain")
+        }
+
+        aeocha.it("dir prop round-trip (build:label)") callback {
+            out, status, _ = sh(get_label_wc2)
+            aeocha.expect_exit(fw, status, 0, "propget dir exit 0")
+            aeocha.expect_stdout_contains(fw, out, "prod",
+                "WC2 sees build:label = prod")
+        }
+
+        aeocha.it("empty-value prop survives the round-trip") callback {
+            // propget on empty-valued prop returns exit 1 in this CLI;
+            // bash test captured stdout only (`$(svn propget ...)`) and
+            // didn't check exit code. Match that semantics.
+            out, _, _ = sh(get_empty_wc2)
+            aeocha.assert_str_eq(fw, out, "", "kv:empty stdout is empty")
+        }
+
+        aeocha.it("prep round 2: edit+propdel+commit+update exit 0") callback {
+            _, status, _ = sh(prep2)
+            aeocha.expect_exit(fw, status, 0, "prep2 exit 0")
+        }
+
+        aeocha.it("prop change observed in WC2") callback {
+            out, _, _ = sh(get_mime_wc2)
+            aeocha.expect_stdout_contains(fw, out, "application/octet-stream",
+                "WC2 sees application/octet-stream")
+        }
+
+        aeocha.it("new prop observed in WC2") callback {
+            out, _, _ = sh(get_owner_wc2)
+            aeocha.expect_stdout_contains(fw, out, "alice",
+                "WC2 sees owner = alice")
+        }
+
+        aeocha.it("propdel propagated — propget on deleted prop fails") callback {
+            _, status, _ = sh(get_label_after)
+            aeocha.assert_not_eq(fw, status, 0,
+                "propget on deleted prop should fail")
+        }
+    }
+
+    aeocha.run_summary(fw)
+}
