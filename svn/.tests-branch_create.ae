@@ -1,8 +1,7 @@
 import build
-import bash
-import bash (script, pre_command, post_command)
-import svnae
-import svnae (svn_server_with_token)
+import aether
+import aether (driver, output, binary_under_test, fixture_seed, fixture_server,
+               path, repo, seed_bin, bin, args, port, ready_after_ms)
 
 main() {
     b = build.start()
@@ -10,8 +9,24 @@ main() {
     build.dep(b, "svnadmin")
     build.dep(b, "svnserver")
     build.dep(b, "svnserver/.build-seed.ae")
-    bash.test(b) {
-        svn_server_with_token("test_branch_create", "9665", "b82a-token")
-        script("test_branch_create.sh")
+
+    aether.driver_test(b) {
+        driver("test_branch_create_driver.ae")
+        output("test_branch_create_driver")
+
+        binary_under_test(b, "svn") {
+            path("target/svn/bin/svn")
+        }
+
+        fixture_seed(b, "test_branch_create") {
+            repo("/tmp/svnae_aeb_test_branch_create_repo")
+            seed_bin("target/svnserver/bin/svnae-seed")
+        }
+        fixture_server(b, "test_branch_create") {
+            bin("target/svnserver/bin/aether-svnserver")
+            args("demo $TEST_BRANCH_CREATE_REPO 9665 --superuser-token b82a-token")
+            port(9665)
+            ready_after_ms(1500)
+        }
     }
 }
