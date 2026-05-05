@@ -1,8 +1,7 @@
 import build
-import bash
-import bash (script, pre_command, post_command)
-import svnae
-import svnae (svn_server_with_token)
+import aether
+import aether (driver, output, binary_under_test, fixture_seed, fixture_server,
+               path, repo, seed_bin, bin, args, port, ready_after_ms)
 
 main() {
     b = build.start()
@@ -10,8 +9,24 @@ main() {
     build.dep(b, "svnadmin")
     build.dep(b, "svnserver")
     build.dep(b, "svnserver/.build-seed.ae")
-    bash.test(b) {
-        svn_server_with_token("test_acl_cp_follow", "9625", "cpacl-token")
-        script("test_acl_cp_follow.sh")
+
+    aether.driver_test(b) {
+        driver("test_acl_cp_follow_driver.ae")
+        output("test_acl_cp_follow_driver")
+
+        binary_under_test(b, "svn") {
+            path("target/svn/bin/svn")
+        }
+
+        fixture_seed(b, "test_acl_cp_follow") {
+            repo("/tmp/svnae_aeb_test_acl_cp_follow_repo")
+            seed_bin("target/svnserver/bin/svnae-seed")
+        }
+        fixture_server(b, "test_acl_cp_follow") {
+            bin("target/svnserver/bin/aether-svnserver")
+            args("demo $TEST_ACL_CP_FOLLOW_REPO 9625 --superuser-token cpacl-token")
+            port(9625)
+            ready_after_ms(1500)
+        }
     }
 }
