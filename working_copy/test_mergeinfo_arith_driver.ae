@@ -1,0 +1,178 @@
+// Copyright 2026 Paul Hammant (portions).
+// Apache License, Version 2.0 — see LICENSE.
+//
+// Aether driver for svn:mergeinfo range arithmetic — cancel,
+// collapse, union, partial cancel.
+// Round 247. Migrated from working_copy/test_mergeinfo_arith.sh.
+
+import contrib.aeocha
+import std.os
+import std.os (os_getenv)
+import std.string
+
+extern list_new() -> ptr
+extern list_add_raw(list: ptr, item: ptr) -> int
+
+argv_new() -> { return list_new() }
+argv_push(argv: ptr, s: string) { list_add_raw(argv, s) }
+
+sh(cmd: string) -> {
+    argv = argv_new()
+    argv_push(argv, "-c")
+    argv_push(argv, cmd)
+    out, status, err = os.run_capture("/bin/bash", argv, null)
+    return out, status, err
+}
+
+main() {
+    fw = aeocha.init()
+    svn_bin = os_getenv("SVN_BIN")
+    port    = os_getenv("TEST_MERGEINFO_ARITH_PORT")
+    url     = string.concat("http://127.0.0.1:", string.concat(port, "/demo"))
+    wc      = "/tmp/svnae_test_miar_wc"
+
+    // Setup: build r4..r8 by writing 5 successive distinct contents
+    // for src/main.c, each adding a non-overlapping line.
+    setup = "rm -rf /tmp/svnae_test_miar_setup && "
+    setup = string.concat(setup, svn_bin)
+    setup = string.concat(setup, " checkout ")
+    setup = string.concat(setup, url)
+    setup = string.concat(setup, " /tmp/svnae_test_miar_setup >/dev/null && cd /tmp/svnae_test_miar_setup && ")
+    setup = string.concat(setup, "printf 'a1\\na2\\n' > src/main.c && ")
+    setup = string.concat(setup, svn_bin)
+    setup = string.concat(setup, " commit --author u --log 'r4 base' >/dev/null && ")
+    setup = string.concat(setup, "printf 'a1\\na2\\nb\\n' > src/main.c && ")
+    setup = string.concat(setup, svn_bin)
+    setup = string.concat(setup, " commit --author u --log 'r5 add b' >/dev/null && ")
+    setup = string.concat(setup, "printf 'a1\\na2\\nb\\n\\nc\\n' > src/main.c && ")
+    setup = string.concat(setup, svn_bin)
+    setup = string.concat(setup, " commit --author u --log 'r6 add c' >/dev/null && ")
+    setup = string.concat(setup, "printf 'a1\\na2\\nb\\n\\nc\\n\\nd\\n' > src/main.c && ")
+    setup = string.concat(setup, svn_bin)
+    setup = string.concat(setup, " commit --author u --log 'r7 add d' >/dev/null && ")
+    setup = string.concat(setup, "printf 'a1\\na2\\nb\\n\\nc\\n\\nd\\n\\ne\\n' > src/main.c && ")
+    setup = string.concat(setup, svn_bin)
+    setup = string.concat(setup, " commit --author u --log 'r8 add e' >/dev/null && ")
+    setup = string.concat(setup, "rm -rf /tmp/svnae_test_miar_setup")
+
+    o0, setup_st, e0 = sh(setup)
+
+    propget_mi = string.concat("cd ", wc)
+    propget_mi = string.concat(propget_mi, " && ")
+    propget_mi = string.concat(propget_mi, svn_bin)
+    propget_mi = string.concat(propget_mi, " propget svn:mergeinfo . 2>/dev/null || echo '<empty>'")
+
+    // Helper: fresh WC at r4 (rm + checkout + update --rev 4).
+    // Each case starts with this.
+    fresh_wc_at_r4 = string.concat("rm -rf ", wc)
+    fresh_wc_at_r4 = string.concat(fresh_wc_at_r4, " && ")
+    fresh_wc_at_r4 = string.concat(fresh_wc_at_r4, svn_bin)
+    fresh_wc_at_r4 = string.concat(fresh_wc_at_r4, " checkout ")
+    fresh_wc_at_r4 = string.concat(fresh_wc_at_r4, url)
+    fresh_wc_at_r4 = string.concat(fresh_wc_at_r4, " ")
+    fresh_wc_at_r4 = string.concat(fresh_wc_at_r4, wc)
+    fresh_wc_at_r4 = string.concat(fresh_wc_at_r4, " >/dev/null && cd ")
+    fresh_wc_at_r4 = string.concat(fresh_wc_at_r4, wc)
+    fresh_wc_at_r4 = string.concat(fresh_wc_at_r4, " && ")
+    fresh_wc_at_r4 = string.concat(fresh_wc_at_r4, svn_bin)
+    fresh_wc_at_r4 = string.concat(fresh_wc_at_r4, " update --rev 4 >/dev/null")
+
+    // Helpers for each merge command.
+    merge_in_wc = string.concat("cd ", wc)
+    merge_in_wc = string.concat(merge_in_wc, " && ")
+    merge_in_wc = string.concat(merge_in_wc, svn_bin)
+    merge_in_wc = string.concat(merge_in_wc, " merge ")
+
+    merge_c5  = string.concat(merge_in_wc, "-c 5 ")
+    merge_c5  = string.concat(merge_c5, url)
+    merge_c5  = string.concat(merge_c5, "/src src >/dev/null 2>&1")
+    merge_rc5 = string.concat(merge_in_wc, "-c -5 ")
+    merge_rc5 = string.concat(merge_rc5, url)
+    merge_rc5 = string.concat(merge_rc5, "/src src >/dev/null 2>&1")
+    merge_c6  = string.concat(merge_in_wc, "-c 6 ")
+    merge_c6  = string.concat(merge_c6, url)
+    merge_c6  = string.concat(merge_c6, "/src src >/dev/null 2>&1")
+    merge_c7  = string.concat(merge_in_wc, "-c 7 ")
+    merge_c7  = string.concat(merge_c7, url)
+    merge_c7  = string.concat(merge_c7, "/src src >/dev/null 2>&1")
+    merge_rc6 = string.concat(merge_in_wc, "-c -6 ")
+    merge_rc6 = string.concat(merge_rc6, url)
+    merge_rc6 = string.concat(merge_rc6, "/src src >/dev/null 2>&1")
+    merge_r47 = string.concat(merge_in_wc, "-r 4:7 ")
+    merge_r47 = string.concat(merge_r47, url)
+    merge_r47 = string.concat(merge_r47, "/src src >/dev/null 2>&1")
+
+    aeocha.describe(fw, "svn:mergeinfo range arithmetic") {
+
+        aeocha.it("setup: r4..r8 commits exit 0") callback {
+            aeocha.expect_exit(fw, setup_st, 0, "setup exit 0")
+        }
+
+        // Case 1: cancel (fwd r5 + reverse r5 → empty mergeinfo)
+        aeocha.it("Case 1: fwd r5 yields src:5-5 mergeinfo") callback {
+            _, st1, _ = sh(fresh_wc_at_r4)
+            aeocha.expect_exit(fw, st1, 0, "fresh WC at r4")
+            _, st2, _ = sh(merge_c5)
+            aeocha.expect_exit(fw, st2, 0, "merge -c 5 exit 0")
+            out, _, _ = sh(propget_mi)
+            aeocha.expect_stdout_contains(fw, out, "src:5-5",
+                "fwd r5 mergeinfo")
+        }
+
+        aeocha.it("Case 1: fwd+reverse r5 cancels — mergeinfo empty") callback {
+            _, st, _ = sh(merge_rc5)
+            aeocha.expect_exit(fw, st, 0, "merge -c -5 exit 0")
+            out, _, _ = sh(propget_mi)
+            aeocha.expect_stdout_contains(fw, out, "<empty>",
+                "fwd+rev cancels to empty")
+        }
+
+        // Case 2: adjacent collapse (r5 + r6 → src:5-6)
+        aeocha.it("Case 2: r5 then r6 collapses to src:5-6") callback {
+            _, st1, _ = sh(fresh_wc_at_r4)
+            aeocha.expect_exit(fw, st1, 0, "fresh WC at r4")
+            sh(merge_c5)
+            sh(merge_c6)
+            out, _, _ = sh(propget_mi)
+            aeocha.expect_stdout_contains(fw, out, "src:5-6",
+                "r5+r6 collapse")
+        }
+
+        // Case 3: non-adjacent stays as comma-list, then bridge collapses
+        aeocha.it("Case 3: r5 then r7 stays as src:5-5,7-7") callback {
+            _, st1, _ = sh(fresh_wc_at_r4)
+            aeocha.expect_exit(fw, st1, 0, "fresh WC at r4")
+            sh(merge_c5)
+            sh(merge_c7)
+            out, _, _ = sh(propget_mi)
+            aeocha.expect_stdout_contains(fw, out, "src:5-5,7-7",
+                "non-adjacent comma-list")
+        }
+
+        aeocha.it("Case 3: bridge r6 collapses to src:5-7") callback {
+            sh(merge_c6)
+            out, _, _ = sh(propget_mi)
+            aeocha.expect_stdout_contains(fw, out, "src:5-7",
+                "bridge collapse")
+        }
+
+        // Case 4: partial cancel (range 4:7 then reverse r6 only)
+        aeocha.it("Case 4: range 4:7 yields src:5-7") callback {
+            _, st1, _ = sh(fresh_wc_at_r4)
+            aeocha.expect_exit(fw, st1, 0, "fresh WC at r4")
+            sh(merge_r47)
+            out, _, _ = sh(propget_mi)
+            aeocha.expect_stdout_contains(fw, out, "src:5-7",
+                "range 4:7 → src:5-7")
+        }
+
+        aeocha.it("Case 4: reverse r6 carves the middle — src:5-5,7-7") callback {
+            sh(merge_rc6)
+            out, _, _ = sh(propget_mi)
+            aeocha.expect_stdout_contains(fw, out, "src:5-5,7-7",
+                "partial cancel r6")
+        }
+    }
+
+    aeocha.run_summary(fw)
+}
