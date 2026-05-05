@@ -1,0 +1,216 @@
+// Copyright 2026 Paul Hammant (portions).
+// Apache License, Version 2.0 — see LICENSE.
+//
+// Aether driver for svn merge — branch merge + conflict scenario.
+// Round 245. Migrated from working_copy/test_merge.sh.
+
+import contrib.aeocha
+import std.os
+import std.os (os_getenv)
+import std.string
+
+extern list_new() -> ptr
+extern list_add_raw(list: ptr, item: ptr) -> int
+
+argv_new() -> { return list_new() }
+argv_push(argv: ptr, s: string) { list_add_raw(argv, s) }
+
+sh(cmd: string) -> {
+    argv = argv_new()
+    argv_push(argv, "-c")
+    argv_push(argv, cmd)
+    out, status, err = os.run_capture("/bin/bash", argv, null)
+    return out, status, err
+}
+
+main() {
+    fw = aeocha.init()
+    svn_bin = os_getenv("SVN_BIN")
+    port    = os_getenv("TEST_MERGE_PORT")
+    url     = string.concat("http://127.0.0.1:", string.concat(port, "/demo"))
+    wc      = "/tmp/svnae_test_mrg_wc"
+
+    log_merge_commit = "/tmp/svnae_test_mrg_commit.log"
+
+    // === ROUND 1 prep: branch + trunk edit + checkout WC ===
+    // r4: server-side cp src → src-branch
+    // r5: trunk edit src/main.c via temp WC
+    // checkout WC at r5
+    prep1 = string.concat(svn_bin, " cp ")
+    prep1 = string.concat(prep1, url)
+    prep1 = string.concat(prep1, "/src ")
+    prep1 = string.concat(prep1, url)
+    prep1 = string.concat(prep1, "/src-branch --author alice --log 'branch src' >/dev/null && ")
+    prep1 = string.concat(prep1, "rm -rf /tmp/svnae_test_mrg_trunk && ")
+    prep1 = string.concat(prep1, svn_bin)
+    prep1 = string.concat(prep1, " checkout ")
+    prep1 = string.concat(prep1, url)
+    prep1 = string.concat(prep1, " /tmp/svnae_test_mrg_trunk >/dev/null && cd /tmp/svnae_test_mrg_trunk && echo 'trunk improvement' > src/main.c && ")
+    prep1 = string.concat(prep1, svn_bin)
+    prep1 = string.concat(prep1, " commit --author alice --log 'trunk edit r5' >/dev/null && ")
+    prep1 = string.concat(prep1, "rm -rf /tmp/svnae_test_mrg_trunk ")
+    prep1 = string.concat(prep1, wc)
+    prep1 = string.concat(prep1, " && ")
+    prep1 = string.concat(prep1, svn_bin)
+    prep1 = string.concat(prep1, " checkout ")
+    prep1 = string.concat(prep1, url)
+    prep1 = string.concat(prep1, " ")
+    prep1 = string.concat(prep1, wc)
+    prep1 = string.concat(prep1, " >/dev/null")
+
+    o1, prep1_st, e1 = sh(prep1)
+
+    // pre-merge content of branch
+    cat_branch_pre = string.concat("cat ", wc)
+    cat_branch_pre = string.concat(cat_branch_pre, "/src-branch/main.c")
+
+    // do the merge: src@4:5 → src-branch
+    do_merge = string.concat("cd ", wc)
+    do_merge = string.concat(do_merge, " && ")
+    do_merge = string.concat(do_merge, svn_bin)
+    do_merge = string.concat(do_merge, " merge ")
+    do_merge = string.concat(do_merge, url)
+    do_merge = string.concat(do_merge, "/src@4:5 src-branch >/dev/null 2>&1")
+
+    cat_branch_post = string.concat("cat ", wc)
+    cat_branch_post = string.concat(cat_branch_post, "/src-branch/main.c")
+    cat_trunk_post  = string.concat("cat ", wc)
+    cat_trunk_post  = string.concat(cat_trunk_post, "/src/main.c")
+    status_cmd      = string.concat("cd ", wc)
+    status_cmd      = string.concat(status_cmd, " && ")
+    status_cmd      = string.concat(status_cmd, svn_bin)
+    status_cmd      = string.concat(status_cmd, " status")
+    count_m_branch  = string.concat(status_cmd, " | grep -c '^M.*src-branch/main.c' || true")
+    count_m_trunk   = string.concat(status_cmd, " | grep -c '^M.*src/main.c' || true")
+    propget_mi      = string.concat("cd ", wc)
+    propget_mi      = string.concat(propget_mi, " && ")
+    propget_mi      = string.concat(propget_mi, svn_bin)
+    propget_mi      = string.concat(propget_mi, " propget svn:mergeinfo . 2>/dev/null || echo ''")
+
+    commit_merge    = string.concat("cd ", wc)
+    commit_merge    = string.concat(commit_merge, " && ")
+    commit_merge    = string.concat(commit_merge, svn_bin)
+    commit_merge    = string.concat(commit_merge, " commit --author alice --log 'merge trunk r5 into branch' | tee ")
+    commit_merge    = string.concat(commit_merge, log_merge_commit)
+    cat_commit_log  = "cat /tmp/svnae_test_mrg_commit.log"
+
+    // === ROUND 2: conflict scenario ===
+    prep2 = string.concat("cd / && rm -rf ", wc)
+    prep2 = string.concat(prep2, " && ")
+    prep2 = string.concat(prep2, svn_bin)
+    prep2 = string.concat(prep2, " checkout ")
+    prep2 = string.concat(prep2, url)
+    prep2 = string.concat(prep2, " ")
+    prep2 = string.concat(prep2, wc)
+    prep2 = string.concat(prep2, " --rev 4 >/dev/null && cd ")
+    prep2 = string.concat(prep2, wc)
+    prep2 = string.concat(prep2, " && echo 'local divergent' > src-branch/main.c && ")
+    prep2 = string.concat(prep2, svn_bin)
+    prep2 = string.concat(prep2, " merge ")
+    prep2 = string.concat(prep2, url)
+    prep2 = string.concat(prep2, "/src@4:5 src-branch 2>/dev/null || true")
+
+    grep_conflict   = string.concat("grep -q '<<<<<<< MINE' ", wc)
+    grep_conflict   = string.concat(grep_conflict, "/src-branch/main.c && grep -q '>>>>>>> THEIRS' ")
+    grep_conflict   = string.concat(grep_conflict, wc)
+    grep_conflict   = string.concat(grep_conflict, "/src-branch/main.c && echo yes || echo no")
+    count_c_lines   = string.concat(status_cmd, " | grep -c '^C.*src-branch/main.c' || true")
+    refused_commit  = string.concat("cd ", wc)
+    refused_commit  = string.concat(refused_commit, " && ")
+    refused_commit  = string.concat(refused_commit, svn_bin)
+    refused_commit  = string.concat(refused_commit, " commit --author alice --log 'try' 2>/dev/null")
+
+    // resolve --accept mine
+    resolve_mine    = string.concat("cd ", wc)
+    resolve_mine    = string.concat(resolve_mine, " && ")
+    resolve_mine    = string.concat(resolve_mine, svn_bin)
+    resolve_mine    = string.concat(resolve_mine, " resolve src-branch/main.c --accept mine >/dev/null")
+
+    aeocha.describe(fw, "svn merge — branch merge + conflict") {
+
+        aeocha.it("prep round 1: branch + trunk edit + checkout exit 0") callback {
+            aeocha.expect_exit(fw, prep1_st, 0, "round 1 prep exit 0")
+        }
+
+        aeocha.it("pre-merge: src-branch/main.c is r4 content") callback {
+            out, _, _ = sh(cat_branch_pre)
+            aeocha.expect_stdout_contains(fw, out, "int main() { return 42; }",
+                "branch still pristine pre-merge")
+        }
+
+        aeocha.it("merge src@4:5 → src-branch updates branch file") callback {
+            _, st, _ = sh(do_merge)
+            aeocha.expect_exit(fw, st, 0, "merge exit 0")
+            out, _, _ = sh(cat_branch_post)
+            aeocha.expect_stdout_contains(fw, out, "trunk improvement",
+                "branch main.c picked up trunk content")
+        }
+
+        aeocha.it("trunk src/main.c untouched (merge target was branch only)") callback {
+            out, _, _ = sh(cat_trunk_post)
+            aeocha.expect_stdout_contains(fw, out, "trunk improvement",
+                "trunk still r5")
+        }
+
+        aeocha.it("status shows M on branch file, not trunk") callback {
+            r1, _, _ = sh(count_m_branch)
+            aeocha.expect_stdout_contains(fw, r1, "1",
+                "exactly one M for src-branch/main.c")
+            r2, _, _ = sh(count_m_trunk)
+            aeocha.expect_stdout_contains(fw, r2, "0",
+                "no M for src/main.c")
+        }
+
+        aeocha.it("svn:mergeinfo recorded as src:5-5") callback {
+            out, _, _ = sh(propget_mi)
+            aeocha.expect_stdout_contains(fw, out, "src:5-5",
+                "mergeinfo on .")
+        }
+
+        aeocha.it("merge commit lands at rev 6") callback {
+            _, st, _ = sh(commit_merge)
+            aeocha.expect_exit(fw, st, 0, "commit exit 0")
+            out, _, _ = sh(cat_commit_log)
+            aeocha.expect_stdout_contains(fw, out, "Committed revision 6.",
+                "merge commit at r6")
+        }
+
+        // ---- conflict scenario ----
+        aeocha.it("prep round 2: fresh WC at r4 + divergent edit + merge runs") callback {
+            _, st, _ = sh(prep2)
+            // merge with conflict may exit nonzero; we don't assert on st.
+            aeocha.assert_eq(fw, 1, 1, "trivial — prep ran")
+        }
+
+        aeocha.it("merge produced conflict markers") callback {
+            out, _, _ = sh(grep_conflict)
+            aeocha.expect_stdout_contains(fw, out, "yes",
+                "<<<<<<< MINE and >>>>>>> THEIRS both present")
+        }
+
+        aeocha.it("status shows C for src-branch/main.c") callback {
+            out, _, _ = sh(count_c_lines)
+            aeocha.expect_stdout_contains(fw, out, "1",
+                "exactly one C line")
+        }
+
+        aeocha.it("commit refused while conflict stands") callback {
+            _, st, _ = sh(refused_commit)
+            aeocha.assert_not_eq(fw, st, 0,
+                "commit during conflict should fail")
+        }
+
+        aeocha.it("resolve --accept mine + status shows M") callback {
+            _, st, _ = sh(resolve_mine)
+            aeocha.expect_exit(fw, st, 0, "resolve exit 0")
+            r1, _, _ = sh(cat_branch_post)
+            aeocha.expect_stdout_contains(fw, r1, "local divergent",
+                "branch file now has local content")
+            r2, _, _ = sh(count_m_branch)
+            aeocha.expect_stdout_contains(fw, r2, "1",
+                "exactly one M after resolve-mine")
+        }
+    }
+
+    aeocha.run_summary(fw)
+}

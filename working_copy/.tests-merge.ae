@@ -1,16 +1,31 @@
 import build
-import bash
-import bash (script, pre_command, post_command)
-import svnae
-import svnae (svn_server)
+import aether
+import aether (driver, output, binary_under_test, fixture_seed, fixture_server,
+               path, repo, seed_bin, bin, args, port, ready_after_ms)
 
 main() {
     b = build.start()
     build.dep(b, "svn")
     build.dep(b, "svnserver")
     build.dep(b, "svnserver/.build-seed.ae")
-    bash.test(b) {
-        svn_server("test_merge", "9700")
-        script("test_merge.sh")
+
+    aether.driver_test(b) {
+        driver("test_merge_driver.ae")
+        output("test_merge_driver")
+
+        binary_under_test(b, "svn") {
+            path("target/svn/bin/svn")
+        }
+
+        fixture_seed(b, "test_merge") {
+            repo("/tmp/svnae_aeb_test_merge_repo")
+            seed_bin("target/svnserver/bin/svnae-seed")
+        }
+        fixture_server(b, "test_merge") {
+            bin("target/svnserver/bin/aether-svnserver")
+            args("demo $TEST_MERGE_REPO 9700")
+            port(9700)
+            ready_after_ms(1500)
+        }
     }
 }
