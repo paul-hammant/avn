@@ -1,0 +1,173 @@
+// Copyright 2026 Paul Hammant (portions).
+// Apache License, Version 2.0 — see LICENSE.
+//
+// Aether driver for svn cp + mv on a WC, with commit round-trip.
+// Round 241. Migrated from working_copy/test_cp_mv.sh.
+
+import contrib.aeocha
+import std.os
+import std.os (os_getenv)
+import std.string
+
+extern list_new() -> ptr
+extern list_add_raw(list: ptr, item: ptr) -> int
+
+argv_new() -> { return list_new() }
+argv_push(argv: ptr, s: string) { list_add_raw(argv, s) }
+
+sh(cmd: string) -> {
+    argv = argv_new()
+    argv_push(argv, "-c")
+    argv_push(argv, cmd)
+    out, status, err = os.run_capture("/bin/bash", argv, null)
+    return out, status, err
+}
+
+main() {
+    fw = aeocha.init()
+    svn_bin = os_getenv("SVN_BIN")
+    port    = os_getenv("TEST_CP_MV_PORT")
+    url     = string.concat("http://127.0.0.1:", string.concat(port, "/demo"))
+    base    = string.concat("http://127.0.0.1:", string.concat(port, "/repos/demo"))
+    wc      = "/tmp/svnae_test_cpmv_wc"
+
+    // prep: clean checkout
+    prep = string.concat("rm -rf ", wc)
+    prep = string.concat(prep, " && ")
+    prep = string.concat(prep, svn_bin)
+    prep = string.concat(prep, " checkout ")
+    prep = string.concat(prep, url)
+    prep = string.concat(prep, " ")
+    prep = string.concat(prep, wc)
+    prep = string.concat(prep, " >/dev/null")
+    prep_out_, prep_st_, prep_err_ = sh(prep)
+
+    cd_wc = string.concat("cd ", wc)
+    cd_wc = string.concat(cd_wc, " && ")
+    cd_wc = string.concat(cd_wc, svn_bin)
+
+    cp_readme       = string.concat(cd_wc, " cp README README.bak")
+    cat_readme_wc   = string.concat("cat ", wc)
+    cat_readme_wc   = string.concat(cat_readme_wc, "/README")
+    cat_bak_wc      = string.concat("cat ", wc)
+    cat_bak_wc      = string.concat(cat_bak_wc, "/README.bak")
+    status_sorted   = string.concat(cd_wc, " status | sort")
+
+    mv_main         = string.concat(cd_wc, " mv src/main.c src/new_main.c")
+    test_main_gone  = string.concat("test -f ", wc)
+    test_main_gone  = string.concat(test_main_gone, "/src/main.c && echo present || echo absent")
+    cat_new_main    = string.concat("cat ", wc)
+    cat_new_main    = string.concat(cat_new_main, "/src/new_main.c")
+    status_plain    = string.concat(cd_wc, " status")
+
+    // negative: cp of unknown source must fail
+    cp_unknown      = string.concat(cd_wc, " cp nosuchfile someplace 2>/dev/null")
+    // negative: cp onto existing dst must fail
+    cp_overwrite    = string.concat(cd_wc, " cp README src/new_main.c 2>/dev/null")
+
+    commit_cmd      = string.concat(cd_wc, " commit --author cpuser --log 'cp + mv'")
+
+    cat_remote_bak      = string.concat(svn_bin, " cat ")
+    cat_remote_bak      = string.concat(cat_remote_bak, url)
+    cat_remote_bak      = string.concat(cat_remote_bak, " README.bak")
+    cat_remote_new_main = string.concat(svn_bin, " cat ")
+    cat_remote_new_main = string.concat(cat_remote_new_main, url)
+    cat_remote_new_main = string.concat(cat_remote_new_main, " src/new_main.c")
+
+    main_c_curl     = string.concat("curl -s -o /dev/null -w '%{http_code}' ", base)
+    main_c_curl     = string.concat(main_c_curl, "/rev/4/cat/src/main.c")
+
+    aeocha.describe(fw, "svn cp + mv on a WC, commit round-trip") {
+
+        aeocha.it("prep: checkout exit 0") callback {
+            aeocha.expect_exit(fw, prep_st_, 0, "checkout exit 0")
+        }
+
+        aeocha.it("cp README README.bak prints 'A README.bak'") callback {
+            out, status, _ = sh(cp_readme)
+            aeocha.expect_exit(fw, status, 0, "cp exit 0")
+            aeocha.expect_stdout_contains(fw, out, "A         README.bak",
+                "cp announces add")
+        }
+
+        aeocha.it("cp leaves source intact and copies content") callback {
+            r1, _, _ = sh(cat_readme_wc)
+            r2, _, _ = sh(cat_bak_wc)
+            aeocha.expect_stdout_contains(fw, r1, "Hello", "README still says Hello")
+            aeocha.expect_stdout_contains(fw, r2, "Hello", "README.bak got Hello")
+        }
+
+        aeocha.it("status shows A README.bak") callback {
+            out, _, _ = sh(status_sorted)
+            aeocha.expect_stdout_contains(fw, out, "A       README.bak",
+                "status announces A README.bak")
+        }
+
+        aeocha.it("mv src/main.c src/new_main.c prints A + D") callback {
+            out, status, _ = sh(mv_main)
+            aeocha.expect_exit(fw, status, 0, "mv exit 0")
+            aeocha.expect_stdout_contains(fw, out, "A         src/new_main.c",
+                "mv announces add")
+            aeocha.expect_stdout_contains(fw, out, "D         src/main.c",
+                "mv announces delete")
+        }
+
+        aeocha.it("src/main.c gone, src/new_main.c present with body") callback {
+            r1, _, _ = sh(test_main_gone)
+            aeocha.expect_stdout_contains(fw, r1, "absent",
+                "src/main.c removed from disk")
+            r2, _, _ = sh(cat_new_main)
+            aeocha.expect_stdout_contains(fw, r2, "int main() { return 42; }",
+                "src/new_main.c carries body")
+        }
+
+        aeocha.it("status shows A new_main.c and D main.c") callback {
+            out, _, _ = sh(status_plain)
+            aeocha.expect_stdout_contains(fw, out, "src/new_main.c",
+                "new_main.c listed in status")
+            aeocha.expect_stdout_contains(fw, out, "src/main.c",
+                "main.c listed in status")
+        }
+
+        aeocha.it("cp of unknown source fails nonzero") callback {
+            _, status, _ = sh(cp_unknown)
+            aeocha.assert_not_eq(fw, status, 0,
+                "cp of nosuchfile should fail")
+        }
+
+        aeocha.it("cp onto existing dst fails nonzero") callback {
+            _, status, _ = sh(cp_overwrite)
+            aeocha.assert_not_eq(fw, status, 0,
+                "cp onto existing dst should fail")
+        }
+
+        aeocha.it("commit returns rev 4") callback {
+            out, status, _ = sh(commit_cmd)
+            aeocha.expect_exit(fw, status, 0, "commit exit 0")
+            aeocha.expect_stdout_contains(fw, out, "Committed revision 4.",
+                "commit announces rev 4")
+        }
+
+        aeocha.it("remote README.bak fetches Hello") callback {
+            out, status, _ = sh(cat_remote_bak)
+            aeocha.expect_exit(fw, status, 0, "remote cat exit 0")
+            aeocha.expect_stdout_contains(fw, out, "Hello",
+                "remote README.bak content")
+        }
+
+        aeocha.it("remote new_main.c fetches body") callback {
+            out, status, _ = sh(cat_remote_new_main)
+            aeocha.expect_exit(fw, status, 0, "remote cat exit 0")
+            aeocha.expect_stdout_contains(fw, out, "int main() { return 42; }",
+                "remote new_main.c content")
+        }
+
+        aeocha.it("remote src/main.c at r4 → 404") callback {
+            out, _, _ = sh(main_c_curl)
+            aeocha.expect_stdout_contains(fw, out, "404",
+                "main.c gone at r4 (curl reports 404)")
+        }
+    }
+
+    aeocha.run_summary(fw)
+}
