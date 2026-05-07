@@ -39,6 +39,7 @@ extern algos_token(spec: string, i: int) -> string
 extern openssl_hash_supported(algo: string) -> int
 
 extern admin_db_init_schema(repo: string) -> string
+extern merge_ledger_init_schema(repo: string) -> string
 
 extern rep_write_blob(repo: string, data: string, len: int) -> string
 extern rev_blob_body(root: string, branch: string, props: string, acl: string, prev: int, author: string, date: string, log: string) -> string
@@ -70,9 +71,18 @@ create_bare_(repo: string, algos_spec: string) -> int {
         return 0 - 1
     }
 
-    // rep_cache + path_rev schema.
+    // rep_cache + path_rev schema in rep-cache.db.
     err = admin_db_init_schema(repo)
     if string.length(err) > 0 { return 0 - 1 }
+
+    // merge_event + merge_source_rev schema in merges.db. Round 270
+    // introduces the server-side merge ledger (replaces svn:mergeinfo
+    // property — see TODO MB-H "merge ledger architecture"). Both
+    // tables are CREATE IF NOT EXISTS, so this also retrofits onto
+    // older repos via merge_ledger.ae's lazy open path; doing it
+    // proactively at create-time keeps fresh repos in a clean state.
+    mle = merge_ledger_init_schema(repo)
+    if string.length(mle) > 0 { return 0 - 1 }
     return 0
 }
 

@@ -1,0 +1,157 @@
+// Copyright 2026 Paul Hammant (portions).
+// Apache License, Version 2.0 — see LICENSE.
+//
+// Unit tests for repo_storage/merge_ledger.ae — Phase 1.1 of the
+// merge-ledger architecture (replaces svn:mergeinfo). The ledger is
+// a derived index over rev blobs, queried by wc_merge during sweep
+// merges. Pre-svnadmin-create the schema is created lazily;
+// post-create it's already in place.
+
+import std.string
+
+extern os_getpid_raw() -> int
+extern system(cmd: string) -> int
+
+extern merge_ledger_init_schema(repo: string) -> string
+extern merge_ledger_record(repo: string,
+                           rev_sha: string,
+                           target_branch: string, source_branch: string,
+                           source_revs_packed: string,
+                           verb: int, author: string, ts: string) -> int
+extern merge_ledger_is_integrated(repo: string,
+                                  target_branch: string,
+                                  source_branch: string,
+                                  source_rev_sha: string) -> int
+extern merge_ledger_integrated_set(repo: string,
+                                   target_branch: string,
+                                   source_branch: string) -> string
+extern merge_ledger_eligible_revs(repo: string,
+                                  target_branch: string,
+                                  source_branch: string,
+                                  candidate_revs_packed: string) -> string
+
+const VERB_APPLIED     = 0
+const VERB_RECORD_ONLY = 1
+
+expect_int(label: string, got: int, want: int) -> int {
+    if got == want { println("ok   ${label}: ${got}"); return 0 }
+    println("FAIL ${label}: got ${got}, want ${want}")
+    return 1
+}
+
+expect_str(label: string, got: string, want: string) -> int {
+    if string.equals(got, want) == 1 { println("ok   ${label}"); return 0 }
+    println("FAIL ${label}: got [${got}] want [${want}]")
+    return 1
+}
+
+main() {
+    fails = 0
+    pid = os_getpid_raw()
+    repo = "/tmp/test_mledger_${pid}"
+    system("rm -rf ${repo}")
+    system("mkdir -p ${repo}")
+
+    // Eagerly install the schema (mirrors what svnadmin/create.ae
+    // does inside create_bare_).
+    err = merge_ledger_init_schema(repo)
+    fails = fails + expect_str("merge_ledger_init_schema", err, "")
+
+    // The ledger DB should now exist under $repo/merges.db.
+    rc = system("test -f ${repo}/merges.db")
+    fails = fails + expect_int("merges.db exists post-init", rc, 0)
+
+    // Empty ledger: no revs integrated.
+    fails = fails + expect_int("empty: not integrated",
+        merge_ledger_is_integrated(repo, "release_a", "main",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+        0)
+    fails = fails + expect_str("empty: integrated_set",
+        merge_ledger_integrated_set(repo, "release_a", "main"),
+        "")
+
+    // Record a single merge event with three source revs.
+    sha_merge1 = "1111111111111111111111111111111111111111"
+    sha_src_a  = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    sha_src_b  = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    sha_src_c  = "cccccccccccccccccccccccccccccccccccccccc"
+    packed_abc = "${sha_src_a}\n${sha_src_b}\n${sha_src_c}\n"
+
+    rec = merge_ledger_record(repo, sha_merge1, "release_a", "main",
+                              packed_abc, VERB_APPLIED, "alice",
+                              "2026-05-07T09:00:00Z")
+    fails = fails + expect_int("record (a,b,c) into release_a from main", rec, 0)
+
+    // Each source rev should now be integrated.
+    fails = fails + expect_int("a integrated",
+        merge_ledger_is_integrated(repo, "release_a", "main", sha_src_a), 1)
+    fails = fails + expect_int("b integrated",
+        merge_ledger_is_integrated(repo, "release_a", "main", sha_src_b), 1)
+    fails = fails + expect_int("c integrated",
+        merge_ledger_is_integrated(repo, "release_a", "main", sha_src_c), 1)
+
+    // Different target → not integrated.
+    fails = fails + expect_int("a not in release_b",
+        merge_ledger_is_integrated(repo, "release_b", "main", sha_src_a), 0)
+    // Different source branch → not integrated.
+    fails = fails + expect_int("a not from feature",
+        merge_ledger_is_integrated(repo, "release_a", "feature", sha_src_a), 0)
+    // Unknown sha → not integrated.
+    sha_dead = "dddddddddddddddddddddddddddddddddddddddd"
+    fails = fails + expect_int("d not integrated",
+        merge_ledger_is_integrated(repo, "release_a", "main", sha_dead), 0)
+
+    // Eligible filter: of {a, d, b}, expect just {d}.
+    candidates = "${sha_src_a}\n${sha_dead}\n${sha_src_b}\n"
+    elig = merge_ledger_eligible_revs(repo, "release_a", "main", candidates)
+    fails = fails + expect_str("eligible filters out merged", elig, "${sha_dead}\n")
+
+    // integrated_set sorts SHAs ascending — a, b, c is the canonical order.
+    iset = merge_ledger_integrated_set(repo, "release_a", "main")
+    fails = fails + expect_str("integrated_set sorted",
+        iset, "${sha_src_a}\n${sha_src_b}\n${sha_src_c}\n")
+
+    // Idempotency: re-recording the same event is a no-op (INSERT OR IGNORE).
+    rec2 = merge_ledger_record(repo, sha_merge1, "release_a", "main",
+                               packed_abc, VERB_APPLIED, "alice",
+                               "2026-05-07T09:00:00Z")
+    fails = fails + expect_int("re-record (idempotent)", rec2, 0)
+    iset2 = merge_ledger_integrated_set(repo, "release_a", "main")
+    fails = fails + expect_str("idempotent: integrated_set unchanged",
+        iset2, "${sha_src_a}\n${sha_src_b}\n${sha_src_c}\n")
+
+    // Second merge event integrating distinct SHAs into the same target.
+    sha_merge2 = "2222222222222222222222222222222222222222"
+    sha_src_d  = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    rec3 = merge_ledger_record(repo, sha_merge2, "release_a", "main",
+                               "${sha_src_d}\n", VERB_APPLIED, "bob",
+                               "2026-05-07T10:00:00Z")
+    fails = fails + expect_int("record d into release_a", rec3, 0)
+    fails = fails + expect_int("d integrated after second event",
+        merge_ledger_is_integrated(repo, "release_a", "main", sha_src_d), 1)
+
+    // Record-only verb stores the row but for `svn merged` reporting
+    // we'd want to distinguish; the integration check still says
+    // "yes" (the rev was *considered*). That mirrors Perforce's
+    // ignored verb — knowable via the merge_event row's `verb`
+    // column. For the simple "is integrated" question, the answer
+    // is yes.
+    sha_merge3 = "3333333333333333333333333333333333333333"
+    sha_blocked = "ffffffffffffffffffffffffffffffffffffffff"
+    rec4 = merge_ledger_record(repo, sha_merge3, "release_a", "main",
+                               "${sha_blocked}\n", VERB_RECORD_ONLY,
+                               "alice", "2026-05-07T11:00:00Z")
+    fails = fails + expect_int("record-only of blocked sha", rec4, 0)
+    fails = fails + expect_int("record-only counts as integrated for skip",
+        merge_ledger_is_integrated(repo, "release_a", "main", sha_blocked), 1)
+
+    // Cleanup.
+    system("rm -rf ${repo}")
+
+    if fails == 0 {
+        println("test_merge_ledger: OK")
+    } else {
+        println("test_merge_ledger: ${fails} FAIL(s)")
+        exit(1)
+    }
+}

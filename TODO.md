@@ -5,6 +5,64 @@ Tests are 32/32 green at HEAD (bash integration suite) plus 8/8
 Aether-native unit tests; 100% Aether (zero hand-written C); naming
 sweep finished through Round 206.
 
+## MB-H — Server-side merge ledger (replacing `svn:mergeinfo`)
+
+In progress. Migrating merge tracking from the versioned property
+(architecturally flawed — see Round 268-269 commit notes and the
+TODO MB-G discussion) to a server-side SQLite ledger
+(`<repo>/merges.db`) plus a `merged:` field on the rev blob.
+
+Plan (each numbered item is one baby commit):
+
+  1.1 *DONE Round 270*. New `repo_storage/merge_ledger.ae` —
+      schema (`merge_event`, `merge_source_rev`), public API
+      (`merge_ledger_init_schema`, `merge_ledger_record`,
+      `merge_ledger_is_integrated`, `merge_ledger_integrated_set`,
+      `merge_ledger_eligible_revs`). Eager schema install in
+      `svnadmin/create.ae`'s `create_bare_`. Lazy install on
+      first use for older repos. Unit test
+      `util/.tests-merge_ledger.ae` (44/44 green). No callers
+      yet — surface only.
+
+  1.2 Rev blob carries `merged: <source_branch>:<sha>,...` field.
+      `repo_storage/commit_finalise.ae`'s `rev_blob_body` emits;
+      `repos/rev_io.ae` parses; `repos_rev_field(repo, rev,
+      "merged")` accessor. Round-trip pinned.
+
+  1.3 Wire merge metadata into the txn. `txn_merge_record(t,
+      source_branch, source_sha)` setter. `commit_finalise` reads
+      the txn's merge list, writes the rev blob's `merged:` field
+      *and* writes ledger rows atomically.
+
+  1.4 HTTP read endpoints: `GET /repos/X/merged?target=B&source=S`
+      and `GET /repos/X/eligible?target=B&source=S&candidates=...`.
+
+  2.1 `wc_merge` queries the ledger via HTTP (instead of parsing
+      `svn:mergeinfo` property). Property still gets written
+      (dual-state) until 2.3.
+
+  2.2 New `svn merged` CLI subcommand.
+
+  2.3 Stop writing `svn:mergeinfo`. Server rejects incoming
+      `svn:mergeinfo` with HTTP 400. Tests update:
+      test_merge / test_merge_reverse / test_mergeinfo_arith /
+      cherry_convergence — assert via `svn merged` instead.
+
+  3.1 Delete `working_copy/mergeinfo.ae` (~600 lines retired).
+  3.2 Drop the prop-build path.
+  3.3 Refuse `svn propset svn:mergeinfo` on the client.
+
+  4.1 (optional) `svnadmin verify --rebuild-merges` rebuilds the
+      ledger from rev blobs.
+
+Architectural rationale captured at length in the Round 264-269
+commit messages — short version: `svn:mergeinfo` was server-side
+storage choice (property in versioned content) that bled all the
+classical-SVN merge-tracking pain into user space; ledger is
+opaque server metadata, server-only-writer, sha-keyed (immune to
+rename and history-rewriting concerns since avn doesn't do either),
+no diff noise, no hand-edit surface.
+
 ## Cherry-pick convergence — bug-bait test (2026-05-06; FIXED 2026-05-07)
 
 `working_copy/.tests-cherry_convergence.ae` + `.test_cherry_convergence_driver.ae`

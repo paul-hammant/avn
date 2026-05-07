@@ -1,0 +1,297 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+
+// Server-side merge ledger.
+//
+// Replaces classical SVN's `svn:mergeinfo` property — which lived in
+// versioned content, was hand-editable, was path-keyed (so it broke
+// on rename), accumulated subtree-creep, and put merge tracking in
+// user space.
+//
+// avn keeps merge tracking server-side in `<repo>/merges.db`. The
+// rev blob carries a `merged: <source_branch>:<sha>,<sha>...` field
+// (added by repo_storage/commit_finalise.ae) which is the canonical
+// source of truth; the SQLite tables here are a derived index, fast
+// for the queries `wc_merge` actually runs:
+//
+//   "is source rev S integrated into target branch T?"
+//   "list all source revs from B integrated into T"
+//   "filter this candidate list to revs not yet integrated into T"
+//
+// Re-buildable from rev blobs at any time (`svnadmin verify
+// --rebuild-merges`, Phase 4).
+//
+// Schema:
+//
+//   merge_event      one row per merge commit: who/when/from-where
+//                    (rev_sha is the merge commit's own SHA — what's
+//                     stored in the per-branch revs/ pointer file)
+//   merge_source_rev one row per (target_branch, source_branch,
+//                                 source_rev_sha) — the question
+//                    "is X integrated?" reduces to a primary-key
+//                    lookup. target_branch + source_branch are
+//                    denormalised onto this table for query speed.
+//
+// Every operation is run inside the same SQLite transaction the
+// commit's other index work uses (path_rev population), so a merge
+// commit's rev blob, branch head pointer, path_rev rows, and
+// merge_event rows all land or none do.
+
+import std.string
+import contrib.sqlite
+
+const MERGE_VERB_APPLIED      = 0    // diff was applied to the target
+const MERGE_VERB_RECORD_ONLY  = 1    // -s ours / --record-only — no diff applied
+
+const SQLITE_ROW  = 100
+const SQLITE_DONE = 101
+
+// ---- private helpers -----------------------------------------------------
+
+// Open <repo>/merges.db, creating the file + schema lazily on first
+// use. Idempotent — `CREATE TABLE IF NOT EXISTS` makes repeat opens
+// cheap, and old repos that predate this round upgrade silently on
+// the first merge.
+ledger_open_(repo: string) -> ptr {
+    db, oerr = sqlite.open("${repo}/merges.db")
+    if string.length(oerr) > 0 { return null }
+    err = sqlite.exec(db,
+        "CREATE TABLE IF NOT EXISTS merge_event (  rev_sha TEXT NOT NULL,  target_branch TEXT NOT NULL,  source_branch TEXT NOT NULL,  verb INTEGER NOT NULL,  author TEXT NOT NULL,  ts TEXT NOT NULL,  PRIMARY KEY (rev_sha, source_branch));CREATE TABLE IF NOT EXISTS merge_source_rev (  target_branch  TEXT NOT NULL,  source_branch  TEXT NOT NULL,  source_rev_sha TEXT NOT NULL,  rev_sha        TEXT NOT NULL,  PRIMARY KEY (target_branch, source_branch, source_rev_sha));CREATE INDEX IF NOT EXISTS msr_target_sha ON merge_source_rev (target_branch, source_rev_sha);CREATE INDEX IF NOT EXISTS me_target ON merge_event (target_branch);")
+    if string.length(err) > 0 { sqlite.close(db); return null }
+    return db
+}
+
+// Append one source-rev SHA (newline-terminated) into a packed string.
+append_packed_(out: string, sha: string) -> string {
+    if string.length(sha) == 0 { return out }
+    s = string.concat(out, sha)
+    return string.concat(s, "\n")
+}
+
+// Iterate a "\n"-separated set of SHAs, calling `record_one` per item.
+// Stops on first record failure.
+record_each_(db: ptr, target_branch: string, source_branch: string,
+             rev_sha: string, packed: string) -> int {
+    n = string.length(packed)
+    if n == 0 { return 0 }
+
+    stmt, perr = sqlite.prepare(db,
+        "INSERT OR IGNORE INTO merge_source_rev (target_branch, source_branch, source_rev_sha, rev_sha) VALUES (?, ?, ?, ?)")
+    if string.length(perr) > 0 { return 0 - 1 }
+
+    rc = 0
+    i = 0
+    seg_start = 0
+    while i <= n {
+        at_end = 0
+        if i == n           { at_end = 1 }
+        if at_end == 0 {
+            c = string.char_at(packed, i)
+            if c == 10 { at_end = 1 }
+        }
+        if at_end == 1 {
+            if i > seg_start {
+                sha = string.substring(packed, seg_start, i)
+                sqlite.bind_text(stmt, 1, target_branch)
+                sqlite.bind_text(stmt, 2, source_branch)
+                sqlite.bind_text(stmt, 3, sha)
+                sqlite.bind_text(stmt, 4, rev_sha)
+                sc, _ = sqlite.step(stmt, db)
+                sqlite.reset(stmt)
+                if sc != SQLITE_DONE { rc = 0 - 1 }
+            }
+            seg_start = i + 1
+        }
+        i = i + 1
+    }
+    sqlite.finalize(stmt)
+    return rc
+}
+
+// ---- public API ----------------------------------------------------------
+
+// Eagerly install the schema. Called by `svnadmin create` so a fresh
+// repo has empty merge_event / merge_source_rev tables on disk
+// immediately. The lazy-init path in `ledger_open_` handles older
+// repos that pre-date this round. Returns "" on success, error
+// message on failure.
+export merge_ledger_init_schema(repo: string) -> string {
+    db = ledger_open_(repo)
+    if db == null { return "merge_ledger: open/init failed" }
+    sqlite.close(db)
+    return ""
+}
+
+// Record one merge event. `source_revs_packed` is "\n"-separated SHAs
+// — the source revs this merge integrated. `verb` is MERGE_VERB_APPLIED
+// or MERGE_VERB_RECORD_ONLY.
+//
+// Returns 0 on success, -1 on infrastructure failure. Idempotent on
+// the (rev_sha, source_branch) and (target, source, source_rev_sha)
+// keys via INSERT OR IGNORE — re-running merge_ledger_record with
+// identical args is a no-op, which means svnadmin's rebuild path
+// can safely re-record without truncate.
+export merge_ledger_record(repo: string,
+                           rev_sha: string,
+                           target_branch: string,
+                           source_branch: string,
+                           source_revs_packed: string,
+                           verb: int,
+                           author: string,
+                           ts: string) -> int {
+    if string.length(rev_sha) == 0       { return 0 - 1 }
+    if string.length(target_branch) == 0 { return 0 - 1 }
+    if string.length(source_branch) == 0 { return 0 - 1 }
+
+    db = ledger_open_(repo)
+    if db == null { return 0 - 1 }
+
+    sqlite.exec(db, "BEGIN")
+
+    stmt, perr = sqlite.prepare(db,
+        "INSERT OR IGNORE INTO merge_event (rev_sha, target_branch, source_branch, verb, author, ts) VALUES (?, ?, ?, ?, ?, ?)")
+    if string.length(perr) > 0 {
+        sqlite.exec(db, "ROLLBACK")
+        sqlite.close(db)
+        return 0 - 1
+    }
+    sqlite.bind_text(stmt, 1, rev_sha)
+    sqlite.bind_text(stmt, 2, target_branch)
+    sqlite.bind_text(stmt, 3, source_branch)
+    sqlite.bind_int (stmt, 4, verb)
+    sqlite.bind_text(stmt, 5, author)
+    sqlite.bind_text(stmt, 6, ts)
+    sc, _ = sqlite.step(stmt, db)
+    sqlite.finalize(stmt)
+    if sc != SQLITE_DONE {
+        sqlite.exec(db, "ROLLBACK")
+        sqlite.close(db)
+        return 0 - 1
+    }
+
+    rc = record_each_(db, target_branch, source_branch, rev_sha, source_revs_packed)
+    if rc != 0 {
+        sqlite.exec(db, "ROLLBACK")
+        sqlite.close(db)
+        return 0 - 1
+    }
+
+    sqlite.exec(db, "COMMIT")
+    sqlite.close(db)
+    return 0
+}
+
+// Is `source_rev_sha` integrated into `target_branch` from
+// `source_branch`? Returns 1 if yes, 0 if no, -1 on infrastructure
+// failure. Hot path — called per candidate during a sweep merge's
+// eligibility computation.
+export merge_ledger_is_integrated(repo: string,
+                                  target_branch: string,
+                                  source_branch: string,
+                                  source_rev_sha: string) -> int {
+    db = ledger_open_(repo)
+    if db == null { return 0 - 1 }
+
+    stmt, perr = sqlite.prepare(db,
+        "SELECT 1 FROM merge_source_rev WHERE target_branch = ? AND source_branch = ? AND source_rev_sha = ? LIMIT 1")
+    if string.length(perr) > 0 { sqlite.close(db); return 0 - 1 }
+    sqlite.bind_text(stmt, 1, target_branch)
+    sqlite.bind_text(stmt, 2, source_branch)
+    sqlite.bind_text(stmt, 3, source_rev_sha)
+    sc, _ = sqlite.step(stmt, db)
+    sqlite.finalize(stmt)
+    sqlite.close(db)
+    if sc == SQLITE_ROW { return 1 }
+    return 0
+}
+
+// List all source revs from `source_branch` integrated into
+// `target_branch`. Returned as a "\n"-separated packed string of
+// SHAs (possibly empty). Intended for `svn merged --integrated`
+// and similar reporting.
+export merge_ledger_integrated_set(repo: string,
+                                   target_branch: string,
+                                   source_branch: string) -> string {
+    db = ledger_open_(repo)
+    if db == null { return "" }
+
+    stmt, perr = sqlite.prepare(db,
+        "SELECT source_rev_sha FROM merge_source_rev WHERE target_branch = ? AND source_branch = ? ORDER BY source_rev_sha")
+    if string.length(perr) > 0 { sqlite.close(db); return "" }
+    sqlite.bind_text(stmt, 1, target_branch)
+    sqlite.bind_text(stmt, 2, source_branch)
+
+    out = ""
+    sc, _ = sqlite.step(stmt, db)
+    while sc == SQLITE_ROW {
+        sha = sqlite.column_text(stmt, 0)
+        out = append_packed_(out, sha)
+        sc, _ = sqlite.step(stmt, db)
+    }
+    sqlite.finalize(stmt)
+    sqlite.close(db)
+    return out
+}
+
+// Filter `candidate_revs_packed` to the subset NOT yet integrated
+// into `target_branch` from `source_branch`. Order is preserved.
+// Returned as "\n"-separated packed string.
+//
+// This is the call wc_merge will make during a sweep merge to
+// compute which revs to actually apply. Implemented as one prepared
+// statement bound per candidate — at typical scale (a few dozen
+// candidates) the SQLite overhead is irrelevant.
+export merge_ledger_eligible_revs(repo: string,
+                                  target_branch: string,
+                                  source_branch: string,
+                                  candidate_revs_packed: string) -> string {
+    n = string.length(candidate_revs_packed)
+    if n == 0 { return "" }
+
+    db = ledger_open_(repo)
+    if db == null { return "" }
+
+    stmt, perr = sqlite.prepare(db,
+        "SELECT 1 FROM merge_source_rev WHERE target_branch = ? AND source_branch = ? AND source_rev_sha = ? LIMIT 1")
+    if string.length(perr) > 0 { sqlite.close(db); return "" }
+
+    out = ""
+    i = 0
+    seg_start = 0
+    while i <= n {
+        at_end = 0
+        if i == n           { at_end = 1 }
+        if at_end == 0 {
+            c = string.char_at(candidate_revs_packed, i)
+            if c == 10 { at_end = 1 }
+        }
+        if at_end == 1 {
+            if i > seg_start {
+                sha = string.substring(candidate_revs_packed, seg_start, i)
+                sqlite.bind_text(stmt, 1, target_branch)
+                sqlite.bind_text(stmt, 2, source_branch)
+                sqlite.bind_text(stmt, 3, sha)
+                sc, _ = sqlite.step(stmt, db)
+                sqlite.reset(stmt)
+                if sc != SQLITE_ROW {
+                    out = append_packed_(out, sha)
+                }
+            }
+            seg_start = i + 1
+        }
+        i = i + 1
+    }
+    sqlite.finalize(stmt)
+    sqlite.close(db)
+    return out
+}
+
+main() {
+    println("repo_storage/merge_ledger.ae is a library; not meant to run standalone")
+}

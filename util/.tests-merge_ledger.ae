@@ -1,0 +1,23 @@
+import build
+import aether
+import aether (source, output, regen, link_flag)
+
+main() {
+    b = build.start()
+    aether.program_test(b) {
+        source("test_merge_ledger.ae")
+        output("test_merge_ledger")
+        link_flag("-laether_sqlite")
+        link_flag("-lsqlite3")
+        link_flag("-lz")
+        link_flag("-lssl")
+        link_flag("-lcrypto")
+        // Module under test, plus io for the system() shim used to
+        // stage a temp dir. The test calls merge_ledger_init_schema
+        // directly rather than going through svnadmin/create.ae —
+        // the ledger is the unit-under-test, the create-time wiring
+        // is exercised end-to-end by the existing svnadmin tests.
+        regen("../repo_storage/merge_ledger.ae")
+        regen("../util/io.ae")
+    }
+}
