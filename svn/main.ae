@@ -686,10 +686,28 @@ cmd_log(argv_start: int) {
 cmd_ls(argv_start: int) {
     url = aether_args_get(argv_start)
     rev_str = find_flag("--rev", argv_start)
-    path = first_positional(argv_start + 1)  // skip the URL itself
+    arg_path = first_positional(argv_start + 1)  // skip the URL itself
 
-    base = url_base(url)
-    repo = url_repo(url)
+    // Round 266 (MB-D fix): use deep URL parsers so URLs like
+    // `http://host/demo/release_a` parse to base+repo+path rather
+    // than misinterpreting the trailing `release_a` as the repo.
+    base = base_url_deep(url)
+    repo = repo_name_deep(url)
+    url_path = in_repo_path(url)
+
+    // If the URL carries a path AND the user passed a positional
+    // path arg, classical SVN concatenates them (URL's path is the
+    // anchor; the arg is relative). With no positional arg the URL's
+    // path stands alone.
+    path = url_path
+    if string.length(arg_path) > 0 {
+        if string.length(url_path) > 0 {
+            path = string.concat(url_path, "/")
+            path = string.concat(path, arg_path)
+        } else {
+            path = arg_path
+        }
+    }
 
     rev = 0
     if string.length(rev_str) > 0 {
@@ -1582,13 +1600,38 @@ cmd_checkout(argv_start: int) {
     url = aether_args_get(argv_start)
     rev_str = find_flag("--rev", argv_start)
     dest = first_positional(argv_start + 1)
+
+    // Round 266 (MB-D fix): use the deep URL parsers so URLs of the
+    // form `http://host/repo/sub/path` parse to base="http://host",
+    // repo="repo", path="sub/path". Pre-fix `url_base`/`url_repo`
+    // split on the LAST `/` and misidentified `sub/path` as the
+    // repo name; `remote_head_rev` then queried a non-existent
+    // repo and returned "could not contact server".
+    base = base_url_deep(url)
+    repo = repo_name_deep(url)
+    sub  = in_repo_path(url)
+
     if string.length(dest) == 0 {
-        // Default: last segment of URL.
-        dest = url_repo(url)
+        // Default: last segment of URL (sub-path's last segment, or
+        // the repo name if the URL has no sub-path).
+        if string.length(sub) > 0 {
+            dest = sub
+        } else {
+            dest = repo
+        }
     }
 
-    base = url_base(url)
-    repo = url_repo(url)
+    if string.length(sub) > 0 {
+        // Sub-path checkout produces a WC anchored at `sub` — the
+        // wider refactor (path translation in every wc_*) is filed
+        // as TODO MB-D follow-up. Until that lands, refuse with a
+        // clear message rather than silently checking out the wrong
+        // tree.
+        println("svn checkout: sub-path checkout not yet supported")
+        println("              (URL has trailing path '${sub}'; check out the")
+        println("              repo root and `cd` into the subdir instead)")
+        return 1
+    }
 
     rev = 0
     if string.length(rev_str) > 0 {
