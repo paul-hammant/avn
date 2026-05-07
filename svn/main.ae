@@ -126,6 +126,13 @@ extern fetch_merge_runs(base: string, repo: string,
 // but haven't been committed yet).
 extern wc_pending_merge_dump(wc_root: string) -> string
 
+// Round 280 — verbose mode reads source-repo URL out of the WC's
+// info table so `svn merged --pending -v` can decorate each pending
+// row with author/date/log via the existing remote_info_rev path.
+extern wc_db_open(wc_root: string) -> ptr
+extern wc_db_get_info(db: ptr, key: string) -> string
+extern wc_db_close(db: ptr)
+
 extern remote_paths_changed(base_url: string, repo_name: string, rev: int) -> ptr
 extern remote_paths_count(P: ptr) -> int
 extern remote_paths_action(P: ptr, i: int) -> string
@@ -790,6 +797,10 @@ cmd_merged(argv_start: int) {
     eligible = find_bool_flag_("--eligible", argv_start)
     pending  = find_bool_flag_("--pending",  argv_start)
     json_out = find_bool_flag_("--json",     argv_start)
+    verbose  = find_bool_flag_("-v",         argv_start)
+    if verbose == 0 {
+        verbose = find_bool_flag_("--verbose", argv_start)
+    }
 
     // --pending reads WC-local state — no URL needed, walk up from cwd.
     if pending == 1 {
@@ -803,10 +814,23 @@ cmd_merged(argv_start: int) {
             return 1
         }
         dump = wc_pending_merge_dump(wc_root)
+        // Verbose mode needs the source repo URL to decorate each row;
+        // pull it from the WC's info table. Reading these is cheap
+        // (one SQLite read) and only happens when the user asks for -v.
+        v_base = ""
+        v_repo = ""
+        if verbose == 1 {
+            db = wc_db_open(wc_root)
+            if db != null {
+                v_base = string.copy(wc_db_get_info(db, "base_url"))
+                v_repo = string.copy(wc_db_get_info(db, "repo"))
+                wc_db_close(db)
+            }
+        }
         if json_out == 1 {
-            print_pending_json_(wc_root, dump)
+            print_pending_json_(wc_root, dump, verbose, v_base, v_repo)
         } else {
-            print_pending_text_(dump)
+            print_pending_text_(dump, verbose, v_base, v_repo)
         }
         return 0
     }
@@ -867,14 +891,17 @@ cmd_merged(argv_start: int) {
         // see?" — pass 0.
         runs = fetch_merge_runs(base, repo, target, source, lo, hi, 0)
         if json_out == 1 {
-            print_eligible_json_(target, source, lo, hi, runs)
+            print_eligible_json_(target, source, lo, hi, runs, verbose, base, repo)
         } else {
-            print_eligible_text_(runs)
+            print_eligible_text_(runs, verbose, base, repo)
         }
         return 0
     }
 
-    // Default: list integrated SHAs.
+    // Default: list integrated SHAs. Verbose decoration here would
+    // need a SHA → rev # → log resolution path that doesn't exist
+    // yet — see TODO Q1. For now -v is silently ignored on this
+    // path and the bare SHA list comes back.
     out = fetch_merged(base, repo, target, source)
     if json_out == 1 {
         print_integrated_json_(target, source, out)
@@ -884,11 +911,158 @@ cmd_merged(argv_start: int) {
     return 0
 }
 
+// One-line "rev / author / date / log" decoration for a single rev.
+// Round 280: -v verbose mode. Two-space-separated; the user pipes
+// through `column -t` if they want alignment.
+//
+// Log message gets truncated at LOG_TRUNC chars + "..." for one-line
+// output. JSON callers want the full message and use decorate_rev_json_
+// instead.
+const VERBOSE_LOG_TRUNC = 60
+
+// Truncate `s` to at most `max` chars, appending "..." if it had to be
+// cut. Empty input returns empty (no ellipsis).
+truncate_log_(s: string, max_chars: int) -> string {
+    n = string.length(s)
+    if n == 0     { return s }
+    if n <= max_chars { return s }
+    return string.concat(string.substring(s, 0, max_chars), "...")
+}
+
+// Strip newlines from a log message — single-line decoration breaks
+// otherwise. We turn embedded newlines into " | ", which is unambiguous
+// against the field-separator (two spaces).
+strip_newlines_(s: string) -> string {
+    n = string.length(s)
+    out = ""
+    i = 0
+    seg_start = 0
+    while i < n {
+        if string.char_at(s, i) == 10 {
+            if i > seg_start {
+                out = string.concat(out, string.substring(s, seg_start, i))
+            }
+            out = string.concat(out, " | ")
+            seg_start = i + 1
+        }
+        i = i + 1
+    }
+    if seg_start == 0 { return s }
+    if seg_start < n {
+        out = string.concat(out, string.substring(s, seg_start, n))
+    }
+    return out
+}
+
+// JSON-escape `s` — only the bare minimum (`"` and `\` and control
+// chars common in commit messages: `\n`, `\r`, `\t`). Returns a
+// new string. Empty input returns "".
+json_escape_(s: string) -> string {
+    n = string.length(s)
+    if n == 0 { return s }
+    out = ""
+    seg_start = 0
+    i = 0
+    while i < n {
+        c = string.char_at(s, i)
+        replacement = ""
+        if c == 34       { replacement = "\\\"" }      // "
+        if c == 92       { replacement = "\\\\" }      // \
+        if c == 10       { replacement = "\\n" }
+        if c == 13       { replacement = "\\r" }
+        if c == 9        { replacement = "\\t" }
+        if string.length(replacement) > 0 {
+            if i > seg_start {
+                out = string.concat(out, string.substring(s, seg_start, i))
+            }
+            out = string.concat(out, replacement)
+            seg_start = i + 1
+        }
+        i = i + 1
+    }
+    if seg_start == 0 { return s }
+    if seg_start < n {
+        out = string.concat(out, string.substring(s, seg_start, n))
+    }
+    return out
+}
+
+// Decorate one rev as "rNN  AUTHOR  DATE  LOG-trunc" (text mode).
+// Falls back to "rNN  ?  ?  (rev info unavailable)" if the server
+// lookup fails, so the row stays present rather than vanishing.
+decorate_rev_text_(base: string, repo: string, rev: int) -> string {
+    I = remote_info_rev(base, repo, rev)
+    if I == 0 {
+        return "r${rev}  ?  ?  (rev info unavailable)"
+    }
+    author = remote_info_author(I)
+    date   = remote_info_date(I)
+    msg    = remote_info_msg(I)
+    msg_one = strip_newlines_(msg)
+    msg_cut = truncate_log_(msg_one, VERBOSE_LOG_TRUNC)
+    out = "r${rev}  ${author}  ${date}  ${msg_cut}"
+    remote_info_free(I)
+    return out
+}
+
+// Append one verbose-rev JSON object to `out`. Returns the extended
+// string. Fields are ALWAYS present (empty strings on lookup failure)
+// so the JSON shape stays stable for jq consumers.
+append_rev_json_(out: string, rev: int, base: string, repo: string) -> string {
+    author = ""
+    date   = ""
+    msg    = ""
+    I = remote_info_rev(base, repo, rev)
+    if I != 0 {
+        author = remote_info_author(I)
+        date   = remote_info_date(I)
+        msg    = remote_info_msg(I)
+    }
+    res = string.concat(out, "{\"rev\":")
+    res = string.concat(res, "${rev}")
+    res = string.concat(res, ",\"author\":\"")
+    res = string.concat(res, json_escape_(author))
+    res = string.concat(res, "\",\"date\":\"")
+    res = string.concat(res, json_escape_(date))
+    res = string.concat(res, "\",\"log\":\"")
+    res = string.concat(res, json_escape_(msg))
+    res = string.concat(res, "\"}")
+    if I != 0 { remote_info_free(I) }
+    return res
+}
+
+// Like append_rev_json_ but emits ONLY the trailing author/date/log
+// fields (with a leading comma, no surrounding braces, no `rev`). Used
+// to splice verbose decoration into a pending-row object that already
+// has its own `rev` field.
+append_rev_aux_json_(out: string, rev: int, base: string, repo: string) -> string {
+    author = ""
+    date   = ""
+    msg    = ""
+    I = remote_info_rev(base, repo, rev)
+    if I != 0 {
+        author = remote_info_author(I)
+        date   = remote_info_date(I)
+        msg    = remote_info_msg(I)
+    }
+    res = string.concat(out, ",\"author\":\"")
+    res = string.concat(res, json_escape_(author))
+    res = string.concat(res, "\",\"date\":\"")
+    res = string.concat(res, json_escape_(date))
+    res = string.concat(res, "\",\"log\":\"")
+    res = string.concat(res, json_escape_(msg))
+    res = string.concat(res, "\"")
+    if I != 0 { remote_info_free(I) }
+    return res
+}
+
 // ---- output helpers -----------------------------------------------------
 
 // Emit one rev number per line, prefixed `r`. `runs` is the
-// "lo:hi\n..." packed shape from fetch_merge_runs.
-print_eligible_text_(runs: string) {
+// "lo:hi\n..." packed shape from fetch_merge_runs. With verbose=1,
+// each line gains "  AUTHOR  DATE  LOG-trunc" decoration via a per-rev
+// remote_info_rev fetch.
+print_eligible_text_(runs: string, verbose: int, base: string, repo: string) {
     rn = string.length(runs)
     i = 0
     seg_start = 0
@@ -912,7 +1086,11 @@ print_eligible_text_(runs: string) {
                             run_hi = string.get_int(run_hi_s)
                             rv = run_lo + 1
                             while rv <= run_hi {
-                                println("r${rv}")
+                                if verbose == 1 {
+                                    println(decorate_rev_text_(base, repo, rv))
+                                } else {
+                                    println("r${rv}")
+                                }
                                 rv = rv + 1
                             }
                         }
@@ -927,8 +1105,11 @@ print_eligible_text_(runs: string) {
 
 // JSON: {"target":"…","source":"…","range":{"from":N,"to":M},"eligible":[…]}
 // Rev numbers (not SHAs) — matches what the human reads. Comma-separated.
+// With verbose=1, each entry is `{"rev":N,"author":"…","date":"…","log":"…"}`
+// instead of a bare int.
 print_eligible_json_(target: string, source: string, lo: int, hi: int,
-                     runs: string) {
+                     runs: string, verbose: int,
+                     base: string, repo: string) {
     out = "{\"target\":\""
     out = string.concat(out, target)
     out = string.concat(out, "\",\"source\":\"")
@@ -963,7 +1144,11 @@ print_eligible_json_(target: string, source: string, lo: int, hi: int,
                             rv = run_lo + 1
                             while rv <= run_hi {
                                 if first == 0 { out = string.concat(out, ",") }
-                                out = string.concat(out, "${rv}")
+                                if verbose == 1 {
+                                    out = append_rev_json_(out, rv, base, repo)
+                                } else {
+                                    out = string.concat(out, "${rv}")
+                                }
                                 first = 0
                                 rv = rv + 1
                             }
@@ -1028,8 +1213,10 @@ print_integrated_json_(target: string, source: string, packed: string) {
     println(out)
 }
 
-// One pending row per line, human form via print_pending_row_.
-print_pending_text_(dump: string) {
+// One pending row per line, human form via print_pending_row_. With
+// verbose=1, the row is followed by an indented "  AUTHOR  DATE  LOG"
+// continuation line via remote_info_rev decoration.
+print_pending_text_(dump: string, verbose: int, base: string, repo: string) {
     n = string.length(dump)
     i = 0
     seg_start = 0
@@ -1043,6 +1230,17 @@ print_pending_text_(dump: string) {
             if i > seg_start {
                 line = string.substring(dump, seg_start, i)
                 print_pending_row_(line)
+                if verbose == 1 {
+                    rev = pending_row_source_rev_(line)
+                    if rev > 0 {
+                        deco = decorate_rev_text_(base, repo, rev)
+                        // Strip the leading "rNN  " — the heading line already
+                        // shows the rev number; keep author/date/log only.
+                        // decorate_rev_text_ shape is "rNN  AUTHOR  DATE  LOG".
+                        cut = strip_rev_prefix_(deco)
+                        println("  ${cut}")
+                    }
+                }
             }
             seg_start = i + 1
         }
@@ -1050,8 +1248,57 @@ print_pending_text_(dump: string) {
     }
 }
 
+// Helpers for print_pending_text_ verbose decoration. Extract the
+// source_rev int from a tab-separated dump row, and strip the "rNN  "
+// prefix from a decorate_rev_text_ output. Both return safe defaults
+// on malformed input (0 and the input string respectively) — verbose
+// shouldn't crash a row, just present less.
+
+pending_row_source_rev_(line: string) -> int {
+    // Row shape: "<target>\t<source>\t<rev>\t<verb>"
+    n = string.length(line)
+    t1 = 0 - 1
+    t2 = 0 - 1
+    t3 = 0 - 1
+    i = 0
+    while i < n {
+        if string.char_at(line, i) == 9 {
+            if t1 < 0      { t1 = i }
+            else { if t2 < 0 { t2 = i } else { if t3 < 0 { t3 = i; break } } }
+        }
+        i = i + 1
+    }
+    if t1 < 0 || t2 < 0 || t3 < 0 { return 0 }
+    rev_s = string.substring(line, t2 + 1, t3)
+    if string.try_int(rev_s) == 0 { return 0 }
+    return string.get_int(rev_s)
+}
+
+strip_rev_prefix_(deco: string) -> string {
+    // Skip "rNN  " (r + digits + two spaces). If the shape doesn't
+    // match, return the input unchanged so the user still sees data.
+    n = string.length(deco)
+    if n < 4 { return deco }
+    if string.char_at(deco, 0) != 114 { return deco }    // 'r'
+    j = 1
+    while j < n {
+        c = string.char_at(deco, j)
+        if c < 48 { break }
+        if c > 57 { break }
+        j = j + 1
+    }
+    if j == 1 { return deco }
+    if j + 2 > n { return deco }
+    if string.char_at(deco, j)     != 32 { return deco }  // ' '
+    if string.char_at(deco, j + 1) != 32 { return deco }
+    return string.substring(deco, j + 2, n)
+}
+
 // JSON: {"wc_root":"…","pending":[{"target":"…","source":"…","rev":N,"verb":"applied"}, …]}
-print_pending_json_(wc_root: string, dump: string) {
+// With verbose=1, each entry also gains "author"/"date"/"log" fields
+// via remote_info_rev on the source rev.
+print_pending_json_(wc_root: string, dump: string, verbose: int,
+                    base: string, repo: string) {
     out = "{\"wc_root\":\""
     out = string.concat(out, wc_root)
     out = string.concat(out, "\",\"pending\":[")
@@ -1070,6 +1317,20 @@ print_pending_json_(wc_root: string, dump: string) {
                 line = string.substring(dump, seg_start, i)
                 row_json = pending_row_to_json_(line)
                 if string.length(row_json) > 0 {
+                    if verbose == 1 {
+                        // pending_row_to_json_'s output ends with "}".
+                        // Splice author/date/log fields in before
+                        // that closing brace.
+                        rl = string.length(row_json)
+                        if rl > 0 {
+                            if string.char_at(row_json, rl - 1) == 125 {
+                                rev = pending_row_source_rev_(line)
+                                row_open = string.substring(row_json, 0, rl - 1)
+                                row_open = append_rev_aux_json_(row_open, rev, base, repo)
+                                row_json = string.concat(row_open, "}")
+                            }
+                        }
+                    }
                     if first == 0 { out = string.concat(out, ",") }
                     out = string.concat(out, row_json)
                     first = 0

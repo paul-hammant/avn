@@ -317,6 +317,61 @@ verified in Round 268: cherry-pick C4→C3 vs C3→C4 followed by
 sweep produce byte-identical files matching trunk@HEAD's content.
 
 
+## Future query API surface
+
+### Q1. Combined `--all` view + integrated `-v` verbose decoration
+After Round 280 ships verbose mode for `--eligible` and `--pending`, the
+default-integrated form (the SHA list) also wants `-v` decoration —
+but the SHA → (rev #, author, date, log) resolution requires either a
+schema bump on `merge_source_rev` (add `source_rev_num INTEGER`,
+populated at write-time from commit_parse's already-resolved rev #) or
+a server-side enrichment endpoint that walks rev blobs to map SHA →
+rev # at query time. Schema bump is preferred (the column is
+populated for free; no scan); the wire shape of `/merged` becomes
+`{integrated:[{"sha":"…","rev":N},…]}` and the existing SHA-only
+shape goes away (no other clients to break).
+
+Filed for after we have a real workflow asking for it. Today's `svn
+merged URL --target T --source S` returns SHAs which dump cleanly into
+shell pipes; verbose decoration is the future-proofing.
+
+Same TODO covers an `--all` mode (combined integrated/eligible in one
+listing) — same data plumbing, just a UI choice on top.
+
+### Q2. Structured-query endpoint — only if 3+ shapes accumulate
+If after `--all` and `-v` ship we end up adding more `/foo/bar/baz`
+URL paths for new query shapes, switch to a homegrown query-body
+endpoint:
+
+  POST /repos/{r}/q
+  {"select":["rev","sha","author","log"], "from":"integrated",
+   "target":"release_a", "source":"trunk"}
+
+~200 lines of dispatch in svnserver/. No parser. Two endpoints become
+one and verbose mode falls out as a `select` field. **Don't build
+this until we genuinely need three new shapes** — the REST endpoints
+are fine while we're still only adding one new endpoint per round.
+
+### Q3. If we ever ship a real GraphQL endpoint — library choice
+Don't read this until Q2 has been built and Q2 alone is hurting.
+
+Two viable libraries:
+
+- **libgraphqlparser** (Meta, C++) — ships a C API on purpose,
+  designed for binding to other languages. Easy to extern from
+  Aether (link-time, no shim crate). The Meta-famous one. Preferred.
+
+- **graphql-parser** (Rust crate) — needs a `#[no_mangle] extern "C"`
+  shim crate built as `staticlib`. Doable, but you've signed up for
+  maintaining the shim. Skip unless libgraphqlparser doesn't exist
+  on the target platform.
+
+avn's query graph (merge events ⇄ source revs ⇄ rev metadata) maps
+naturally onto GraphQL's field-selection model — the `-v` problem
+(client picks decoration depth) is the canonical GraphQL win. But
+**this is overkill** for a CLI with one client and a finite query
+set. File and forget unless someone actually asks for it.
+
 ## Round 228 update
 
 Aether 0.116 shipped the `@aether string` per-param extern annotation
