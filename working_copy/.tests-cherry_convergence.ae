@@ -1,0 +1,42 @@
+// Cherry-pick convergence test: builds a 5-rev trunk on one branch,
+// branches twice at r2, runs two cherry-pick orderings (C4-then-C3
+// vs C3-then-C4) followed by a sweep merge of trunk into each
+// branch. Asserts both branches end with byte-identical files.
+//
+// Mirrors the scenarios in
+// https://github.com/paul-hammant/limits-of-merging-experiment
+// (the "limits of merging" blog post). Classical-SVN reference is
+// https://github.com/paul-hammant/limits-of-merging-experiment/tree/svn-version
+// — that branch's start.sh + scenario-*.sh run cleanly against the
+// upstream C Subversion. Failures here are regressions we
+// introduced in the port; see TODO.md "Cherry-pick convergence"
+// for the MB-A..MB-F catalogue.
+//
+// Driver creates the repo via svnadmin and spawns the server inline,
+// so no fixture_seed/server here — the test owns the lifecycle.
+
+import build
+import aether
+import aether (driver, output, binary_under_test, path)
+
+main() {
+    b = build.start()
+    build.dep(b, "svn")
+    build.dep(b, "svnadmin")
+    build.dep(b, "svnserver")
+
+    aether.driver_test(b) {
+        driver(".test_cherry_convergence_driver.ae")
+        output("test_cherry_convergence_driver")
+
+        binary_under_test(b, "svn") {
+            path("target/svn/bin/svn")
+        }
+        binary_under_test(b, "admin") {
+            path("target/svnadmin/bin/svnadmin")
+        }
+        binary_under_test(b, "server") {
+            path("target/svnserver/bin/aether-svnserver")
+        }
+    }
+}

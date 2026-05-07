@@ -1,0 +1,348 @@
+// Copyright 2026 Paul Hammant (portions).
+// Apache License, Version 2.0 — see LICENSE.
+//
+// Cherry-pick convergence driver. Inspired by the "limits of merging"
+// blog: build trunk C1..C5, branch twice at C2, then run two
+// cherry-pick orderings (C4-then-C3 / C3-then-C4) plus a sweep merge.
+// Assert both branches end byte-identical.
+//
+// Fixtures are at tests/fixtures/cherry/ relative to the avn repo
+// root (the cwd aeb spawns the driver from).
+
+import contrib.aeocha
+import std.os
+import std.os (os_getenv)
+import std.string
+
+extern list_new() -> ptr
+extern list_add_raw(list: ptr, item: ptr) -> int
+
+argv_new() -> { return list_new() }
+argv_push(argv: ptr, s: string) { list_add_raw(argv, s) }
+
+sh(cmd: string) -> {
+    argv = argv_new()
+    argv_push(argv, "-c")
+    argv_push(argv, cmd)
+    out, status, err = os.run_capture("/bin/bash", argv, null)
+    return out, status, err
+}
+
+// `test -f $WC/$FILE && sha256sum ... | cut -d' ' -f1 || echo $MISSING`
+// Guards convergence assertions: a missing file (scenarios failed)
+// produces "MISSING_A" vs "MISSING_B" rather than empty strings,
+// preventing a trivial "" == "" pass.
+_sha_cmd(wc: string, file: string, missing: string) -> string {
+    c = string.concat("test -f ", wc)
+    c = string.concat(c, "/")
+    c = string.concat(c, file)
+    c = string.concat(c, " && sha256sum ")
+    c = string.concat(c, wc)
+    c = string.concat(c, "/")
+    c = string.concat(c, file)
+    c = string.concat(c, " | cut -d' ' -f1 || echo ")
+    c = string.concat(c, missing)
+    return c
+}
+
+main() {
+    fw = aeocha.init()
+    svn_bin    = os_getenv("SVN_BIN")
+    admin_bin  = os_getenv("ADMIN_BIN")
+    server_bin = os_getenv("SERVER_BIN")
+
+    repo = "/tmp/svnae_aeb_cherry_repo"
+    port = "9720"
+    wc_t = "/tmp/svnae_cherry_trunk_wc"
+    wc_a = "/tmp/svnae_cherry_a_wc"
+    wc_b = "/tmp/svnae_cherry_b_wc"
+    url  = "http://127.0.0.1:9720/demo"
+    pidf = "/tmp/svnae_cherry_srv.pid"
+    // Workspace root derived from SVN_BIN (= $WORKSPACE/target/svn/bin/svn)
+    // via bash parameter expansion stripping the trailing four segments.
+    // file.exists() rejects directories so we can't binary_under_test
+    // the fixtures dir directly. Aether eats `${...}` in string literals,
+    // so we splice the parameter-expansion sigil in via concat.
+    dollar = "$"
+    fix = string.concat(dollar, "{SVN_BIN%/*/*/*/*}/tests/fixtures/cherry")
+
+    // ---- bring up server ---------------------------------------------------
+    setup = "rm -rf "
+    setup = string.concat(setup, repo)
+    setup = string.concat(setup, " ")
+    setup = string.concat(setup, wc_t)
+    setup = string.concat(setup, " ")
+    setup = string.concat(setup, wc_a)
+    setup = string.concat(setup, " ")
+    setup = string.concat(setup, wc_b)
+    setup = string.concat(setup, " && ")
+    setup = string.concat(setup, admin_bin)
+    setup = string.concat(setup, " create ")
+    setup = string.concat(setup, repo)
+    setup = string.concat(setup, " >/dev/null")
+
+    spawn_srv = "(nohup "
+    spawn_srv = string.concat(spawn_srv, server_bin)
+    spawn_srv = string.concat(spawn_srv, " demo ")
+    spawn_srv = string.concat(spawn_srv, repo)
+    spawn_srv = string.concat(spawn_srv, " ")
+    spawn_srv = string.concat(spawn_srv, port)
+    spawn_srv = string.concat(spawn_srv, " >/tmp/svnae_cherry_srv.log 2>&1 & echo $! > ")
+    spawn_srv = string.concat(spawn_srv, pidf)
+    spawn_srv = string.concat(spawn_srv, "; disown); sleep 1.5")
+
+    kill_srv = "kill $(cat "
+    kill_srv = string.concat(kill_srv, pidf)
+    kill_srv = string.concat(kill_srv, ") 2>/dev/null || true")
+
+    _, setup_st, _ = sh(setup)
+    _ignore_spawn, spawn_st, _ = sh(spawn_srv)
+
+    // ---- build trunk r1..r5 ------------------------------------------------
+    // r1: stage baseline files (Gemfile, app.rb, happy_path_test.rb), commit.
+    // r2..r5: apply C2..C5 patches via `patch -p1`, commit each.
+    build_trunk = "cd / && rm -rf "
+    build_trunk = string.concat(build_trunk, wc_t)
+    build_trunk = string.concat(build_trunk, " && ")
+    build_trunk = string.concat(build_trunk, "FIX=")
+    build_trunk = string.concat(build_trunk, fix)
+    build_trunk = string.concat(build_trunk, " && ")
+    build_trunk = string.concat(build_trunk, svn_bin)
+    build_trunk = string.concat(build_trunk, " checkout ")
+    build_trunk = string.concat(build_trunk, url)
+    build_trunk = string.concat(build_trunk, " ")
+    build_trunk = string.concat(build_trunk, wc_t)
+    build_trunk = string.concat(build_trunk, " >/dev/null && cd ")
+    build_trunk = string.concat(build_trunk, wc_t)
+    build_trunk = string.concat(build_trunk, " && ")
+    // SVN-classical layout: /trunk/ holds the source. Branches are
+    // server-side dir copies (`svn cp URL/trunk URL/release_x`).
+    //
+    // Order matters here: avn has a bug where `svn cp URL/path@PASTREV
+    // URL/dst` clobbers sibling top-level dirs in the resulting tree.
+    // We side-step it by branching at HEAD *between* C2 and C3 — both
+    // branches get C2's content, and trunk continues with C3..C5.
+    //
+    // Rev layout produced:
+    //   r1: trunk + baseline (C1)
+    //   r2: C2 in trunk
+    //   r3: branch release_a from URL/trunk (HEAD = C2)
+    //   r4: branch release_b from URL/trunk
+    //   r5: C3 in trunk
+    //   r6: C4 in trunk
+    //   r7: C5 in trunk
+    build_trunk = string.concat(build_trunk, "mkdir trunk && ")
+    build_trunk = string.concat(build_trunk, svn_bin)
+    build_trunk = string.concat(build_trunk, " add trunk >/dev/null && ")
+    // C1: baseline files into /trunk/
+    build_trunk = string.concat(build_trunk, "cp $FIX/baseline/Gemfile $FIX/baseline/app.rb $FIX/baseline/happy_path_test.rb trunk/ && ")
+    build_trunk = string.concat(build_trunk, svn_bin)
+    build_trunk = string.concat(build_trunk, " add trunk/Gemfile trunk/app.rb trunk/happy_path_test.rb >/dev/null && ")
+    build_trunk = string.concat(build_trunk, svn_bin)
+    build_trunk = string.concat(build_trunk, " commit --author paul --log 'C1: baseline' >/dev/null && ")
+    // C2
+    build_trunk = string.concat(build_trunk, "cd trunk && patch -p1 --no-backup-if-mismatch < $FIX/patches/c2-hair-color-string.patch >/dev/null && cd .. && ")
+    build_trunk = string.concat(build_trunk, svn_bin)
+    build_trunk = string.concat(build_trunk, " commit --author paul --log 'C2: hair_color (string)' >/dev/null && ")
+    // Branches at HEAD (= C2 content)
+    build_trunk = string.concat(build_trunk, svn_bin)
+    build_trunk = string.concat(build_trunk, " cp ")
+    build_trunk = string.concat(build_trunk, url)
+    build_trunk = string.concat(build_trunk, "/trunk ")
+    build_trunk = string.concat(build_trunk, url)
+    build_trunk = string.concat(build_trunk, "/release_a --author paul --log 'branch a (post-C2)' >/dev/null && ")
+    build_trunk = string.concat(build_trunk, svn_bin)
+    build_trunk = string.concat(build_trunk, " cp ")
+    build_trunk = string.concat(build_trunk, url)
+    build_trunk = string.concat(build_trunk, "/trunk ")
+    build_trunk = string.concat(build_trunk, url)
+    build_trunk = string.concat(build_trunk, "/release_b --author paul --log 'branch b (post-C2)' >/dev/null && ")
+    // svn update brings the WC in sync with HEAD's tree. Without
+    // this, the next commit's txn starts from the WC's base rev
+    // (which predates the branch creations) and ends up dropping
+    // /release_a and /release_b from the new tree — avn's commit
+    // doesn't detect the out-of-date condition.
+    build_trunk = string.concat(build_trunk, svn_bin)
+    build_trunk = string.concat(build_trunk, " update >/dev/null && ")
+    // C3..C5 in trunk
+    build_trunk = string.concat(build_trunk, "cd trunk && patch -p1 --no-backup-if-mismatch < $FIX/patches/c3-uppercase-buttons.patch >/dev/null && cd .. && ")
+    build_trunk = string.concat(build_trunk, svn_bin)
+    build_trunk = string.concat(build_trunk, " commit --author paul --log 'C3: uppercase buttons' >/dev/null && ")
+    build_trunk = string.concat(build_trunk, "cd trunk && patch -p1 --no-backup-if-mismatch < $FIX/patches/c4-hair-color-int.patch >/dev/null && cd .. && ")
+    build_trunk = string.concat(build_trunk, svn_bin)
+    build_trunk = string.concat(build_trunk, " commit --author paul --log 'C4: hair_color (int)' >/dev/null && ")
+    build_trunk = string.concat(build_trunk, "cd trunk && patch -p1 --no-backup-if-mismatch < $FIX/patches/c5-maintainer-comment.patch >/dev/null && cd .. && ")
+    build_trunk = string.concat(build_trunk, svn_bin)
+    build_trunk = string.concat(build_trunk, " commit --author paul --log 'C5: maintainer comment' >/dev/null")
+
+    _, build_trunk_st, _ = sh(build_trunk)
+
+    // ---- scenario A: release_a — cherry-pick C4 then C3, then sweep ------
+    do_a = "cd / && rm -rf "
+    do_a = string.concat(do_a, wc_a)
+    do_a = string.concat(do_a, " && ")
+    do_a = string.concat(do_a, svn_bin)
+    do_a = string.concat(do_a, " checkout ")
+    do_a = string.concat(do_a, url)
+    do_a = string.concat(do_a, "/release_a ")
+    do_a = string.concat(do_a, wc_a)
+    do_a = string.concat(do_a, " >/dev/null && cd ")
+    do_a = string.concat(do_a, wc_a)
+    do_a = string.concat(do_a, " && ")
+    // -c 4 then commit
+    do_a = string.concat(do_a, svn_bin)
+    do_a = string.concat(do_a, " merge -c 6 ")
+    do_a = string.concat(do_a, url)
+    do_a = string.concat(do_a, "/trunk . >/tmp/svnae_cherry_a_m4.log 2>&1 && ")
+    do_a = string.concat(do_a, svn_bin)
+    do_a = string.concat(do_a, " commit --author paul --log 'cherry-pick C4 (a)' >/dev/null && ")
+    // -c 3 then commit
+    do_a = string.concat(do_a, svn_bin)
+    do_a = string.concat(do_a, " merge -c 5 ")
+    do_a = string.concat(do_a, url)
+    do_a = string.concat(do_a, "/trunk . >/tmp/svnae_cherry_a_m3.log 2>&1 && ")
+    do_a = string.concat(do_a, svn_bin)
+    do_a = string.concat(do_a, " commit --author paul --log 'cherry-pick C3 (a)' >/dev/null && ")
+    // sweep r2:HEAD — should only apply C5 (C3,C4 in mergeinfo)
+    do_a = string.concat(do_a, svn_bin)
+    do_a = string.concat(do_a, " merge -r 4:HEAD ")
+    do_a = string.concat(do_a, url)
+    do_a = string.concat(do_a, "/trunk . >/tmp/svnae_cherry_a_sweep.log 2>&1 && ")
+    do_a = string.concat(do_a, svn_bin)
+    do_a = string.concat(do_a, " commit --author paul --log 'sweep main → release_a' >/dev/null")
+
+    _, do_a_st, _ = sh(do_a)
+
+    // ---- scenario B: release_b — cherry-pick C3 then C4, then sweep ------
+    do_b = "cd / && rm -rf "
+    do_b = string.concat(do_b, wc_b)
+    do_b = string.concat(do_b, " && ")
+    do_b = string.concat(do_b, svn_bin)
+    do_b = string.concat(do_b, " checkout ")
+    do_b = string.concat(do_b, url)
+    do_b = string.concat(do_b, "/release_b ")
+    do_b = string.concat(do_b, wc_b)
+    do_b = string.concat(do_b, " >/dev/null && cd ")
+    do_b = string.concat(do_b, wc_b)
+    do_b = string.concat(do_b, " && ")
+    // -c 3 then commit
+    do_b = string.concat(do_b, svn_bin)
+    do_b = string.concat(do_b, " merge -c 5 ")
+    do_b = string.concat(do_b, url)
+    do_b = string.concat(do_b, "/trunk . >/tmp/svnae_cherry_b_m3.log 2>&1 && ")
+    do_b = string.concat(do_b, svn_bin)
+    do_b = string.concat(do_b, " commit --author paul --log 'cherry-pick C3 (b)' >/dev/null && ")
+    // -c 4 then commit
+    do_b = string.concat(do_b, svn_bin)
+    do_b = string.concat(do_b, " merge -c 6 ")
+    do_b = string.concat(do_b, url)
+    do_b = string.concat(do_b, "/trunk . >/tmp/svnae_cherry_b_m4.log 2>&1 && ")
+    do_b = string.concat(do_b, svn_bin)
+    do_b = string.concat(do_b, " commit --author paul --log 'cherry-pick C4 (b)' >/dev/null && ")
+    // sweep
+    do_b = string.concat(do_b, svn_bin)
+    do_b = string.concat(do_b, " merge -r 4:HEAD ")
+    do_b = string.concat(do_b, url)
+    do_b = string.concat(do_b, "/trunk . >/tmp/svnae_cherry_b_sweep.log 2>&1 && ")
+    do_b = string.concat(do_b, svn_bin)
+    do_b = string.concat(do_b, " commit --author paul --log 'sweep main → release_b' >/dev/null")
+
+    _, do_b_st, _ = sh(do_b)
+
+    // ---- compare files ----------------------------------------------------
+    sha_a_app  = _sha_cmd(wc_a, "app.rb",             "MISSING_A")
+    sha_b_app  = _sha_cmd(wc_b, "app.rb",             "MISSING_B")
+    sha_a_test = _sha_cmd(wc_a, "happy_path_test.rb", "MISSING_A")
+    sha_b_test = _sha_cmd(wc_b, "happy_path_test.rb", "MISSING_B")
+    sha_a_gem  = _sha_cmd(wc_a, "Gemfile",            "MISSING_A")
+    sha_b_gem  = _sha_cmd(wc_b, "Gemfile",            "MISSING_B")
+
+    // Diagnostic: trunk's own app.rb at HEAD (for context if convergence
+    // fails — what should branches converge TO?).
+    sha_t_app = _sha_cmd(wc_t, "trunk/app.rb",        "MISSING_T")
+
+    // Mergeinfo on release_a / release_b — should record main:3,4,5
+    // (the three revs swept in via cherry-pick + sweep).
+    mi_a = string.concat("cd ", wc_a)
+    mi_a = string.concat(mi_a, " && ")
+    mi_a = string.concat(mi_a, svn_bin)
+    mi_a = string.concat(mi_a, " propget svn:mergeinfo . 2>/dev/null || echo ''")
+    mi_b = string.concat("cd ", wc_b)
+    mi_b = string.concat(mi_b, " && ")
+    mi_b = string.concat(mi_b, svn_bin)
+    mi_b = string.concat(mi_b, " propget svn:mergeinfo . 2>/dev/null || echo ''")
+
+    aeocha.describe(fw, "cherry-pick convergence (limits-of-merging)") {
+
+        aeocha.it("setup: empty repo created") callback {
+            aeocha.expect_exit(fw, setup_st, 0, "svnadmin create exit 0")
+        }
+
+        aeocha.it("setup: server up on port 9720") callback {
+            aeocha.expect_exit(fw, spawn_st, 0, "spawn shell exit 0")
+        }
+
+        aeocha.it("trunk: r1..r5 commits + 2 server-side branches succeed") callback {
+            // Diagnostic logs at /tmp/svnae_cherry_srv.log + the per-step
+            // .log files (m3/m4/sweep) if anything goes wrong.
+            aeocha.expect_exit(fw, build_trunk_st, 0, "trunk build exit 0")
+        }
+
+        aeocha.it("scenario A (C4→C3→sweep) completes without conflict") callback {
+            aeocha.expect_exit(fw, do_a_st, 0, "scenario A exit 0")
+        }
+
+        aeocha.it("scenario B (C3→C4→sweep) completes without conflict") callback {
+            aeocha.expect_exit(fw, do_b_st, 0, "scenario B exit 0")
+        }
+
+        aeocha.it("convergence: app.rb identical between A and B") callback {
+            sa, _, _ = sh(sha_a_app)
+            sb, _, _ = sh(sha_b_app)
+            aeocha.assert_str_eq(fw, string.trim(sa), string.trim(sb),
+                "release_a/app.rb sha == release_b/app.rb sha")
+        }
+
+        aeocha.it("convergence: happy_path_test.rb identical between A and B") callback {
+            sa, _, _ = sh(sha_a_test)
+            sb, _, _ = sh(sha_b_test)
+            aeocha.assert_str_eq(fw, string.trim(sa), string.trim(sb),
+                "release_a/happy_path_test.rb sha == release_b/...")
+        }
+
+        aeocha.it("convergence: Gemfile identical between A and B") callback {
+            sa, _, _ = sh(sha_a_gem)
+            sb, _, _ = sh(sha_b_gem)
+            aeocha.assert_str_eq(fw, string.trim(sa), string.trim(sb),
+                "release_a/Gemfile sha == release_b/Gemfile sha")
+        }
+
+        aeocha.it("convergence: branches match trunk@HEAD's app.rb") callback {
+            sa, _, _ = sh(sha_a_app)
+            st, _, _ = sh(sha_t_app)
+            aeocha.assert_str_eq(fw, string.trim(sa), string.trim(st),
+                "release_a/app.rb sha == trunk/app.rb sha")
+        }
+
+        aeocha.it("mergeinfo on release_a records trunk revs 5,6,7") callback {
+            out, _, _ = sh(mi_a)
+            // Loose check — exact format depends on mergeinfo serialiser,
+            // but the rev numbers must appear together.
+            aeocha.expect_stdout_contains(fw, out, "5", "rev 5 (C3) in mergeinfo")
+            aeocha.expect_stdout_contains(fw, out, "6", "rev 6 (C4) in mergeinfo")
+            aeocha.expect_stdout_contains(fw, out, "7", "rev 7 (C5) in mergeinfo")
+        }
+
+        aeocha.it("mergeinfo on release_b records trunk revs 5,6,7") callback {
+            out, _, _ = sh(mi_b)
+            aeocha.expect_stdout_contains(fw, out, "5", "rev 5 (C3) in mergeinfo")
+            aeocha.expect_stdout_contains(fw, out, "6", "rev 6 (C4) in mergeinfo")
+            aeocha.expect_stdout_contains(fw, out, "7", "rev 7 (C5) in mergeinfo")
+        }
+    }
+
+    // teardown — fire and forget; don't assert.
+    sh(kill_srv)
+
+    aeocha.run_summary(fw)
+}
