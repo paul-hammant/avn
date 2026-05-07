@@ -19,6 +19,19 @@
 //   content_lens  int_vec   bytes in contents[i]
 //   copy_shas     std.list      AetherString per entry (40-char hex)
 //   copy_kinds    int_vec   0=file 1=dir, only meaningful for COPY
+//
+// Plus optional merge metadata (Round 272 / Phase 1.3 of the
+// merge-ledger work):
+//
+//   merge_source_branch   "" if this txn is not a merge commit
+//   merge_source_revs     std.list, AetherString SHA per source rev
+//                         integrated by this commit
+//   merge_verb            0 applied (default), 1 record-only, 2 reverse
+//
+// commit_finalise reads these and (a) emits a `merged:` line in the
+// rev blob, (b) records merge_event + merge_source_rev rows in
+// <repo>/merges.db. wc_merge will populate them via the new
+// txn_merge_* setters in Phase 2.1.
 
 import std.string
 import std.list
@@ -38,6 +51,10 @@ const EDIT_MKDIR    = 2
 const EDIT_DELETE   = 3
 const EDIT_COPY     = 4
 
+const MERGE_VERB_APPLIED      = 0
+const MERGE_VERB_RECORD_ONLY  = 1
+const MERGE_VERB_REVERSE      = 2
+
 struct Txn {
     base_rev: int
     kinds: ptr
@@ -46,10 +63,15 @@ struct Txn {
     content_lens: ptr
     copy_shas: ptr
     copy_kinds: ptr
+    merge_source_branch: string
+    merge_source_revs: ptr
+    merge_verb: int
 }
 
 export txn_new(base_rev: int) -> ptr {
-    raw = malloc(64)
+    // 96 bytes covers the 10-field struct (1 int + 8 ptr + 1 int +
+    // padding) on 64-bit. Pre-Round-272 alloc was 64 (7 fields).
+    raw = malloc(96)
     if raw == null { return null }
     t = raw as *Txn
     t.base_rev     = base_rev
@@ -59,6 +81,9 @@ export txn_new(base_rev: int) -> ptr {
     t.content_lens = int_vec_new(8)
     t.copy_shas    = list_new()
     t.copy_kinds   = int_vec_new(8)
+    t.merge_source_branch = ""
+    t.merge_source_revs   = list_new()
+    t.merge_verb          = MERGE_VERB_APPLIED
     return raw
 }
 
@@ -71,6 +96,7 @@ export txn_free(t_ptr: ptr) {
     int_vec_free(t.content_lens)
     list_free(t.copy_shas)
     int_vec_free(t.copy_kinds)
+    list_free(t.merge_source_revs)
     free(t_ptr)
     return
 }
@@ -165,6 +191,79 @@ export txn_edit_copy_kind(t_ptr: ptr, i: int) -> int {
     if t_ptr == null { return 0 }
     t = t_ptr as *Txn
     return int_vec_get(t.copy_kinds, i)
+}
+
+// ---- Merge metadata (Round 272 / Phase 1.3) -----------------------------
+
+// Mark this txn as a merge commit: source branch + verb. Idempotent
+// w.r.t. setting the same source twice; the source-revs list grows
+// via subsequent txn_merge_record_rev calls. Returns 0 on success,
+// -1 on bad input.
+export txn_merge_set_source(t_ptr: ptr,
+                            source_branch: string, verb: int) -> int {
+    if t_ptr == null { return 0 - 1 }
+    if string.length(source_branch) == 0 { return 0 - 1 }
+    t = t_ptr as *Txn
+    t.merge_source_branch = string.copy(source_branch)
+    t.merge_verb = verb
+    return 0
+}
+
+// Append one source-rev SHA to the merge metadata. Caller invokes
+// once per integrated rev. Order is preserved.
+export txn_merge_record_rev(t_ptr: ptr, source_sha: string) -> int {
+    if t_ptr == null { return 0 - 1 }
+    if string.length(source_sha) == 0 { return 0 - 1 }
+    t = t_ptr as *Txn
+    list_add_raw(t.merge_source_revs, string.copy(source_sha))
+    return 0
+}
+
+export txn_merge_source_branch(t_ptr: ptr) -> string {
+    if t_ptr == null { return "" }
+    t = t_ptr as *Txn
+    return t.merge_source_branch
+}
+
+export txn_merge_count(t_ptr: ptr) -> int {
+    if t_ptr == null { return 0 }
+    t = t_ptr as *Txn
+    return list_size(t.merge_source_revs)
+}
+
+export txn_merge_source_rev_at(t_ptr: ptr, i: int) -> string {
+    if t_ptr == null { return "" }
+    t = t_ptr as *Txn
+    p = list_get_raw(t.merge_source_revs, i)
+    if p == null { return "" }
+    return p
+}
+
+export txn_merge_verb(t_ptr: ptr) -> int {
+    if t_ptr == null { return 0 }
+    t = t_ptr as *Txn
+    return t.merge_verb
+}
+
+// Pack merge_source_revs into the "\n"-separated string shape that
+// merge_ledger.* and format_merged_field consume. Returns "" when
+// the txn carries no merge metadata.
+export txn_merge_source_revs_packed(t_ptr: ptr) -> string {
+    if t_ptr == null { return "" }
+    t = t_ptr as *Txn
+    if string.length(t.merge_source_branch) == 0 { return "" }
+    n = list_size(t.merge_source_revs)
+    out = ""
+    i = 0
+    while i < n {
+        sha = list_get_raw(t.merge_source_revs, i)
+        if sha != null {
+            out = string.concat(out, sha)
+            out = string.concat(out, "\n")
+        }
+        i = i + 1
+    }
+    return out
 }
 
 main() {

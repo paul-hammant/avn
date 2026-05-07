@@ -69,6 +69,24 @@ extern repos_paths_free(P: ptr)
 extern txn_count(t: ptr) -> int
 extern txn_edit_path(t: ptr, i: int) -> string
 
+// Merge metadata on the txn (Round 272 / Phase 1.3). Used to emit
+// the `merged:` field on the rev blob and to populate the
+// merge ledger.
+extern txn_merge_source_branch(t: ptr) -> string
+extern txn_merge_count(t: ptr) -> int
+extern txn_merge_verb(t: ptr) -> int
+extern txn_merge_source_revs_packed(t: ptr) -> string
+
+// rev-blob `merged:` field encoder.
+extern format_merged_field(source_branch: string,
+                           source_revs_packed: string) -> string
+
+// merge ledger writer.
+extern merge_ledger_record(repo: string, rev_sha: string,
+                           target_branch: string, source_branch: string,
+                           source_revs_packed: string,
+                           verb: int, author: string, ts: string) -> int
+
 // ---- private helpers ------------------------------------------------
 
 // Load the root-dir sha1 for a given revision. "" on miss (caller
@@ -263,10 +281,18 @@ finalise_on_branch_(repo: string, txn: ptr,
     ps = string.copy(ps)
     as_ = string.copy(as_)
 
-    // Phase 1.2: rev blob carries `merged:` field. Phase 1.3 will
-    // pass real merge data here from the txn — for now always "".
-    rev_body = rev_blob_body(new_root, branch, ps, as_, prev, "",
-                                     author, os.now_utc_iso8601(), logmsg)
+    // Phase 1.3: read merge metadata off the txn (set by wc_merge in
+    // Phase 2.1). Empty source branch → not a merge commit, no
+    // `merged:` field, no ledger write — same byte shape as
+    // pre-merge-ledger commits.
+    merge_src    = txn_merge_source_branch(txn)
+    merge_packed = txn_merge_source_revs_packed(txn)
+    merge_field  = format_merged_field(merge_src, merge_packed)
+    merge_verb_  = txn_merge_verb(txn)
+
+    ts = os.now_utc_iso8601()
+    rev_body = rev_blob_body(new_root, branch, ps, as_, prev, merge_field,
+                                     author, ts, logmsg)
     rev_sha_borrowed = rep_write_blob(repo, rev_body, string.length(rev_body))
     if string.length(rev_sha_borrowed) == 0 { return 0 - 1 }
     rev_sha = string.copy(rev_sha_borrowed)
@@ -275,6 +301,17 @@ finalise_on_branch_(repo: string, txn: ptr,
     if rev_pointer_write(repo, branch, next, rev_sha) != 0 { return 0 - 1 }
 
     populate_path_rev_(repo, branch, next)
+
+    // Merge ledger row(s) — atomic enough: rev blob already on disk
+    // (rep_write_blob is content-addressed, so re-writing is a
+    // no-op); the rev pointer file is written; only the ledger
+    // remains. If this fails the rev still landed cleanly — the
+    // ledger can be rebuilt from the rev blob's `merged:` field
+    // via Phase 4.1's verify --rebuild-merges.
+    if string.length(merge_field) > 0 {
+        merge_ledger_record(repo, rev_sha, branch, merge_src,
+                            merge_packed, merge_verb_, author, ts)
+    }
 
     return next
 }
