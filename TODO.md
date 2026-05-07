@@ -70,14 +70,72 @@ branch.
 Only `cd $WC/.. && svn add relative/path` works. Classical SVN
 accepts both.
 
+### MB-A / MB-B diagnosis (2026-05-07)
+
+**Not regressions — never implemented.** Look at
+`repo_storage/commit_finalise.ae:170-181` (`finalise_on_branch_`):
+
+```aether
+base_rev = txn_base_rev(txn)
+base_root = load_rev_root_sha1_(repo, base_rev)
+new_root = rebuild_dir(repo, base_root, "", txn)   // ← rebuild
+prev = repos_head_rev(repo)
+next = prev + 1
+```
+
+The new tree is rebuilt from the *base_rev* snapshot, completely
+ignoring whatever happened between base_rev and HEAD. WC2 with
+stale base_rev=1 commits: rebuilds from r1's tree, applies WC2's
+edits, lands as r3 — silently dropping WC1's intervening r2.
+
+Pre-Round 64 C version in `ae/fs_fs/commit_shim.c` had the same
+shape:
+
+```c
+int base_rev = svnae_txn_base_rev(txn);
+char *base_root = load_rev_root_sha1(repo, base_rev);
+char *new_root = svnae_txn_rebuild_root(repo, base_root, txn);
+int prev = svnae_repos_head_rev(repo);
+int next = prev + 1;
+```
+
+First introduced in Phase 6.5 (commit `dfd6567`, 2026-04-19) when
+the POST /commit endpoint landed. No out-of-date check has ever
+existed in the avn commit pipeline. Bisecting [Phase 6.5..HEAD]
+would just say "always bad."
+
+**MB-B is the same architectural gap.** Server-side `svn cp
+URL/path@PASTREV URL/dst` opens a txn with `base_rev = PASTREV`,
+runs the same `rebuild_dir(repo, base_root, ..., txn)` and lands
+the result as a fresh rev. Anything that existed at root between
+PASTREV and HEAD but isn't reachable from `/path@PASTREV` is
+silently dropped from the new tree.
+
+**The fix for both** is the same shape: between
+`prev = repos_head_rev(repo)` and `rebuild_dir(...)`, walk each
+of the txn's edited paths and ask "did any rev in (base_rev..prev]
+touch this path?" If yes, return -1 with a distinct out-of-date
+error code. Classical SVN's commit editor does this implicitly
+through its delta-against-HEAD design; ours rebuilds against
+base_rev's tree directly so we have to bolt the check on
+explicitly.
+
+For MB-B specifically, also worth deciding whether server-side
+copy should *merge* the past-rev source into the HEAD tree
+(preserving siblings) or *replace* HEAD with `base_rev + dst-only`
+(current behaviour). Classical SVN's `svn copy URL@REV URL/dst`
+does the former — only the new dst path is added; everything else
+at HEAD survives.
+
 ### Severity & ordering
-- MB-A is a real bug (data loss, no warning) — fix first.
+- MB-A is the priority — data loss, no warning.
+- MB-B shares MB-A's root cause; the same fix lifts both.
 - MB-D + MB-E together prevent any branch-shaped WC workflow.
 - MB-C prevents the classical `/trunk + /branches` layout in any
   configuration.
-- MB-B + MB-F are paper cuts but visible at the surface.
+- MB-F is a paper cut but visible at the surface.
 
-Until at least MB-A and MB-C/D are fixed, the cherry-pick
+Until at least MB-A/B and MB-C/D are fixed, the cherry-pick
 convergence dance from svnbook §4 (https://svnbook.red-bean.com/en/1.6/svn.branchmerge.advanced.html#svn.branchmerge.cherrypicking)
 can't be reproduced in avn.
 
