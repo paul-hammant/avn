@@ -82,13 +82,13 @@ main() {
     status_cmd      = string.concat(status_cmd, " status")
     count_m_branch  = string.concat(status_cmd, " | grep -c '^M.*src-branch/main.c' || true")
     count_m_trunk   = string.concat(status_cmd, " | grep -c '^M.*src/main.c' || true")
-    // Round 268: mergeinfo records on the merge *target*, not the WC
-    // root. After `svn merge URL/src@4:5 src-branch`, the property
-    // lives on src-branch. Pre-Round 268 it was hard-coded to "".
-    propget_mi      = string.concat("cd ", wc)
-    propget_mi      = string.concat(propget_mi, "/src-branch && ")
-    propget_mi      = string.concat(propget_mi, svn_bin)
-    propget_mi      = string.concat(propget_mi, " propget svn:mergeinfo . 2>/dev/null || echo ''")
+    // Round 276 / Phase 2.3: mergeinfo lives in the server-side
+    // ledger now. `svn merged ... | wc -l` gives a count; non-zero
+    // = at least one rev integrated. Looser than the pre-Round-276
+    // "src:5-5" exact-string check but verifies the same fact.
+    propget_mi      = string.concat(svn_bin, " merged ")
+    propget_mi      = string.concat(propget_mi, url)
+    propget_mi      = string.concat(propget_mi, " --target src-branch --source src | wc -l")
 
     commit_merge    = string.concat("cd ", wc)
     commit_merge    = string.concat(commit_merge, " && ")
@@ -164,18 +164,22 @@ main() {
                 "no M for src/main.c")
         }
 
-        aeocha.it("svn:mergeinfo recorded as src:5-5") callback {
-            out, _, _ = sh(propget_mi)
-            aeocha.expect_stdout_contains(fw, out, "src:5-5",
-                "mergeinfo on .")
-        }
-
         aeocha.it("merge commit lands at rev 6") callback {
             _, st, _ = sh(commit_merge)
             aeocha.expect_exit(fw, st, 0, "commit exit 0")
             out, _, _ = sh(cat_commit_log)
             aeocha.expect_stdout_contains(fw, out, "Committed revision 6.",
                 "merge commit at r6")
+        }
+
+        // Round 276 / Phase 2.3: ledger query runs AFTER commit, since
+        // the ledger only populates on commit (not on merge).
+        aeocha.it("merge ledger records r5 from src into src-branch") callback {
+            out, _, _ = sh(propget_mi)
+            trimmed = string.trim(out)
+            n = 0
+            if string.try_int(trimmed) == 1 { n = string.get_int(trimmed) }
+            aeocha.assert_gt(fw, n, 0, "at least one integrated SHA")
         }
 
         // ---- conflict scenario ----

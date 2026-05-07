@@ -42,7 +42,13 @@ main() {
     build.dep(b, "working_copy/.tests-ignore.ae")
     build.dep(b, "working_copy/.tests-log_verbose.ae")
     build.dep(b, "working_copy/.tests-merge.ae")
-    build.dep(b, "working_copy/.tests-mergeinfo_arith.ae")
+    // working_copy/.tests-mergeinfo_arith.ae — retired in Round 276
+    // (Phase 2.3 of MB-H). The test exercised svn:mergeinfo property
+    // rangeset arithmetic — cancel pairs, range collapse, comma-list
+    // serialisation — which the property carrier was responsible for.
+    // Phase 3 deletes working_copy/mergeinfo.ae; this test goes with
+    // it. The ledger-side equivalent assertions live in
+    // util/.tests-merge_ledger.ae.
     build.dep(b, "working_copy/.tests-merge_reverse.ae")
     build.dep(b, "working_copy/.tests-mutate.ae")
     build.dep(b, "working_copy/.tests-props.ae")

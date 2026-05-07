@@ -45,6 +45,7 @@ extern handler_commit(req: ptr, res: ptr)
 extern handler_copy(req: ptr, res: ptr)
 extern handler_branch_create(req: ptr, res: ptr)
 extern merged_list_handle(req: ptr, res: ptr, repo: string, sub: string)
+extern merge_runs_handle(req: ptr, res: ptr, repo: string, sub: string)
 extern svnserver_find_repo_path(name: string) -> string
 
 // @c_callback exports this Aether function under a stable C symbol
@@ -134,6 +135,16 @@ svnserver_dispatch(req: ptr, res: ptr, _user_data: ptr) {
             return
         }
         merged_list_handle(req, res, repo_path, merged_tail)
+        return
+    }
+    runs_tail, runs_match = string.strip_prefix(tail, "/merge_runs/")
+    if runs_match == 1 {
+        repo_path2 = svnserver_find_repo_path(name)
+        if string.length(repo_path2) == 0 {
+            svnserver_respond_error(res, 404, "no such repo")
+            return
+        }
+        merge_runs_handle(req, res, repo_path2, runs_tail)
         return
     }
 

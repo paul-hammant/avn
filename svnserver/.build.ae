@@ -27,6 +27,7 @@ main() {
         regen("../repo_storage/reppath.ae")
         regen("../repo_storage/commit_finalise.ae")
         regen("../repo_storage/merge_ledger.ae")
+        regen("../repo_storage/merge_ledger_runs.ae")
         regen("../repo_storage/branch_spec.ae")
         regen("../repo_storage/filter.ae")
         regen("../repo_storage/spec.ae")

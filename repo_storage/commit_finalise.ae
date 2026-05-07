@@ -72,6 +72,7 @@ extern txn_edit_path(t: ptr, i: int) -> string
 // Merge metadata on the txn (Round 272 / Phase 1.3). Used to emit
 // the `merged:` field on the rev blob and to populate the
 // merge ledger.
+extern txn_merge_target_path(t: ptr) -> string
 extern txn_merge_source_branch(t: ptr) -> string
 extern txn_merge_count(t: ptr) -> int
 extern txn_merge_verb(t: ptr) -> int
@@ -85,6 +86,7 @@ extern format_merged_field(source_branch: string,
 extern merge_ledger_record(repo: string, rev_sha: string,
                            target_branch: string, source_branch: string,
                            source_revs_packed: string,
+                           rev_num: int,
                            verb: int, author: string, ts: string) -> int
 
 // ---- private helpers ------------------------------------------------
@@ -285,6 +287,7 @@ finalise_on_branch_(repo: string, txn: ptr,
     // Phase 2.1). Empty source branch → not a merge commit, no
     // `merged:` field, no ledger write — same byte shape as
     // pre-merge-ledger commits.
+    merge_tgt    = txn_merge_target_path(txn)
     merge_src    = txn_merge_source_branch(txn)
     merge_packed = txn_merge_source_revs_packed(txn)
     merge_field  = format_merged_field(merge_src, merge_packed)
@@ -309,8 +312,15 @@ finalise_on_branch_(repo: string, txn: ptr,
     // ledger can be rebuilt from the rev blob's `merged:` field
     // via Phase 4.1's verify --rebuild-merges.
     if string.length(merge_field) > 0 {
-        merge_ledger_record(repo, rev_sha, branch, merge_src,
-                            merge_packed, merge_verb_, author, ts)
+        // Ledger keys on the merge target — what wc_merge passed
+        // as TARGET (e.g. "release_a" for a subdir merge), which
+        // is what `wc_merge`'s eligibility query uses on the next
+        // sweep. Falls back to the branch name when the merge
+        // target is the WC root.
+        ledger_target = merge_tgt
+        if string.length(ledger_target) == 0 { ledger_target = branch }
+        merge_ledger_record(repo, rev_sha, ledger_target, merge_src,
+                            merge_packed, next, merge_verb_, author, ts)
     }
 
     return next

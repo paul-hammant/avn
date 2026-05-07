@@ -41,6 +41,7 @@ extern url_rev_props(base: string, repo: string, rev: int, path: string) -> stri
 extern url_rev_blame(base: string, repo: string, rev: int, path: string) -> string
 extern remote_parse_log(body: string) -> string
 extern remote_parse_merged(body: string) -> string
+extern remote_parse_merge_runs(body: string) -> string
 extern remote_parse_paths(body: string) -> string
 extern remote_parse_blame(body: string) -> string
 extern remote_parse_info_rev(body: string) -> string
@@ -109,6 +110,32 @@ export fetch_merged(base: string, repo: string,
     body = get_200(url)
     if string.length(body) == 0 { return "" }
     return remote_parse_merged(body)
+}
+
+// Round 276 / Phase 2.3 — fetch eligible-run shape for a sweep
+// merge of (lo..hi] as-of the WC's base rev. Returns
+// "lo1:hi1\nlo2:hi2\n..." (possibly empty when the whole range is
+// already integrated). wc_merge consumes it directly through its
+// existing run-iteration loop. as_of_rev=0 disables the time
+// filter (= "any-time integrated").
+export fetch_merge_runs(base: string, repo: string,
+                        target_branch: string, source_branch: string,
+                        lo: int, hi: int, as_of_rev: int) -> string {
+    url = string.concat(base, "/repos/")
+    url = string.concat(url, repo)
+    url = string.concat(url, "/merge_runs/")
+    url = string.concat(url, target_branch)
+    url = string.concat(url, "/")
+    url = string.concat(url, source_branch)
+    url = string.concat(url, "/")
+    url = string.concat(url, "${lo}")
+    url = string.concat(url, "/")
+    url = string.concat(url, "${hi}")
+    url = string.concat(url, "/")
+    url = string.concat(url, "${as_of_rev}")
+    body = get_200(url)
+    if string.length(body) == 0 { return "" }
+    return remote_parse_merge_runs(body)
 }
 
 // POST `body` (JSON) to `url`, expect HTTP <expected_status>, parse

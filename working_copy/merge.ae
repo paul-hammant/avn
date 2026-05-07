@@ -39,9 +39,8 @@ extern wc_db_upsert_node(db: ptr, path: string, kind: int, base_rev: int, base_s
 extern wc_db_node_exists(db: ptr, path: string) -> int
 extern wc_db_get_info(db: ptr, key: string) -> string
 
-extern wc_propset(wc_root: string, path: string, name: string, value: string) -> int
-extern wc_propdel(wc_root: string, path: string, name: string) -> int
-extern propget_value(wc_root: string, path: string, name: string) -> string
+// (svn:mergeinfo prop helpers retired in Round 276 — wc_merge no
+// longer touches that property; the merge ledger lives server-side.)
 
 // Opaque remote_tree storage in C (merge_shim.c). The recursive walk fills
 // it via remote_tree_add_dir / _add_file; apply passes read it via
@@ -62,49 +61,23 @@ extern merge_apply_adds_mods(wc_root: string, target_path: string,
                                      rev_a: int, rev_b: int,
                                      a_rt: ptr, b_rt: ptr, db: ptr)
 
-// Mergeinfo helpers.
-extern mergeinfo_add_range(existing: string, source: string,
-                                   lo: int, hi: int, reverse: int) -> string
-extern mergeinfo_eligible_runs(existing: string, source: string,
-                               lo: int, hi: int) -> string
+// Server-side merge ledger query (Round 276 / Phase 2.3 — replaces
+// the property-based mergeinfo_eligible_runs from Round 269). The
+// HTTP client returns the same packed "lo:hi\n..." run shape the
+// existing iteration loop already consumes.
+extern fetch_merge_runs(base: string, repo: string,
+                        target_branch: string, source_branch: string,
+                        lo: int, hi: int, as_of_rev: int) -> string
 
-// pending_merge accumulator (Round 274 / Phase 2.1). Replaces the
-// `svn:mergeinfo`-property write as the carrier between `svn merge`
-// and `svn commit`. Property still gets written by
-// mergeinfo_add_range_ below — Phase 2.3 cuts over to ledger-only.
+// pending_merge accumulator (Round 274 / Phase 2.1) — carries
+// merge metadata from `svn merge` to `svn commit`. Server-side,
+// commit_finalise drains pending into rev blob `merged:` field
+// and merge ledger rows.
 extern wc_pending_merge_record(wc_root: string,
+                               target_path: string,
                                source_branch: string,
                                source_rev: int,
                                verb: int) -> int
-
-// Update svn:mergeinfo on `target` (a WC-relative path; "" = WC root)
-// to include (source, lo, hi, reverse). Ensures a tracked dir row
-// exists at `target`. Pre-Round 268 the property was hard-coded to
-// the WC root, which was wrong: classical SVN records mergeinfo on
-// the merge *target*, not the WC root, so a `cd $WC/sub && svn
-// merge -c N URL/foo .` records `svn:mergeinfo` on $WC/sub, not on
-// $WC. Without that, a follow-up sweep on the same target couldn't
-// see the cherry-pick history.
-mergeinfo_add_range_(wc_root: string, target: string, source: string,
-                     lo: int, hi: int, reverse: int) -> int {
-    db = wc_db_open(wc_root)
-    if db == null { return 0 - 1 }
-    if wc_db_node_exists(db, target) == 0 {
-        wc_db_upsert_node(db, target, 1, 0, "", 0)
-    }
-    wc_db_close(db)
-
-    existing = propget_value(wc_root, target, "svn:mergeinfo")
-    existing = string.copy(existing)
-    new_val = mergeinfo_add_range(existing, source, lo, hi, reverse)
-    new_val = string.copy(new_val)
-    if string.length(new_val) > 0 {
-        return wc_propset(wc_root, target, "svn:mergeinfo", new_val)
-    }
-    // Empty result — delete the property entirely.
-    wc_propdel(wc_root, target, "svn:mergeinfo")
-    return 0
-}
 
 // Apply one (lo..hi] diff chunk: fetch the source tree at lo and at
 // hi, optionally swap for a reverse merge, run the two-pass apply
@@ -189,11 +162,21 @@ export wc_merge(wc_root: string, source_path: string,
     // get_info returns refcounted AetherString (Round 143).
     base_url = wc_db_get_info(db, "base_url")
     repo     = wc_db_get_info(db, "repo")
+    base_rev_s = wc_db_get_info(db, "base_rev")
     wc_db_close(db)
     if string.length(base_url) == 0 { return 0 - 1 }
     if string.length(repo) == 0 { return 0 - 1 }
     base_url = string.copy(base_url)
     repo     = string.copy(repo)
+    // WC's base rev — used as the as-of-rev filter for the merge
+    // ledger query so a checkout-at-rev-N sees the eligibility view
+    // it would have seen pre-Round-276 with versioned mergeinfo.
+    wc_base_rev = 0
+    if string.length(base_rev_s) > 0 {
+        if string.try_int(base_rev_s) == 1 {
+            wc_base_rev = string.get_int(base_rev_s)
+        }
+    }
 
     // MB-G / MB-G-2 (Rounds 268-269): split the requested range
     // into the maximal-contiguous sub-ranges that aren't already in
@@ -206,28 +189,30 @@ export wc_merge(wc_root: string, source_path: string,
     // handles arbitrary gaps (e.g. cherry-picked r5 and r7 then
     // sweep r4..r9 → two runs (5..6] and (7..9]).
     //
-    // Reverse merges (`-c -N`) skip the filter: cancel bookkeeping
-    // happens in mergeinfo_add_range's cancel_pairs path.
+    // Round 276 / Phase 2.3: server-side ledger query replaces the
+    // property-based eligibility filter. The HTTP response shape is
+    // identical to what mergeinfo_eligible_runs used to return —
+    // the iteration loop downstream is unchanged.
+    //
+    // Reverse merges (`-c -N`) skip the filter — there's no
+    // ledger-level concept of "blocked" yet; until we add reverse
+    // tracking the merge runs through the full requested range.
     runs = ""
     if reverse == 0 {
-        existing = propget_value(wc_root, target_path, "svn:mergeinfo")
-        existing = string.copy(existing)
-        if string.length(existing) > 0 {
-            runs = mergeinfo_eligible_runs(existing, source_path, rev_base, rev_theirs)
-            runs = string.copy(runs)
-        } else {
-            // No prior mergeinfo — single run covers the whole range.
-            runs = "${rev_base}:${rev_theirs}\n"
-        }
+        runs = fetch_merge_runs(base_url, repo, target_path, source_path,
+                                rev_base, rev_theirs, wc_base_rev)
+        runs = string.copy(runs)
     } else {
         // Reverse — single run, no filtering.
         runs = "${rev_base}:${rev_theirs}\n"
     }
 
     if string.length(runs) == 0 {
-        // Whole range already merged — record idempotent no-op and
-        // exit without touching the WC tree.
-        mergeinfo_add_range_(wc_root, target_path, source_path, rev_a, rev_b, 0)
+        // Whole range already merged — record nothing, no-op.
+        // (Pre-Round-276 also poked the property at this point for
+        // idempotent re-runs; the ledger doesn't need that — the
+        // server only writes a row when commit_finalise sees a
+        // non-empty source-revs list.)
         return 0
     }
 
@@ -252,27 +237,14 @@ export wc_merge(wc_root: string, source_path: string,
         if reverse == 1 { verb_ = 2 }
         rev_i = lo + 1
         while rev_i <= hi {
-            wc_pending_merge_record(wc_root, source_path, rev_i, verb_)
+            wc_pending_merge_record(wc_root, target_path, source_path,
+                                    rev_i, verb_)
             rev_i = rev_i + 1
         }
         pos = next_pos
     }
     wc_db_close(db)
-    if rc != 0 { return rc }
-
-    // Record merged range in svn:mergeinfo on the merge *target*.
-    // Always record the user's full requested range (rev_a:rev_b),
-    // not just the eligible sub-runs — that matches classical SVN's
-    // "you asked for r4:9; mergeinfo now reflects r4:9". Idempotency
-    // comes from mergeinfo_add_range's range merging.
-    //
-    // Round 274 / Phase 2.1: dual-state — property still written
-    // for backward-compat with existing eligibility filter; ledger
-    // populated via pending_merge above. Phase 2.3 retires the
-    // property write.
-    mergeinfo_add_range_(wc_root, target_path, source_path,
-                         rev_base, rev_theirs, reverse)
-    return 0
+    return rc
 }
 
 main() {

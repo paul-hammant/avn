@@ -1,0 +1,84 @@
+// Copyright 2026 Paul Hammant (portions).
+// Apache License, Version 2.0 — see LICENSE.
+//
+// Eligible-run computation for the merge ledger. Lives in its own
+// module because it transitively depends on repos_rev_blob_sha
+// (rev_io + rep_store + …); merge_ledger.ae's CRUD core is
+// dependency-light and can be unit-tested without those.
+//
+// `wc_merge`'s sweep eligibility query goes:
+//   client/fetch.ae → svnserver/handler_merge.ae → here
+
+import std.string
+
+extern repos_rev_blob_sha(repo: string, rev: int) -> string
+extern merge_ledger_is_integrated_as_of(repo: string,
+                                        target_branch: string,
+                                        source_branch: string,
+                                        source_rev_sha: string,
+                                        as_of_rev: int) -> int
+
+// Walk rev numbers in (lo..hi], resolve each to its rev-blob SHA,
+// ask the ledger if it's already integrated. Group consecutive
+// not-integrated revs into "lo:hi\n" runs (same packed shape the
+// pre-Round-276 `mergeinfo_eligible_runs` produced over the
+// svn:mergeinfo property string — wc_merge's iteration loop is
+// agnostic to the source).
+//
+// `as_of_rev` filters merge_event rows to those committed at or
+// before that rev. WCs checked out at base_rev=N pass N here; the
+// query returns the same eligibility view classical SVN's
+// versioned mergeinfo property would have given. Pass 0 for "no
+// filter" (all-time integrated).
+//
+// Round 276 / Phase 2.3 retires the property-based eligibility
+// check in favour of this server-side computation, queried via the
+// /merge_runs HTTP endpoint.
+export merge_ledger_eligible_runs_for_range(repo: string,
+                                            target_branch: string,
+                                            source_branch: string,
+                                            lo: int, hi: int,
+                                            as_of_rev: int) -> string {
+    if lo >= hi { return "" }
+    out = ""
+    in_run = 0
+    run_lo = 0
+    run_hi = 0
+    cur = lo + 1
+    while cur <= hi {
+        rev_sha = repos_rev_blob_sha(repo, cur)
+        is_eligible = 0
+        if string.length(rev_sha) == 0 {
+            // Unknown rev — treat as eligible (the merge engine
+            // will surface a real failure if the rev doesn't exist
+            // on the source branch).
+            is_eligible = 1
+        } else {
+            integrated = merge_ledger_is_integrated_as_of(repo, target_branch,
+                                                          source_branch,
+                                                          rev_sha, as_of_rev)
+            if integrated == 0 { is_eligible = 1 }
+        }
+        if is_eligible == 1 {
+            if in_run == 0 {
+                run_lo = cur - 1
+                in_run = 1
+            }
+            run_hi = cur
+        } else {
+            if in_run == 1 {
+                out = string.concat(out, "${run_lo}:${run_hi}\n")
+                in_run = 0
+            }
+        }
+        cur = cur + 1
+    }
+    if in_run == 1 {
+        out = string.concat(out, "${run_lo}:${run_hi}\n")
+    }
+    return out
+}
+
+main() {
+    println("repo_storage/merge_ledger_runs.ae is a library; not meant to run standalone")
+}

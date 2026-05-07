@@ -51,7 +51,12 @@ struct RaCommit {
     // merge_source_branch means "non-merge commit"; the JSON
     // builder omits the field. merge_source_revs_packed is
     // newline-separated decimal ints (rev numbers); the server
-    // resolves to SHAs at commit-parse time.
+    // resolves to SHAs at commit-parse time. merge_target_path
+    // (Round 276 / Phase 2.3) is the WC anchor of the merge —
+    // what the user passed to `svn merge ... TARGET`. The ledger
+    // keys on it so subdirectory merges can have distinct
+    // mergeinfo without colliding.
+    merge_target_path: string
     merge_source_branch: string
     merge_source_revs_packed: string
     merge_verb: int
@@ -72,6 +77,7 @@ export remote_commit_begin(base_rev: int, author: string, logmsg: string) -> ptr
     cb.edits_packed = string.copy("")
     cb.props_packed = string.copy("")
     cb.acls_packed = string.copy("")
+    cb.merge_target_path = string.copy("")
     cb.merge_source_branch = string.copy("")
     cb.merge_source_revs_packed = string.copy("")
     cb.merge_verb = 0
@@ -83,11 +89,13 @@ export remote_commit_begin(base_rev: int, author: string, logmsg: string) -> ptr
 // newline-separated decimal ints (rev numbers); commit_parse on
 // the server resolves to SHAs.
 export remote_commit_set_merged_from(cb_ptr: ptr,
+                                     target_path: string,
                                      source_branch: string,
                                      source_revs_packed: string,
                                      verb: int) -> int {
     if cb_ptr == null { return 0 - 1 }
     cb = cb_ptr as *RaCommit
+    cb.merge_target_path = string.copy(target_path)
     cb.merge_source_branch = string.copy(source_branch)
     cb.merge_source_revs_packed = string.copy(source_revs_packed)
     cb.merge_verb = verb
@@ -95,6 +103,11 @@ export remote_commit_set_merged_from(cb_ptr: ptr,
 }
 
 // Read accessors used by remote_commit_build_body.
+export remote_cb_merge_target_path(cb_ptr: ptr) -> string {
+    if cb_ptr == null { return "" }
+    cb = cb_ptr as *RaCommit
+    return cb.merge_target_path
+}
 export remote_cb_merge_source_branch(cb_ptr: ptr) -> string {
     if cb_ptr == null { return "" }
     cb = cb_ptr as *RaCommit

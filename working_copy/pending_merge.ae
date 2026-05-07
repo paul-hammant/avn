@@ -22,13 +22,18 @@ const SQLITE_DONE = 101
 extern wc_db_open(wc_root: string) -> ptr
 extern wc_db_close(db: ptr)
 
-// Record one (source_branch, source_rev, verb) row. Idempotent on
-// the (source_branch, source_rev) primary key — re-recording the
-// same rev with the same verb is a no-op. Returns 0 on success,
-// -1 on infrastructure failure, -2 if there's already a row with
-// the SAME source_rev but a DIFFERENT verb (caller's commit will
-// be inconsistent — reject early with a clear signal).
+// Record one (target_path, source_branch, source_rev, verb) row.
+// Idempotent on the primary key — re-recording the same triple is
+// a no-op. Returns 0 on success, -1 on infrastructure failure, -2
+// if there's already a row with the SAME (target, source, rev)
+// but a DIFFERENT verb (caller's commit would be inconsistent —
+// reject early).
+//
+// `target_path` is the merge's WC anchor — what the user passed
+// to `svn merge ... TARGET`. Empty string means the merge target
+// was the WC root.
 export wc_pending_merge_record(wc_root: string,
+                               target_path: string,
                                source_branch: string,
                                source_rev: int,
                                verb: int) -> int {
@@ -37,12 +42,13 @@ export wc_pending_merge_record(wc_root: string,
     db = wc_db_open(wc_root)
     if db == null { return 0 - 1 }
 
-    // Reject conflicting verb on the same (source_branch, rev).
+    // Reject conflicting verb on the same (target, source, rev).
     chk, perr = sqlite.prepare(db,
-        "SELECT verb FROM pending_merge WHERE source_branch = ? AND source_rev = ?")
+        "SELECT verb FROM pending_merge WHERE target_path = ? AND source_branch = ? AND source_rev = ?")
     if string.length(perr) > 0 { wc_db_close(db); return 0 - 1 }
-    sqlite.bind_text(chk, 1, source_branch)
-    sqlite.bind_int (chk, 2, source_rev)
+    sqlite.bind_text(chk, 1, target_path)
+    sqlite.bind_text(chk, 2, source_branch)
+    sqlite.bind_int (chk, 3, source_rev)
     sc, _ = sqlite.step(chk, db)
     if sc == SQLITE_ROW {
         existing = sqlite.column_int(chk, 0)
@@ -54,11 +60,12 @@ export wc_pending_merge_record(wc_root: string,
     sqlite.finalize(chk)
 
     stmt, p2 = sqlite.prepare(db,
-        "INSERT INTO pending_merge (source_branch, source_rev, verb) VALUES (?, ?, ?)")
+        "INSERT INTO pending_merge (target_path, source_branch, source_rev, verb) VALUES (?, ?, ?, ?)")
     if string.length(p2) > 0 { wc_db_close(db); return 0 - 1 }
-    sqlite.bind_text(stmt, 1, source_branch)
-    sqlite.bind_int (stmt, 2, source_rev)
-    sqlite.bind_int (stmt, 3, verb)
+    sqlite.bind_text(stmt, 1, target_path)
+    sqlite.bind_text(stmt, 2, source_branch)
+    sqlite.bind_int (stmt, 3, source_rev)
+    sqlite.bind_int (stmt, 4, verb)
     sc2, _ = sqlite.step(stmt, db)
     sqlite.finalize(stmt)
     wc_db_close(db)
@@ -98,6 +105,25 @@ export wc_pending_merge_source_branch(wc_root: string) -> string {
 
     stmt, perr = sqlite.prepare(db,
         "SELECT source_branch FROM pending_merge ORDER BY source_branch LIMIT 1")
+    if string.length(perr) > 0 { wc_db_close(db); return "" }
+    sc, _ = sqlite.step(stmt, db)
+    out = ""
+    if sc == SQLITE_ROW {
+        out = string.copy(sqlite.column_text(stmt, 0))
+    }
+    sqlite.finalize(stmt)
+    wc_db_close(db)
+    return out
+}
+
+// Target path of the pending merges. Same single-target assumption
+// as the source-branch getter — first row wins on multi-target.
+export wc_pending_merge_target_path(wc_root: string) -> string {
+    db = wc_db_open(wc_root)
+    if db == null { return "" }
+
+    stmt, perr = sqlite.prepare(db,
+        "SELECT target_path FROM pending_merge ORDER BY target_path LIMIT 1")
     if string.length(perr) > 0 { wc_db_close(db); return "" }
     sc, _ = sqlite.step(stmt, db)
     out = ""

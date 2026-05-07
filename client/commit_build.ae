@@ -37,6 +37,7 @@ extern remote_cb_props_packed(cb: ptr) -> string
 extern remote_cb_acls_packed(cb: ptr) -> string
 
 // Round 274 / Phase 2.1 — merged_from accessors.
+extern remote_cb_merge_target_path(cb: ptr) -> string
 extern remote_cb_merge_source_branch(cb: ptr) -> string
 extern remote_cb_merge_source_revs_packed(cb: ptr) -> string
 extern remote_cb_merge_verb(cb: ptr) -> int
@@ -303,7 +304,9 @@ export remote_commit_build_body(cb: ptr) -> string {
     // contract is forward-compatible) ignore it.
     msrc = remote_cb_merge_source_branch(cb)
     if string.length(msrc) > 0 {
+        mtgt = remote_cb_merge_target_path(cb)
         mf = json_create_object()
+        json.object_set(mf, "target_path",   json_create_string(mtgt))
         json.object_set(mf, "source_branch", json_create_string(msrc))
         json.object_set(mf, "verb",          json.create_number(remote_cb_merge_verb(cb)))
         revs = json_create_array()

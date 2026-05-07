@@ -63,15 +63,17 @@ struct Txn {
     content_lens: ptr
     copy_shas: ptr
     copy_kinds: ptr
+    merge_target_path: string
     merge_source_branch: string
     merge_source_revs: ptr
     merge_verb: int
 }
 
 export txn_new(base_rev: int) -> ptr {
-    // 96 bytes covers the 10-field struct (1 int + 8 ptr + 1 int +
-    // padding) on 64-bit. Pre-Round-272 alloc was 64 (7 fields).
-    raw = malloc(96)
+    // 112 bytes covers the 11-field struct (1 int + 9 ptr/string + 1
+    // int + padding) on 64-bit. Pre-Round-272 alloc was 64 (7
+    // fields); Round 272 bumped to 96.
+    raw = malloc(112)
     if raw == null { return null }
     t = raw as *Txn
     t.base_rev     = base_rev
@@ -81,6 +83,7 @@ export txn_new(base_rev: int) -> ptr {
     t.content_lens = int_vec_new(8)
     t.copy_shas    = list_new()
     t.copy_kinds   = int_vec_new(8)
+    t.merge_target_path   = ""
     t.merge_source_branch = ""
     t.merge_source_revs   = list_new()
     t.merge_verb          = MERGE_VERB_APPLIED
@@ -195,18 +198,28 @@ export txn_edit_copy_kind(t_ptr: ptr, i: int) -> int {
 
 // ---- Merge metadata (Round 272 / Phase 1.3) -----------------------------
 
-// Mark this txn as a merge commit: source branch + verb. Idempotent
-// w.r.t. setting the same source twice; the source-revs list grows
-// via subsequent txn_merge_record_rev calls. Returns 0 on success,
-// -1 on bad input.
+// Mark this txn as a merge commit: target path + source branch +
+// verb. target_path is the WC anchor of the merge ("" = WC root),
+// keying for the ledger. Idempotent w.r.t. setting the same source
+// twice; the source-revs list grows via subsequent
+// txn_merge_record_rev calls. Returns 0 on success, -1 on bad
+// input.
 export txn_merge_set_source(t_ptr: ptr,
+                            target_path: string,
                             source_branch: string, verb: int) -> int {
     if t_ptr == null { return 0 - 1 }
     if string.length(source_branch) == 0 { return 0 - 1 }
     t = t_ptr as *Txn
+    t.merge_target_path   = string.copy(target_path)
     t.merge_source_branch = string.copy(source_branch)
     t.merge_verb = verb
     return 0
+}
+
+export txn_merge_target_path(t_ptr: ptr) -> string {
+    if t_ptr == null { return "" }
+    t = t_ptr as *Txn
+    return t.merge_target_path
 }
 
 // Append one source-rev SHA to the merge metadata. Caller invokes

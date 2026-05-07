@@ -269,16 +269,17 @@ main() {
     // fails — what should branches converge TO?).
     sha_t_app = _sha_cmd(wc_t, "trunk/app.rb",        "MISSING_T")
 
-    // Mergeinfo on release_a / release_b — should record main:5,6,7
-    // (the three revs swept in via cherry-pick + sweep).
-    mi_a = string.concat("cd ", wc_a)
-    mi_a = string.concat(mi_a, "/release_a && ")
-    mi_a = string.concat(mi_a, svn_bin)
-    mi_a = string.concat(mi_a, " propget svn:mergeinfo . 2>/dev/null || echo ''")
-    mi_b = string.concat("cd ", wc_b)
-    mi_b = string.concat(mi_b, "/release_b && ")
-    mi_b = string.concat(mi_b, svn_bin)
-    mi_b = string.concat(mi_b, " propget svn:mergeinfo . 2>/dev/null || echo ''")
+    // Round 276 / Phase 2.3: mergeinfo lives in the server-side
+    // ledger now (svn:mergeinfo property retired). `svn merged`
+    // queries it; the response is one rev SHA per integrated rev.
+    // `svn merged` prints one rev SHA per line; pipe through wc -l
+    // and grep for "wc -l > 0" via a literal count-mark assertion.
+    mi_a = string.concat(svn_bin, " merged ")
+    mi_a = string.concat(mi_a, url)
+    mi_a = string.concat(mi_a, " --target release_a --source trunk | wc -l")
+    mi_b = string.concat(svn_bin, " merged ")
+    mi_b = string.concat(mi_b, url)
+    mi_b = string.concat(mi_b, " --target release_b --source trunk | wc -l")
 
     aeocha.describe(fw, "cherry-pick convergence (limits-of-merging)") {
 
@@ -332,23 +333,26 @@ main() {
                 "release_a/app.rb sha == trunk/app.rb sha")
         }
 
-        aeocha.it("mergeinfo on release_a names trunk source") callback {
+        aeocha.it("ledger: release_a has integrated revs from trunk") callback {
+            // The mi_a command pipes `svn merged ... | wc -l`,
+            // so stdout is a single-line decimal count. Three
+            // cherry-picked revs (C3, C4, C5) means at least 3 SHAs
+            // — assert ≥ "3" in the output. (mergeinfo creep also
+            // counts our own merge-commit SHAs, so the real number
+            // is higher; "3" is a robust lower bound.)
             out, _, _ = sh(mi_a)
-            // Classical SVN compresses contiguous revs as `N-M`; the
-            // range we produce is `trunk:5-9` (mergeinfo creep — see
-            // the blog's discussion: r7..r9 are the branch-copy and
-            // cherry-pick commits themselves, included in the swept
-            // range). Asserting on the source name + the start rev
-            // pins the property's content without baking in a
-            // particular range serialisation.
-            aeocha.expect_stdout_contains(fw, out, "trunk", "source = trunk")
-            aeocha.expect_stdout_contains(fw, out, "5",     "starts at r5 (C3)")
+            trimmed = string.trim(out)
+            n = 0
+            if string.try_int(trimmed) == 1 { n = string.get_int(trimmed) }
+            aeocha.assert_gt(fw, n, 2, "at least 3 integrated SHAs")
         }
 
-        aeocha.it("mergeinfo on release_b names trunk source") callback {
+        aeocha.it("ledger: release_b has integrated revs from trunk") callback {
             out, _, _ = sh(mi_b)
-            aeocha.expect_stdout_contains(fw, out, "trunk", "source = trunk")
-            aeocha.expect_stdout_contains(fw, out, "5",     "starts at r5 (C3)")
+            trimmed = string.trim(out)
+            n = 0
+            if string.try_int(trimmed) == 1 { n = string.get_int(trimmed) }
+            aeocha.assert_gt(fw, n, 2, "at least 3 integrated SHAs")
         }
     }
 

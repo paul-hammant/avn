@@ -328,6 +328,39 @@ export remote_parse_list(body: string) -> string {
     return string.concat(header, out)
 }
 
+// Round 276 / Phase 2.3 — parse {"runs":[{lo,hi},…]} from
+// GET /merge_runs/.../<lo>/<hi> into the same "lo:hi\n..." packed
+// string wc_merge has consumed since the property era. wc_merge
+// can pass the result through unchanged.
+export remote_parse_merge_runs(body: string) -> string {
+    if string.length(body) == 0 { return "" }
+    root, err = json.parse(body)
+    if string.length(err) > 0 { return "" }
+    jarr, jerr = json.object_get(root, "runs")
+    if string.length(jerr) > 0 { json.free(root); return "" }
+    if jarr == null { json.free(root); return "" }
+    n = json.array_size(jarr)
+    out = ""
+    i = 0
+    while i < n {
+        e, _ = json.array_get(jarr, i)
+        if e != null {
+            jlo, _ = json.object_get(e, "lo")
+            jhi, _ = json.object_get(e, "hi")
+            if jlo != null {
+                if jhi != null {
+                    lo = json.get_int(jlo)
+                    hi = json.get_int(jhi)
+                    out = string.concat(out, "${lo}:${hi}\n")
+                }
+            }
+        }
+        i = i + 1
+    }
+    json.free(root)
+    return out
+}
+
 // Round 274 / Phase 2.2 — parse {"integrated":["sha","sha",...]}
 // from GET /merged/<target>/<source> into a "\n"-separated SHA
 // list, ready to print or further process.

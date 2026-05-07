@@ -58,11 +58,17 @@ const SQLITE_DONE = 101
 // use. Idempotent — `CREATE TABLE IF NOT EXISTS` makes repeat opens
 // cheap, and old repos that predate this round upgrade silently on
 // the first merge.
+//
+// merge_event.rev_num is the global rev number at which this merge
+// committed, used by Round 276 / Phase 2.3 for as-of-rev filtering
+// (a WC checked out at base_rev=N sees only ledger entries with
+// rev_num <= N — same checkout-versioned semantics classical SVN
+// got from versioning the svn:mergeinfo property).
 ledger_open_(repo: string) -> ptr {
     db, oerr = sqlite.open("${repo}/merges.db")
     if string.length(oerr) > 0 { return null }
     err = sqlite.exec(db,
-        "CREATE TABLE IF NOT EXISTS merge_event (  rev_sha TEXT NOT NULL,  target_branch TEXT NOT NULL,  source_branch TEXT NOT NULL,  verb INTEGER NOT NULL,  author TEXT NOT NULL,  ts TEXT NOT NULL,  PRIMARY KEY (rev_sha, source_branch));CREATE TABLE IF NOT EXISTS merge_source_rev (  target_branch  TEXT NOT NULL,  source_branch  TEXT NOT NULL,  source_rev_sha TEXT NOT NULL,  rev_sha        TEXT NOT NULL,  PRIMARY KEY (target_branch, source_branch, source_rev_sha));CREATE INDEX IF NOT EXISTS msr_target_sha ON merge_source_rev (target_branch, source_rev_sha);CREATE INDEX IF NOT EXISTS me_target ON merge_event (target_branch);")
+        "CREATE TABLE IF NOT EXISTS merge_event (  rev_sha TEXT NOT NULL,  target_branch TEXT NOT NULL,  source_branch TEXT NOT NULL,  rev_num INTEGER NOT NULL DEFAULT 0,  verb INTEGER NOT NULL,  author TEXT NOT NULL,  ts TEXT NOT NULL,  PRIMARY KEY (rev_sha, source_branch));CREATE TABLE IF NOT EXISTS merge_source_rev (  target_branch  TEXT NOT NULL,  source_branch  TEXT NOT NULL,  source_rev_sha TEXT NOT NULL,  rev_sha        TEXT NOT NULL,  PRIMARY KEY (target_branch, source_branch, source_rev_sha));CREATE INDEX IF NOT EXISTS msr_target_sha ON merge_source_rev (target_branch, source_rev_sha);CREATE INDEX IF NOT EXISTS me_target ON merge_event (target_branch);")
     if string.length(err) > 0 { sqlite.close(db); return null }
     return db
 }
@@ -142,6 +148,7 @@ export merge_ledger_record(repo: string,
                            target_branch: string,
                            source_branch: string,
                            source_revs_packed: string,
+                           rev_num: int,
                            verb: int,
                            author: string,
                            ts: string) -> int {
@@ -155,7 +162,7 @@ export merge_ledger_record(repo: string,
     sqlite.exec(db, "BEGIN")
 
     stmt, perr = sqlite.prepare(db,
-        "INSERT OR IGNORE INTO merge_event (rev_sha, target_branch, source_branch, verb, author, ts) VALUES (?, ?, ?, ?, ?, ?)")
+        "INSERT OR IGNORE INTO merge_event (rev_sha, target_branch, source_branch, rev_num, verb, author, ts) VALUES (?, ?, ?, ?, ?, ?, ?)")
     if string.length(perr) > 0 {
         sqlite.exec(db, "ROLLBACK")
         sqlite.close(db)
@@ -164,9 +171,10 @@ export merge_ledger_record(repo: string,
     sqlite.bind_text(stmt, 1, rev_sha)
     sqlite.bind_text(stmt, 2, target_branch)
     sqlite.bind_text(stmt, 3, source_branch)
-    sqlite.bind_int (stmt, 4, verb)
-    sqlite.bind_text(stmt, 5, author)
-    sqlite.bind_text(stmt, 6, ts)
+    sqlite.bind_int (stmt, 4, rev_num)
+    sqlite.bind_int (stmt, 5, verb)
+    sqlite.bind_text(stmt, 6, author)
+    sqlite.bind_text(stmt, 7, ts)
     sc, _ = sqlite.step(stmt, db)
     sqlite.finalize(stmt)
     if sc != SQLITE_DONE {
@@ -188,27 +196,61 @@ export merge_ledger_record(repo: string,
 }
 
 // Is `source_rev_sha` integrated into `target_branch` from
-// `source_branch`? Returns 1 if yes, 0 if no, -1 on infrastructure
-// failure. Hot path — called per candidate during a sweep merge's
-// eligibility computation.
+// `source_branch`, AS-OF the caller's view rev? Returns 1 if yes,
+// 0 if no, -1 on infrastructure failure. Pass as_of_rev=0 to mean
+// "any time" (no filtering).
+//
+// The as-of filter joins to merge_event.rev_num: only rows whose
+// merge commit landed at rev_num <= as_of_rev count. This gives
+// a WC checked out at base_rev=N the same eligibility view it
+// would have had pre-Round-276 with svn:mergeinfo (which was
+// versioned content, so a checkout at N saw only mergeinfo from
+// commits <= N).
 export merge_ledger_is_integrated(repo: string,
                                   target_branch: string,
                                   source_branch: string,
                                   source_rev_sha: string) -> int {
+    return merge_ledger_is_integrated_as_of_(repo, target_branch,
+                                             source_branch, source_rev_sha, 0)
+}
+
+merge_ledger_is_integrated_as_of_(repo: string,
+                                  target_branch: string,
+                                  source_branch: string,
+                                  source_rev_sha: string,
+                                  as_of_rev: int) -> int {
     db = ledger_open_(repo)
     if db == null { return 0 - 1 }
 
-    stmt, perr = sqlite.prepare(db,
-        "SELECT 1 FROM merge_source_rev WHERE target_branch = ? AND source_branch = ? AND source_rev_sha = ? LIMIT 1")
+    sql_text = ""
+    if as_of_rev <= 0 {
+        sql_text = "SELECT 1 FROM merge_source_rev WHERE target_branch = ? AND source_branch = ? AND source_rev_sha = ? LIMIT 1"
+    } else {
+        sql_text = "SELECT 1 FROM merge_source_rev msr JOIN merge_event me ON msr.rev_sha = me.rev_sha AND msr.source_branch = me.source_branch WHERE msr.target_branch = ? AND msr.source_branch = ? AND msr.source_rev_sha = ? AND me.rev_num <= ? LIMIT 1"
+    }
+    stmt, perr = sqlite.prepare(db, sql_text)
     if string.length(perr) > 0 { sqlite.close(db); return 0 - 1 }
     sqlite.bind_text(stmt, 1, target_branch)
     sqlite.bind_text(stmt, 2, source_branch)
     sqlite.bind_text(stmt, 3, source_rev_sha)
+    if as_of_rev > 0 { sqlite.bind_int(stmt, 4, as_of_rev) }
     sc, _ = sqlite.step(stmt, db)
     sqlite.finalize(stmt)
     sqlite.close(db)
     if sc == SQLITE_ROW { return 1 }
     return 0
+}
+
+// As-of-rev variant exposed for callers that need it (the
+// runs-for-range computation in merge_ledger_runs.ae).
+export merge_ledger_is_integrated_as_of(repo: string,
+                                        target_branch: string,
+                                        source_branch: string,
+                                        source_rev_sha: string,
+                                        as_of_rev: int) -> int {
+    return merge_ledger_is_integrated_as_of_(repo, target_branch,
+                                             source_branch, source_rev_sha,
+                                             as_of_rev)
 }
 
 // List all source revs from `source_branch` integrated into
