@@ -55,7 +55,6 @@ main() {
         regen("../working_copy/merge_apply.ae")
         regen("../working_copy/merge_walk.ae")
         regen("../working_copy/update_props.ae")
-        regen("../working_copy/mergeinfo.ae")
         regen("../working_copy/merge3.ae")
         regen("../working_copy/resolve.ae")
         regen("../working_copy/sidecar.ae")

@@ -18,8 +18,9 @@
 //   wc_merge(wc_root, source_path, rev_a, rev_b, target_path)
 //
 // Apply the file-tree diff between two source-path revisions onto the
-// WC. Records the merged range in svn:mergeinfo on the WC's root
-// tracked node.
+// WC. Round 274+ records merge metadata into wc.db's pending_merge
+// table; svn commit drains it into the commit body's `merged_from`
+// JSON; the server writes the merge ledger.
 //
 // rev_a < rev_b: forward merge — apply (source@A → source@B) to WC.
 // rev_a > rev_b: reverse merge — undo (source@B → source@A).
@@ -27,9 +28,9 @@
 //
 // Round 70 (Gordian) ports the orchestration out of merge_shim.c.
 // The recursive walker is in working_copy/merge_walk.ae; the deletion +
-// add/mod two-pass apply is in working_copy/merge_apply.ae; mergeinfo
-// add/cancel is in working_copy/mergeinfo.ae. What was left in C was the
-// glue calling all three around the opaque remote_tree handles.
+// add/mod two-pass apply is in working_copy/merge_apply.ae. What was
+// left in C was the glue calling them around the opaque remote_tree
+// handles.
 
 import std.string
 

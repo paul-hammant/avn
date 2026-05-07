@@ -249,21 +249,35 @@ export commit_from_body(req: ptr, res: ptr, repo: string) -> int {
 
                 keys_joined = ""
                 values_joined = ""
+                emitted_props = 0
                 if pval != null {
                     nk = json.object_size(pval)
                     ki = 0
                     while ki < nk {
                         kname, kval, _ = json.object_entry(pval, ki)
                         kname = string.copy(kname)
+                        // Round 277 / Phase 3: svn:mergeinfo is
+                        // server-managed via the merge ledger; reject
+                        // any client trying to set it directly. The
+                        // CLI also guards this (defence in depth) but
+                        // the wire-level check is the authoritative
+                        // one — buggy / malicious clients can't poke
+                        // around the ledger via the prop carrier.
+                        if string.equals(kname, "svn:mergeinfo") == 1 {
+                            txn_free(txn)
+                            json.free(root)
+                            return -3
+                        }
                         if kval != null {
                             vstr, verr = json.get_string(kval)
                             if string.length(verr) == 0 {
-                                if ki > 0 {
+                                if emitted_props > 0 {
                                     keys_joined = string.concat(keys_joined, "\n")
                                     values_joined = string.concat(values_joined, "\n")
                                 }
                                 keys_joined = string.concat(keys_joined, kname)
                                 values_joined = string.concat(values_joined, vstr)
+                                emitted_props = emitted_props + 1
                             }
                         }
                         ki = ki + 1

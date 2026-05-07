@@ -1257,6 +1257,15 @@ cmd_propset(argv_start: int) {
     name  = aether_args_get(argv_start)
     value = aether_args_get(argv_start + 1)
     path  = prop_path(aether_args_get(argv_start + 2))
+    // Round 277 / Phase 3: merge tracking is server-managed. Refuse
+    // direct edits to svn:mergeinfo at the CLI — server-side
+    // commit_parse rejects on the wire too (defence in depth).
+    if string.equals(name, "svn:mergeinfo") == 1 {
+        println("svn propset: 'svn:mergeinfo' is server-managed (Phase 2.3+)")
+        println("             — use `svn merge` to record integration; the")
+        println("             server's merge ledger is the source of truth.")
+        return 1
+    }
     rc = wc_propset(".", path, name, value)
     if rc == -2 {
         println("svn propset: ${path} is not tracked")

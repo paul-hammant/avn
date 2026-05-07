@@ -48,9 +48,19 @@ Plan (each numbered item is one baby commit):
       test_merge / test_merge_reverse / test_mergeinfo_arith /
       cherry_convergence — assert via `svn merged` instead.
 
-  3.1 Delete `working_copy/mergeinfo.ae` (~600 lines retired).
-  3.2 Drop the prop-build path.
-  3.3 Refuse `svn propset svn:mergeinfo` on the client.
+  3.1 *DONE Round 277*. Deleted `working_copy/mergeinfo.ae` (612
+      lines: rangeset string parse/emit, cancel-pairs, source-set
+      extraction). Dropped from svn/.build.ae. The retired
+      .test_mergeinfo_arith_driver.ae + .tests-mergeinfo_arith.ae
+      went with it.
+  3.2 *DONE Round 277*. svnserver/commit_parse.ae rejects any
+      commit body whose props dict contains a `svn:mergeinfo`
+      entry, with HTTP 400. Wire-level rejection — defence
+      against buggy or malicious clients trying to poke the
+      ledger via the property carrier.
+  3.3 *DONE Round 277*. svn/main.ae cmd_propset rejects
+      `svn:mergeinfo` at the CLI with a clear "server-managed"
+      message.
 
   4.1 (optional) `svnadmin verify --rebuild-merges` rebuilds the
       ledger from rev blobs.
