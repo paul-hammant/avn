@@ -127,17 +127,104 @@ copy should *merge* the past-rev source into the HEAD tree
 does the former — only the new dst path is added; everything else
 at HEAD survives.
 
-### Severity & ordering
-- MB-A is the priority — data loss, no warning.
-- MB-B shares MB-A's root cause; the same fix lifts both.
-- MB-D + MB-E together prevent any branch-shaped WC workflow.
-- MB-C prevents the classical `/trunk + /branches` layout in any
-  configuration.
-- MB-F is a paper cut but visible at the surface.
+### MB-C diagnosis (2026-05-07)
 
-Until at least MB-A/B and MB-C/D are fixed, the cherry-pick
-convergence dance from svnbook §4 (https://svnbook.red-bean.com/en/1.6/svn.branchmerge.advanced.html#svn.branchmerge.cherrypicking)
-can't be reproduced in avn.
+**`wc_db_open` silently creates a new WC if `.svn/wc.db` is
+missing.** From `working_copy/db_open.ae:22`:
+
+```aether
+export wc_db_open(wc_root: string) -> ptr {
+    pristine_dir = "${wc_root}/.svn/pristine"
+    merr = fs.mkdir_p(pristine_dir)            // ← creates if missing
+    ...
+    db, oerr = sqlite.open(dbpath)             // ← creates if missing
+    if wc_db_install_schema(db) != 0 { ... }   // ← creates schema
+    return db
+}
+```
+
+Verified by probe: with a real WC at `$WC` and an unversioned
+`$WC/sub/`, running `cd $WC/sub && svn add foo.txt` silently
+creates a brand-new isolated `$WC/sub/.svn/wc.db`. The add
+"succeeds" against this fake WC but the parent's `$WC/.svn/wc.db`
+never learns about it, so a later `svn commit` from `$WC` sees
+nothing scheduled.
+
+**Fix**: `wc_db_open` should distinguish "open an existing WC"
+(used by `wc_add`, `wc_commit`, `wc_status`, `wc_merge`, …) from
+"initialise a new WC" (used only by `cmd_checkout`'s call path).
+The first form should refuse if `.svn/wc.db` doesn't exist at the
+provided `wc_root`; the second form keeps today's auto-create
+behaviour.
+
+### MB-D / MB-E diagnosis (2026-05-07)
+
+**Same bug, different surface.** `cmd_checkout` and `cmd_ls` use
+the shallow `url_base` / `url_repo` helpers (split on the LAST `/`)
+which only parse 2-segment `host/repo` URLs:
+
+```aether
+url_base(url) → everything before the last "/"
+url_repo(url) → everything after the last "/"
+```
+
+For `URL = http://host/demo/release_a` (avn's first-class branch
+URL grammar — see `branch_of` at `svn/main.ae:271`), this gives
+`base = http://host/demo`, `repo = release_a`. The subsequent
+`remote_head_rev(base, repo)` queries
+`http://host/demo/repos/release_a/info` → 404 → "could not contact
+server".
+
+The deep parsers `base_url_deep` / `repo_name_deep` / `in_repo_path`
+already exist in the same file and are used correctly by `cmd_cp`
+and `cmd_merge`. `cmd_checkout` and `cmd_ls` just don't reach for
+them. MB-E is the same bug exercised through avn's branch
+grammar.
+
+**Fix**: switch `cmd_checkout` and `cmd_ls` to the deep parsers,
+and extend the `wc_checkout` extern (currently `(base_url,
+repo_name, dest, rev)`) to accept a sub-path / branch parameter
+so the WC stores the correct anchor.
+
+### MB-F diagnosis (2026-05-07)
+
+**`cmd_add` hard-codes `wc_root="."`**, see `svn/main.ae:881`:
+
+```aether
+rc = wc_add(".", p)
+```
+
+`p` is taken verbatim from argv. If `p` is absolute (`/abs/path`),
+`wc_add` joins it onto cwd and fails to locate a WC. If cwd
+isn't a WC root, see MB-C — `wc_db_open` happily creates a new
+fake WC at "." instead of erroring.
+
+**Fix**: walk up from `realpath(p)` looking for `.svn/wc.db`;
+that's the WC root. Compute the relative path from there. Apply
+the same lookup in every `cmd_*` that takes WC paths
+(`cmd_status`, `cmd_commit`, `cmd_revert`, ...). Classical SVN
+calls this the "WC anchor" lookup; it's a well-trodden algorithm.
+
+### Severity & ordering — six gaps, four root causes
+
+| Gap | Root cause | One-line fix |
+|---|---|---|
+| MB-A | (1) commit_finalise rebuilds from base_rev's tree without scanning `(base_rev..HEAD]` | walk txn paths against intervening revs, reject on conflict |
+| MB-B | (1) — same as MB-A | same fix; also decide cp-from-past-rev should merge into HEAD |
+| MB-C | (2) wc_db_open auto-creates a new WC | refuse-unless-exists in non-checkout call paths |
+| MB-D | (3) cmd_checkout uses shallow url parser; wc_checkout has no sub-path arg | use `base_url_deep` etc.; extend wc_checkout signature |
+| MB-E | (3) — same as MB-D | same fix |
+| MB-F | (4) cmd_add hard-codes `wc_root="."`, no walk-up to find anchor | walk-up `.svn/wc.db` lookup before calling `wc_*` |
+
+**Priority**: (1) is data loss → fix first. (2) is data
+integrity-adjacent (silent split-WC) → fix second. (3) blocks the
+classical / and first-class branch workflows → fix third. (4) is
+a paper cut but obvious to users → fix fourth.
+
+Once (1), (2), (3) land, the cherry-pick convergence test should
+green up — that's the canary. svnbook §4
+(https://svnbook.red-bean.com/en/1.6/svn.branchmerge.advanced.html#svn.branchmerge.cherrypicking)
+becomes the reference for what's expected to work.
 
 
 ## Round 228 update
