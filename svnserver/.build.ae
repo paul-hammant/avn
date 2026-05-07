@@ -65,6 +65,7 @@ main() {
         regen("../svnserver/respond.ae")
         regen("../svnserver/handler_info.ae")
         regen("../svnserver/handler_log.ae")
+        regen("../svnserver/handler_merge.ae")
         regen("../svnserver/handler_rev_info.ae")
         regen("../svnserver/handler_rev_cat.ae")
         regen("../svnserver/handler_rev_list.ae")

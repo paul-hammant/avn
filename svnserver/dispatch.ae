@@ -44,6 +44,8 @@ extern handler_path_delete(req: ptr, res: ptr)
 extern handler_commit(req: ptr, res: ptr)
 extern handler_copy(req: ptr, res: ptr)
 extern handler_branch_create(req: ptr, res: ptr)
+extern merged_list_handle(req: ptr, res: ptr, repo: string, sub: string)
+extern svnserver_find_repo_path(name: string) -> string
 
 // @c_callback exports this Aether function under a stable C symbol
 // so std.http's route registration can take its address directly —
@@ -122,6 +124,16 @@ svnserver_dispatch(req: ptr, res: ptr, _user_data: ptr) {
     _rev_tail, rev_match = string.strip_prefix(tail, "/rev/")
     if rev_match == 1 {
         handle_repo_rev(req, res)
+        return
+    }
+    merged_tail, merged_match = string.strip_prefix(tail, "/merged/")
+    if merged_match == 1 {
+        repo_path = svnserver_find_repo_path(name)
+        if string.length(repo_path) == 0 {
+            svnserver_respond_error(res, 404, "no such repo")
+            return
+        }
+        merged_list_handle(req, res, repo_path, merged_tail)
         return
     }
 

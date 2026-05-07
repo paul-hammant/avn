@@ -1,0 +1,96 @@
+// Copyright 2026 Paul Hammant (portions).
+// Apache License, Version 2.0 — see LICENSE.
+//
+// HTTP read endpoints over the merge ledger (Phase 1.4 of MB-H).
+//
+//   GET /repos/{r}/merged/{target}/{source}
+//     → 200 {"integrated":["<sha>","<sha>",...]}
+//     → 404 if {r} doesn't exist
+//
+// `wc_merge` will use this in Phase 2.1: query the integrated set
+// for (target, source), compute eligible candidates client-side
+// by set-subtraction. Reporting tools (`svn merged`, future
+// admin UIs) consume the same shape.
+//
+// Path components after `/merged/` are the target and source
+// branches, in that order. Empty tail components → 400.
+
+import std.http
+import std.string
+
+extern svnserver_respond_error(res: ptr, code: int, msg: string)
+extern svnserver_respond_json_ok(res: ptr, body: string)
+extern svnserver_find_repo_path(name: string) -> string
+
+extern merge_ledger_integrated_set(repo: string,
+                                   target_branch: string,
+                                   source_branch: string) -> string
+
+// Build the JSON `{"integrated":[...]}` body. `packed` is the
+// "\n"-separated SHA list returned by merge_ledger_integrated_set.
+build_integrated_json_(packed: string) -> string {
+    out = "{\"integrated\":["
+    n = string.length(packed)
+    seg_start = 0
+    first = 1
+    i = 0
+    while i <= n {
+        at_end = 0
+        if i == n { at_end = 1 }
+        if at_end == 0 {
+            c = string.char_at(packed, i)
+            if c == 10 { at_end = 1 }
+        }
+        if at_end == 1 {
+            if i > seg_start {
+                if first == 0 { out = string.concat(out, ",") }
+                out = string.concat(out, "\"")
+                out = string.concat(out, string.substring(packed, seg_start, i))
+                out = string.concat(out, "\"")
+                first = 0
+            }
+            seg_start = i + 1
+        }
+        i = i + 1
+    }
+    return string.concat(out, "]}")
+}
+
+// Split "<target>/<source>" into the two branches. Empty pieces
+// (including a trailing slash) produce ("","").
+split_pair_(rest: string) -> (string, string) {
+    n = string.length(rest)
+    sl = 0 - 1
+    i = 0
+    while i < n {
+        if string.char_at(rest, i) == 47 { sl = i; break }
+        i = i + 1
+    }
+    if sl < 0     { return "", "" }
+    if sl == 0    { return "", "" }
+    if sl == n - 1 { return "", "" }
+    target = string.substring(rest, 0, sl)
+    source = string.substring(rest, sl + 1, n)
+    return target, source
+}
+
+export merged_list_handle(req: ptr, res: ptr, repo: string, sub: string) {
+    // `sub` is the path tail after "/merged/" — i.e. "target/source".
+    target, source = split_pair_(sub)
+    if string.length(target) == 0 {
+        svnserver_respond_error(res, 400, "expected /merged/<target>/<source>")
+        return
+    }
+    if string.length(source) == 0 {
+        svnserver_respond_error(res, 400, "expected /merged/<target>/<source>")
+        return
+    }
+
+    packed = merge_ledger_integrated_set(repo, target, source)
+    body = build_integrated_json_(packed)
+    svnserver_respond_json_ok(res, body)
+}
+
+main() {
+    println("svnserver/handler_merge.ae is a library; not meant to run standalone")
+}
