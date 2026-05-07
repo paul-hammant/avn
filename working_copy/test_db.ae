@@ -21,6 +21,7 @@ extern os_getpid_raw() -> int
 extern system(cmd: string) -> int
 
 extern wc_db_open(wc_root: string) -> ptr
+extern wc_db_init(wc_root: string) -> ptr
 extern wc_db_close(db: ptr)
 // 6-param extern. `state` is a reserved keyword (actor model), so we
 // use `st` in the Aether-side signature; the C side still exposes both
@@ -65,11 +66,13 @@ main() {
     system("rm -rf ${wc}")
     system("mkdir -p ${wc}")
 
-    db = wc_db_open(wc)
+    // Fresh WC — wc_db_init is the only entry point that creates
+    // .svn/pristine + wc.db from nothing (Round 265 split).
+    db = wc_db_init(wc)
     if db == 0 {
-        println("FAIL open"); exit(1)
+        println("FAIL init"); exit(1)
     }
-    println("ok   open (created .svn/wc.db + pristine dir)")
+    println("ok   init (created .svn/wc.db + pristine dir)")
 
     // Initially empty.
     fails = fails + expect_int("no nodes yet", wc_db_node_exists(db, "README"), 0)

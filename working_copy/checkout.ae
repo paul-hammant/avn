@@ -46,6 +46,7 @@ extern remote_props_free(P: ptr)
 
 // wc.db lifecycle + helpers.
 extern wc_db_open(wc_root: string) -> ptr
+extern wc_db_init(wc_root: string) -> ptr
 extern wc_db_close(db: ptr)
 extern wc_db_upsert_node(db: ptr, path: string, kind: int, base_rev: int, base_sha1: string, node_state: int) -> int
 extern wc_db_set_info(db: ptr, key: string, value: string) -> int
@@ -145,7 +146,11 @@ export wc_checkout(base_url: string, repo_name: string,
                           dest: string, rev: int) -> int {
     if io_mkdir_p(dest) != 0 { return 0 - 1 }
 
-    db = wc_db_open(dest)
+    // Checkout is the only caller that's allowed to *create* a WC.
+    // Every other caller (wc_add, wc_commit, wc_status, …) must use
+    // wc_db_open which now refuses if .svn/wc.db doesn't exist —
+    // see Round 265 / db_open.ae.
+    db = wc_db_init(dest)
     if db == null { return 0 - 1 }
 
     full_url = "${base_url}/${repo_name}"

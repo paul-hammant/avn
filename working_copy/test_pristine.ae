@@ -20,7 +20,7 @@ import std.string
 extern os_getpid_raw() -> int
 extern system(cmd: string) -> int
 
-extern wc_db_open(wc_root: string) -> ptr
+extern wc_db_init(wc_root: string) -> ptr
 extern wc_db_close(db: ptr)
 
 extern wc_pristine_put(wc_root: string, data: string, len: int) -> string
@@ -47,8 +47,8 @@ main() {
     system("rm -rf ${wc}")
     system("mkdir -p ${wc}")
 
-    // Open db so .svn dirs exist.
-    db = wc_db_open(wc)
+    // Init a fresh WC so .svn dirs + wc.db exist.
+    db = wc_db_init(wc)
     wc_db_close(db)
 
     // Small text blob — stored RAW (too small to benefit from zlib).

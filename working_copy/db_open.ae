@@ -7,21 +7,60 @@
 //
 //     http://www.apache.org/licenses/LICENSE-2.0
 
-// wc.db lifecycle: open/close. Round 182 retires working_copy/db_shim.c
-// (69 lines C). The C side existed only to mkdir_p the parent
-// dir before sqlite3_open_v2; with std.fs.mkdir_p (already
-// shipped) and contrib.sqlite.open (already shipped) this is a
-// 4-line Aether function.
+// wc.db lifecycle: open existing / initialise new / close.
+//
+// Round 182 retired working_copy/db_shim.c (69 lines C). The C side
+// existed only to mkdir_p the parent dir before sqlite3_open_v2;
+// with std.fs.mkdir_p and contrib.sqlite.open this is a few lines
+// of Aether.
+//
+// Two distinct entry points (Round 265 split, fixing MB-C):
+//
+//   wc_db_open(wc_root)  — open an EXISTING WC. Returns null if
+//                          $wc_root/.svn/wc.db doesn't already
+//                          exist. Used by everything except checkout.
+//
+//   wc_db_init(wc_root)  — INITIALISE a fresh WC: mkdir
+//                          $wc_root/.svn/pristine, create wc.db,
+//                          install schema. Used only by wc_checkout.
+//
+// Pre-Round 265, wc_db_open both fs.mkdir_p'd .svn/pristine and
+// auto-created the sqlite db, so any caller pointing at a non-WC
+// directory (a fresh WC subdir, an arbitrary path, …) silently got
+// a brand-new isolated WC. `cd $WC/sub && svn add foo.txt` would
+// create `$WC/sub/.svn/wc.db` from nothing; the parent's commit
+// later saw no changes — exactly the MB-C surface in TODO.md.
 
 import std.fs
 import std.string
 import contrib.sqlite
 
 extern wc_db_install_schema(db: ptr) -> int
+extern io_is_regular_file(path: string) -> int
 
+// Open an existing wc.db. Returns null if the WC doesn't already
+// exist at $wc_root.
 export wc_db_open(wc_root: string) -> ptr {
-    // sqlite needs the .svn/ parent dir to exist; pristine/ at
-    // the same time covers both this and the pristine-store init.
+    dbpath = "${wc_root}/.svn/wc.db"
+    if io_is_regular_file(dbpath) == 0 { return null }
+
+    db, oerr = sqlite.open(dbpath)
+    if string.length(oerr) > 0 { return null }
+
+    // Schema install is idempotent (CREATE TABLE IF NOT EXISTS); a
+    // mid-version repo opens cleanly if the binary has new columns.
+    if wc_db_install_schema(db) != 0 {
+        sqlite.close(db)
+        return null
+    }
+    return db
+}
+
+// Initialise a fresh WC under $wc_root: create .svn/pristine, the
+// wc.db, and the schema. Returns null on any failure. Only
+// wc_checkout (and tests that explicitly stage a fresh WC) should
+// call this.
+export wc_db_init(wc_root: string) -> ptr {
     pristine_dir = "${wc_root}/.svn/pristine"
     merr = fs.mkdir_p(pristine_dir)
     if string.length(merr) > 0 { return null }
