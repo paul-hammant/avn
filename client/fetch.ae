@@ -40,6 +40,7 @@ extern url_rev_list(base: string, repo: string, rev: int, path: string) -> strin
 extern url_rev_props(base: string, repo: string, rev: int, path: string) -> string
 extern url_rev_blame(base: string, repo: string, rev: int, path: string) -> string
 extern remote_parse_log(body: string) -> string
+extern remote_parse_merged(body: string) -> string
 extern remote_parse_paths(body: string) -> string
 extern remote_parse_blame(body: string) -> string
 extern remote_parse_info_rev(body: string) -> string
@@ -92,6 +93,22 @@ export fetch_list(base: string, repo: string, rev: int, path: string) -> string 
     body = get_200(url_rev_list(base, repo, rev, p))
     if string.length(body) == 0 { return "" }
     return remote_parse_list(body)
+}
+
+// Round 274 / Phase 2.2 — fetch the merge ledger's integrated set
+// for (target, source) on `repo`. Returns "\n"-separated SHA list
+// (possibly empty) — already parsed out of the JSON envelope.
+export fetch_merged(base: string, repo: string,
+                    target_branch: string, source_branch: string) -> string {
+    url = string.concat(base, "/repos/")
+    url = string.concat(url, repo)
+    url = string.concat(url, "/merged/")
+    url = string.concat(url, target_branch)
+    url = string.concat(url, "/")
+    url = string.concat(url, source_branch)
+    body = get_200(url)
+    if string.length(body) == 0 { return "" }
+    return remote_parse_merged(body)
 }
 
 // POST `body` (JSON) to `url`, expect HTTP <expected_status>, parse

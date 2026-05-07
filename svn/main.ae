@@ -114,6 +114,10 @@ extern remote_log_date(lg: ptr, i: int) -> string
 extern remote_log_msg(lg: ptr, i: int) -> string
 extern remote_log_free(lg: ptr)
 
+// Round 274 / Phase 2.2 — `svn merged` ledger query.
+extern fetch_merged(base: string, repo: string,
+                    target_branch: string, source_branch: string) -> string
+
 extern remote_paths_changed(base_url: string, repo_name: string, rev: int) -> ptr
 extern remote_paths_count(P: ptr) -> int
 extern remote_paths_action(P: ptr, i: int) -> string
@@ -746,6 +750,47 @@ cmd_log(argv_start: int) {
     }
     println("------------------------------------------------------------")
     remote_log_free(lg)
+    return 0
+}
+
+// `svn merged URL --target T --source S` — list the rev SHAs from
+// source branch S that have been integrated into target branch T,
+// per the server-side merge ledger (Round 274 / Phase 2.2).
+//
+// Replaces the user-facing read access to merge tracking that
+// classical SVN exposed via `svn propget svn:mergeinfo`.
+//
+// Output: one SHA per line. Empty output = nothing integrated yet.
+cmd_merged(argv_start: int) {
+    url    = aether_args_get(argv_start)
+    target = find_flag("--target", argv_start)
+    source = find_flag("--source", argv_start)
+    if string.length(url) == 0 {
+        println("svn merged: usage: svn merged URL --target T --source S")
+        return 2
+    }
+    if string.length(target) == 0 {
+        println("svn merged: --target is required")
+        return 2
+    }
+    if string.length(source) == 0 {
+        println("svn merged: --source is required")
+        return 2
+    }
+    base = base_url_deep(url)
+    repo = repo_name_deep(url)
+    out = fetch_merged(base, repo, target, source)
+    n = string.length(out)
+    if n == 0 { return 0 }
+    // out is "\n"-separated SHAs already; print verbatim minus any
+    // trailing "\n" so we don't double up.
+    last = string.char_at(out, n - 1)
+    if last == 10 {
+        io.stdout_write(out, n - 1)
+    } else {
+        io.stdout_write(out, n)
+    }
+    println("")
     return 0
 }
 
@@ -1797,6 +1842,7 @@ print_usage() {
     println("  cp       SRC DST | URL@REV URL --author A --log M")
     println("  mv       SRC DST")
     println("  merge    URL@REVA:REVB [TARGET_DIR]")
+    println("  merged   URL --target T --source S")
     println("  resolve  PATH [--accept mine|theirs|working]")
     println("  propset  NAME VALUE PATH")
     println("  propget  NAME PATH")
@@ -1851,6 +1897,7 @@ main() {
     if string.equals(sub, "move") == 1     { exit(cmd_mv(2)) }
     if string.equals(sub, "rename") == 1   { exit(cmd_mv(2)) }
     if string.equals(sub, "merge") == 1    { exit(cmd_merge(2)) }
+    if string.equals(sub, "merged") == 1   { exit(cmd_merged(2)) }
     if string.equals(sub, "resolve") == 1  { exit(cmd_resolve(2)) }
     if string.equals(sub, "resolved") == 1 { exit(cmd_resolve(2)) }
     if string.equals(sub, "propset") == 1  { exit(cmd_propset(2)) }

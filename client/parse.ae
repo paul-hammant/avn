@@ -328,6 +328,38 @@ export remote_parse_list(body: string) -> string {
     return string.concat(header, out)
 }
 
+// Round 274 / Phase 2.2 — parse {"integrated":["sha","sha",...]}
+// from GET /merged/<target>/<source> into a "\n"-separated SHA
+// list, ready to print or further process.
+export remote_parse_merged(body: string) -> string {
+    if string.length(body) == 0 { return "" }
+    root, err = json.parse(body)
+    if string.length(err) > 0 { return "" }
+
+    jarr, jerr = json.object_get(root, "integrated")
+    if string.length(jerr) > 0 { json.free(root); return "" }
+    if jarr == null { json.free(root); return "" }
+
+    n = json.array_size(jarr)
+    out = ""
+    i = 0
+    while i < n {
+        e, _ = json.array_get(jarr, i)
+        if e != null {
+            sha, eerr = json.get_string(e)
+            if string.length(eerr) == 0 {
+                if string.length(sha) > 0 {
+                    out = string.concat(out, sha)
+                    out = string.concat(out, "\n")
+                }
+            }
+        }
+        i = i + 1
+    }
+    json.free(root)
+    return out
+}
+
 // Parse a /hashes JSON {"primary":..., "secondaries":[{algo,hash},...]}
 // into "N\x02<algo>\x01<hash>\x02..." (same two-separator shape as
 // the other remote_parse_* helpers). Returns "0\x02" on a hash response
