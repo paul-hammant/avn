@@ -34,8 +34,8 @@ extern remote_free(p: string)
 
 extern path_join_rel(prefix: string, name: string) -> string
 
-extern rtree_add_dir(rt: ptr, path: string)
-extern rtree_add_file(rt: ptr, path: string, data: string, data_len: int,
+extern remote_tree_add_dir(rt: ptr, path: string)
+extern remote_tree_add_file(rt: ptr, path: string, data: string, data_len: int,
                              wc_root: string)
 
 // Round 140: wc_root threaded through explicitly so add_file can
@@ -63,7 +63,7 @@ export merge_walk_remote(wc_root: string,
             rel = string.copy(rel)
 
             if string.equals(kind, "dir") == 1 {
-                rtree_add_dir(rt, rel)
+                remote_tree_add_dir(rt, rel)
                 if merge_walk_remote(wc_root, base_url, repo, rev,
                                            source_path, rel, rt) != 0 {
                     result = -1
@@ -77,7 +77,7 @@ export merge_walk_remote(wc_root: string,
                     result = -1
                 }
                 if result == 0 {
-                    rtree_add_file(rt, rel, data, string.length(data), wc_root)
+                    remote_tree_add_file(rt, rel, data, string.length(data), wc_root)
                     remote_free(data)
                 }
             }

@@ -29,7 +29,7 @@
 // The recursive walker is in working_copy/merge_walk.ae; the deletion +
 // add/mod two-pass apply is in working_copy/merge_apply.ae; mergeinfo
 // add/cancel is in working_copy/mergeinfo.ae. What was left in C was the
-// glue calling all three around the opaque rtree handles.
+// glue calling all three around the opaque remote_tree handles.
 
 import std.string
 
@@ -43,11 +43,11 @@ extern wc_propset(wc_root: string, path: string, name: string, value: string) ->
 extern wc_propdel(wc_root: string, path: string, name: string) -> int
 extern propget_value(wc_root: string, path: string, name: string) -> string
 
-// Opaque rtree storage in C (merge_shim.c). The recursive walk fills
-// it via rtree_add_dir / _add_file; apply passes read it via
+// Opaque remote_tree storage in C (merge_shim.c). The recursive walk fills
+// it via remote_tree_add_dir / _add_file; apply passes read it via
 // the mergert_* accessors.
-extern rtree_new() -> ptr
-extern rtree_free(rt: ptr)
+extern remote_tree_new() -> ptr
+extern remote_tree_free(rt: ptr)
 
 // Walker + apply passes (Aether-side helpers). wc_root is passed
 // explicitly through the walker so add_file can hash files at
@@ -120,18 +120,18 @@ export wc_merge(wc_root: string, source_path: string,
 
     // Fetch the source tree at both endpoints. wc_root threads
     // through so add_file can hash files at add-time.
-    a = rtree_new()
-    b = rtree_new()
+    a = remote_tree_new()
+    b = remote_tree_new()
     arc = merge_walk_remote(wc_root, base_url, repo, rev_base, source_path, "", a)
     brc = merge_walk_remote(wc_root, base_url, repo, rev_theirs, source_path, "", b)
     if arc != 0 {
-        rtree_free(a)
-        rtree_free(b)
+        remote_tree_free(a)
+        remote_tree_free(b)
         return 0 - 1
     }
     if brc != 0 {
-        rtree_free(a)
-        rtree_free(b)
+        remote_tree_free(a)
+        remote_tree_free(b)
         return 0 - 1
     }
 
@@ -150,8 +150,8 @@ export wc_merge(wc_root: string, source_path: string,
     merge_apply_adds_mods(wc_root, target_path, rev_a, rev_b, a, b, db)
     wc_db_close(db)
 
-    rtree_free(a)
-    rtree_free(b)
+    remote_tree_free(a)
+    remote_tree_free(b)
 
     // Record merged range in svn:mergeinfo. The reverse flag turns
     // into the leading '-' on the emitted line.

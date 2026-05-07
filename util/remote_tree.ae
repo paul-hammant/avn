@@ -12,13 +12,13 @@
 // Five parallel containers, all indexed by node position:
 //
 //   paths         std.list       AetherString per node
-//   kinds         std.gintarr    0=file 1=dir
+//   kinds         int_vec    0=file 1=dir
 //   shas          std.list       40-char hex string, "" for dirs
 //   contents      std.list       AetherString per node (binary-safe)
-//   content_lens  std.gintarr    bytes in contents[i], 0 for dirs
+//   content_lens  int_vec    bytes in contents[i], 0 for dirs
 //
-// Used by the update walker (rtree_*) and the merge walker
-// (rtree_* read-only accessors).
+// Used by the update walker (remote_tree_*) and the merge walker
+// (remote_tree_* read-only accessors).
 
 import std.string
 import std.list
@@ -27,11 +27,11 @@ import std.intarr
 extern malloc(size: int) -> ptr
 extern free(p: ptr)
 
-extern gintarr_new(initial_cap: int) -> ptr
-extern gintarr_count(a: ptr) -> int
-extern gintarr_get(a: ptr, i: int) -> int
-extern gintarr_add(a: ptr, value: int) -> ptr
-extern gintarr_free(a: ptr)
+extern int_vec_new(initial_cap: int) -> ptr
+extern int_vec_count(a: ptr) -> int
+extern int_vec_get(a: ptr, i: int) -> int
+extern int_vec_add(a: ptr, value: int) -> ptr
+extern int_vec_free(a: ptr)
 
 extern wc_hash_bytes(wc_root: string, data: string, length: int) -> string
 
@@ -43,45 +43,45 @@ struct Rtree {
     content_lens: ptr
 }
 
-export rtree_new() -> ptr {
+export remote_tree_new() -> ptr {
     raw = malloc(64)
     if raw == null { return null }
     rt = raw as *Rtree
     rt.paths        = list_new()
-    rt.kinds        = gintarr_new(16)
+    rt.kinds        = int_vec_new(16)
     rt.shas         = list_new()
     rt.contents     = list_new()
-    rt.content_lens = gintarr_new(16)
+    rt.content_lens = int_vec_new(16)
     return raw
 }
 
-export rtree_free(rt_ptr: ptr) {
+export remote_tree_free(rt_ptr: ptr) {
     if rt_ptr == null { return }
     rt = rt_ptr as *Rtree
     list_free(rt.paths)
-    gintarr_free(rt.kinds)
+    int_vec_free(rt.kinds)
     list_free(rt.shas)
     list_free(rt.contents)
-    gintarr_free(rt.content_lens)
+    int_vec_free(rt.content_lens)
     free(rt_ptr)
     return
 }
 
 // ---- public add ops ------------------------------------------
 
-export rtree_add_dir(rt_ptr: ptr, path: string) {
+export remote_tree_add_dir(rt_ptr: ptr, path: string) {
     if rt_ptr == null { return 0 }
     rt = rt_ptr as *Rtree
     list_add_raw(rt.paths,    string.copy(path))
     list_add_raw(rt.shas,     string.copy(""))
     list_add_raw(rt.contents, string.copy(""))
 
-    rt.kinds        = gintarr_add(rt.kinds, 1)
-    rt.content_lens = gintarr_add(rt.content_lens, 0)
+    rt.kinds        = int_vec_add(rt.kinds, 1)
+    rt.content_lens = int_vec_add(rt.content_lens, 0)
     return 0
 }
 
-export rtree_add_file(rt_ptr: ptr, path: string,
+export remote_tree_add_file(rt_ptr: ptr, path: string,
                              data: string, data_len: int,
                              wc_root: string) {
     if rt_ptr == null { return 0 }
@@ -97,20 +97,20 @@ export rtree_add_file(rt_ptr: ptr, path: string,
     list_add_raw(rt.shas,     string.copy(sha))
     list_add_raw(rt.contents, string.copy(data))
 
-    rt.kinds        = gintarr_add(rt.kinds, 0)
-    rt.content_lens = gintarr_add(rt.content_lens, data_len)
+    rt.kinds        = int_vec_add(rt.kinds, 0)
+    rt.content_lens = int_vec_add(rt.content_lens, data_len)
     return 0
 }
 
 // ---- read accessors ---------------------------------------------
 
-export rtree_count(rt_ptr: ptr) -> int {
+export remote_tree_count(rt_ptr: ptr) -> int {
     if rt_ptr == null { return 0 }
     rt = rt_ptr as *Rtree
-    return gintarr_count(rt.kinds)
+    return int_vec_count(rt.kinds)
 }
 
-export rtree_path_at(rt_ptr: ptr, i: int) -> string {
+export remote_tree_path_at(rt_ptr: ptr, i: int) -> string {
     if rt_ptr == null { return "" }
     rt = rt_ptr as *Rtree
     p = list_get_raw(rt.paths, i)
@@ -118,16 +118,16 @@ export rtree_path_at(rt_ptr: ptr, i: int) -> string {
     return p
 }
 
-export rtree_kind_at(rt_ptr: ptr, i: int) -> int {
+export remote_tree_kind_at(rt_ptr: ptr, i: int) -> int {
     if rt_ptr == null { return 0 - 1 }
     rt = rt_ptr as *Rtree
-    n = gintarr_count(rt.kinds)
+    n = int_vec_count(rt.kinds)
     if i < 0 { return 0 - 1 }
     if i >= n { return 0 - 1 }
-    return gintarr_get(rt.kinds, i)
+    return int_vec_get(rt.kinds, i)
 }
 
-export rtree_sha_at(rt_ptr: ptr, i: int) -> string {
+export remote_tree_sha_at(rt_ptr: ptr, i: int) -> string {
     if rt_ptr == null { return "" }
     rt = rt_ptr as *Rtree
     p = list_get_raw(rt.shas, i)
@@ -135,7 +135,7 @@ export rtree_sha_at(rt_ptr: ptr, i: int) -> string {
     return p
 }
 
-export rtree_data_at(rt_ptr: ptr, i: int) -> string {
+export remote_tree_data_at(rt_ptr: ptr, i: int) -> string {
     if rt_ptr == null { return "" }
     rt = rt_ptr as *Rtree
     p = list_get_raw(rt.contents, i)
@@ -143,16 +143,16 @@ export rtree_data_at(rt_ptr: ptr, i: int) -> string {
     return p
 }
 
-export rtree_data_len_at(rt_ptr: ptr, i: int) -> int {
+export remote_tree_data_len_at(rt_ptr: ptr, i: int) -> int {
     if rt_ptr == null { return 0 }
     rt = rt_ptr as *Rtree
-    return gintarr_get(rt.content_lens, i)
+    return int_vec_get(rt.content_lens, i)
 }
 
-export rtree_find_by_path(rt_ptr: ptr, path: string) -> int {
+export remote_tree_find_by_path(rt_ptr: ptr, path: string) -> int {
     if rt_ptr == null { return 0 - 1 }
     rt = rt_ptr as *Rtree
-    n = gintarr_count(rt.kinds)
+    n = int_vec_count(rt.kinds)
     paths = rt.paths
     i = 0
     while i < n {
@@ -166,5 +166,5 @@ export rtree_find_by_path(rt_ptr: ptr, path: string) -> int {
 }
 
 main() {
-    println("util/rtree/rtree.ae is a library; not meant to run standalone")
+    println("util/remote_tree.ae is a library; not meant to run standalone")
 }

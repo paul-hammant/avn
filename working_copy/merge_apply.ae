@@ -17,7 +17,7 @@
 // two-pass diff-and-apply loop.
 //
 // The C side owns:
-//   - the two rtree snapshots (A = base tree at rev_base, B = theirs
+//   - the two remote_tree snapshots (A = base tree at rev_base, B = theirs
 //     tree at rev_theirs; both fetched via walk_remote)
 //   - the sqlite3 db handle
 //   - per-path node lookups (wc_db_get_node)
@@ -34,15 +34,15 @@
 import std.string
 import std.io
 
-// --- rtree accessors (C-side opaque handle; shared with update_shim's
+// --- remote_tree accessors (C-side opaque handle; shared with update_shim's
 //     but named uniquely so both can link into the same binary) ----------
-extern rtree_count(rt: ptr) -> int
-extern rtree_path_at(rt: ptr, i: int) -> string
-extern rtree_kind_at(rt: ptr, i: int) -> int
-extern rtree_sha_at(rt: ptr, i: int) -> string
-extern rtree_data_at(rt: ptr, i: int) -> string
-extern rtree_data_len_at(rt: ptr, i: int) -> int
-extern rtree_find_by_path(rt: ptr, path: string) -> int
+extern remote_tree_count(rt: ptr) -> int
+extern remote_tree_path_at(rt: ptr, i: int) -> string
+extern remote_tree_kind_at(rt: ptr, i: int) -> int
+extern remote_tree_sha_at(rt: ptr, i: int) -> string
+extern remote_tree_data_at(rt: ptr, i: int) -> string
+extern remote_tree_data_len_at(rt: ptr, i: int) -> int
+extern remote_tree_find_by_path(rt: ptr, path: string) -> int
 
 // --- db handle + per-path node accessor -----------------------------------
 extern wc_db_node_exists(db: ptr, path: string) -> int
@@ -88,12 +88,12 @@ map_wc_rel(target_path: string, p: string) -> string {
 
 export merge_apply_deletions(wc_root: string, target_path: string,
                              a_rt: ptr, b_rt: ptr, db: ptr) {
-    n_a = rtree_count(a_rt)
+    n_a = remote_tree_count(a_rt)
     i = 0
     while i < n_a {
-        remote_path = rtree_path_at(a_rt, i)
-        remote_kind = rtree_kind_at(a_rt, i)
-        if rtree_find_by_path(b_rt, remote_path) < 0 {
+        remote_path = remote_tree_path_at(a_rt, i)
+        remote_kind = remote_tree_kind_at(a_rt, i)
+        if remote_tree_find_by_path(b_rt, remote_path) < 0 {
             wc_rel = map_wc_rel(target_path, remote_path)
             disk = path_join_rel(wc_root, wc_rel)
             if wc_db_node_exists(db, wc_rel) == 1 {
@@ -123,14 +123,14 @@ export merge_apply_deletions(wc_root: string, target_path: string,
 export merge_apply_adds_mods(wc_root: string, target_path: string,
                              rev_a: int, rev_b: int,
                              a_rt: ptr, b_rt: ptr, db: ptr) {
-    n_b = rtree_count(b_rt)
+    n_b = remote_tree_count(b_rt)
     i = 0
     while i < n_b {
-        rb_path = rtree_path_at(b_rt, i)
-        rb_kind = rtree_kind_at(b_rt, i)
-        rb_sha  = rtree_sha_at(b_rt, i)
-        rb_data = rtree_data_at(b_rt, i)
-        rb_len  = rtree_data_len_at(b_rt, i)
+        rb_path = remote_tree_path_at(b_rt, i)
+        rb_kind = remote_tree_kind_at(b_rt, i)
+        rb_sha  = remote_tree_sha_at(b_rt, i)
+        rb_data = remote_tree_data_at(b_rt, i)
+        rb_len  = remote_tree_data_len_at(b_rt, i)
 
         wc_rel = map_wc_rel(target_path, rb_path)
         disk = path_join_rel(wc_root, wc_rel)
@@ -145,11 +145,11 @@ export merge_apply_adds_mods(wc_root: string, target_path: string,
         }
         if rb_kind == 0 {
             // File.
-            a_idx = rtree_find_by_path(a_rt, rb_path)
+            a_idx = remote_tree_find_by_path(a_rt, rb_path)
             skip = 0
             if a_idx >= 0 {
-                if rtree_kind_at(a_rt, a_idx) == 0 {
-                    if string.equals(rtree_sha_at(a_rt, a_idx), rb_sha) == 1 {
+                if remote_tree_kind_at(a_rt, a_idx) == 0 {
+                    if string.equals(remote_tree_sha_at(a_rt, a_idx), rb_sha) == 1 {
                         skip = 1     // unchanged on remote between A and B
                     }
                 }
@@ -179,8 +179,8 @@ export merge_apply_adds_mods(wc_root: string, target_path: string,
                         a_data = ""
                         a_len = 0
                         if a_idx >= 0 {
-                            a_data = rtree_data_at(a_rt, a_idx)
-                            a_len = rtree_data_len_at(a_rt, a_idx)
+                            a_data = remote_tree_data_at(a_rt, a_idx)
+                            a_len = remote_tree_data_len_at(a_rt, a_idx)
                         }
                         m3rc = merge3_apply(disk,
                                                   a_data, a_len, rev_a,

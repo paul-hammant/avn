@@ -15,7 +15,7 @@
 
 // Recursive remote-tree walker for `svn update` / `svn switch`.
 // Calls the RA list/cat accessors and populates a C-side
-// remote_tree via the rtree_add_{dir,file} wrappers.
+// remote_tree via the remote_tree_add_{dir,file} wrappers.
 //
 // Previously a 28-line recursive C function in working_copy/update_shim.c
 // — lifts cleanly once the RA accessors + path-join helper are
@@ -33,8 +33,8 @@ extern remote_free(p: string)
 
 extern path_join_rel(prefix: string, name: string) -> string
 
-extern rtree_add_dir(rt: ptr, path: string)
-extern rtree_add_file(rt: ptr, path: string, data: string, data_len: int,
+extern remote_tree_add_dir(rt: ptr, path: string)
+extern remote_tree_add_file(rt: ptr, path: string, data: string, data_len: int,
                              wc_root: string)
 
 // Returns 0 on success, -1 on any list/cat failure. wc_root is
@@ -59,7 +59,7 @@ export update_walk_remote(wc_root: string,
             rel = string.copy(rel)
 
             if string.equals(kind, "dir") == 1 {
-                rtree_add_dir(rt, rel)
+                remote_tree_add_dir(rt, rel)
                 if update_walk_remote(wc_root, base_url, repo, rev, rel, rt) != 0 {
                     result = -1
                 }
@@ -70,7 +70,7 @@ export update_walk_remote(wc_root: string,
                     result = -1
                 }
                 if result == 0 {
-                    rtree_add_file(rt, rel, data, string.length(data), wc_root)
+                    remote_tree_add_file(rt, rel, data, string.length(data), wc_root)
                     remote_free(data)
                 }
             }

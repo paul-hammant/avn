@@ -7,10 +7,10 @@
 //
 //     http://www.apache.org/licenses/LICENSE-2.0
 
-// gintarr — growable wrapper around std.intarr.
+// int_vec — growable wrapper around std.intarr.
 //
 // std.intarr is a fixed-size packed int buffer; svn-aether port
-// callers (txn edit list, rtree node list) need append-style
+// callers (txn edit list, remote_tree node list) need append-style
 // growth without knowing the final count up-front. This wraps
 // intarr with a (capacity, count) pair encoded so we can
 // double-and-copy on overflow.
@@ -33,7 +33,7 @@ const HEADER_SLOTS = 2
 
 // Allocate a new growable intarr with the given initial capacity.
 // Returns null on OOM.
-export gintarr_new(initial_cap: int) -> ptr {
+export int_vec_new(initial_cap: int) -> ptr {
     if initial_cap < 4 { initial_cap = 4 }
     a, _err = intarr.new(initial_cap + HEADER_SLOTS)
     if a == null { return null }
@@ -43,13 +43,13 @@ export gintarr_new(initial_cap: int) -> ptr {
 }
 
 // How many entries are currently stored?
-export gintarr_count(a: ptr) -> int {
+export int_vec_count(a: ptr) -> int {
     if a == null { return 0 }
     return intarr_get_unchecked(a, 0)
 }
 
-// Read entry i. Returns 0 on OOB (caller-must-check via gintarr_count).
-export gintarr_get(a: ptr, i: int) -> int {
+// Read entry i. Returns 0 on OOB (caller-must-check via int_vec_count).
+export int_vec_get(a: ptr, i: int) -> int {
     if a == null { return 0 }
     n = intarr_get_unchecked(a, 0)
     if i < 0 { return 0 }
@@ -60,7 +60,7 @@ export gintarr_get(a: ptr, i: int) -> int {
 // Append. Returns the same handle on success, OR a new handle if a
 // regrow was needed. Caller must update its variable to the
 // returned ptr. Returns null on OOM (callers can detect and bail).
-export gintarr_add(a: ptr, value: int) -> ptr {
+export int_vec_add(a: ptr, value: int) -> ptr {
     if a == null { return null }
     n   = intarr_get_unchecked(a, 0)
     cap = intarr_get_unchecked(a, 1)
@@ -92,11 +92,11 @@ export gintarr_add(a: ptr, value: int) -> ptr {
 
 
 // Release.
-export gintarr_free(a: ptr) {
+export int_vec_free(a: ptr) {
     if a != null { intarr_free(a) }
     return 0
 }
 
 main() {
-    println("util/gintarr.ae is a library; not meant to run standalone")
+    println("util/int_vec.ae is a library; not meant to run standalone")
 }

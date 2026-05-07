@@ -31,13 +31,13 @@ import std.string
 import std.io
 
 // --- remote_tree accessors (C-side opaque handle) -------------------------
-extern rtree_count(rt: ptr) -> int
-extern rtree_path_at(rt: ptr, i: int) -> string
-extern rtree_kind_at(rt: ptr, i: int) -> int
-extern rtree_sha_at(rt: ptr, i: int) -> string
-extern rtree_data_at(rt: ptr, i: int) -> string
-extern rtree_data_len_at(rt: ptr, i: int) -> int
-extern rtree_find_by_path(rt: ptr, path: string) -> int
+extern remote_tree_count(rt: ptr) -> int
+extern remote_tree_path_at(rt: ptr, i: int) -> string
+extern remote_tree_kind_at(rt: ptr, i: int) -> int
+extern remote_tree_sha_at(rt: ptr, i: int) -> string
+extern remote_tree_data_at(rt: ptr, i: int) -> string
+extern remote_tree_data_len_at(rt: ptr, i: int) -> int
+extern remote_tree_find_by_path(rt: ptr, path: string) -> int
 
 // --- wc.db nodelist accessors ---------------------------------------------
 extern wc_nodelist_count(L: ptr) -> int
@@ -113,7 +113,7 @@ export update_apply_pass_a(wc_root: string, base_url: string, repo: string,
         if st == 1 { skip = 1 }
         if st == 2 { skip = 1 }
         if skip == 0 {
-            r_idx = rtree_find_by_path(rt, rel)
+            r_idx = remote_tree_find_by_path(rt, rel)
             if r_idx < 0 {
                 // Remote removed it. Delete locally.
                 disk = path_join_rel(wc_root, rel)
@@ -122,10 +122,10 @@ export update_apply_pass_a(wc_root: string, base_url: string, repo: string,
                 wc_db_delete_node(db, rel)
             }
             if r_idx >= 0 {
-                r_kind = rtree_kind_at(rt, r_idx)
-                r_sha  = rtree_sha_at(rt, r_idx)
-                r_data = rtree_data_at(rt, r_idx)
-                r_len  = rtree_data_len_at(rt, r_idx)
+                r_kind = remote_tree_kind_at(rt, r_idx)
+                r_sha  = remote_tree_sha_at(rt, r_idx)
+                r_data = remote_tree_data_at(rt, r_idx)
+                r_len  = remote_tree_data_len_at(rt, r_idx)
 
                 if kind != r_kind {
                     // Kind switched — tree-conflict; we skip and log.
@@ -218,11 +218,11 @@ export update_apply_pass_a(wc_root: string, base_url: string, repo: string,
 export update_apply_pass_b(wc_root: string, base_url: string, repo: string,
                            target_rev: int, rt: ptr, nodelist: ptr,
                            db: ptr) {
-    nr = rtree_count(rt)
+    nr = remote_tree_count(rt)
     n_local = wc_nodelist_count(nodelist)
     i = 0
     while i < nr {
-        rpath = rtree_path_at(rt, i)
+        rpath = remote_tree_path_at(rt, i)
         // Skip if already present locally (pass A handled it).
         found = 0
         j = 0
@@ -234,10 +234,10 @@ export update_apply_pass_b(wc_root: string, base_url: string, repo: string,
             j = j + 1
         }
         if found == 0 {
-            r_kind = rtree_kind_at(rt, i)
-            r_sha  = rtree_sha_at(rt, i)
-            r_data = rtree_data_at(rt, i)
-            r_len  = rtree_data_len_at(rt, i)
+            r_kind = remote_tree_kind_at(rt, i)
+            r_sha  = remote_tree_sha_at(rt, i)
+            r_data = remote_tree_data_at(rt, i)
+            r_len  = remote_tree_data_len_at(rt, i)
             disk   = path_join_rel(wc_root, rpath)
 
             ok = 0

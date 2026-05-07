@@ -13,9 +13,9 @@
 // fresh-aether-requests.md).
 //
 //   paths         std.list      AetherString per entry
-//   kinds         std.gintarr   0=file 1=dir
+//   kinds         int_vec   0=file 1=dir
 //   contents      std.list      AetherString per entry (binary-safe)
-//   content_lens  std.gintarr
+//   content_lens  int_vec
 //
 // Used by repo_storage/test_revisions.ae's commit-rev fixture: build a
 // flat (path, kind, content) list, then walk it to emit dir blobs
@@ -28,11 +28,11 @@ import std.intarr
 extern malloc(size: int) -> ptr
 extern free(p: ptr)
 
-extern gintarr_new(initial_cap: int) -> ptr
-extern gintarr_count(a: ptr) -> int
-extern gintarr_get(a: ptr, i: int) -> int
-extern gintarr_add(a: ptr, value: int) -> ptr
-extern gintarr_free(a: ptr)
+extern int_vec_new(initial_cap: int) -> ptr
+extern int_vec_count(a: ptr) -> int
+extern int_vec_get(a: ptr, i: int) -> int
+extern int_vec_add(a: ptr, value: int) -> ptr
+extern int_vec_free(a: ptr)
 
 struct TreeBuilder {
     paths: ptr
@@ -46,9 +46,9 @@ export fsfs_tree_builder_new() -> ptr {
     if raw == null { return null }
     tb = raw as *TreeBuilder
     tb.paths        = list_new()
-    tb.kinds        = gintarr_new(16)
+    tb.kinds        = int_vec_new(16)
     tb.contents     = list_new()
-    tb.content_lens = gintarr_new(16)
+    tb.content_lens = int_vec_new(16)
     return raw
 }
 
@@ -56,9 +56,9 @@ export fsfs_tree_builder_free(tb_ptr: ptr) {
     if tb_ptr == null { return }
     tb = tb_ptr as *TreeBuilder
     list_free(tb.paths)
-    gintarr_free(tb.kinds)
+    int_vec_free(tb.kinds)
     list_free(tb.contents)
-    gintarr_free(tb.content_lens)
+    int_vec_free(tb.content_lens)
     free(tb_ptr)
     return
 }
@@ -76,15 +76,15 @@ export fsfs_tree_builder_add(tb_ptr: ptr, path: string, kind: int,
         content_len = 0
     }
 
-    tb.kinds = gintarr_add(tb.kinds, kind)
-    tb.content_lens = gintarr_add(tb.content_lens, content_len)
+    tb.kinds = int_vec_add(tb.kinds, kind)
+    tb.content_lens = int_vec_add(tb.content_lens, content_len)
     return 0
 }
 
 export fsfs_tree_builder_count(tb_ptr: ptr) -> int {
     if tb_ptr == null { return 0 }
     tb = tb_ptr as *TreeBuilder
-    return gintarr_count(tb.kinds)
+    return int_vec_count(tb.kinds)
 }
 
 export fsfs_tree_builder_path(tb_ptr: ptr, i: int) -> string {
@@ -98,10 +98,10 @@ export fsfs_tree_builder_path(tb_ptr: ptr, i: int) -> string {
 export fsfs_tree_builder_kind(tb_ptr: ptr, i: int) -> int {
     if tb_ptr == null { return 0 - 1 }
     tb = tb_ptr as *TreeBuilder
-    n = gintarr_count(tb.kinds)
+    n = int_vec_count(tb.kinds)
     if i < 0 { return 0 - 1 }
     if i >= n { return 0 - 1 }
-    return gintarr_get(tb.kinds, i)
+    return int_vec_get(tb.kinds, i)
 }
 
 export fsfs_tree_builder_content_data(tb_ptr: ptr, i: int) -> string {

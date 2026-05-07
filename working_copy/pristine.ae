@@ -83,7 +83,7 @@ extern io_mkdir_p(path: string) -> int
 extern io_exists(path: string) -> int
 extern io_is_regular_file(path: string) -> int
 
-// Binary-safe byte ops — see util/binbuf.ae for impls.
+// Binary-safe byte ops — see util/byte_ops.ae for impls.
 extern pack_le32(v: int) -> string
 extern concat(prefix: string, prefix_len: int, suf: string, suf_len: int) -> string
 extern slice(s: string, s_len: int, start: int, end: int) -> string
