@@ -44,6 +44,11 @@ extern merge_ledger_is_integrated(repo: string,
                                   target_branch: string,
                                   source_branch: string,
                                   source_rev_sha: string) -> int
+extern merge_ledger_is_integrated_as_of(repo: string,
+                                        target_branch: string,
+                                        source_branch: string,
+                                        source_rev_sha: string,
+                                        as_of_rev: int) -> int
 extern merge_ledger_integrated_set(repo: string,
                                    target_branch: string,
                                    source_branch: string) -> string
@@ -54,6 +59,7 @@ extern merge_ledger_eligible_revs(repo: string,
 
 const VERB_APPLIED     = 0
 const VERB_RECORD_ONLY = 1
+const VERB_REVERSE     = 2
 
 expect_int(label: string, got: int, want: int) -> int {
     if got == want { println("ok   ${label}: ${got}"); return 0 }
@@ -281,6 +287,85 @@ main() {
     fails = fails + expect_int("after rejected calls: still no source",
         txn_merge_count(t3), 0)
     txn_free(t3)
+
+    // ---- Round 281: reverse-merge subtraction --------------------
+    //
+    // Scenarios:
+    //   F1: forward(rN)                            → integrated
+    //   F2: forward(rN), reverse(rN)               → NOT integrated, eligible
+    //   F3: forward(rN), reverse(rN), forward(rN)  → integrated
+    //   F4: forward(rN), reverse(rN) -- as_of mid  → integrated  (the
+    //                                                 reverse hasn't
+    //                                                 happened yet
+    //                                                 at the as-of view)
+    //
+    // Each merge_event uses a distinct rev_sha; SHA pattern below is
+    // arbitrary but unique. All target/source branches are `rev_t /
+    // rev_s` to keep these scenarios isolated from earlier asserts.
+    rev_target = "rev_t"
+    rev_source = "rev_s"
+    sha_fwd1 = "f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1"
+    sha_rev1 = "0202020202020202020202020202020202020202"
+    sha_fwd2 = "f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3"
+    sha_x    = "1234567890abcdef1234567890abcdef12345678"
+
+    // F1 — forward only.
+    rec_f1 = merge_ledger_record(repo, sha_fwd1, rev_target, rev_source,
+                                 "${sha_x}\n", 100, VERB_APPLIED, "carol",
+                                 "2026-05-07T12:00:00Z")
+    fails = fails + expect_int("F1: record forward", rec_f1, 0)
+    fails = fails + expect_int("F1: x integrated",
+        merge_ledger_is_integrated(repo, rev_target, rev_source, sha_x), 1)
+    fails = fails + expect_str("F1: integrated_set has x",
+        merge_ledger_integrated_set(repo, rev_target, rev_source),
+        "${sha_x}\n")
+    fails = fails + expect_str("F1: x not eligible",
+        merge_ledger_eligible_revs(repo, rev_target, rev_source, "${sha_x}\n"),
+        "")
+
+    // F2 — reverse merge of x. After this, x should not be integrated
+    // and should re-appear in the eligible set.
+    rec_r1 = merge_ledger_record(repo, sha_rev1, rev_target, rev_source,
+                                 "${sha_x}\n", 110, VERB_REVERSE, "carol",
+                                 "2026-05-07T13:00:00Z")
+    fails = fails + expect_int("F2: record reverse", rec_r1, 0)
+    fails = fails + expect_int("F2: x not integrated after reverse",
+        merge_ledger_is_integrated(repo, rev_target, rev_source, sha_x), 0)
+    fails = fails + expect_str("F2: integrated_set excludes x",
+        merge_ledger_integrated_set(repo, rev_target, rev_source), "")
+    fails = fails + expect_str("F2: x is eligible again",
+        merge_ledger_eligible_revs(repo, rev_target, rev_source, "${sha_x}\n"),
+        "${sha_x}\n")
+
+    // F3 — forward again. Latest verb wins → integrated.
+    rec_f2 = merge_ledger_record(repo, sha_fwd2, rev_target, rev_source,
+                                 "${sha_x}\n", 120, VERB_APPLIED, "carol",
+                                 "2026-05-07T14:00:00Z")
+    fails = fails + expect_int("F3: record forward again", rec_f2, 0)
+    fails = fails + expect_int("F3: x integrated again after re-forward",
+        merge_ledger_is_integrated(repo, rev_target, rev_source, sha_x), 1)
+    fails = fails + expect_str("F3: integrated_set has x again",
+        merge_ledger_integrated_set(repo, rev_target, rev_source),
+        "${sha_x}\n")
+    fails = fails + expect_str("F3: x no longer eligible",
+        merge_ledger_eligible_revs(repo, rev_target, rev_source, "${sha_x}\n"),
+        "")
+
+    // F4 — as-of-rev between forward (rev_num=100) and reverse
+    // (rev_num=110). The reverse hasn't happened in the as-of view
+    // yet. Note: as_of uses the merge_ledger_is_integrated_as_of
+    // entry point.
+    fails = fails + expect_int("F4: as_of=105 (between F+R) → integrated",
+        merge_ledger_is_integrated_as_of(repo, rev_target, rev_source,
+                                         sha_x, 105), 1)
+    // And as-of=115 (after reverse, before re-forward at 120) → not.
+    fails = fails + expect_int("F4: as_of=115 (between R+F) → NOT integrated",
+        merge_ledger_is_integrated_as_of(repo, rev_target, rev_source,
+                                         sha_x, 115), 0)
+    // And as-of=125 (after re-forward) → integrated.
+    fails = fails + expect_int("F4: as_of=125 (after re-forward) → integrated",
+        merge_ledger_is_integrated_as_of(repo, rev_target, rev_source,
+                                         sha_x, 125), 1)
 
     // Cleanup.
     system("rm -rf ${repo}")
