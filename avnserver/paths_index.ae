@@ -1,0 +1,173 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// permissions and limitations under the License.
+
+// Paths-index blob lookup — ported from paths_acl_lookup in
+// avnserver/shim.c (and its buggy sha1-hardcoded twin
+// paths_props_lookup). Both are the same "one line per path" shape:
+//
+//   <sha-hex> <path>\n
+//   <sha-hex> <path>\n
+//   ...
+//
+// The sha width varies by repo hash (40 for sha1, 64 for sha256). This
+// Aether port detects the first space on each line and doesn't assume
+// a fixed width — fixing the latent paths_props_lookup bug along the
+// way. Returns the matching sha or "" if no entry matches.
+
+import std.string
+
+// Return the sha-hex for `path` in the paths-index `body`. "" if absent.
+// Empty `path` matches the rare "<sha> \n" entry shape (root-as-empty-name);
+// our ACL storage uses this for the root-level rule.
+export paths_index_lookup(body: string, path: string) -> string {
+    n = string.length(body)
+    plen = string.length(path)
+    if n == 0 { return "" }
+    if plen == 0 {
+        // empty-path entry: match "<sha> \n" where path section is empty.
+        line_start = 0
+        i = 0
+        while i <= n {
+            at_end = 0
+            c = 0
+            if i == n { at_end = 1 } else { c = string.char_at(body, i) }
+            is_eol = 0
+            if at_end == 1 { is_eol = 1 }
+            if c == 10 { is_eol = 1 }
+            if is_eol == 1 {
+                if i > line_start {
+                    sp = line_start
+                    while sp < i {
+                        if string.char_at(body, sp) == 32 { break }
+                        sp = sp + 1
+                    }
+                    if sp > line_start && sp == i - 1 {
+                        return string.substring(body, line_start, sp)
+                    }
+                }
+                line_start = i + 1
+            }
+            i = i + 1
+        }
+        return ""
+    }
+    line_start = 0
+    i = 0
+    while i <= n {
+        at_end = 0
+        c = 0
+        if i == n { at_end = 1 } else { c = string.char_at(body, i) }
+        is_eol = 0
+        if at_end == 1 { is_eol = 1 }
+        if c == 10 { is_eol = 1 }
+        if is_eol == 1 {
+            // Line is body[line_start..i). Split on first ' '.
+            sp = line_start
+            while sp < i {
+                if string.char_at(body, sp) == 32 { break }
+                sp = sp + 1
+            }
+            if sp > line_start && sp < i {
+                sha_len = sp - line_start
+                name_off = sp + 1
+                name_len = i - name_off
+                if name_len == plen {
+                    is_match = 1
+                    j = 0
+                    while j < plen {
+                        if string.char_at(body, name_off + j) != string.char_at(path, j) {
+                            is_match = 0
+                            break
+                        }
+                        j = j + 1
+                    }
+                    if is_match == 1 {
+                        return string.substring(body, line_start, line_start + sha_len)
+                    }
+                }
+            }
+            line_start = i + 1
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// Find the nearest ancestor match and return "sha\tprefix". Empty
+// string if nothing matches. Used by /acl to report effective_from.
+export paths_index_ancestor_nearest(body: string, target: string) -> string {
+    path = target
+    while 1 == 1 {
+        sha = paths_index_lookup(body, path)
+        if string.length(sha) > 0 {
+            out = string.concat(sha, "\t")
+            return string.concat(out, path)
+        }
+        n = string.length(path)
+        if n == 0 { return "" }
+        cut = 0 - 1
+        i = n - 1
+        while i >= 0 {
+            if string.char_at(path, i) == 47 { cut = i; break }
+            i = i - 1
+        }
+        if cut < 0 {
+            path = ""
+        } else {
+            path = string.substring(path, 0, cut)
+        }
+    }
+    return ""
+}
+
+// For each ancestor of `target` (including target itself, then its
+// parent, grandparent, …, "") look up the acl_sha in `body` and emit
+// "<sha>\n" lines for the hits (deepest first). The caller uses these
+// to walk the ACL chain from most-specific to most-general.
+//
+// Callers that want the matching prefix for reporting can use
+// paths_index_lookup directly after; this helper keeps the return
+// shape simple (just the shas, in priority order).
+export paths_index_ancestor_shas(body: string, target: string) -> string {
+    out = ""
+    // Work on a mutable-via-substring path string.
+    path = target
+    while 1 == 1 {
+        sha = paths_index_lookup(body, path)
+        if string.length(sha) > 0 {
+            out = string.concat(out, sha)
+            out = string.concat(out, "\n")
+        }
+        // Strip last '/'-separated segment.
+        n = string.length(path)
+        if n == 0 { break }
+        cut = 0 - 1
+        i = n - 1
+        while i >= 0 {
+            if string.char_at(path, i) == 47 { cut = i; break }
+            i = i - 1
+        }
+        if cut < 0 {
+            path = ""
+        } else {
+            path = string.substring(path, 0, cut)
+        }
+    }
+    return out
+}
+
+main() {
+    println("avnserver/paths_index.ae is a library; not meant to run standalone")
+}

@@ -1,0 +1,28 @@
+import build
+import aether
+import aether (driver, output, binary_under_test, path)
+
+main() {
+    b = build.start()
+    build.dep(b, "avn")
+    build.dep(b, "avnadmin")
+    build.dep(b, "avnserver")
+
+    aether.driver_test(b) {
+        driver(".test_branches_phase81_driver.ae")
+        output("test_branches_phase81_driver")
+
+        // No fixture_seed/server — driver creates repo via svnadmin
+        // create and spawns server inline (so it can probe rep-cache.db
+        // schema before any WC traffic).
+        binary_under_test(b, "svn") {
+            path("target/avn/bin/svn")
+        }
+        binary_under_test(b, "admin") {
+            path("target/avnadmin/bin/svnadmin")
+        }
+        binary_under_test(b, "server") {
+            path("target/avnserver/bin/aether-svnserver")
+        }
+    }
+}

@@ -1,4 +1,4 @@
-# Notes to self (LLM assisting on svn-aether)
+# Notes to self (LLM assisting on avn)
 
 Terse. Re-read at session start.
 

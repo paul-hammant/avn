@@ -13,23 +13,23 @@ main() {
     b = build.start()
 
     build.dep(b, "client/.tests.ae")
-    build.dep(b, "svnadmin/.tests.ae")
+    build.dep(b, "avnadmin/.tests.ae")
 
     // svnserver — split into two .tests-*.ae files (server, put).
-    build.dep(b, "svnserver/.tests-server.ae")
-    build.dep(b, "svnserver/.tests-put.ae")
+    build.dep(b, "avnserver/.tests-server.ae")
+    build.dep(b, "avnserver/.tests-put.ae")
 
     // svn — all 10 tests on SDK fixtures, one .tests-<tag>.ae each.
-    build.dep(b, "svn/.tests-acl.ae")
-    build.dep(b, "svn/.tests-acl_cp_follow.ae")
-    build.dep(b, "svn/.tests-acl_write.ae")
-    build.dep(b, "svn/.tests-blame.ae")
-    build.dep(b, "svn/.tests-branch_create.ae")
-    build.dep(b, "svn/.tests-branch_enforce.ae")
-    build.dep(b, "svn/.tests-branches_phase81.ae")
-    build.dep(b, "svn/.tests-svn.ae")
-    build.dep(b, "svn/.tests-verify.ae")
-    build.dep(b, "svn/.tests-verify_secondaries.ae")
+    build.dep(b, "avn/.tests-acl.ae")
+    build.dep(b, "avn/.tests-acl_cp_follow.ae")
+    build.dep(b, "avn/.tests-acl_write.ae")
+    build.dep(b, "avn/.tests-blame.ae")
+    build.dep(b, "avn/.tests-branch_create.ae")
+    build.dep(b, "avn/.tests-branch_enforce.ae")
+    build.dep(b, "avn/.tests-branches_phase81.ae")
+    build.dep(b, "avn/.tests-svn.ae")
+    build.dep(b, "avn/.tests-verify.ae")
+    build.dep(b, "avn/.tests-verify_secondaries.ae")
 
     // working_copy — all 17 tests on SDK fixtures (test_switch's stage-1
     // server is fixture-managed; stage 2 is inline in the script).

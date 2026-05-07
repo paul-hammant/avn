@@ -1,0 +1,99 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// permissions and limitations under the License.
+
+// POST /repos/{r}/copy — atomic server-side copy. Caller supplies
+// { "base_rev": N, "from_path", "to_path", "author", "log" } and
+// receives {"rev": N+1} on success.
+//
+// The JSON parse, ACL + spec checks, auto-follow-ACL, txn-build,
+// and commit-finalise stay on the C side (behind
+// svnserver_copy_from_body) — Aether doesn't have array-of-string
+// FFI for paths-acl handling, and pulling auto_follow_copy_acl up
+// would be a separate, larger port. The Aether handler owns URL
+// parse, 404-for-wrong-route, and response mapping.
+
+import std.http
+import std.string
+
+extern parse_repo_name_in(path: string) -> string
+extern svnserver_find_repo_path(name: string) -> string
+extern copy_from_body(req: ptr, repo: string) -> int
+
+extern rev_response_json(rev: int) -> string
+
+extern svnserver_respond_error(res: ptr, code: int, msg: string)
+extern svnserver_respond_json_ok(res: ptr, body: string)
+
+export handler_copy(req: ptr, res: ptr) {
+    path = http.request_path(req)
+
+    name = parse_repo_name_in(path)
+    if string.length(name) == 0 {
+        svnserver_respond_error(res, 404, "not found")
+        return
+    }
+    rest, _r1 = string.strip_prefix(path, string.concat(string.concat("/repos/", name), "/"))
+    if string.equals(rest, "copy") == 0 {
+        svnserver_respond_error(res, 404, "not found")
+        return
+    }
+
+    repo = svnserver_find_repo_path(name)
+    if string.length(repo) == 0 {
+        svnserver_respond_error(res, 404, "no such repo")
+        return
+    }
+
+    rv = copy_from_body(req, repo)
+    if rv == -1 {
+        svnserver_respond_error(res, 400, "empty body")
+        return
+    }
+    if rv == -2 {
+        svnserver_respond_error(res, 400, "malformed JSON")
+        return
+    }
+    if rv == -3 {
+        svnserver_respond_error(res, 400, "missing or wrong-typed field")
+        return
+    }
+    if rv == -4 {
+        svnserver_respond_error(res, 403, "forbidden")
+        return
+    }
+    if rv == -5 {
+        svnserver_respond_error(res, 403, "cross-branch copy refused")
+        return
+    }
+    if rv == -6 {
+        svnserver_respond_error(res, 404, "from_path not found at base_rev")
+        return
+    }
+    if rv == -7 {
+        svnserver_respond_error(res, 500, "copy commit failed")
+        return
+    }
+    if rv == -8 {
+        svnserver_respond_error(res, 409, "out of date — fetch and retry")
+        return
+    }
+
+    svnserver_respond_json_ok(res, rev_response_json(rv))
+}
+
+
+main() {
+    println("avnserver/handler_copy.ae is a library; not meant to run standalone")
+}

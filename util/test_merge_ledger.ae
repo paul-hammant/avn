@@ -80,7 +80,7 @@ main() {
     system("rm -rf ${repo}")
     system("mkdir -p ${repo}")
 
-    // Eagerly install the schema (mirrors what svnadmin/create.ae
+    // Eagerly install the schema (mirrors what avnadmin/create.ae
     // does inside create_bare_).
     err = merge_ledger_init_schema(repo)
     fails = fails + expect_str("merge_ledger_init_schema", err, "")

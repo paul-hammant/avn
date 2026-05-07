@@ -1,0 +1,237 @@
+// Copyright 2026 Paul Hammant (portions).
+// Apache License, Version 2.0 — see LICENSE.
+//
+// Aether driver for branch infrastructure + default `main` + path-rev index.
+// Round 254. Migrated from avn/test_branches_phase81.sh.
+
+import contrib.aeocha
+import std.os
+import std.os (os_getenv)
+import std.string
+
+extern list_new() -> ptr
+extern list_add_raw(list: ptr, item: ptr) -> int
+
+argv_new() -> { return list_new() }
+argv_push(argv: ptr, s: string) { list_add_raw(argv, s) }
+
+sh(cmd: string) -> {
+    argv = argv_new()
+    argv_push(argv, "-c")
+    argv_push(argv, cmd)
+    out, status, err = os.run_capture("/bin/bash", argv, null)
+    return out, status, err
+}
+
+main() {
+    fw = aeocha.init()
+    svn_bin    = os_getenv("SVN_BIN")
+    admin_bin  = os_getenv("ADMIN_BIN")
+    server_bin = os_getenv("SERVER_BIN")
+
+    repo = "/tmp/avn_aeb_test_b81_repo"
+    port = "9660"
+    wc   = "/tmp/avn_test_b81_wc"
+    url  = string.concat("http://127.0.0.1:", string.concat(port, "/demo"))
+    base = string.concat("http://127.0.0.1:", string.concat(port, "/repos/demo"))
+    pidf = "/tmp/avn_test_b81_srv.pid"
+
+    setup = string.concat("rm -rf ", repo)
+    setup = string.concat(setup, " ")
+    setup = string.concat(setup, wc)
+    setup = string.concat(setup, " && ")
+    setup = string.concat(setup, admin_bin)
+    setup = string.concat(setup, " create ")
+    setup = string.concat(setup, repo)
+    setup = string.concat(setup, " >/dev/null")
+
+    spawn_srv = "(nohup "
+    spawn_srv = string.concat(spawn_srv, server_bin)
+    spawn_srv = string.concat(spawn_srv, " demo ")
+    spawn_srv = string.concat(spawn_srv, repo)
+    spawn_srv = string.concat(spawn_srv, " ")
+    spawn_srv = string.concat(spawn_srv, port)
+    spawn_srv = string.concat(spawn_srv, " >/tmp/avn_test_b81_srv.log 2>&1 & echo $! > ")
+    spawn_srv = string.concat(spawn_srv, pidf)
+    spawn_srv = string.concat(spawn_srv, "; disown); sleep 1.5")
+
+    kill_srv = "kill $(cat "
+    kill_srv = string.concat(kill_srv, pidf)
+    kill_srv = string.concat(kill_srv, ") 2>/dev/null || true")
+
+    // (A) per-branch layout
+    test_main_head = string.concat("test -f ", repo)
+    test_main_head = string.concat(test_main_head, "/branches/main/head && echo 1 || echo 0")
+    test_main_revs = string.concat("test -d ", repo)
+    test_main_revs = string.concat(test_main_revs, "/branches/main/revs && echo 1 || echo 0")
+    test_rev0_blob = string.concat("test -f ", repo)
+    test_rev0_blob = string.concat(test_rev0_blob, "/branches/main/revs/00/00/000000 && echo 1 || echo 0")
+    cat_main_head  = string.concat("cat ", repo)
+    cat_main_head  = string.concat(cat_main_head, "/branches/main/head")
+    test_main_spec = string.concat("test -f ", repo)
+    test_main_spec = string.concat(test_main_spec, "/branches/main/spec && echo 1 || echo 0")
+
+    // (B) path_rev table
+    schema_check = string.concat("sqlite3 ", repo)
+    schema_check = string.concat(schema_check, "/rep-cache.db '.schema path_rev' 2>/dev/null | grep -c 'CREATE TABLE path_rev' || true")
+
+    // populate
+    populate = string.concat(svn_bin, " checkout ")
+    populate = string.concat(populate, url)
+    populate = string.concat(populate, " ")
+    populate = string.concat(populate, wc)
+    populate = string.concat(populate, " >/dev/null && cd ")
+    populate = string.concat(populate, wc)
+    populate = string.concat(populate, " && echo hello > README.md && mkdir src && echo 'int main() { return 0; }' > src/main.c && ")
+    populate = string.concat(populate, svn_bin)
+    populate = string.concat(populate, " add README.md src src/main.c >/dev/null && ")
+    populate = string.concat(populate, svn_bin)
+    populate = string.concat(populate, " commit --author alice --log 'initial content' >/dev/null")
+
+    // (H) heads
+    cat_legacy_head = string.concat("cat ", repo)
+    cat_legacy_head = string.concat(cat_legacy_head, "/head")
+
+    // path_rev rows
+    sql_count_r1 = string.concat("sqlite3 ", repo)
+    sql_count_r1 = string.concat(sql_count_r1, "/rep-cache.db 'SELECT COUNT(*) FROM path_rev WHERE rev = 1'")
+    sql_main_c   = string.concat("sqlite3 ", repo)
+    sql_main_c   = string.concat(sql_main_c, "/rep-cache.db \"SELECT COUNT(*) FROM path_rev WHERE branch='main' AND path='src/main.c' AND rev=1\"")
+
+    // (C) rev0 blob carries 'branch: main'. Aether eats ${rev0_sha:0:2}, so
+    // use cut/awk to derive sha2/sha34.
+    rev0_blob_check = "rev0_sha=$(cat "
+    rev0_blob_check = string.concat(rev0_blob_check, repo)
+    rev0_blob_check = string.concat(rev0_blob_check, "/revs/000000); sha2=$(printf %s $rev0_sha | cut -c1-2); sha34=$(printf %s $rev0_sha | cut -c3-4); blob_path=\"")
+    rev0_blob_check = string.concat(rev0_blob_check, repo)
+    rev0_blob_check = string.concat(rev0_blob_check, "/reps/$sha2/$sha34/$rev0_sha.rep\"; hdr=$(head -c 1 \"$blob_path\"); ")
+    rev0_blob_check = string.concat(rev0_blob_check, "if [ \"$hdr\" = \"R\" ]; then grep -aF -c 'branch: main' \"$blob_path\" || true; ")
+    rev0_blob_check = string.concat(rev0_blob_check, "else dd if=\"$blob_path\" bs=1 skip=1 2>/dev/null | perl -e 'use Compress::Zlib;local $/;my $b=<>;my $u=uncompress($b);print $u if defined $u' 2>/dev/null | grep -aF -c 'branch: main' || true; fi")
+
+    // (D) /info
+    info_curl = string.concat("curl -s ", base)
+    info_curl = string.concat(info_curl, "/info")
+    info_grep_default  = string.concat(info_curl, " | grep -c '\"default_branch\":\"main\"' || true")
+    info_grep_branches = string.concat(info_curl, " | grep -c '\"branches\":\\[\"main\"' || true")
+
+    // (E) svn branches
+    svn_branches = string.concat(svn_bin, " branches ")
+    svn_branches = string.concat(svn_branches, url)
+
+    // (F) legacy URL ops
+    legacy_cat = string.concat(svn_bin, " cat ")
+    legacy_cat = string.concat(legacy_cat, url)
+    legacy_cat = string.concat(legacy_cat, " README.md")
+
+    legacy_log = string.concat(svn_bin, " log ")
+    legacy_log = string.concat(legacy_log, url)
+    legacy_log = string.concat(legacy_log, " 2>&1 | grep -c 'initial content' || true")
+
+    // (G) branch URL doesn't crash
+    branch_url_info = string.concat(svn_bin, " info ")
+    branch_url_info = string.concat(branch_url_info, url)
+    branch_url_info = string.concat(branch_url_info, "/main 2>&1 | grep -cE '(svn info|could not contact|no such revision|Revision:)' || true")
+
+    cleanup = string.concat("rm -rf ", repo)
+    cleanup = string.concat(cleanup, " ")
+    cleanup = string.concat(cleanup, wc)
+
+    aeocha.describe(fw, "branch infra + default main + path-rev index") {
+
+        aeocha.it("setup: svnadmin create + spawn server") callback {
+            _, st, _ = sh(setup)
+            aeocha.expect_exit(fw, st, 0, "create exit 0")
+            sh(spawn_srv)
+        }
+
+        // (A) layout
+        aeocha.it("(A) branches/main/head + revs + spec exist") callback {
+            r1, _, _ = sh(test_main_head)
+            aeocha.expect_stdout_contains(fw, r1, "1", "head present")
+            r2, _, _ = sh(test_main_revs)
+            aeocha.expect_stdout_contains(fw, r2, "1", "revs dir present")
+            r3, _, _ = sh(test_rev0_blob)
+            aeocha.expect_stdout_contains(fw, r3, "1", "revs/00/00/000000 present")
+            r4, _, _ = sh(cat_main_head)
+            aeocha.expect_stdout_contains(fw, r4, "rev=0", "main head = rev=0")
+            r5, _, _ = sh(test_main_spec)
+            aeocha.expect_stdout_contains(fw, r5, "1", "spec present")
+        }
+
+        // (B) path_rev table
+        aeocha.it("(B) path_rev table defined in rep-cache.db") callback {
+            out, _, _ = sh(schema_check)
+            aeocha.expect_stdout_contains(fw, out, "1", "schema present")
+        }
+
+        // populate
+        aeocha.it("populate: WC commit lands rev 1") callback {
+            _, st, _ = sh(populate)
+            aeocha.expect_exit(fw, st, 0, "populate exit 0")
+        }
+
+        // (H) heads advanced
+        aeocha.it("(H) legacy head = 1, per-branch head = rev=1") callback {
+            r1, _, _ = sh(cat_legacy_head)
+            aeocha.expect_stdout_contains(fw, r1, "1", "legacy head")
+            r2, _, _ = sh(cat_main_head)
+            aeocha.expect_stdout_contains(fw, r2, "rev=1", "branch head")
+        }
+
+        // (B continued) path_rev rows
+        aeocha.it("(B) path_rev has 3 rows for rev 1") callback {
+            out, _, _ = sh(sql_count_r1)
+            aeocha.expect_stdout_contains(fw, out, "3", "3 rows")
+            r2, _, _ = sh(sql_main_c)
+            aeocha.expect_stdout_contains(fw, r2, "1",
+                "src/main.c@r1 branch=main row")
+        }
+
+        // (C) rev0 blob has 'branch: main'
+        aeocha.it("(C) rev0 blob carries branch: main") callback {
+            out, _, _ = sh(rev0_blob_check)
+            aeocha.expect_stdout_contains(fw, out, "1",
+                "branch: main found")
+        }
+
+        // (D) /info
+        aeocha.it("(D) /info advertises default_branch + branches list") callback {
+            r1, _, _ = sh(info_grep_default)
+            aeocha.expect_stdout_contains(fw, r1, "1", "default_branch present")
+            r2, _, _ = sh(info_grep_branches)
+            aeocha.expect_stdout_contains(fw, r2, "1", "branches[] has main")
+        }
+
+        // (E) svn branches
+        aeocha.it("(E) svn branches lists main") callback {
+            out, _, _ = sh(svn_branches)
+            aeocha.expect_stdout_contains(fw, out, "main", "main listed")
+        }
+
+        // (F) legacy ops
+        aeocha.it("(F) legacy svn cat works") callback {
+            out, _, _ = sh(legacy_cat)
+            aeocha.expect_stdout_contains(fw, out, "hello", "cat README.md")
+        }
+
+        aeocha.it("(F) legacy svn log works") callback {
+            out, _, _ = sh(legacy_log)
+            aeocha.expect_stdout_contains(fw, out, "1", "1 'initial content' line")
+        }
+
+        // (G) branch URL doesn't crash CLI
+        aeocha.it("(G) branch-explicit URL doesn't crash CLI") callback {
+            out, _, _ = sh(branch_url_info)
+            aeocha.expect_stdout_contains(fw, out, "1",
+                "got a recognised stdout line")
+        }
+
+        aeocha.it("cleanup: kill server + rm repo/WC") callback {
+            sh(kill_srv)
+            sh(cleanup)
+            aeocha.assert_eq(fw, 1, 1, "trivial — best-effort cleanup")
+        }
+    }
+
+    aeocha.run_summary(fw)
+}

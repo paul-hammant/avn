@@ -28,33 +28,33 @@ main() {
     svn_bin = os_getenv("SVN_BIN")
     port    = os_getenv("TEST_MERGE_REVERSE_PORT")
     url     = string.concat("http://127.0.0.1:", string.concat(port, "/demo"))
-    wc      = "/tmp/svnae_test_rmrg_wc"
+    wc      = "/tmp/avn_test_rmrg_wc"
 
     // Expected file contents at r4, r5, r6, and after reverse r5 from r6.
-    // Bake them into /tmp/svnae_test_rmrg_expected.* files in prep so we
+    // Bake them into /tmp/avn_test_rmrg_expected.* files in prep so we
     // can diff against them later.
-    write_expected = "rm -f /tmp/svnae_test_rmrg_expected.* && "
-    write_expected = string.concat(write_expected, "printf 'head 1\\nhead 2\\nbody 3\\ntail 4\\ntail 5\\n' > /tmp/svnae_test_rmrg_expected.r4 && ")
-    write_expected = string.concat(write_expected, "printf 'head 1\\nhead 2\\nmid-edit\\nbody 3\\ntail 4\\ntail 5\\n' > /tmp/svnae_test_rmrg_expected.r5 && ")
-    write_expected = string.concat(write_expected, "printf 'head 1\\nhead 2\\nmid-edit\\nbody 3\\ntail 4\\ntail 5\\ntail-edit\\n' > /tmp/svnae_test_rmrg_expected.r6 && ")
-    write_expected = string.concat(write_expected, "printf 'head 1\\nhead 2\\nbody 3\\ntail 4\\ntail 5\\ntail-edit\\n' > /tmp/svnae_test_rmrg_expected.r6_undo_r5")
+    write_expected = "rm -f /tmp/avn_test_rmrg_expected.* && "
+    write_expected = string.concat(write_expected, "printf 'head 1\\nhead 2\\nbody 3\\ntail 4\\ntail 5\\n' > /tmp/avn_test_rmrg_expected.r4 && ")
+    write_expected = string.concat(write_expected, "printf 'head 1\\nhead 2\\nmid-edit\\nbody 3\\ntail 4\\ntail 5\\n' > /tmp/avn_test_rmrg_expected.r5 && ")
+    write_expected = string.concat(write_expected, "printf 'head 1\\nhead 2\\nmid-edit\\nbody 3\\ntail 4\\ntail 5\\ntail-edit\\n' > /tmp/avn_test_rmrg_expected.r6 && ")
+    write_expected = string.concat(write_expected, "printf 'head 1\\nhead 2\\nbody 3\\ntail 4\\ntail 5\\ntail-edit\\n' > /tmp/avn_test_rmrg_expected.r6_undo_r5")
 
     // Setup: r4..r6 on src/main.c via a temp WC.
-    setup = "rm -rf /tmp/svnae_test_rmrg_setup && "
+    setup = "rm -rf /tmp/avn_test_rmrg_setup && "
     setup = string.concat(setup, svn_bin)
     setup = string.concat(setup, " checkout ")
     setup = string.concat(setup, url)
-    setup = string.concat(setup, " /tmp/svnae_test_rmrg_setup >/dev/null && cd /tmp/svnae_test_rmrg_setup && ")
-    setup = string.concat(setup, "cp /tmp/svnae_test_rmrg_expected.r4 src/main.c && ")
+    setup = string.concat(setup, " /tmp/avn_test_rmrg_setup >/dev/null && cd /tmp/avn_test_rmrg_setup && ")
+    setup = string.concat(setup, "cp /tmp/avn_test_rmrg_expected.r4 src/main.c && ")
     setup = string.concat(setup, svn_bin)
     setup = string.concat(setup, " commit --author u --log 'r4: base' >/dev/null && ")
-    setup = string.concat(setup, "cp /tmp/svnae_test_rmrg_expected.r5 src/main.c && ")
+    setup = string.concat(setup, "cp /tmp/avn_test_rmrg_expected.r5 src/main.c && ")
     setup = string.concat(setup, svn_bin)
     setup = string.concat(setup, " commit --author u --log 'r5: mid-edit' >/dev/null && ")
-    setup = string.concat(setup, "cp /tmp/svnae_test_rmrg_expected.r6 src/main.c && ")
+    setup = string.concat(setup, "cp /tmp/avn_test_rmrg_expected.r6 src/main.c && ")
     setup = string.concat(setup, svn_bin)
     setup = string.concat(setup, " commit --author u --log 'r6: tail-edit' >/dev/null && ")
-    setup = string.concat(setup, "rm -rf /tmp/svnae_test_rmrg_setup")
+    setup = string.concat(setup, "rm -rf /tmp/avn_test_rmrg_setup")
 
     o0, prep0_st, e0 = sh(write_expected)
     o1, prep1_st, e1 = sh(setup)
@@ -77,7 +77,7 @@ main() {
     case_a = string.concat(case_a, svn_bin)
     case_a = string.concat(case_a, " update --rev 4 >/dev/null")
 
-    case_a_pre  = string.concat("diff -q /tmp/svnae_test_rmrg_expected.r4 ", wc)
+    case_a_pre  = string.concat("diff -q /tmp/avn_test_rmrg_expected.r4 ", wc)
     case_a_pre  = string.concat(case_a_pre, "/src/main.c >/dev/null 2>&1 && echo same || echo diff")
 
     case_a_merge = string.concat("cd ", wc)
@@ -87,7 +87,7 @@ main() {
     case_a_merge = string.concat(case_a_merge, url)
     case_a_merge = string.concat(case_a_merge, "/src src >/dev/null 2>&1")
 
-    case_a_post = string.concat("diff -q /tmp/svnae_test_rmrg_expected.r5 ", wc)
+    case_a_post = string.concat("diff -q /tmp/avn_test_rmrg_expected.r5 ", wc)
     case_a_post = string.concat(case_a_post, "/src/main.c >/dev/null 2>&1 && echo same || echo diff")
 
     // Round 276 / Phase 2.3: mergeinfo lives in the server-side
@@ -112,7 +112,7 @@ main() {
     case_b_co = string.concat(case_b_co, wc)
     case_b_co = string.concat(case_b_co, " >/dev/null")
 
-    case_b_pre  = string.concat("diff -q /tmp/svnae_test_rmrg_expected.r6 ", wc)
+    case_b_pre  = string.concat("diff -q /tmp/avn_test_rmrg_expected.r6 ", wc)
     case_b_pre  = string.concat(case_b_pre, "/src/main.c >/dev/null 2>&1 && echo same || echo diff")
 
     case_b_merge = string.concat("cd ", wc)
@@ -122,7 +122,7 @@ main() {
     case_b_merge = string.concat(case_b_merge, url)
     case_b_merge = string.concat(case_b_merge, "/src src >/dev/null 2>&1")
 
-    case_b_post = string.concat("diff -q /tmp/svnae_test_rmrg_expected.r6_undo_r5 ", wc)
+    case_b_post = string.concat("diff -q /tmp/avn_test_rmrg_expected.r6_undo_r5 ", wc)
     case_b_post = string.concat(case_b_post, "/src/main.c >/dev/null 2>&1 && echo same || echo diff")
 
     // === (C) Reverse range -r 6:4 ===
@@ -141,7 +141,7 @@ main() {
     case_c_merge = string.concat(case_c_merge, url)
     case_c_merge = string.concat(case_c_merge, "/src src >/dev/null 2>&1")
 
-    case_c_post = string.concat("diff -q /tmp/svnae_test_rmrg_expected.r4 ", wc)
+    case_c_post = string.concat("diff -q /tmp/avn_test_rmrg_expected.r4 ", wc)
     case_c_post = string.concat(case_c_post, "/src/main.c >/dev/null 2>&1 && echo same || echo diff")
 
     aeocha.describe(fw, "svn merge — reverse + cherry-pick") {

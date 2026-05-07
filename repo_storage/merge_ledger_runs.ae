@@ -7,7 +7,7 @@
 // dependency-light and can be unit-tested without those.
 //
 // `wc_merge`'s sweep eligibility query goes:
-//   client/fetch.ae → svnserver/handler_merge.ae → here
+//   client/fetch.ae → avnserver/handler_merge.ae → here
 
 import std.string
 

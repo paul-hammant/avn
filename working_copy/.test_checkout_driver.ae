@@ -31,8 +31,8 @@ main() {
     svn_bin = os_getenv("SVN_BIN")
     port    = os_getenv("TEST_CHECKOUT_PORT")
     url     = string.concat("http://127.0.0.1:", string.concat(port, "/demo"))
-    wc      = "/tmp/svnae_test_co_wc"
-    wc1     = "/tmp/svnae_test_co_wc_r1"
+    wc      = "/tmp/avn_test_co_wc"
+    wc1     = "/tmp/avn_test_co_wc_r1"
 
     // --- prep: head checkout, then r1 checkout ---
     head_co = string.concat("rm -rf ", wc)

@@ -1,0 +1,192 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// permissions and limitations under the License.
+
+// /log response body builder. Ported from handle_repo_log in
+// avnserver/shim.c.
+//
+// Shape:
+//   { "entries": [ {rev, author, date, msg}, ... ] }
+//
+// Visibility filter: a rev is shown iff super-user OR the caller
+// has read access on at least one path touched by the rev. r0 is
+// always visible (no paths to filter on).
+
+import std.string
+
+// Log-list accessors from the C side.
+extern repos_log_count(lg: ptr) -> int
+extern repos_log_rev(lg: ptr, i: int) -> int
+extern repos_log_author(lg: ptr, i: int) -> string
+extern repos_log_date(lg: ptr, i: int) -> string
+extern repos_log_msg(lg: ptr, i: int) -> string
+
+// Paths-changed list (C-owned).
+extern repos_paths_changed(repo: string, rev: int) -> ptr
+extern repos_paths_count(p: ptr) -> int
+extern repos_paths_path(p: ptr, i: int) -> string
+extern repos_paths_free(p: ptr)
+
+// ACL decider (C-side).
+extern acl_allows_mode(repo: string, rev: int, user: string, target_path: string, want_write: int) -> int
+
+// JSON entry builder already in Aether.
+extern log_entry_json(rev: int, author: string, date: string,
+                             msg: string) -> string
+
+export log_json(repo: string, lg: ptr, user: string, is_super: int) -> string {
+    out = "{\"entries\":["
+    n = repos_log_count(lg)
+    any = 0
+    i = 0
+    while i < n {
+        rev = repos_log_rev(lg, i)
+
+        // Visibility: super shows everything. Non-super sees a rev iff
+        // at least one of its touched paths is ACL-visible. r0 has no
+        // paths so is always visible.
+        visible = 1
+        if is_super == 0 {
+            if rev > 0 {
+                visible = 0
+                paths = repos_paths_changed(repo, rev)
+                if paths != null {
+                    pn = repos_paths_count(paths)
+                    j = 0
+                    while j < pn {
+                        path = repos_paths_path(paths, j)
+                        if acl_allows_mode(repo, rev, user, path, 0) == 1 {
+                            visible = 1
+                            break
+                        }
+                        j = j + 1
+                    }
+                    repos_paths_free(paths)
+                }
+            }
+        }
+
+        if visible == 1 {
+            if any == 1 { out = string.concat(out, ",") }
+            any = 1
+            out = string.concat(out, log_entry_json(rev,
+                repos_log_author(lg, i),
+                repos_log_date(lg, i),
+                repos_log_msg(lg, i)))
+        }
+        i = i + 1
+    }
+    return string.concat(out, "]}")
+}
+
+
+// /rev/N/paths response body. ACL-filter the list of (action, path)
+// entries; super-user sees everything.
+extern repos_paths_action(p: ptr, i: int) -> string
+extern path_change_entry_json(action: string, path: string) -> string
+
+export paths_changed_json(repo: string, rev: int, paths: ptr,
+                          user: string, is_super: int) -> string {
+    out = "{\"entries\":["
+    n = repos_paths_count(paths)
+    any = 0
+    i = 0
+    while i < n {
+        path = repos_paths_path(paths, i)
+        visible = 1
+        if is_super == 0 {
+            if acl_allows_mode(repo, rev, user, path, 0) == 0 {
+                visible = 0
+            }
+        }
+        if visible == 1 {
+            if any == 1 { out = string.concat(out, ",") }
+            any = 1
+            action = repos_paths_action(paths, i)
+            out = string.concat(out, path_change_entry_json(action, path))
+        }
+        i = i + 1
+    }
+    return string.concat(out, "]}")
+}
+
+
+// /rev/N/blame/<path> response body. Straight iteration, no filter —
+// ACL already checked at the path level by the caller.
+extern blame_count(b: ptr) -> int
+extern blame_rev(b: ptr, i: int) -> int
+extern blame_author(b: ptr, i: int) -> string
+extern blame_text(b: ptr, i: int) -> string
+extern blame_entry_json(rev: int, author: string, text: string) -> string
+
+export blame_json(blame: ptr) -> string {
+    out = "{\"lines\":["
+    n = blame_count(blame)
+    i = 0
+    while i < n {
+        if i > 0 { out = string.concat(out, ",") }
+        out = string.concat(out, blame_entry_json(
+            blame_rev(blame, i),
+            blame_author(blame, i),
+            blame_text(blame, i)))
+        i = i + 1
+    }
+    return string.concat(out, "]}")
+}
+
+
+// /rev/N/hashes response body. Assembles the prelude from
+// (primary algo, primary sha) plus the secondary entries by walking
+// a newline-separated "algo1 sha1\nalgo2 sha2\n..." string the C
+// side collected.
+extern hashes_prelude_json(algo: string, primary_hash: string) -> string
+extern secondary_entry_json(algo: string, hash: string) -> string
+
+export hashes_json(algo: string, primary_sha: string, secondary_pairs: string) -> string {
+    out = hashes_prelude_json(algo, primary_sha)
+    n = string.length(secondary_pairs)
+    any = 0
+    line_start = 0
+    i = 0
+    while i <= n {
+        at_end = 0
+        c = 0
+        if i == n { at_end = 1 } else { c = string.char_at(secondary_pairs, i) }
+        if at_end == 1 || c == 10 {
+            // Parse "algo sha" from [line_start..i).
+            sp = line_start
+            while sp < i {
+                if string.char_at(secondary_pairs, sp) == 32 { break }
+                sp = sp + 1
+            }
+            if sp > line_start {
+                if sp < i {
+                    sec_algo = string.substring(secondary_pairs, line_start, sp)
+                    sec_sha = string.substring(secondary_pairs, sp + 1, i)
+                    if any == 1 { out = string.concat(out, ",") }
+                    any = 1
+                    out = string.concat(out, secondary_entry_json(sec_algo, sec_sha))
+                }
+            }
+            line_start = i + 1
+        }
+        i = i + 1
+    }
+    return string.concat(out, "]}")
+}
+
+
+main() {
+    println("avnserver/log_json.ae is a library; not meant to run standalone")
+}

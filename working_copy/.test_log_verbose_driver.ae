@@ -70,7 +70,7 @@ main() {
     port    = os_getenv("TEST_LOG_VERBOSE_PORT")
     url     = string.concat("http://127.0.0.1:", string.concat(port, "/demo"))
     paths_base = string.concat("http://127.0.0.1:", string.concat(port, "/repos/demo/rev/"))
-    wc      = "/tmp/svnae_test_logv_wc"
+    wc      = "/tmp/avn_test_logv_wc"
 
     // --- prep: build known history r4..r6 in a WC ---
     // (this happens before describe so any prep failure aborts

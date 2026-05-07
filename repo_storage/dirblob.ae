@@ -15,7 +15,7 @@
 
 // Dir-blob line parser — ported from the eight near-identical
 // "<kind> <sha> <name>\n" scanners across repo_storage/commit_shim.c,
-// repo_storage/txn_shim.c, repos/shim.c, and svnserver/shim.c.
+// repo_storage/txn_shim.c, repos/shim.c, and avnserver/shim.c.
 //
 // Blob format:
 //   f <sha-hex> README\n

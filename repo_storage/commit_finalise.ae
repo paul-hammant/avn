@@ -115,7 +115,7 @@ populate_path_rev_(repo: string, branch: string, rev: int) {
     if string.length(oerr) > 0 { repos_paths_free(P); return 0 }
 
     // Schema retrofit: seeded-from-scratch repos (via seed.ae) didn't
-    // go through svnadmin/create when the path_rev table was added,
+    // go through avnadmin/create when the path_rev table was added,
     // so create-if-missing here. Idempotent.
     sqlite.exec(db,
         "CREATE TABLE IF NOT EXISTS path_rev (  branch TEXT NOT NULL,  path   TEXT NOT NULL,  rev    INTEGER NOT NULL,  PRIMARY KEY (branch, path, rev));CREATE INDEX IF NOT EXISTS path_rev_lookup ON path_rev (branch, path);")

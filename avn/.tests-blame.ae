@@ -1,0 +1,32 @@
+import build
+import aether
+import aether (driver, output, binary_under_test, fixture_seed, fixture_server,
+               path, seed_bin, bin, args, port, ready_after_ms)
+
+main() {
+    b = build.start()
+    build.dep(b, "avn")
+    build.dep(b, "avnadmin")
+    build.dep(b, "avnserver")
+    build.dep(b, "avnserver/.build-seed.ae")
+
+    aether.driver_test(b) {
+        driver(".test_blame_driver.ae")
+        output("test_blame_driver")
+
+        binary_under_test(b, "svn") {
+            path("target/avn/bin/svn")
+        }
+
+        fixture_seed(b, "test_blame") {
+            path("/tmp/avn_aeb_test_blame_repo")
+            seed_bin("target/avnserver/bin/svnae-seed")
+        }
+        fixture_server(b, "test_blame") {
+            bin("target/avnserver/bin/aether-svnserver")
+            args("demo $TEST_BLAME_PATH 9615 --superuser-token blame-super-token")
+            port(9615)
+            ready_after_ms(1500)
+        }
+    }
+}

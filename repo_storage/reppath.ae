@@ -15,7 +15,7 @@
 
 // Rep-store path builders for repo_storage/rep_store_shim.c.
 //
-// Layout (inside a bare svn-aether repo):
+// Layout (inside a bare avn repo):
 //   <repo>/reps/<s0s1>/<s2s3>/<sha>.rep        full file path
 //   <repo>/reps/<s0s1>/<s2s3>                  parent dir (for mkdir -p)
 //   <s0s1>/<s2s3>/<sha>.rep                    rel_path stored in rep-cache

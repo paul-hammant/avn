@@ -1,4 +1,4 @@
-# svn-aether
+# avn
 
 A clean-sheet reimplementation of [Apache Subversion] in the [Aether
 systems language]. The goal isn't a mechanical C→Aether translation —

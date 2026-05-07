@@ -28,7 +28,7 @@ main() {
     svn_bin = os_getenv("SVN_BIN")
     port    = os_getenv("TEST_REVERT_DIFF_PORT")
     url     = string.concat("http://127.0.0.1:", string.concat(port, "/demo"))
-    wc      = "/tmp/svnae_test_rd_wc"
+    wc      = "/tmp/avn_test_rd_wc"
 
     // prep: clean checkout
     prep = string.concat("rm -rf ", wc)

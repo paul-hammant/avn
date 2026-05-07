@@ -1,6 +1,6 @@
 # TODO
 
-Outstanding work on the svn-aether port. Prioritised by leverage.
+Outstanding work on the avn port. Prioritised by leverage.
 Tests are 32/32 green at HEAD (bash integration suite) plus 8/8
 Aether-native unit tests; 100% Aether (zero hand-written C); naming
 sweep finished through Round 206.

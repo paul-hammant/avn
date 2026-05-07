@@ -1,4 +1,4 @@
-# svn-aether port — status
+# avn port — status
 
 A clean-sheet reimplementation of Apache Subversion in the Aether
 systems language. Not a mechanical C → Aether translation — we read
@@ -636,7 +636,7 @@ Named after the plan's Phase N. Plan: `../svn-to-aether.md`.
 | 8 (auth) | Basic/Bearer auth over TLS | Same — deferred. |
 | 11 | libmagic replacement | Not on critical path; stub with extension-based mime detection when needed. |
 
-## Feature matrix — reference svn vs svn-aether
+## Feature matrix — reference svn vs avn
 
 Implemented:
 

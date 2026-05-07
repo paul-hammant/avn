@@ -7,7 +7,7 @@
 //
 //     http://www.apache.org/licenses/LICENSE-2.0
 
-// Per-process auth state for the svn-aether REST client. Set once
+// Per-process auth state for the avn REST client. Set once
 // at CLI startup (--user=foo / --token=... or env); read on every
 // outgoing HTTP request via send_with_auth. Backed by std.config.
 

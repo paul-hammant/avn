@@ -1,0 +1,32 @@
+import build
+import aether
+import aether (driver, output, binary_under_test, fixture_seed, fixture_server,
+               path, seed_bin, bin, args, port, ready_after_ms)
+
+main() {
+    b = build.start()
+    build.dep(b, "avn")
+    build.dep(b, "avnadmin")
+    build.dep(b, "avnserver")
+    build.dep(b, "avnserver/.build-seed.ae")
+
+    aether.driver_test(b) {
+        driver(".test_acl_write_driver.ae")
+        output("test_acl_write_driver")
+
+        binary_under_test(b, "svn") {
+            path("target/avn/bin/svn")
+        }
+
+        fixture_seed(b, "test_acl_write") {
+            path("/tmp/avn_aeb_test_acl_write_repo")
+            seed_bin("target/avnserver/bin/svnae-seed")
+        }
+        fixture_server(b, "test_acl_write") {
+            bin("target/avnserver/bin/aether-svnserver")
+            args("demo $TEST_ACL_WRITE_PATH 9550 --superuser-token test-super-token-7-2")
+            port(9550)
+            ready_after_ms(1500)
+        }
+    }
+}

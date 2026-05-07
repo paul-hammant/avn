@@ -1,0 +1,14 @@
+import build
+import bash
+import bash (jobs)
+
+main() {
+    b = build.start()
+    build.dep(b, "avnadmin")
+    build.dep(b, "avnserver")
+    build.dep(b, "avnserver/.build-seed.ae")
+    build.dep(b, "avn")
+    bash.test(b) {
+        jobs(8)
+    }
+}

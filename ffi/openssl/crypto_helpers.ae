@@ -16,7 +16,7 @@
 // Aether-side wrappers over std.cryptography v2 that the thin C
 // shim in ffi/openssl/shim.c calls back into. The C side keeps
 // its existing openssl_* signatures so every downstream
-// caller (ra/svnserver/svnadmin/fs_fs/checksum) links unchanged;
+// caller (ra/avnserver/avnadmin/fs_fs/checksum) links unchanged;
 // the bodies become 1-2 line wrappers that defer the EVP work to
 // std.cryptography.
 

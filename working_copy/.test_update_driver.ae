@@ -29,17 +29,17 @@ main() {
     svn_bin = os_getenv("SVN_BIN")
     port    = os_getenv("TEST_UPDATE_PORT")
     url     = string.concat("http://127.0.0.1:", string.concat(port, "/demo"))
-    wc1     = "/tmp/svnae_test_upd_wc1"
-    wc2     = "/tmp/svnae_test_upd_wc2"
+    wc1     = "/tmp/avn_test_upd_wc1"
+    wc2     = "/tmp/avn_test_upd_wc2"
 
     // Logs we tee to (closure-typer workaround for outer-scope strings)
-    log_wc1_commit  = "/tmp/svnae_test_upd_wc1_commit.log"
-    log_wc2_update  = "/tmp/svnae_test_upd_wc2_update.log"
-    log_wc1_commit2 = "/tmp/svnae_test_upd_wc1_commit2.log"
-    log_wc2_update2 = "/tmp/svnae_test_upd_wc2_update2.log"
-    log_resolve     = "/tmp/svnae_test_upd_resolve.log"
-    log_commit3     = "/tmp/svnae_test_upd_commit3.log"
-    log_update_r4   = "/tmp/svnae_test_upd_update_r4.log"
+    log_wc1_commit  = "/tmp/avn_test_upd_wc1_commit.log"
+    log_wc2_update  = "/tmp/avn_test_upd_wc2_update.log"
+    log_wc1_commit2 = "/tmp/avn_test_upd_wc1_commit2.log"
+    log_wc2_update2 = "/tmp/avn_test_upd_wc2_update2.log"
+    log_resolve     = "/tmp/avn_test_upd_resolve.log"
+    log_commit3     = "/tmp/avn_test_upd_commit3.log"
+    log_update_r4   = "/tmp/avn_test_upd_update_r4.log"
 
     // === ROUND 1 prep ===
     // rm both WCs, checkout both, in WC1 edit + add + rm + commit,
@@ -80,8 +80,8 @@ main() {
     o1, prep1_st, e1 = sh(prep1)
 
     // === ROUND 1 assertion-time commands (constant-string) ===
-    cat_wc1_commit_log = "cat /tmp/svnae_test_upd_wc1_commit.log"
-    cat_wc2_update_log = "cat /tmp/svnae_test_upd_wc2_update.log"
+    cat_wc1_commit_log = "cat /tmp/avn_test_upd_wc1_commit.log"
+    cat_wc2_update_log = "cat /tmp/avn_test_upd_wc2_update.log"
     cat_wc2_readme     = string.concat("cat ", wc2)
     cat_wc2_readme     = string.concat(cat_wc2_readme, "/README")
     cat_wc2_newfile    = string.concat("cat ", wc2)
@@ -112,8 +112,8 @@ main() {
     prep2 = string.concat(prep2, " update 2>&1 | tee ")
     prep2 = string.concat(prep2, log_wc2_update2)
 
-    cat_wc1_commit2_log = "cat /tmp/svnae_test_upd_wc1_commit2.log"
-    cat_wc2_update2_log = "cat /tmp/svnae_test_upd_wc2_update2.log"
+    cat_wc1_commit2_log = "cat /tmp/avn_test_upd_wc1_commit2.log"
+    cat_wc2_update2_log = "cat /tmp/avn_test_upd_wc2_update2.log"
     grep_conflict       = string.concat("grep -q '<<<<<<< MINE' ", wc2)
     grep_conflict       = string.concat(grep_conflict, "/README && grep -q '>>>>>>> THEIRS' ")
     grep_conflict       = string.concat(grep_conflict, wc2)
@@ -145,8 +145,8 @@ main() {
     prep3b = string.concat(prep3b, " commit --author alice --log 'resolve to reconciled' | tee ")
     prep3b = string.concat(prep3b, log_commit3)
 
-    cat_resolve_log     = "cat /tmp/svnae_test_upd_resolve.log"
-    cat_commit3_log     = "cat /tmp/svnae_test_upd_commit3.log"
+    cat_resolve_log     = "cat /tmp/avn_test_upd_resolve.log"
+    cat_commit3_log     = "cat /tmp/avn_test_upd_commit3.log"
     count_m_lines       = string.concat(cd_wc2_status, " | grep -c '^M.*README' || true")
 
     // === ROUND 4: --rev 4 selector ===
@@ -156,7 +156,7 @@ main() {
     prep4 = string.concat(prep4, " update --rev 4 | tee ")
     prep4 = string.concat(prep4, log_update_r4)
 
-    cat_update_r4_log = "cat /tmp/svnae_test_upd_update_r4.log"
+    cat_update_r4_log = "cat /tmp/avn_test_upd_update_r4.log"
 
     aeocha.describe(fw, "svn update — two-WC pull / conflict / resolve / --rev N") {
 

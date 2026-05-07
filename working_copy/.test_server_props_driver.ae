@@ -28,8 +28,8 @@ main() {
     svn_bin = os_getenv("SVN_BIN")
     port    = os_getenv("TEST_SERVER_PROPS_PORT")
     url     = string.concat("http://127.0.0.1:", string.concat(port, "/demo"))
-    wc1     = "/tmp/svnae_test_sp_wc1"
-    wc2     = "/tmp/svnae_test_sp_wc2"
+    wc1     = "/tmp/avn_test_sp_wc1"
+    wc2     = "/tmp/avn_test_sp_wc2"
 
     // --- prep round 1: WC1 checkout, propset on file + dir + empty,
     //     commit. Then WC2 fresh checkout — picks up the props. ---

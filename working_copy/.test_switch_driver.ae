@@ -40,12 +40,12 @@ main() {
     port2   = os_getenv("TEST_SW_SECONDARY_PORT")
     url1    = string.concat("http://127.0.0.1:", string.concat(port1, "/demo"))
     url2    = string.concat("http://127.0.0.1:", string.concat(port2, "/demo"))
-    wc      = "/tmp/svnae_test_sw_wc"
+    wc      = "/tmp/avn_test_sw_wc"
 
     // Differentiate the secondary repo: commit a different README via
     // a throwaway WC. Build the shell command step-by-step (multi-arg
     // string.concat would need a 12-deep nest).
-    setup_wc = "/tmp/svnae_test_sw_setup"
+    setup_wc = "/tmp/avn_test_sw_setup"
     setup_cmd = string.concat("rm -rf ", setup_wc)
     setup_cmd = string.concat(setup_cmd, " && ")
     setup_cmd = string.concat(setup_cmd, svn_bin)

@@ -60,7 +60,7 @@ err_print_chain(err: ptr) {
         m = error_message(e)
         f = error_file(e)
         l = error_line(e)
-        println("svn-aether: E${c}: ${m}  [${f}:${l}]")
+        println("avn: E${c}: ${m}  [${f}:${l}]")
         e = error_cause(e)
     }
     return

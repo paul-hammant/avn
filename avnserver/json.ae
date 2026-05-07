@@ -1,0 +1,395 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// permissions and limitations under the License.
+
+// JSON string escaping + int→dec — ported from sb_putjson_string and
+// sb_putjson_int in avnserver/shim.c. Pure string transformation; no
+// I/O, compiles under --emit=lib.
+//
+// Strategy: single left-to-right scan. Whenever we hit a byte that
+// needs escaping, flush the preceding safe run via substring and then
+// emit the escape. Safe runs cover ordinary ASCII and UTF-8 multi-byte
+// sequences alike — they pass through verbatim.
+
+import std.string
+
+// Return the JSON-escaped form of `v` including surrounding double
+// quotes. Handles the six short-form escapes and \u00XX for any other
+// control byte < 0x20.
+
+// Public wrappers — exported to C as json_escape_string / json_int_to_dec.
+export json_escape_string(v: string) -> string {
+    out = "\""
+    n = string.length(v)
+    run_start = 0
+    i = 0
+    while i < n {
+        c = string.char_at(v, i)
+        needs_escape = 0
+        if c == 34 { needs_escape = 1 }   // "
+        if c == 92 { needs_escape = 1 }   // \
+        if c < 32  { needs_escape = 1 }   // control bytes
+        if needs_escape == 1 {
+            if i > run_start {
+                out = string.concat(out, string.substring(v, run_start, i))
+            }
+            out = string.concat(out, escape_byte(c))
+            run_start = i + 1
+        }
+        i = i + 1
+    }
+    if run_start < n {
+        out = string.concat(out, string.substring(v, run_start, n))
+    }
+    out = string.concat(out, "\"")
+    return out
+}
+
+json_int_to_dec(v: int) -> string {
+    return string.from_int(v)
+}
+
+// --- internal helpers -----------------------------------------------------
+
+escape_byte(c: int) -> string {
+    if c == 34 { return "\\\"" }
+    if c == 92 { return "\\\\" }
+    if c == 10 { return "\\n" }
+    if c == 13 { return "\\r" }
+    if c == 9  { return "\\t" }
+    if c == 8  { return "\\b" }
+    if c == 12 { return "\\f" }
+    // Any other control byte: \u00XX (4 hex digits total; the high
+    // two are always "00" for c < 32).
+    hi = c / 16
+    lo = c - hi * 16
+    out = "\\u00"
+    out = string.concat(out, hex_char(hi))
+    out = string.concat(out, hex_char(lo))
+    return out
+}
+
+digit_char(d: int) -> string {
+    if d == 0 { return "0" }
+    if d == 1 { return "1" }
+    if d == 2 { return "2" }
+    if d == 3 { return "3" }
+    if d == 4 { return "4" }
+    if d == 5 { return "5" }
+    if d == 6 { return "6" }
+    if d == 7 { return "7" }
+    if d == 8 { return "8" }
+    if d == 9 { return "9" }
+    return "?"
+}
+
+hex_char(d: int) -> string {
+    if d < 10 { return digit_char(d) }
+    if d == 10 { return "a" }
+    if d == 11 { return "b" }
+    if d == 12 { return "c" }
+    if d == 13 { return "d" }
+    if d == 14 { return "e" }
+    if d == 15 { return "f" }
+    return "?"
+}
+
+// --- props blob → JSON object --------------------------------------------
+//
+// Per-path props blobs are line-oriented "key=value\n". Emit them as a
+// JSON object body {"k":"v", ...}. Used by GET /rev/N/props.
+//
+// Lines without an '=' are skipped. Keys longer than 255 bytes are
+// emitted as "" (matching the C fallback).
+
+export props_blob_to_json(body: string) -> string {
+    out = "{"
+    n = string.length(body)
+    first = 1
+    line_start = 0
+    i = 0
+    while i <= n {
+        at_end = 0
+        c = 0
+        if i == n { at_end = 1 } else { c = string.char_at(body, i) }
+        is_eol = 0
+        if at_end == 1 { is_eol = 1 }
+        if c == 10 { is_eol = 1 }
+        if is_eol == 1 {
+            // body[line_start..i) is one line; split on first '='.
+            eq = line_start
+            found_eq = 0
+            while eq < i {
+                if string.char_at(body, eq) == 61 { found_eq = 1; break }
+                eq = eq + 1
+            }
+            if found_eq == 1 {
+                if first == 0 { out = string.concat(out, ",") }
+                first = 0
+                key = string.substring(body, line_start, eq)
+                val = string.substring(body, eq + 1, i)
+                if string.length(key) >= 256 {
+                    out = string.concat(out, "\"\"")
+                } else {
+                    out = string.concat(out, json_escape_string(key))
+                }
+                out = string.concat(out, ":")
+                out = string.concat(out, json_escape_string(val))
+            }
+            line_start = i + 1
+        }
+        i = i + 1
+    }
+    out = string.concat(out, "}")
+    return out
+}
+
+// --- spec-file body → JSON array ----------------------------------------
+//
+// A branch spec file holds one include-glob per line. /info's specs map
+// emits each branch's spec as a JSON array: ["glob1", "glob2", ...].
+// Lines that are empty after trimming trailing whitespace are dropped.
+
+export specs_to_json_array(body: string) -> string {
+    out = "["
+    n = string.length(body)
+    any = 0
+    line_start = 0
+    i = 0
+    while i <= n {
+        at_end = 0
+        c = 0
+        if i == n { at_end = 1 } else { c = string.char_at(body, i) }
+        is_eol = 0
+        if at_end == 1 { is_eol = 1 }
+        if c == 10 { is_eol = 1 }
+        if is_eol == 1 {
+            // Trim trailing whitespace (\r, space).
+            end = i
+            while end > line_start {
+                t = string.char_at(body, end - 1)
+                if t != 13 && t != 32 && t != 9 { break }
+                end = end - 1
+            }
+            if end > line_start {
+                if any == 1 { out = string.concat(out, ",") }
+                any = 1
+                glob = string.substring(body, line_start, end)
+                out = string.concat(out, json_escape_string(glob))
+            }
+            line_start = i + 1
+        }
+        i = i + 1
+    }
+    out = string.concat(out, "]")
+    return out
+}
+
+// --- per-entry record formatters ----------------------------------------
+//
+// Thin wrappers that assemble a single JSON object from the fields the
+// caller already has as C strings. Each was a 4-6 line sb_puts/sb_putjson_*
+// run at the svnserver emit site.
+
+// Full {"rev":N,"author":"...","date":"...","msg":"...","root":"..."} object.
+// Used by /rev/N/info (emits as-is including the trailing }).
+export rev_info_json(rev: int, author: string, date: string, msg: string, root: string) -> string {
+    out = "{\"rev\":"
+    out = string.concat(out, string.from_int(rev))
+    out = string.concat(out, ",\"author\":")
+    out = string.concat(out, json_escape_string(author))
+    out = string.concat(out, ",\"date\":")
+    out = string.concat(out, json_escape_string(date))
+    out = string.concat(out, ",\"msg\":")
+    out = string.concat(out, json_escape_string(msg))
+    out = string.concat(out, ",\"root\":")
+    out = string.concat(out, json_escape_string(root))
+    out = string.concat(out, "}")
+    return out
+}
+
+// {"rev":N,"author":"...","date":"...","msg":"..."}
+export log_entry_json(rev: int, author: string, date: string, msg: string) -> string {
+    out = "{\"rev\":"
+    out = string.concat(out, string.from_int(rev))
+    out = string.concat(out, ",\"author\":")
+    out = string.concat(out, json_escape_string(author))
+    out = string.concat(out, ",\"date\":")
+    out = string.concat(out, json_escape_string(date))
+    out = string.concat(out, ",\"msg\":")
+    out = string.concat(out, json_escape_string(msg))
+    out = string.concat(out, "}")
+    return out
+}
+
+// {"action":"A","path":"..."}
+export path_change_entry_json(action: string, path: string) -> string {
+    out = "{\"action\":"
+    out = string.concat(out, json_escape_string(action))
+    out = string.concat(out, ",\"path\":")
+    out = string.concat(out, json_escape_string(path))
+    out = string.concat(out, "}")
+    return out
+}
+
+// {"primary":{"algo":"sha1","hash":"..."},"secondaries":[
+// — everything up to the opening of the secondaries array.
+export hashes_prelude_json(algo: string, primary_hash: string) -> string {
+    out = "{\"primary\":{\"algo\":"
+    out = string.concat(out, json_escape_string(algo))
+    out = string.concat(out, ",\"hash\":")
+    out = string.concat(out, json_escape_string(primary_hash))
+    out = string.concat(out, "},\"secondaries\":[")
+    return out
+}
+
+// ACL response body: {"rules":[...lines from `rules_body`...],"effective_from":"..."}
+// rules_body is the raw ACL blob content (one rule per line, empty body = no rules).
+export acl_response_json(rules_body: string, effective_from: string) -> string {
+    out = "{\"rules\":["
+    n = string.length(rules_body)
+    first = 1
+    line_start = 0
+    i = 0
+    while i <= n {
+        at_end = 0
+        c = 0
+        if i == n { at_end = 1 } else { c = string.char_at(rules_body, i) }
+        is_eol = 0
+        if at_end == 1 { is_eol = 1 }
+        if c == 10 { is_eol = 1 }
+        if is_eol == 1 {
+            if i > line_start {
+                rule = string.substring(rules_body, line_start, i)
+                if first == 0 { out = string.concat(out, ",") }
+                first = 0
+                out = string.concat(out, json_escape_string(rule))
+            }
+            line_start = i + 1
+        }
+        i = i + 1
+    }
+    out = string.concat(out, "],\"effective_from\":")
+    out = string.concat(out, json_escape_string(effective_from))
+    out = string.concat(out, "}")
+    return out
+}
+
+// Single secondary entry: {"algo":"...","hash":"..."}
+export secondary_entry_json(algo: string, hash: string) -> string {
+    out = "{\"algo\":"
+    out = string.concat(out, json_escape_string(algo))
+    out = string.concat(out, ",\"hash\":")
+    out = string.concat(out, json_escape_string(hash))
+    out = string.concat(out, "}")
+    return out
+}
+
+// Tiny response builders for mutation endpoints.
+export error_response_json(msg: string) -> string {
+    out = "{\"error\":"
+    out = string.concat(out, json_escape_string(msg))
+    return string.concat(out, "}")
+}
+
+export rev_response_json(rev: int) -> string {
+    out = "{\"rev\":"
+    out = string.concat(out, string.from_int(rev))
+    return string.concat(out, "}")
+}
+
+export rev_sha_response_json(rev: int, sha: string) -> string {
+    out = "{\"rev\":"
+    out = string.concat(out, string.from_int(rev))
+    out = string.concat(out, ",\"sha\":")
+    out = string.concat(out, json_escape_string(sha))
+    return string.concat(out, "}")
+}
+
+export rev_branch_response_json(rev: int, branch: string) -> string {
+    out = "{\"rev\":"
+    out = string.concat(out, string.from_int(rev))
+    out = string.concat(out, ",\"branch\":")
+    out = string.concat(out, json_escape_string(branch))
+    return string.concat(out, "}")
+}
+
+// Prelude of /info: {"head":N,"name":"...","hash_algo":"...","default_branch":"main"
+// Stops before ,"branches":[...] so the C side can still stream the branch list.
+export info_prelude_json(head: int, name: string, hash_algo: string) -> string {
+    out = "{\"head\":"
+    out = string.concat(out, string.from_int(head))
+    out = string.concat(out, ",\"name\":")
+    out = string.concat(out, json_escape_string(name))
+    out = string.concat(out, ",\"hash_algo\":")
+    out = string.concat(out, json_escape_string(hash_algo))
+    out = string.concat(out, ",\"default_branch\":\"main\"")
+    return out
+}
+
+// Dir list entries, both shapes. {"name":"...","kind":"file"|"dir"} for
+// visible children; {"kind":"hidden","sha":"..."} for denied.
+export list_entry_visible_json(name: string, kind_c: int) -> string {
+    out = "{\"name\":"
+    out = string.concat(out, json_escape_string(name))
+    out = string.concat(out, ",\"kind\":")
+    if kind_c == 100 {   // 'd'
+        out = string.concat(out, "\"dir\"")
+    } else {
+        out = string.concat(out, "\"file\"")
+    }
+    return string.concat(out, "}")
+}
+
+export list_entry_hidden_json(sha: string) -> string {
+    out = "{\"kind\":\"hidden\",\"sha\":"
+    out = string.concat(out, json_escape_string(sha))
+    return string.concat(out, "}")
+}
+
+// Redacted dir-blob lines: "<kind> <sha> <name>\n" or "H <sha>\n".
+export redact_line_visible(kind_c: int, sha: string, name: string) -> string {
+    out = ""
+    if kind_c == 100 {
+        out = "d "
+    } else {
+        out = "f "
+    }
+    out = string.concat(out, sha)
+    out = string.concat(out, " ")
+    out = string.concat(out, name)
+    return string.concat(out, "\n")
+}
+
+export redact_line_hidden(sha: string) -> string {
+    out = "H "
+    out = string.concat(out, sha)
+    return string.concat(out, "\n")
+}
+
+// {"rev":N,"author":"...","text":"..."}
+export blame_entry_json(rev: int, author: string, text: string) -> string {
+    out = "{\"rev\":"
+    out = string.concat(out, string.from_int(rev))
+    out = string.concat(out, ",\"author\":")
+    out = string.concat(out, json_escape_string(author))
+    out = string.concat(out, ",\"text\":")
+    out = string.concat(out, json_escape_string(text))
+    out = string.concat(out, "}")
+    return out
+}
+
+main() {
+    println("avnserver/json.ae is a library; not meant to run standalone")
+}

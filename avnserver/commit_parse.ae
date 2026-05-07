@@ -1,0 +1,622 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// permissions and limitations under the License.
+
+// POST /commit body parser + mutation.
+// Request JSON (sketch):
+//   {
+//     "base_rev": N, "author": "...", "log": "...",
+//     "edits": [ {"op":"add-file","path":p,"content":b64}, ... ],
+//     "props"?: { "path1": {"k":"v",...}, ... },
+//     "acl"?:   { "path1": ["+alice","-eve"], ... },
+//     "branch"?: "main"
+//   }
+//
+// Return-value contract (matches the old C function):
+//   >= 0 : new_rev
+//   -1   : empty body
+//   -2   : malformed JSON
+//   -3   : missing/wrong-typed top-level field
+//   -4   : forbidden (ACL write denied)
+//   -5   : path outside branch spec
+//   -6   : oom building txn
+//   -7   : edit missing op/path
+//   -8   : add-file missing content
+//   -9   : base64 decode failed
+//   -10  : unknown op
+//   -11  : commit finalise failed
+//   -12  : out of date (base_rev predates HEAD and a path conflicts)
+
+import std.string
+import std.json
+import std.http
+
+extern svnserver_request_header(req: ptr, name: string) -> string
+extern svnserver_request_is_super(req: ptr) -> int
+
+extern acl_allows_mode(repo: string, rev: int, user: string, target_path: string, want_write: int) -> int
+extern svnserver_spec_allows(repo: string, branch: string,
+                              path: string, is_super: int) -> int
+
+extern txn_new(base_rev: int) -> ptr
+extern txn_mkdir(t: ptr, path: string) -> int
+extern txn_delete(t: ptr, path: string) -> int
+extern txn_add_file(t: ptr, path: string, content: string, len: int) -> int
+extern txn_free(t: ptr)
+// Round 274 / Phase 2.1 — merge metadata setters.
+extern txn_merge_set_source(t: ptr, target_path: string,
+                            source_branch: string, verb: int) -> int
+extern txn_merge_record_rev(t: ptr, source_sha: string) -> int
+// Resolve rev number (sent on the wire) → rev SHA (stored in ledger).
+extern repos_rev_blob_sha(repo: string, rev: int) -> string
+
+// b64-decode + txn_add_file. crypto_b64_decode returns the
+// (bytes, length, err) triple cleanly via export-tuple-return —
+// Round 159 dropped the prior TLS-pair workaround. AetherStrings
+// auto-unwrap at C extern boundaries declared `const char*` (#297),
+// so we call txn_add_file directly.
+extern crypto_b64_decode(b64: string) -> (string, int, string)
+
+txn_add_b64_(txn: ptr, path: string, b64: string) -> int {
+    raw, n, err = crypto_b64_decode(b64)
+    if string.length(err) > 0 { return 0 - 1 }
+    return txn_add_file(txn, path, raw, n)
+}
+extern commit_finalise(repo: string, txn: ptr, branch: string,
+                              author: string, log_msg: string,
+                              props_sha: string, acl_sha: string) -> int
+
+// Blob builders. These produce "key=value\n" / "+user\n" /
+// "<sha> <path>\n" bodies directly from the "\n"-joined parallel
+// strings the JSON parse loop below accumulates, then write to the
+// rep store via rep_write_blob. Used to bounce through C
+// (svnserver_build_*_joined + build_*_blob); all that round
+// trip is gone now.
+//
+// Kept as same-file helpers rather than a separate module because
+// aether.toml's extra_sources line + the gcc link command are
+// bumping up against a path-list length limit; adding another
+// _generated.c would truncate the link argv.
+extern rep_write_blob(repo: string, data: string, length: int) -> string
+extern paths_index_sort(body: string) -> string
+
+export commit_from_body(req: ptr, res: ptr, repo: string) -> int {
+    body_len = http.request_body_length(req)
+    if body_len == 0 { return -1 }
+    body = http.request_body(req)
+
+    root, err = json.parse(body)
+    if string.length(err) > 0 { return -2 }
+
+    // Required top-level fields: base_rev (number), author, log, edits.
+    jbase, bbe = json.object_get(root, "base_rev")
+    if string.length(bbe) > 0 { json.free(root); return -3 }
+    if jbase == null { json.free(root); return -3 }
+    base_rev = json.get_int(jbase)
+
+    jauthor, jae = json.object_get(root, "author")
+    if string.length(jae) > 0 { json.free(root); return -3 }
+    if jauthor == null { json.free(root); return -3 }
+    author, ase = json.get_string(jauthor)
+    if string.length(ase) > 0 { json.free(root); return -3 }
+    author = string.copy(author)
+
+    jlog, jle = json.object_get(root, "log")
+    if string.length(jle) > 0 { json.free(root); return -3 }
+    if jlog == null { json.free(root); return -3 }
+    logmsg, lse = json.get_string(jlog)
+    if string.length(lse) > 0 { json.free(root); return -3 }
+    logmsg = string.copy(logmsg)
+
+    jedits, jee = json.object_get(root, "edits")
+    if string.length(jee) > 0 { json.free(root); return -3 }
+    if jedits == null { json.free(root); return -3 }
+
+    // commit_branch — body "branch" field wins, else Svn-Branch
+    // request header, else "main".
+    commit_branch = svnserver_request_header(req, "Svn-Branch")
+    if string.length(commit_branch) == 0 { commit_branch = "main" }
+    jbranch, jbre = json.object_get(root, "branch")
+    if string.length(jbre) == 0 {
+        if jbranch != null {
+            bs, bse = json.get_string(jbranch)
+            if string.length(bse) == 0 {
+                if string.length(bs) > 0 { commit_branch = string.copy(bs) }
+            }
+        }
+    }
+
+    user = svnserver_request_header(req, "X-Svnae-User")
+    is_super = svnserver_request_is_super(req)
+
+    // Pre-scan: every edit path needs ACL write + branch-spec allow.
+    n_edits = json.array_size(jedits)
+    i = 0
+    while i < n_edits {
+        entry, _ = json.array_get(jedits, i)
+        if entry != null {
+            jp, jpe = json.object_get(entry, "path")
+            if string.length(jpe) == 0 {
+                if jp != null {
+                    ps, pse = json.get_string(jp)
+                    if string.length(pse) == 0 {
+                        if is_super == 0 {
+                            if acl_allows_mode(repo, base_rev, user, ps, 1) == 0 {
+                                json.free(root)
+                                return -4
+                            }
+                        }
+                        if svnserver_spec_allows(repo, commit_branch, ps, is_super) == 0 {
+                            json.free(root)
+                            return -5
+                        }
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+
+    // ACL-change pre-scan for non-super: each acl-touched path needs write.
+    if is_super == 0 {
+        jacl_pre, jape = json.object_get(root, "acl")
+        if string.length(jape) == 0 {
+            if jacl_pre != null {
+                pre_n = json.object_size(jacl_pre)
+                pi = 0
+                while pi < pre_n {
+                    apath, _apv, _aperr = json.object_entry(jacl_pre, pi)
+                    if acl_allows_mode(repo, base_rev, user, apath, 1) == 0 {
+                        json.free(root)
+                        return -4
+                    }
+                    pi = pi + 1
+                }
+            }
+        }
+    }
+
+    // Build the txn.
+    txn = txn_new(base_rev)
+    if txn == null { json.free(root); return -6 }
+
+    i = 0
+    while i < n_edits {
+        entry, _ = json.array_get(jedits, i)
+        if entry == null { txn_free(txn); json.free(root); return -7 }
+
+        jop, _ = json.object_get(entry, "op")
+        if jop == null { txn_free(txn); json.free(root); return -7 }
+        op, oerr = json.get_string(jop)
+        if string.length(oerr) > 0 { txn_free(txn); json.free(root); return -7 }
+
+        jpath, _ = json.object_get(entry, "path")
+        if jpath == null { txn_free(txn); json.free(root); return -7 }
+        epath, perr = json.get_string(jpath)
+        if string.length(perr) > 0 { txn_free(txn); json.free(root); return -7 }
+
+        if string.equals(op, "add-file") == 1 {
+            jcontent, _ = json.object_get(entry, "content")
+            if jcontent == null { txn_free(txn); json.free(root); return -8 }
+            b64, berr = json.get_string(jcontent)
+            if string.length(berr) > 0 { txn_free(txn); json.free(root); return -8 }
+            if txn_add_b64_(txn, epath, b64) != 0 {
+                txn_free(txn); json.free(root); return -9
+            }
+        }
+        if string.equals(op, "mkdir") == 1 {
+            txn_mkdir(txn, epath)
+        }
+        if string.equals(op, "delete") == 1 {
+            txn_delete(txn, epath)
+        }
+        if string.equals(op, "add-file") == 0 {
+            if string.equals(op, "mkdir") == 0 {
+                if string.equals(op, "delete") == 0 {
+                    txn_free(txn); json.free(root); return -10
+                }
+            }
+        }
+        i = i + 1
+    }
+
+    // Optional "props" object: build per-path props blobs, collect
+    // sha1s, roll up into a paths-props blob.
+    use_props_sha = ""
+    jprops, _jpe = json.object_get(root, "props")
+    if jprops != null {
+        np = json.object_size(jprops)
+        if np > 0 {
+            paths_joined = ""
+            shas_joined = ""
+            i = 0
+            while i < np {
+                this_path, pval, _ = json.object_entry(jprops, i)
+                // Snapshot the key — json.object_entry returns an owned key,
+                // but we're about to recurse into subsequent iterations.
+                this_path = string.copy(this_path)
+
+                keys_joined = ""
+                values_joined = ""
+                emitted_props = 0
+                if pval != null {
+                    nk = json.object_size(pval)
+                    ki = 0
+                    while ki < nk {
+                        kname, kval, _ = json.object_entry(pval, ki)
+                        kname = string.copy(kname)
+                        // Round 277 / Phase 3: svn:mergeinfo is
+                        // server-managed via the merge ledger; reject
+                        // any client trying to set it directly. The
+                        // CLI also guards this (defence in depth) but
+                        // the wire-level check is the authoritative
+                        // one — buggy / malicious clients can't poke
+                        // around the ledger via the prop carrier.
+                        if string.equals(kname, "svn:mergeinfo") == 1 {
+                            txn_free(txn)
+                            json.free(root)
+                            return -3
+                        }
+                        if kval != null {
+                            vstr, verr = json.get_string(kval)
+                            if string.length(verr) == 0 {
+                                if emitted_props > 0 {
+                                    keys_joined = string.concat(keys_joined, "\n")
+                                    values_joined = string.concat(values_joined, "\n")
+                                }
+                                keys_joined = string.concat(keys_joined, kname)
+                                values_joined = string.concat(values_joined, vstr)
+                                emitted_props = emitted_props + 1
+                            }
+                        }
+                        ki = ki + 1
+                    }
+                }
+                psha = build_props_blob_joined(repo, keys_joined, values_joined)
+                psha = string.copy(psha)
+
+                if i > 0 {
+                    paths_joined = string.concat(paths_joined, "\n")
+                    shas_joined = string.concat(shas_joined, "\n")
+                }
+                paths_joined = string.concat(paths_joined, this_path)
+                shas_joined = string.concat(shas_joined, psha)
+                i = i + 1
+            }
+            use_props_sha = build_paths_props_blob_joined(repo,
+                                paths_joined, shas_joined)
+            use_props_sha = string.copy(use_props_sha)
+        }
+    }
+
+    // Optional "acl" object: same pattern but per-path value is an
+    // array of rule strings. Empty array skips the path (= remove ACL).
+    use_acl_sha = ""
+    jacl, _jaoe = json.object_get(root, "acl")
+    if jacl != null {
+        np = json.object_size(jacl)
+        if np > 0 {
+            paths_joined = ""
+            shas_joined = ""
+            emitted = 0
+            i = 0
+            while i < np {
+                this_path, pval, _ = json.object_entry(jacl, i)
+                this_path = string.copy(this_path)
+                if pval != null {
+                    nr = json.array_size(pval)
+                    if nr > 0 {
+                        rules_joined = ""
+                        rj_count = 0
+                        k = 0
+                        while k < nr {
+                            r_elem, _ = json.array_get(pval, k)
+                            if r_elem != null {
+                                rs, rer = json.get_string(r_elem)
+                                if string.length(rer) == 0 {
+                                    if rj_count > 0 {
+                                        rules_joined = string.concat(rules_joined, "\n")
+                                    }
+                                    rules_joined = string.concat(rules_joined, rs)
+                                    rj_count = rj_count + 1
+                                }
+                            }
+                            k = k + 1
+                        }
+                        asha = build_acl_blob_joined(repo, rules_joined)
+                        asha = string.copy(asha)
+                        if emitted > 0 {
+                            paths_joined = string.concat(paths_joined, "\n")
+                            shas_joined = string.concat(shas_joined, "\n")
+                        }
+                        paths_joined = string.concat(paths_joined, this_path)
+                        shas_joined = string.concat(shas_joined, asha)
+                        emitted = emitted + 1
+                    }
+                }
+                i = i + 1
+            }
+            if emitted > 0 {
+                use_acl_sha = build_paths_acl_blob_joined(repo,
+                                paths_joined, shas_joined)
+                use_acl_sha = string.copy(use_acl_sha)
+            }
+        }
+    }
+
+    // Round 274 / Phase 2.1 — merged_from. Optional commit-body
+    // object; when present, the server resolves rev numbers to
+    // rev-blob SHAs and stamps the txn so commit_finalise emits
+    // the rev blob's `merged:` field and writes the merge ledger.
+    jmf, _ = json.object_get(root, "merged_from")
+    if jmf != null {
+        jms, _ = json.object_get(jmf, "source_branch")
+        msrc = ""
+        if jms != null {
+            mss, msse = json.get_string(jms)
+            if string.length(msse) == 0 { msrc = string.copy(mss) }
+        }
+        mtgt = ""
+        jmt, _ = json.object_get(jmf, "target_path")
+        if jmt != null {
+            mts, mtse = json.get_string(jmt)
+            if string.length(mtse) == 0 { mtgt = string.copy(mts) }
+        }
+        mverb = 0
+        jmv, _ = json.object_get(jmf, "verb")
+        if jmv != null { mverb = json.get_int(jmv) }
+        if string.length(msrc) > 0 {
+            txn_merge_set_source(txn, mtgt, msrc, mverb)
+            jmrevs, _ = json.object_get(jmf, "source_revs")
+            if jmrevs != null {
+                rcount = json.array_size(jmrevs)
+                ri = 0
+                while ri < rcount {
+                    revj, _ = json.array_get(jmrevs, ri)
+                    if revj != null {
+                        rnum = json.get_int(revj)
+                        rsha = repos_rev_blob_sha(repo, rnum)
+                        if string.length(rsha) > 0 {
+                            txn_merge_record_rev(txn, string.copy(rsha))
+                        }
+                    }
+                    ri = ri + 1
+                }
+            }
+        }
+    }
+
+    json.free(root)
+
+    new_rev = commit_finalise(repo, txn, "main", author, logmsg,
+                                     use_props_sha, use_acl_sha)
+    txn_free(txn)
+
+    // Pass through -12 (out of date) so the HTTP handler can map it
+    // to 409. Any other negative result is a generic commit failure.
+    if new_rev == 0 - 12 { return -12 }
+    if new_rev < 0 { return -11 }
+    return new_rev
+}
+
+
+// --- blob builders (inlined from what would be avnserver/blob_build.ae) --
+
+// Count lines in a "\n"-joined string. Trailing "\n" doesn't add a
+// phantom empty line.
+count_lines(joined: string) -> int {
+    n = string.length(joined)
+    if n == 0 { return 0 }
+    lines = 1
+    i = 0
+    while i < n {
+        if string.char_at(joined, i) == 10 {
+            if i + 1 < n { lines = lines + 1 }
+        }
+        i = i + 1
+    }
+    return lines
+}
+
+// Return the i-th line of `joined`, 0-indexed. "" when out of range.
+line_at(joined: string, i: int) -> string {
+    n = string.length(joined)
+    pos = 0
+    k = 0
+    while k < i {
+        if pos >= n { return "" }
+        ch = string.char_at(joined, pos)
+        pos = pos + 1
+        if ch == 10 { k = k + 1 }
+    }
+    start = pos
+    while pos < n {
+        if string.char_at(joined, pos) == 10 { break }
+        pos = pos + 1
+    }
+    return string.substring(joined, start, pos)
+}
+
+// Return the i-th "\x02"-separated record in `packed`. Trailing "\x02"
+// is tolerated. "" on miss.
+packed_record_at(packed: string, i: int) -> string {
+    n = string.length(packed)
+    pos = 0
+    k = 0
+    while k < i {
+        if pos >= n { return "" }
+        sep = -1
+        j = pos
+        while j < n {
+            if string.char_at(packed, j) == 2 { sep = j; break }
+            j = j + 1
+        }
+        if sep < 0 { return "" }
+        pos = sep + 1
+        k = k + 1
+    }
+    if pos >= n { return "" }
+    end = n
+    j = pos
+    while j < n {
+        if string.char_at(packed, j) == 2 { end = j; break }
+        j = j + 1
+    }
+    return string.substring(packed, pos, end)
+}
+
+// Selection sort of a "<N records separated by \x02>" packed stream,
+// sorted by the first "\x01"-delimited field of each record. O(n^2)
+// in record count; commit-time prop lists are tiny (a few keys per
+// path), so this is plenty fast and keeps the helper allocation-
+// free beyond the normalised copy.
+sort_packed_by_first_field(packed: string, n: int) -> string {
+    if n <= 1 { return packed }
+    normalised = ""
+    i = 0
+    while i < n {
+        rec = packed_record_at(packed, i)
+        normalised = string.concat(normalised, rec)
+        normalised = string.concat(normalised, "\x02")
+        i = i + 1
+    }
+    result = ""
+    taken = ""
+    k = 0
+    while k < n {
+        best = -1
+        best_key = ""
+        j = 0
+        while j < n {
+            tok = string.concat(string.concat("|", string.from_int(j)), "|")
+            if string.contains(taken, tok) == 0 {
+                rec = packed_record_at(normalised, j)
+                tab = string.index_of(rec, "\x01")
+                key = rec
+                if tab >= 0 { key = string.substring(rec, 0, tab) }
+                if best < 0 {
+                    best = j
+                    best_key = key
+                }
+                if best >= 0 {
+                    if string.compare(key, best_key) < 0 {
+                        best = j
+                        best_key = key
+                    }
+                }
+            }
+            j = j + 1
+        }
+        if best < 0 { break }
+        chosen = packed_record_at(normalised, best)
+        if k > 0 { result = string.concat(result, "\x02") }
+        result = string.concat(result, chosen)
+        taken = string.concat(taken, string.concat(string.concat("|", string.from_int(best)), "|"))
+        k = k + 1
+    }
+    return result
+}
+
+// Build "key=value\n" sorted by key, write to rep store.
+build_props_blob_joined(repo: string, keys_joined: string, values_joined: string) -> string {
+    nk = count_lines(keys_joined)
+    nv = count_lines(values_joined)
+    n = nk
+    if nv < n { n = nv }
+
+    packed = ""
+    i = 0
+    while i < n {
+        k = line_at(keys_joined, i)
+        v = line_at(values_joined, i)
+        rec = string.concat(k, "\x01")
+        rec = string.concat(rec, v)
+        if i > 0 { packed = string.concat(packed, "\x02") }
+        packed = string.concat(packed, rec)
+        i = i + 1
+    }
+
+    sorted_keys_first = sort_packed_by_first_field(packed, n)
+
+    body = ""
+    i = 0
+    while i < n {
+        rec = packed_record_at(sorted_keys_first, i)
+        tab = string.index_of(rec, "\x01")
+        if tab < 0 {
+            i = i + 1
+            continue
+        }
+        k = string.substring(rec, 0, tab)
+        v = string.substring(rec, tab + 1, string.length(rec))
+        body = string.concat(body, k)
+        body = string.concat(body, "=")
+        body = string.concat(body, v)
+        body = string.concat(body, "\n")
+        i = i + 1
+    }
+
+    return rep_write_blob(repo, body, string.length(body))
+}
+
+// Build "<rule>\n" in caller-supplied order, write to rep store.
+build_acl_blob_joined(repo: string, rules_joined: string) -> string {
+    n = count_lines(rules_joined)
+    body = ""
+    i = 0
+    while i < n {
+        r = line_at(rules_joined, i)
+        body = string.concat(body, r)
+        body = string.concat(body, "\n")
+        i = i + 1
+    }
+    return rep_write_blob(repo, body, string.length(body))
+}
+
+// Build "<sha> <path>\n" sorted by path, write to rep store. Shared
+// shape for paths-props and paths-acl; sort delegated to
+// paths_index_sort (repo_storage/format_line.ae).
+build_paths_index_blob(repo: string, paths_joined: string, shas_joined: string) -> string {
+    np = count_lines(paths_joined)
+    ns = count_lines(shas_joined)
+    n = np
+    if ns < n { n = ns }
+
+    body = ""
+    i = 0
+    while i < n {
+        p = line_at(paths_joined, i)
+        s = line_at(shas_joined, i)
+        body = string.concat(body, s)
+        body = string.concat(body, " ")
+        body = string.concat(body, p)
+        body = string.concat(body, "\n")
+        i = i + 1
+    }
+
+    sorted = paths_index_sort(body)
+    return rep_write_blob(repo, sorted, string.length(sorted))
+}
+
+build_paths_props_blob_joined(repo: string, paths_joined: string, shas_joined: string) -> string {
+    return build_paths_index_blob(repo, paths_joined, shas_joined)
+}
+
+build_paths_acl_blob_joined(repo: string, paths_joined: string, shas_joined: string) -> string {
+    return build_paths_index_blob(repo, paths_joined, shas_joined)
+}
+
+main() {
+    println("avnserver/commit_parse.ae is a library; not meant to run standalone")
+}

@@ -28,9 +28,9 @@ main() {
     svn_bin = os_getenv("SVN_BIN")
     port    = os_getenv("TEST_MERGE_PORT")
     url     = string.concat("http://127.0.0.1:", string.concat(port, "/demo"))
-    wc      = "/tmp/svnae_test_mrg_wc"
+    wc      = "/tmp/avn_test_mrg_wc"
 
-    log_merge_commit = "/tmp/svnae_test_mrg_commit.log"
+    log_merge_commit = "/tmp/avn_test_mrg_commit.log"
 
     // === ROUND 1 prep: branch + trunk edit + checkout WC ===
     // r4: server-side cp src → src-branch
@@ -41,14 +41,14 @@ main() {
     prep1 = string.concat(prep1, "/src ")
     prep1 = string.concat(prep1, url)
     prep1 = string.concat(prep1, "/src-branch --author alice --log 'branch src' >/dev/null && ")
-    prep1 = string.concat(prep1, "rm -rf /tmp/svnae_test_mrg_trunk && ")
+    prep1 = string.concat(prep1, "rm -rf /tmp/avn_test_mrg_trunk && ")
     prep1 = string.concat(prep1, svn_bin)
     prep1 = string.concat(prep1, " checkout ")
     prep1 = string.concat(prep1, url)
-    prep1 = string.concat(prep1, " /tmp/svnae_test_mrg_trunk >/dev/null && cd /tmp/svnae_test_mrg_trunk && echo 'trunk improvement' > src/main.c && ")
+    prep1 = string.concat(prep1, " /tmp/avn_test_mrg_trunk >/dev/null && cd /tmp/avn_test_mrg_trunk && echo 'trunk improvement' > src/main.c && ")
     prep1 = string.concat(prep1, svn_bin)
     prep1 = string.concat(prep1, " commit --author alice --log 'trunk edit r5' >/dev/null && ")
-    prep1 = string.concat(prep1, "rm -rf /tmp/svnae_test_mrg_trunk ")
+    prep1 = string.concat(prep1, "rm -rf /tmp/avn_test_mrg_trunk ")
     prep1 = string.concat(prep1, wc)
     prep1 = string.concat(prep1, " && ")
     prep1 = string.concat(prep1, svn_bin)
@@ -95,7 +95,7 @@ main() {
     commit_merge    = string.concat(commit_merge, svn_bin)
     commit_merge    = string.concat(commit_merge, " commit --author alice --log 'merge trunk r5 into branch' | tee ")
     commit_merge    = string.concat(commit_merge, log_merge_commit)
-    cat_commit_log  = "cat /tmp/svnae_test_mrg_commit.log"
+    cat_commit_log  = "cat /tmp/avn_test_mrg_commit.log"
 
     // === ROUND 2: conflict scenario ===
     prep2 = string.concat("cd / && rm -rf ", wc)

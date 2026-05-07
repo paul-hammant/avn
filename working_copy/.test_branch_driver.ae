@@ -30,7 +30,7 @@ main() {
     repo    = os_getenv("TEST_BRANCH_PATH")
     url     = string.concat("http://127.0.0.1:", string.concat(port, "/demo"))
     base    = string.concat("http://127.0.0.1:", string.concat(port, "/repos/demo"))
-    wc      = "/tmp/svnae_test_br_wc"
+    wc      = "/tmp/avn_test_br_wc"
 
     // One-shot: count reps before, branch, count reps after, print
     // `Committed ...` plus DELTA=N. Assertions then grep this output.
@@ -39,7 +39,7 @@ main() {
     // with mixed int/string slots). Tee output to a file; assertion
     // closures cat it back. Constant-string `cat ...` doesn't trip
     // the typer.
-    branch_log = "/tmp/svnae_test_branch_log"
+    branch_log = "/tmp/avn_test_branch_log"
     branch_pipeline = string.concat("rm -f ", branch_log)
     branch_pipeline = string.concat(branch_pipeline, " && before=$(find ")
     branch_pipeline = string.concat(branch_pipeline, repo)
@@ -58,7 +58,7 @@ main() {
     branch_pipeline = string.concat(branch_pipeline, branch_log)
 
     branch_out_, branch_st_, branch_err_ = sh(branch_pipeline)
-    cat_branch_log = "cat /tmp/svnae_test_branch_log"
+    cat_branch_log = "cat /tmp/avn_test_branch_log"
 
     ls_root         = string.concat(svn_bin, " ls ")
     ls_root         = string.concat(ls_root, url)

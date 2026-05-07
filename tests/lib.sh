@@ -1,4 +1,4 @@
-# Shared bash helpers for the surviving shell tests under svnadmin/.
+# Shared bash helpers for the surviving shell tests under avnadmin/.
 #
 # All other test areas have migrated to aether.driver_test (Aether
 # drivers under .test_*_driver.ae). This file keeps just what those
@@ -11,10 +11,10 @@
 # After sourcing, $ROOT is the repo root and the four binary paths
 # below are pre-set (env-overridable):
 #
-#   $ADMIN_BIN   target/svnadmin/bin/svnadmin
-#   $SERVER_BIN  target/svnserver/bin/aether-svnserver
-#   $SEED_BIN    target/svnserver/bin/svnae-seed
-#   $SVN_BIN     target/svn/bin/svn
+#   $ADMIN_BIN   target/avnadmin/bin/svnadmin
+#   $SERVER_BIN  target/avnserver/bin/aether-svnserver
+#   $SEED_BIN    target/avnserver/bin/svnae-seed
+#   $SVN_BIN     target/avn/bin/svn
 
 if [ -n "${BASH_SOURCE[1]:-}" ] && [ -f "${BASH_SOURCE[1]}" ]; then
     cd "$(dirname "${BASH_SOURCE[1]}")/.."
@@ -22,10 +22,10 @@ if [ -n "${BASH_SOURCE[1]:-}" ] && [ -f "${BASH_SOURCE[1]}" ]; then
 fi
 ROOT="$(pwd)"
 
-ADMIN_BIN="${ADMIN_BIN:-$ROOT/target/svnadmin/bin/svnadmin}"
-SERVER_BIN="${SERVER_BIN:-$ROOT/target/svnserver/bin/aether-svnserver}"
-SEED_BIN="${SEED_BIN:-$ROOT/target/svnserver/bin/svnae-seed}"
-SVN_BIN="${SVN_BIN:-$ROOT/target/svn/bin/svn}"
+ADMIN_BIN="${ADMIN_BIN:-$ROOT/target/avnadmin/bin/svnadmin}"
+SERVER_BIN="${SERVER_BIN:-$ROOT/target/avnserver/bin/aether-svnserver}"
+SEED_BIN="${SEED_BIN:-$ROOT/target/avnserver/bin/svnae-seed}"
+SVN_BIN="${SVN_BIN:-$ROOT/target/avn/bin/svn}"
 
 FAILS=0
 tlib_check() {

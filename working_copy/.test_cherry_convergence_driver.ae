@@ -51,14 +51,14 @@ main() {
     admin_bin  = os_getenv("ADMIN_BIN")
     server_bin = os_getenv("SERVER_BIN")
 
-    repo = "/tmp/svnae_aeb_cherry_repo"
+    repo = "/tmp/avn_aeb_cherry_repo"
     port = "9720"
-    wc_t = "/tmp/svnae_cherry_trunk_wc"
-    wc_a = "/tmp/svnae_cherry_a_wc"
-    wc_b = "/tmp/svnae_cherry_b_wc"
+    wc_t = "/tmp/avn_cherry_trunk_wc"
+    wc_a = "/tmp/avn_cherry_a_wc"
+    wc_b = "/tmp/avn_cherry_b_wc"
     url  = "http://127.0.0.1:9720/demo"
-    pidf = "/tmp/svnae_cherry_srv.pid"
-    // Workspace root derived from SVN_BIN (= $WORKSPACE/target/svn/bin/svn)
+    pidf = "/tmp/avn_cherry_srv.pid"
+    // Workspace root derived from SVN_BIN (= $WORKSPACE/target/avn/bin/svn)
     // via bash parameter expansion stripping the trailing four segments.
     // file.exists() rejects directories so we can't binary_under_test
     // the fixtures dir directly. Aether eats `${...}` in string literals,
@@ -87,7 +87,7 @@ main() {
     spawn_srv = string.concat(spawn_srv, repo)
     spawn_srv = string.concat(spawn_srv, " ")
     spawn_srv = string.concat(spawn_srv, port)
-    spawn_srv = string.concat(spawn_srv, " >/tmp/svnae_cherry_srv.log 2>&1 & echo $! > ")
+    spawn_srv = string.concat(spawn_srv, " >/tmp/avn_cherry_srv.log 2>&1 & echo $! > ")
     spawn_srv = string.concat(spawn_srv, pidf)
     spawn_srv = string.concat(spawn_srv, "; disown); sleep 1.5")
 
@@ -198,21 +198,21 @@ main() {
     do_a = string.concat(do_a, svn_bin)
     do_a = string.concat(do_a, " merge -c 6 ")
     do_a = string.concat(do_a, url)
-    do_a = string.concat(do_a, "/trunk . >/tmp/svnae_cherry_a_m4.log 2>&1 && ")
+    do_a = string.concat(do_a, "/trunk . >/tmp/avn_cherry_a_m4.log 2>&1 && ")
     do_a = string.concat(do_a, svn_bin)
     do_a = string.concat(do_a, " commit --author paul --log 'cherry-pick C4 (a)' >/dev/null && ")
     // -c 3 then commit
     do_a = string.concat(do_a, svn_bin)
     do_a = string.concat(do_a, " merge -c 5 ")
     do_a = string.concat(do_a, url)
-    do_a = string.concat(do_a, "/trunk . >/tmp/svnae_cherry_a_m3.log 2>&1 && ")
+    do_a = string.concat(do_a, "/trunk . >/tmp/avn_cherry_a_m3.log 2>&1 && ")
     do_a = string.concat(do_a, svn_bin)
     do_a = string.concat(do_a, " commit --author paul --log 'cherry-pick C3 (a)' >/dev/null && ")
     // sweep r2:HEAD — should only apply C5 (C3,C4 in mergeinfo)
     do_a = string.concat(do_a, svn_bin)
     do_a = string.concat(do_a, " merge -r 4:HEAD ")
     do_a = string.concat(do_a, url)
-    do_a = string.concat(do_a, "/trunk . >/tmp/svnae_cherry_a_sweep.log 2>&1 && ")
+    do_a = string.concat(do_a, "/trunk . >/tmp/avn_cherry_a_sweep.log 2>&1 && ")
     do_a = string.concat(do_a, svn_bin)
     do_a = string.concat(do_a, " commit --author paul --log 'sweep main → release_a' >/dev/null")
 
@@ -235,21 +235,21 @@ main() {
     do_b = string.concat(do_b, svn_bin)
     do_b = string.concat(do_b, " merge -c 5 ")
     do_b = string.concat(do_b, url)
-    do_b = string.concat(do_b, "/trunk . >/tmp/svnae_cherry_b_m3.log 2>&1 && ")
+    do_b = string.concat(do_b, "/trunk . >/tmp/avn_cherry_b_m3.log 2>&1 && ")
     do_b = string.concat(do_b, svn_bin)
     do_b = string.concat(do_b, " commit --author paul --log 'cherry-pick C3 (b)' >/dev/null && ")
     // -c 4 then commit
     do_b = string.concat(do_b, svn_bin)
     do_b = string.concat(do_b, " merge -c 6 ")
     do_b = string.concat(do_b, url)
-    do_b = string.concat(do_b, "/trunk . >/tmp/svnae_cherry_b_m4.log 2>&1 && ")
+    do_b = string.concat(do_b, "/trunk . >/tmp/avn_cherry_b_m4.log 2>&1 && ")
     do_b = string.concat(do_b, svn_bin)
     do_b = string.concat(do_b, " commit --author paul --log 'cherry-pick C4 (b)' >/dev/null && ")
     // sweep
     do_b = string.concat(do_b, svn_bin)
     do_b = string.concat(do_b, " merge -r 4:HEAD ")
     do_b = string.concat(do_b, url)
-    do_b = string.concat(do_b, "/trunk . >/tmp/svnae_cherry_b_sweep.log 2>&1 && ")
+    do_b = string.concat(do_b, "/trunk . >/tmp/avn_cherry_b_sweep.log 2>&1 && ")
     do_b = string.concat(do_b, svn_bin)
     do_b = string.concat(do_b, " commit --author paul --log 'sweep main → release_b' >/dev/null")
 
@@ -292,7 +292,7 @@ main() {
         }
 
         aeocha.it("trunk: r1..r5 commits + 2 server-side branches succeed") callback {
-            // Diagnostic logs at /tmp/svnae_cherry_srv.log + the per-step
+            // Diagnostic logs at /tmp/avn_cherry_srv.log + the per-step
             // .log files (m3/m4/sweep) if anything goes wrong.
             aeocha.expect_exit(fw, build_trunk_st, 0, "trunk build exit 0")
         }

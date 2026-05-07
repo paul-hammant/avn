@@ -7,7 +7,7 @@
 //
 //     http://www.apache.org/licenses/LICENSE-2.0
 
-// Error chain for the svn-aether port. Round 165 retires
+// Error chain for the avn port. Round 165 retires
 // util/error/shim.c (73 lines C) — Aether 0.109 added
 // self-referential structs via *Self pointer fields (see
 // fresh-aether-requests.md Section C / CHANGELOG [0.109.0]),

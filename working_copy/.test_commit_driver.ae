@@ -29,7 +29,7 @@ main() {
     port    = os_getenv("TEST_COMMIT_PORT")
     url     = string.concat("http://127.0.0.1:", string.concat(port, "/demo"))
     base    = string.concat("http://127.0.0.1:", string.concat(port, "/repos/demo"))
-    wc      = "/tmp/svnae_test_wcc_wc"
+    wc      = "/tmp/avn_test_wcc_wc"
 
     // --- prep: checkout + edit + add + rm + commit (one big shell pipeline) ---
     prep = string.concat("rm -rf ", wc)

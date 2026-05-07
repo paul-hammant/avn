@@ -5,24 +5,24 @@ import aether (driver, output, binary_under_test, fixture_seed, fixture_server,
 
 main() {
     b = build.start()
-    build.dep(b, "svn")
-    build.dep(b, "svnserver")
-    build.dep(b, "svnserver/.build-seed.ae")
+    build.dep(b, "avn")
+    build.dep(b, "avnserver")
+    build.dep(b, "avnserver/.build-seed.ae")
 
     aether.driver_test(b) {
         driver(".test_merge_reverse_driver.ae")
         output("test_merge_reverse_driver")
 
         binary_under_test(b, "svn") {
-            path("target/svn/bin/svn")
+            path("target/avn/bin/svn")
         }
 
         fixture_seed(b, "test_merge_reverse") {
-            path("/tmp/svnae_aeb_test_merge_reverse_repo")
-            seed_bin("target/svnserver/bin/svnae-seed")
+            path("/tmp/avn_aeb_test_merge_reverse_repo")
+            seed_bin("target/avnserver/bin/svnae-seed")
         }
         fixture_server(b, "test_merge_reverse") {
-            bin("target/svnserver/bin/aether-svnserver")
+            bin("target/avnserver/bin/aether-svnserver")
             args("demo $TEST_MERGE_REVERSE_PATH 9490")
             port(9490)
             ready_after_ms(1500)

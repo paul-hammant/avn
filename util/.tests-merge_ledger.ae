@@ -14,7 +14,7 @@ main() {
         link_flag("-lcrypto")
         // Module under test, plus io for the system() shim used to
         // stage a temp dir. The test calls merge_ledger_init_schema
-        // directly rather than going through svnadmin/create.ae —
+        // directly rather than going through avnadmin/create.ae —
         // the ledger is the unit-under-test, the create-time wiring
         // is exercised end-to-end by the existing svnadmin tests.
         //

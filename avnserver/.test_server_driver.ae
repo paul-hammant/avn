@@ -1,0 +1,238 @@
+// Copyright 2026 Paul Hammant (portions).
+// Apache License, Version 2.0 — see LICENSE.
+//
+// Aether driver for the aether-svnserver HTTP endpoint suite.
+// Round 256. Migrated from avnserver/test_server.sh.
+
+import contrib.aeocha
+import std.os
+import std.os (os_getenv)
+import std.string
+
+extern list_new() -> ptr
+extern list_add_raw(list: ptr, item: ptr) -> int
+
+argv_new() -> { return list_new() }
+argv_push(argv: ptr, s: string) { list_add_raw(argv, s) }
+
+sh(cmd: string) -> {
+    argv = argv_new()
+    argv_push(argv, "-c")
+    argv_push(argv, cmd)
+    out, status, err = os.run_capture("/bin/bash", argv, null)
+    return out, status, err
+}
+
+main() {
+    fw = aeocha.init()
+    port = os_getenv("TEST_SERVER_PORT")
+    base = string.concat("http://127.0.0.1:", string.concat(port, "/repos/demo"))
+
+    // Helper: extract a JSON field via python3 from a curled url.
+    // We pass {url, python_expr} as args via positional shell vars.
+    // (Aether eats ${...}, so use $1/$2/$3.)
+
+    // Static commands per assertion.
+    info_head = string.concat("curl -sf ", base)
+    info_head = string.concat(info_head, "/info | python3 -c 'import sys,json; print(json.load(sys.stdin)[\"head\"])'")
+
+    info_name = string.concat("curl -sf ", base)
+    info_name = string.concat(info_name, "/info | python3 -c 'import sys,json; print(json.load(sys.stdin)[\"name\"])'")
+
+    log_count = string.concat("curl -sf ", base)
+    log_count = string.concat(log_count, "/log | python3 -c 'import sys,json; print(len(json.load(sys.stdin)[\"entries\"]))'")
+
+    log_alice1 = string.concat("curl -sf ", base)
+    log_alice1 = string.concat(log_alice1, "/log | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d[\"entries\"][1][\"author\"])'")
+
+    log_bob2 = string.concat("curl -sf ", base)
+    log_bob2 = string.concat(log_bob2, "/log | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d[\"entries\"][2][\"msg\"])'")
+
+    rev2_author = string.concat("curl -sf ", base)
+    rev2_author = string.concat(rev2_author, "/rev/2/info | python3 -c 'import sys,json; print(json.load(sys.stdin)[\"author\"])'")
+
+    cat_r1_readme   = string.concat("curl -sf ", base)
+    cat_r1_readme   = string.concat(cat_r1_readme, "/rev/1/cat/README")
+    cat_r2_main     = string.concat("curl -sf ", base)
+    cat_r2_main     = string.concat(cat_r2_main, "/rev/2/cat/src/main.c")
+    cat_r1_main     = string.concat("curl -sf ", base)
+    cat_r1_main     = string.concat(cat_r1_main, "/rev/1/cat/src/main.c")
+
+    list_r1_count = string.concat("curl -sf ", base)
+    list_r1_count = string.concat(list_r1_count, "/rev/1/list | python3 -c 'import sys,json; print(len(json.load(sys.stdin)[\"entries\"]))'")
+    list_r1_first = string.concat("curl -sf ", base)
+    list_r1_first = string.concat(list_r1_first, "/rev/1/list | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d[\"entries\"][0][\"name\"])'")
+    list_r3_count = string.concat("curl -sf ", base)
+    list_r3_count = string.concat(list_r3_count, "/rev/3/list | python3 -c 'import sys,json; print(len(json.load(sys.stdin)[\"entries\"]))'")
+    list_r2_src   = string.concat("curl -sf ", base)
+    list_r2_src   = string.concat(list_r2_src, "/rev/2/list/src | python3 -c 'import sys,json; print(len(json.load(sys.stdin)[\"entries\"]))'")
+
+    code_r3_lic = string.concat("curl -s -o /dev/null -w '%{http_code}' ", base)
+    code_r3_lic = string.concat(code_r3_lic, "/rev/3/cat/LICENSE")
+    code_nosuch = "curl -s -o /dev/null -w '%{http_code}' "
+    code_nosuch = string.concat(code_nosuch, "http://127.0.0.1:")
+    code_nosuch = string.concat(code_nosuch, port)
+    code_nosuch = string.concat(code_nosuch, "/repos/nosuch/info")
+
+    // POST /commit
+    commit_post = "COMMIT_JSON=$(python3 -c '"
+    commit_post = string.concat(commit_post, "import base64, json\n")
+    commit_post = string.concat(commit_post, "content = b\"// added by HTTP client\\n\"\n")
+    commit_post = string.concat(commit_post, "body = {\"base_rev\":3,\"author\":\"http-client\",\"log\":\"via POST /commit\",\"edits\":[{\"op\":\"add-file\",\"path\":\"CHANGELOG\",\"content\":base64.b64encode(content).decode()},{\"op\":\"delete\",\"path\":\"src/main.c\"}]}\n")
+    commit_post = string.concat(commit_post, "print(json.dumps(body))') && ")
+    commit_post = string.concat(commit_post, "curl -sf -X POST -H 'Content-Type: application/json' -d \"$COMMIT_JSON\" ")
+    commit_post = string.concat(commit_post, base)
+    commit_post = string.concat(commit_post, "/commit | python3 -c 'import sys,json; print(json.load(sys.stdin)[\"rev\"])'")
+
+    head_after = string.concat("curl -sf ", base)
+    head_after = string.concat(head_after, "/info | python3 -c 'import sys,json; print(json.load(sys.stdin)[\"head\"])'")
+
+    cat_r4_changelog = string.concat("curl -sf ", base)
+    cat_r4_changelog = string.concat(cat_r4_changelog, "/rev/4/cat/CHANGELOG")
+
+    code_r4_main = string.concat("curl -s -o /dev/null -w '%{http_code}' ", base)
+    code_r4_main = string.concat(code_r4_main, "/rev/4/cat/src/main.c")
+
+    cat_r3_main = string.concat("curl -sf ", base)
+    cat_r3_main = string.concat(cat_r3_main, "/rev/3/cat/src/main.c")
+
+    log_count_after = string.concat("curl -sf ", base)
+    log_count_after = string.concat(log_count_after, "/log | python3 -c 'import sys,json; print(len(json.load(sys.stdin)[\"entries\"]))'")
+
+    bad_commit = string.concat("curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d 'not valid json' ", base)
+    bad_commit = string.concat(bad_commit, "/commit")
+
+    commit_nosuch = "curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d '{\"base_rev\":3}' "
+    commit_nosuch = string.concat(commit_nosuch, "http://127.0.0.1:")
+    commit_nosuch = string.concat(commit_nosuch, port)
+    commit_nosuch = string.concat(commit_nosuch, "/repos/nosuch/commit")
+
+    aeocha.describe(fw, "aether-svnserver HTTP endpoint suite") {
+
+        // info
+        aeocha.it("/info head == 3") callback {
+            out, _, _ = sh(info_head)
+            aeocha.expect_stdout_contains(fw, out, "3", "head 3")
+        }
+
+        aeocha.it("/info name == demo") callback {
+            out, _, _ = sh(info_name)
+            aeocha.expect_stdout_contains(fw, out, "demo", "name demo")
+        }
+
+        // log
+        aeocha.it("/log count == 4") callback {
+            out, _, _ = sh(log_count)
+            aeocha.expect_stdout_contains(fw, out, "4", "log entries 4")
+        }
+
+        aeocha.it("/log entries[1] author == alice") callback {
+            out, _, _ = sh(log_alice1)
+            aeocha.expect_stdout_contains(fw, out, "alice", "alice author")
+        }
+
+        aeocha.it("/log entries[2] msg == 'answer to everything'") callback {
+            out, _, _ = sh(log_bob2)
+            aeocha.expect_stdout_contains(fw, out, "answer to everything", "msg")
+        }
+
+        // rev/2/info
+        aeocha.it("/rev/2/info author == bob") callback {
+            out, _, _ = sh(rev2_author)
+            aeocha.expect_stdout_contains(fw, out, "bob", "rev2 author")
+        }
+
+        // cat
+        aeocha.it("cat r1 README == Hello") callback {
+            out, _, _ = sh(cat_r1_readme)
+            aeocha.expect_stdout_contains(fw, out, "Hello", "README content")
+        }
+
+        aeocha.it("cat r2 src/main.c == 'return 42'") callback {
+            out, _, _ = sh(cat_r2_main)
+            aeocha.expect_stdout_contains(fw, out, "return 42", "r2 content")
+        }
+
+        aeocha.it("cat r1 src/main.c == 'return 0'") callback {
+            out, _, _ = sh(cat_r1_main)
+            aeocha.expect_stdout_contains(fw, out, "return 0", "r1 content")
+        }
+
+        // list
+        aeocha.it("list r1 count == 3") callback {
+            out, _, _ = sh(list_r1_count)
+            aeocha.expect_stdout_contains(fw, out, "3", "r1 list 3 entries")
+        }
+
+        aeocha.it("list r1 [0].name == LICENSE") callback {
+            out, _, _ = sh(list_r1_first)
+            aeocha.expect_stdout_contains(fw, out, "LICENSE", "first entry")
+        }
+
+        aeocha.it("list r3 count == 2") callback {
+            out, _, _ = sh(list_r3_count)
+            aeocha.expect_stdout_contains(fw, out, "2", "r3 list 2 entries")
+        }
+
+        aeocha.it("list r2 /src count == 1") callback {
+            out, _, _ = sh(list_r2_src)
+            aeocha.expect_stdout_contains(fw, out, "1", "r2 src list 1 entry")
+        }
+
+        // 404s
+        aeocha.it("r3 cat LICENSE → 404") callback {
+            out, _, _ = sh(code_r3_lic)
+            aeocha.expect_stdout_contains(fw, out, "404", "404")
+        }
+
+        aeocha.it("unknown repo /info → 404") callback {
+            out, _, _ = sh(code_nosuch)
+            aeocha.expect_stdout_contains(fw, out, "404", "404")
+        }
+
+        // POST /commit
+        aeocha.it("POST /commit returns rev 4") callback {
+            out, _, _ = sh(commit_post)
+            aeocha.expect_stdout_contains(fw, out, "4", "rev 4")
+        }
+
+        aeocha.it("head after commit == 4") callback {
+            out, _, _ = sh(head_after)
+            aeocha.expect_stdout_contains(fw, out, "4", "head 4")
+        }
+
+        aeocha.it("cat r4 CHANGELOG has new content") callback {
+            out, _, _ = sh(cat_r4_changelog)
+            aeocha.expect_stdout_contains(fw, out, "// added by HTTP client",
+                "CHANGELOG content")
+        }
+
+        aeocha.it("r4 cat src/main.c → 404 (deleted)") callback {
+            out, _, _ = sh(code_r4_main)
+            aeocha.expect_stdout_contains(fw, out, "404", "404")
+        }
+
+        aeocha.it("r3 cat src/main.c preserved (immutability)") callback {
+            out, _, _ = sh(cat_r3_main)
+            aeocha.expect_stdout_contains(fw, out, "return 42", "r3 preserved")
+        }
+
+        aeocha.it("/log count after commit == 5") callback {
+            out, _, _ = sh(log_count_after)
+            aeocha.expect_stdout_contains(fw, out, "5", "5 entries")
+        }
+
+        // Malformed + missing repo
+        aeocha.it("malformed commit body → 400") callback {
+            out, _, _ = sh(bad_commit)
+            aeocha.expect_stdout_contains(fw, out, "400", "400")
+        }
+
+        aeocha.it("commit on missing repo → 404") callback {
+            out, _, _ = sh(commit_nosuch)
+            aeocha.expect_stdout_contains(fw, out, "404", "404")
+        }
+    }
+
+    aeocha.run_summary(fw)
+}

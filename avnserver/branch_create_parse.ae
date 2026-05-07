@@ -1,0 +1,85 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// permissions and limitations under the License.
+
+// Parse the /branches/<NAME>/create JSON body:
+//   {"base": "<sha-or-branch>", "include": ["glob", ...]}
+//
+// Validates shape, collects include globs into a newline-
+// separated string, and hands them straight to
+// branch_create. The C side used to split the string back
+// into a char** array only to rejoin it before passing to
+// filter_dir; that round trip is gone.
+//
+// Return-value contract (matches the old C function):
+//   >= 0 : new_rev
+//   -1   : empty body / malformed JSON
+//   -2   : missing / wrong-typed base or include fields
+//   -3   : include array empty
+//   -4   : branch_create rejected
+
+import std.string
+import std.json
+
+extern branch_create(repo: string, name: string, base: string,
+                            globs_joined: string, author: string) -> int
+
+export branch_create_from_body(repo: string, branch_name: string,
+                                body: string, body_len: int,
+                                user_for_author: string) -> int {
+    if body_len <= 0 { return -1 }
+    root, err = json.parse(body)
+    if string.length(err) > 0 { return -1 }
+
+    jbase, berr = json.object_get(root, "base")
+    if string.length(berr) > 0 { json.free(root); return -2 }
+    if jbase == null { json.free(root); return -2 }
+    base, serr = json.get_string(jbase)
+    if string.length(serr) > 0 { json.free(root); return -2 }
+
+    jinc, ierr = json.object_get(root, "include")
+    if string.length(ierr) > 0 { json.free(root); return -2 }
+    if jinc == null { json.free(root); return -2 }
+    if json.array_size(jinc) < 0 { json.free(root); return -2 }
+
+    n = json.array_size(jinc)
+    if n <= 0 { json.free(root); return -3 }
+
+    globs = ""
+    i = 0
+    while i < n {
+        elem, _ = json.array_get(jinc, i)
+        g, gerr = json.get_string(elem)
+        if string.length(gerr) == 0 {
+            if string.length(g) > 0 {
+                if string.length(globs) > 0 {
+                    globs = string.concat(globs, "\n")
+                }
+                globs = string.concat(globs, g)
+            }
+        }
+        i = i + 1
+    }
+    json.free(root)
+
+    author = "super"
+    if string.length(user_for_author) > 0 { author = user_for_author }
+    new_rev = branch_create(repo, branch_name, base, globs, author)
+    if new_rev < 0 { return -4 }
+    return new_rev
+}
+
+main() {
+    println("avnserver/branch_create_parse.ae is a library; not meant to run standalone")
+}

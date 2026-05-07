@@ -1,0 +1,153 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// permissions and limitations under the License.
+
+// POST /copy body parser + mutation.
+// Request JSON:
+//   {"base_rev": N, "from_path": "...", "to_path": "...",
+//    "author": "...", "log": "..."}
+//
+// Return-value contract (matches the old C function):
+//   >= 0 : new_rev
+//   -1   : empty body
+//   -2   : malformed JSON
+//   -3   : missing/wrong-typed field
+//   -4   : forbidden (non-super lacks RW on from-subtree or to)
+//   -5   : cross-branch copy refused
+//   -6   : from_path missing at base_rev
+//   -7   : commit failed
+//   -8   : out of date (a path conflicts with an intervening commit)
+
+import std.string
+import std.json
+import std.http
+
+extern svnserver_request_header(req: ptr, name: string) -> string
+extern svnserver_request_is_super(req: ptr) -> int
+
+extern acl_subtree_rw(repo: string, rev: int,
+                                       user: string, path: string) -> int
+extern acl_allows_mode(repo: string, rev: int, user: string, target_path: string, want_write: int) -> int
+extern svnserver_spec_allows(repo: string, branch: string,
+                              path: string, is_super: int) -> int
+extern repos_resolve_kind(repo: string, rev: int, path: string) -> int
+extern repos_resolve_sha(repo: string, rev: int, path: string) -> string
+
+extern auto_follow_copy_acl(repo: string, base_rev: int,
+                             from_path: string, to_path: string) -> string
+
+extern txn_new(base_rev: int) -> ptr
+extern txn_copy(t: ptr, path: string, from_sha1: string, from_kind: int) -> int
+extern txn_free(t: ptr)
+extern commit_finalise(repo: string, txn: ptr, branch: string,
+                              author: string, log_msg: string,
+                              props_sha: string, acl_sha: string) -> int
+
+export copy_from_body(req: ptr, repo: string) -> int {
+    body = http.request_body(req)
+    body_len = http.request_body_length(req)
+    if body_len == 0 { return -1 }
+
+    root, err = json.parse(body)
+    if string.length(err) > 0 { return -2 }
+
+    // base_rev — required number.
+    jbr, bb_err = json.object_get(root, "base_rev")
+    if string.length(bb_err) > 0 { json.free(root); return -3 }
+    if jbr == null { json.free(root); return -3 }
+    base_rev = json.get_int(jbr)
+
+    // Five required string fields. Inline the get+typecheck+copy
+    // instead of a helper: Aether 0.84's codegen miscompiles
+    // tuple-returning local helpers when called from an exported
+    // function (both wrapper shims emit as `int32_t`).
+    jfp, fpe = json.object_get(root, "from_path")
+    if string.length(fpe) > 0 { json.free(root); return -3 }
+    if jfp == null { json.free(root); return -3 }
+    from_path, fpe2 = json.get_string(jfp)
+    if string.length(fpe2) > 0 { json.free(root); return -3 }
+    from_path = string.copy(from_path)
+
+    jtp, tpe = json.object_get(root, "to_path")
+    if string.length(tpe) > 0 { json.free(root); return -3 }
+    if jtp == null { json.free(root); return -3 }
+    to_path, tpe2 = json.get_string(jtp)
+    if string.length(tpe2) > 0 { json.free(root); return -3 }
+    to_path = string.copy(to_path)
+
+    jau, aue = json.object_get(root, "author")
+    if string.length(aue) > 0 { json.free(root); return -3 }
+    if jau == null { json.free(root); return -3 }
+    author, aue2 = json.get_string(jau)
+    if string.length(aue2) > 0 { json.free(root); return -3 }
+    author = string.copy(author)
+
+    jlg, lge = json.object_get(root, "log")
+    if string.length(lge) > 0 { json.free(root); return -3 }
+    if jlg == null { json.free(root); return -3 }
+    logmsg, lge2 = json.get_string(jlg)
+    if string.length(lge2) > 0 { json.free(root); return -3 }
+    logmsg = string.copy(logmsg)
+
+    json.free(root)
+
+    user = svnserver_request_header(req, "X-Svnae-User")
+    is_super = svnserver_request_is_super(req)
+    if is_super == 0 {
+        if acl_subtree_rw(repo, base_rev, user, from_path) == 0 {
+            return -4
+        }
+        if acl_allows_mode(repo, base_rev, user, to_path, 1) == 0 {
+            return -4
+        }
+    }
+
+    cp_branch = svnserver_request_header(req, "Svn-Branch")
+    if string.length(cp_branch) == 0 { cp_branch = "main" }
+    if svnserver_spec_allows(repo, cp_branch, from_path, is_super) == 0 {
+        return -5
+    }
+    if svnserver_spec_allows(repo, cp_branch, to_path, is_super) == 0 {
+        return -5
+    }
+
+    kind = repos_resolve_kind(repo, base_rev, from_path)
+    if kind == 0 { return -6 }
+    from_sha = repos_resolve_sha(repo, base_rev, from_path)
+    from_sha = string.copy(from_sha)
+    from_kind_int = 0
+    if kind == 100 { from_kind_int = 1 }   // 'd'
+
+    new_acl_sha = auto_follow_copy_acl(repo, base_rev, from_path, to_path)
+    // rep_write_blob returns into a thread-local buffer; the
+    // txn_copy/commit path below also calls rep_write_blob (for the
+    // node copy's dirblob), which will overwrite this slot. Snapshot
+    // before handing off to the txn machinery.
+    new_acl_sha = string.copy(new_acl_sha)
+
+    txn = txn_new(base_rev)
+    txn_copy(txn, to_path, from_sha, from_kind_int)
+    new_rev = commit_finalise(repo, txn, "main", author, logmsg,
+                                     "", new_acl_sha)
+    txn_free(txn)
+
+    if new_rev == 0 - 12 { return -8 }   // out of date
+    if new_rev < 0 { return -7 }
+    return new_rev
+}
+
+
+main() {
+    println("avnserver/copy_parse.ae is a library; not meant to run standalone")
+}

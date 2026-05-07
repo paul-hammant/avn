@@ -1,0 +1,252 @@
+// Copyright 2026 Paul Hammant (portions).
+// Apache License, Version 2.0 — see LICENSE.
+//
+// Aether driver for REST PUT/DELETE on /repos/<r>/path/<p>.
+// Round 257. Migrated from avnserver/test_rest_put.sh.
+
+import contrib.aeocha
+import std.os
+import std.os (os_getenv)
+import std.string
+
+extern list_new() -> ptr
+extern list_add_raw(list: ptr, item: ptr) -> int
+
+argv_new() -> { return list_new() }
+argv_push(argv: ptr, s: string) { list_add_raw(argv, s) }
+
+sh(cmd: string) -> {
+    argv = argv_new()
+    argv_push(argv, "-c")
+    argv_push(argv, cmd)
+    out, status, err = os.run_capture("/bin/bash", argv, null)
+    return out, status, err
+}
+
+main() {
+    fw = aeocha.init()
+    svn_bin = os_getenv("SVN_BIN")
+    port = os_getenv("TEST_PUT_PORT")
+    base = string.concat("http://127.0.0.1:", string.concat(port, "/repos/demo"))
+    demo_url = string.concat("http://127.0.0.1:", string.concat(port, "/demo"))
+    token = "test-put-token"
+
+    // Helper bash file: fns to grab Node-Hash and orchestrate PUTs.
+    helpers_file = "/tmp/avn_test_put_helpers.sh"
+    write_helpers = "cat > "
+    write_helpers = string.concat(write_helpers, helpers_file)
+    write_helpers = string.concat(write_helpers, " <<'HELPERS'\n")
+    write_helpers = string.concat(write_helpers, "node_hash_of() {\n")
+    write_helpers = string.concat(write_helpers, "  curl -sD - -o /dev/null \"$1\" | awk 'BEGIN{IGNORECASE=1} /^X-Svnae-Node-Hash:/{gsub(/\\r/,\"\"); print $2}'\n")
+    write_helpers = string.concat(write_helpers, "}\n")
+    write_helpers = string.concat(write_helpers, "node_hash_of_super() {\n")
+    write_helpers = string.concat(write_helpers, "  curl -s -H \"X-Svnae-Superuser: ")
+    write_helpers = string.concat(write_helpers, token)
+    write_helpers = string.concat(write_helpers, "\" -D - -o /dev/null \"$1\" | awk '/X-Svnae-Node-Hash/{gsub(/\\r/,\"\"); print $2}'\n")
+    write_helpers = string.concat(write_helpers, "}\nHELPERS")
+
+    src_helpers = "source /tmp/avn_test_put_helpers.sh && "
+
+    // (A) GET current
+    get_main = string.concat("curl -s ", base)
+    get_main = string.concat(get_main, "/path/src/main.c")
+
+    // (B) PUT correct sha
+    put_correct = string.concat(src_helpers, "echo -n 'updated content' > /tmp/put_body && sha=$(node_hash_of '")
+    put_correct = string.concat(put_correct, base)
+    put_correct = string.concat(put_correct, "/path/src/main.c') && ")
+    put_correct = string.concat(put_correct, "curl -s -o /tmp/put_resp -w '%{http_code}' -X PUT --data-binary @/tmp/put_body -H \"Svn-Based-On: $sha\" -H 'Svn-Author: alice' -H 'Svn-Log: direct PUT' '")
+    put_correct = string.concat(put_correct, base)
+    put_correct = string.concat(put_correct, "/path/src/main.c'")
+
+    grep_rev_in_resp = "grep -c '\"rev\":' /tmp/put_resp || true"
+
+    get_main_after = string.concat("curl -s ", base)
+    get_main_after = string.concat(get_main_after, "/path/src/main.c")
+
+    // (C) PUT stale sha
+    put_stale = "curl -s -o /tmp/put_resp -D /tmp/put_hdrs -w '%{http_code}' -X PUT --data-binary @/tmp/put_body -H 'Svn-Based-On: 0000000000000000000000000000000000000000' '"
+    put_stale = string.concat(put_stale, base)
+    put_stale = string.concat(put_stale, "/path/src/main.c'")
+    grep_curr_hash = "grep -ci 'X-Svnae-Current-Hash' /tmp/put_hdrs || true"
+
+    // (D) PUT new file
+    put_new = "echo -n 'brand new' > /tmp/new_body && curl -s -o /tmp/put_resp -w '%{http_code}' -X PUT --data-binary @/tmp/new_body -H 'Svn-Author: alice' '"
+    put_new = string.concat(put_new, base)
+    put_new = string.concat(put_new, "/path/newfile.txt'")
+
+    get_newfile = string.concat("curl -s ", base)
+    get_newfile = string.concat(get_newfile, "/path/newfile.txt")
+
+    // (E) PUT existing without based-on
+    put_exists_no_hdr = "curl -s -o /tmp/put_resp -w '%{http_code}' -X PUT --data-binary @/tmp/put_body '"
+    put_exists_no_hdr = string.concat(put_exists_no_hdr, base)
+    put_exists_no_hdr = string.concat(put_exists_no_hdr, "/path/newfile.txt'")
+
+    // (F) DELETE correct
+    delete_ok = string.concat(src_helpers, "sha=$(node_hash_of '")
+    delete_ok = string.concat(delete_ok, base)
+    delete_ok = string.concat(delete_ok, "/path/newfile.txt') && ")
+    delete_ok = string.concat(delete_ok, "curl -s -o /tmp/put_resp -w '%{http_code}' -X DELETE -H \"Svn-Based-On: $sha\" -H 'Svn-Author: alice' '")
+    delete_ok = string.concat(delete_ok, base)
+    delete_ok = string.concat(delete_ok, "/path/newfile.txt'")
+
+    get_deleted = string.concat("curl -s -o /dev/null -w '%{http_code}' ", base)
+    get_deleted = string.concat(get_deleted, "/path/newfile.txt")
+
+    // (G) DELETE wrong sha
+    delete_wrong = "curl -s -o /dev/null -w '%{http_code}' -X DELETE -H 'Svn-Based-On: deadbeefdeadbeefdeadbeefdeadbeefdeadbeef' '"
+    delete_wrong = string.concat(delete_wrong, base)
+    delete_wrong = string.concat(delete_wrong, "/path/src/main.c'")
+
+    // (H) DELETE absent path
+    delete_absent = "curl -s -o /dev/null -w '%{http_code}' -X DELETE -H 'Svn-Based-On: 0000000000000000000000000000000000000000' '"
+    delete_absent = string.concat(delete_absent, base)
+    delete_absent = string.concat(delete_absent, "/path/does/not/exist.txt'")
+
+    // (I) write-ACL on src + bob denied + alice ok
+    acl_set = string.concat("SVN_SUPERUSER_TOKEN=", token)
+    acl_set = string.concat(acl_set, " ")
+    acl_set = string.concat(acl_set, svn_bin)
+    acl_set = string.concat(acl_set, " acl set ")
+    acl_set = string.concat(acl_set, demo_url)
+    acl_set = string.concat(acl_set, " src '+alice:rw' '-bob' '+*' >/dev/null")
+
+    bob_put = string.concat(src_helpers, "sha=$(node_hash_of_super '")
+    bob_put = string.concat(bob_put, base)
+    bob_put = string.concat(bob_put, "/path/src/main.c') && ")
+    bob_put = string.concat(bob_put, "curl -s -o /dev/null -w '%{http_code}' -X PUT --data-binary 'hack' -H 'X-Svnae-User: bob' -H \"Svn-Based-On: $sha\" '")
+    bob_put = string.concat(bob_put, base)
+    bob_put = string.concat(bob_put, "/path/src/main.c'")
+
+    alice_put = string.concat(src_helpers, "sha=$(node_hash_of_super '")
+    alice_put = string.concat(alice_put, base)
+    alice_put = string.concat(alice_put, "/path/src/main.c') && ")
+    alice_put = string.concat(alice_put, "curl -s -o /tmp/put_resp -w '%{http_code}' -X PUT --data-binary 'alice update' -H 'X-Svnae-User: alice' -H \"Svn-Based-On: $sha\" '")
+    alice_put = string.concat(alice_put, base)
+    alice_put = string.concat(alice_put, "/path/src/main.c'")
+
+    // (J) author defaults from X-Svnae-User
+    alice_put_round2 = string.concat(src_helpers, "sha=$(node_hash_of_super '")
+    alice_put_round2 = string.concat(alice_put_round2, base)
+    alice_put_round2 = string.concat(alice_put_round2, "/path/src/main.c') && ")
+    alice_put_round2 = string.concat(alice_put_round2, "curl -s -o /dev/null -X PUT --data-binary 'round2' -H 'X-Svnae-User: alice' -H \"Svn-Based-On: $sha\" '")
+    alice_put_round2 = string.concat(alice_put_round2, base)
+    alice_put_round2 = string.concat(alice_put_round2, "/path/src/main.c'")
+
+    log_alice_count = string.concat("curl -s ", base)
+    log_alice_count = string.concat(log_alice_count, "/log | grep -c '\"author\":\"alice\"' || true")
+
+    // (K) curl -T pattern
+    curl_t_put = string.concat(src_helpers, "echo -n 'scripted' > /tmp/upload_me && sha=$(node_hash_of_super '")
+    curl_t_put = string.concat(curl_t_put, base)
+    curl_t_put = string.concat(curl_t_put, "/path/src/main.c') && ")
+    curl_t_put = string.concat(curl_t_put, "curl -s -o /tmp/put_resp -w '%{http_code}' -T /tmp/upload_me -H 'X-Svnae-User: alice' -H \"Svn-Based-On: $sha\" '")
+    curl_t_put = string.concat(curl_t_put, base)
+    curl_t_put = string.concat(curl_t_put, "/path/src/main.c'")
+
+    get_after_t = string.concat("curl -s -H 'X-Svnae-User: alice' ", base)
+    get_after_t = string.concat(get_after_t, "/path/src/main.c")
+
+    aeocha.describe(fw, "REST PUT/DELETE on /repos/<r>/path/<p>") {
+
+        aeocha.it("setup: write helpers") callback {
+            _, st, _ = sh(write_helpers)
+            aeocha.expect_exit(fw, st, 0, "helpers exit 0")
+        }
+
+        // (A)
+        aeocha.it("(A) GET path/src/main.c returns 'return 42'") callback {
+            out, _, _ = sh(get_main)
+            aeocha.expect_stdout_contains(fw, out, "return 42",
+                "current content")
+        }
+
+        // (B)
+        aeocha.it("(B) PUT with correct based-on returns 201 + rev") callback {
+            out, _, _ = sh(put_correct)
+            aeocha.expect_stdout_contains(fw, out, "201", "201")
+            r2, _, _ = sh(grep_rev_in_resp)
+            aeocha.expect_stdout_contains(fw, r2, "1", "response had rev")
+            r3, _, _ = sh(get_main_after)
+            aeocha.expect_stdout_contains(fw, r3, "updated content",
+                "content round-trip")
+        }
+
+        // (C)
+        aeocha.it("(C) PUT stale based-on → 409 + Current-Hash header") callback {
+            out, _, _ = sh(put_stale)
+            aeocha.expect_stdout_contains(fw, out, "409", "409")
+            r2, _, _ = sh(grep_curr_hash)
+            aeocha.expect_stdout_contains(fw, r2, "1",
+                "X-Svnae-Current-Hash header present")
+        }
+
+        // (D)
+        aeocha.it("(D) PUT new file (no based-on) → 201") callback {
+            out, _, _ = sh(put_new)
+            aeocha.expect_stdout_contains(fw, out, "201", "201")
+            r2, _, _ = sh(get_newfile)
+            aeocha.expect_stdout_contains(fw, r2, "brand new",
+                "new file content")
+        }
+
+        // (E)
+        aeocha.it("(E) PUT existing file w/o based-on → 409") callback {
+            out, _, _ = sh(put_exists_no_hdr)
+            aeocha.expect_stdout_contains(fw, out, "409", "409")
+        }
+
+        // (F)
+        aeocha.it("(F) DELETE with correct based-on → 200, file gone") callback {
+            out, _, _ = sh(delete_ok)
+            aeocha.expect_stdout_contains(fw, out, "200", "200")
+            r2, _, _ = sh(get_deleted)
+            aeocha.expect_stdout_contains(fw, r2, "404", "404 after delete")
+        }
+
+        // (G)
+        aeocha.it("(G) DELETE wrong-sha → 409") callback {
+            out, _, _ = sh(delete_wrong)
+            aeocha.expect_stdout_contains(fw, out, "409", "409")
+        }
+
+        // (H)
+        aeocha.it("(H) DELETE absent path → 404") callback {
+            out, _, _ = sh(delete_absent)
+            aeocha.expect_stdout_contains(fw, out, "404", "404")
+        }
+
+        // (I)
+        aeocha.it("(I) write-ACL: bob PUT denied, alice PUT ok") callback {
+            _, st, _ = sh(acl_set)
+            aeocha.expect_exit(fw, st, 0, "acl set exit 0")
+            r1, _, _ = sh(bob_put)
+            aeocha.expect_stdout_contains(fw, r1, "403", "bob 403")
+            r2, _, _ = sh(alice_put)
+            aeocha.expect_stdout_contains(fw, r2, "201", "alice 201")
+        }
+
+        // (J)
+        aeocha.it("(J) Author defaults to X-Svnae-User") callback {
+            sh(alice_put_round2)
+            check_alice = "out=$(curl -s "
+            check_alice = string.concat(check_alice, base)
+            check_alice = string.concat(check_alice, "/log | grep -c '\"author\":\"alice\"' || true); [ \"$out\" -gt 0 ] && echo nonzero || echo zero")
+            r2, _, _ = sh(check_alice)
+            aeocha.expect_stdout_contains(fw, r2, "nonzero",
+                "alice authored entries")
+        }
+
+        // (K)
+        aeocha.it("(K) curl -T scripted upload pattern") callback {
+            out, _, _ = sh(curl_t_put)
+            aeocha.expect_stdout_contains(fw, out, "201", "201")
+            r2, _, _ = sh(get_after_t)
+            aeocha.expect_stdout_contains(fw, r2, "scripted",
+                "uploaded content visible")
+        }
+    }
+
+    aeocha.run_summary(fw)
+}

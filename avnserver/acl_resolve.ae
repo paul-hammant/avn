@@ -1,0 +1,110 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// permissions and limitations under the License.
+
+// /rev/N/acl/<path> response body builder. Ported from the "/acl"
+// branch of handle_repo_rev in avnserver/shim.c.
+//
+// Walks the paths-acl blob from `target` upward (nearest ancestor
+// with a rule wins), reads that ancestor's per-path acl rules, and
+// emits the JSON response with both the rules and the
+// `effective_from` path.
+
+import std.string
+
+extern rep_read_blob(repo: string, sha: string) -> string
+extern rep_free(body: string)
+
+// Round 57: load_rev_blob_field is the Aether-side helper from
+// rev_load.ae — round-tripping via the C shim's three
+// svnserver_load_rev_{acl_root,props_sha,root_sha} wrappers was
+// pure boilerplate.
+extern load_rev_blob_field(repo: string, rev: int, key: string) -> string
+extern paths_index_ancestor_nearest(body: string, target: string) -> string
+extern acl_response_json(rules_body: string, effective_from: string) -> string
+
+export acl_resolve_json(repo: string, rev: int, target: string) -> string {
+    acl_root = load_rev_blob_field(repo, rev, "acl")
+    if string.length(acl_root) == 0 {
+        return "{\"rules\":[],\"effective_from\":\"\"}"
+    }
+    paths_body = rep_read_blob(repo, acl_root)
+    if string.length(paths_body) == 0 {
+        return "{\"rules\":[],\"effective_from\":\"\"}"
+    }
+
+    // Nearest ancestor is "sha\tpath". Empty means no match.
+    nearest = paths_index_ancestor_nearest(paths_body, target)
+    rep_free(paths_body)
+    if string.length(nearest) == 0 {
+        return "{\"rules\":[],\"effective_from\":\"\"}"
+    }
+
+    // Split on tab.
+    tab_idx = 0 - 1
+    n = string.length(nearest)
+    i = 0
+    while i < n {
+        if string.char_at(nearest, i) == 9 { tab_idx = i; break }
+        i = i + 1
+    }
+    if tab_idx < 0 {
+        return "{\"rules\":[],\"effective_from\":\"\"}"
+    }
+    eff_sha = string.substring(nearest, 0, tab_idx)
+    eff_path = string.substring(nearest, tab_idx + 1, n)
+
+    rules_body = rep_read_blob(repo, eff_sha)
+    body = acl_response_json(rules_body, eff_path)
+    rep_free(rules_body)
+    return body
+}
+
+
+// /rev/N/props/<path> lookup. Returns "<per-path-sha>\x01<json body>"
+// on success, "\x01{}" when no props for target. The C caller splits
+// on \x01, sets the Merkle header from the sha half, and emits the
+// body half.
+
+extern paths_index_lookup(body: string, path: string) -> string
+extern props_blob_to_json(body: string) -> string
+
+export props_resolve(repo: string, rev: int, target: string) -> string {
+    props_sha = load_rev_blob_field(repo, rev, "props")
+    if string.length(props_sha) == 0 { return "\x01{}" }
+
+    paths_body = rep_read_blob(repo, props_sha)
+    if string.length(paths_body) == 0 { return "\x01{}" }
+
+    per_path_sha = paths_index_lookup(paths_body, target)
+    per_path_sha = string.copy(per_path_sha)
+    rep_free(paths_body)
+    if string.length(per_path_sha) == 0 { return "\x01{}" }
+
+    props_body = rep_read_blob(repo, per_path_sha)
+    if string.length(props_body) == 0 {
+        out = string.concat(per_path_sha, "\x01")
+        return string.concat(out, "{}")
+    }
+
+    json = props_blob_to_json(props_body)
+    rep_free(props_body)
+    out = string.concat(per_path_sha, "\x01")
+    return string.concat(out, json)
+}
+
+
+main() {
+    println("avnserver/acl_resolve.ae is a library; not meant to run standalone")
+}

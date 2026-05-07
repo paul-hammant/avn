@@ -1,0 +1,204 @@
+// Copyright 2026 Paul Hammant (portions).
+// Apache License, Version 2.0 — see LICENSE.
+//
+// Aether driver for svn verify (sha1 + sha256 + tamper detection).
+// Round 251. Migrated from avn/test_verify.sh.
+
+import contrib.aeocha
+import std.os
+import std.os (os_getenv)
+import std.string
+
+extern list_new() -> ptr
+extern list_add_raw(list: ptr, item: ptr) -> int
+
+argv_new() -> { return list_new() }
+argv_push(argv: ptr, s: string) { list_add_raw(argv, s) }
+
+sh(cmd: string) -> {
+    argv = argv_new()
+    argv_push(argv, "-c")
+    argv_push(argv, cmd)
+    out, status, err = os.run_capture("/bin/bash", argv, null)
+    return out, status, err
+}
+
+main() {
+    fw = aeocha.init()
+    svn_bin    = os_getenv("SVN_BIN")
+    admin_bin  = os_getenv("ADMIN_BIN")
+    server_bin = os_getenv("SERVER_BIN")
+    port_s     = os_getenv("TEST_VERIFY_PORT")
+    pid_s      = os_getenv("TEST_VERIFY_PID")
+    repo       = os_getenv("TEST_VERIFY_PATH")
+    url        = string.concat("http://127.0.0.1:", string.concat(port_s, "/demo"))
+    base       = string.concat("http://127.0.0.1:", string.concat(port_s, "/repos/demo"))
+
+    // (A) verify HEAD + verify --rev 1 on sha1 repo
+    verify_head = string.concat(svn_bin, " verify ")
+    verify_head = string.concat(verify_head, url)
+    verify_head = string.concat(verify_head, " 2>&1 | grep -c '^verify: OK' || true")
+
+    verify_r1 = string.concat(svn_bin, " verify ")
+    verify_r1 = string.concat(verify_r1, url)
+    verify_r1 = string.concat(verify_r1, " --rev 1 2>&1 | grep -c '^verify: OK' || true")
+
+    // (B) headers
+    cat_hdrs = string.concat("curl -sD - -o /dev/null ", base)
+    cat_hdrs = string.concat(cat_hdrs, "/rev/3/cat/src/main.c")
+    list_hdrs = string.concat("curl -sD - -o /dev/null ", base)
+    list_hdrs = string.concat(list_hdrs, "/rev/3/list/src")
+
+    // (C) tamper: identify sha, overwrite, verify, restore.
+    // Aether eats ${...} at parse time, so use awk/cut for substrings
+    // and plain $var (no braces) for variable references.
+    tamper = "sha=$(curl -sD - -o /dev/null "
+    tamper = string.concat(tamper, base)
+    tamper = string.concat(tamper, "/rev/3/cat/src/main.c | awk 'BEGIN{IGNORECASE=1} /X-Svnae-Node-Hash:/{gsub(/\\r/,\"\"); print $2}') && ")
+    tamper = string.concat(tamper, "sha2=$(printf %s $sha | cut -c1-2) && sha34=$(printf %s $sha | cut -c3-4) && ")
+    tamper = string.concat(tamper, "target=\"")
+    tamper = string.concat(tamper, repo)
+    tamper = string.concat(tamper, "/reps/$sha2/$sha34/$sha.rep\" && test -f \"$target\" && cp \"$target\" \"$target.bak\" && ")
+    tamper = string.concat(tamper, "hdr_byte=$(head -c1 \"$target\") && ")
+    tamper = string.concat(tamper, "if [ \"$hdr_byte\" = \"R\" ]; then printf 'X' | dd of=\"$target\" bs=1 seek=5 count=1 conv=notrunc 2>/dev/null; else size=$(stat -c%s \"$target\"); off=$((size - 1)); printf '\\x00' | dd of=\"$target\" bs=1 seek=$off count=1 conv=notrunc 2>/dev/null; fi")
+
+    verify_after_tamper = string.concat(svn_bin, " verify ")
+    verify_after_tamper = string.concat(verify_after_tamper, url)
+    verify_after_tamper = string.concat(verify_after_tamper, " 2>&1 || true")
+
+    // Restore is best-effort — sed strips .bak (Aether eats ${d%.bak}
+    // at parse time so we can't use bash suffix-strip directly).
+    restore_blob = "for d in "
+    restore_blob = string.concat(restore_blob, repo)
+    restore_blob = string.concat(restore_blob, "/reps/*/*/*.bak; do dst=$(echo \"$d\" | sed 's/\\.bak$//'); mv \"$d\" \"$dst\"; done")
+
+    // (D) sha256 stage. Kill fixture server, create sha256 repo, spawn server,
+    //     populate via WC + commit, verify, kill, clean.
+    repo2 = "/tmp/avn_verify_repo_256"
+    port2 = "9531"  // hardcoded since we kill the fixture and spawn a new one
+    wc2   = "/tmp/avn_verify_wc"
+    url2  = string.concat("http://127.0.0.1:", string.concat(port2, "/demo"))
+
+    kill_fixture = "kill "
+    kill_fixture = string.concat(kill_fixture, pid_s)
+    kill_fixture = string.concat(kill_fixture, " 2>/dev/null || true; wait ")
+    kill_fixture = string.concat(kill_fixture, pid_s)
+    kill_fixture = string.concat(kill_fixture, " 2>/dev/null || true")
+
+    spawn_sha256 = string.concat("rm -rf ", repo2)
+    spawn_sha256 = string.concat(spawn_sha256, " && ")
+    spawn_sha256 = string.concat(spawn_sha256, admin_bin)
+    spawn_sha256 = string.concat(spawn_sha256, " create ")
+    spawn_sha256 = string.concat(spawn_sha256, repo2)
+    spawn_sha256 = string.concat(spawn_sha256, " --algos sha256 >/dev/null && ")
+    spawn_sha256 = string.concat(spawn_sha256, "(nohup ")
+    spawn_sha256 = string.concat(spawn_sha256, server_bin)
+    spawn_sha256 = string.concat(spawn_sha256, " demo ")
+    spawn_sha256 = string.concat(spawn_sha256, repo2)
+    spawn_sha256 = string.concat(spawn_sha256, " ")
+    spawn_sha256 = string.concat(spawn_sha256, port2)
+    spawn_sha256 = string.concat(spawn_sha256, " >/tmp/avn_verify_srv2.log 2>&1 & echo $! > /tmp/avn_verify_srv2.pid; disown)")
+
+    wait_ready = "sleep 1.5"
+
+    populate = string.concat("rm -rf ", wc2)
+    populate = string.concat(populate, " && ")
+    populate = string.concat(populate, svn_bin)
+    populate = string.concat(populate, " checkout ")
+    populate = string.concat(populate, url2)
+    populate = string.concat(populate, " ")
+    populate = string.concat(populate, wc2)
+    populate = string.concat(populate, " >/dev/null && cd ")
+    populate = string.concat(populate, wc2)
+    populate = string.concat(populate, " && mkdir dir1 && echo alpha > dir1/a.txt && echo beta > top.txt && ")
+    populate = string.concat(populate, svn_bin)
+    populate = string.concat(populate, " add dir1 top.txt >/dev/null && ")
+    populate = string.concat(populate, svn_bin)
+    populate = string.concat(populate, " commit --author alice --log populate >/dev/null")
+
+    verify_sha256 = string.concat(svn_bin, " verify ")
+    verify_sha256 = string.concat(verify_sha256, url2)
+    verify_sha256 = string.concat(verify_sha256, " 2>&1 | grep -c '^verify: OK.*sha256' || true")
+
+    cleanup_sha256 = string.concat("kill $(cat /tmp/avn_verify_srv2.pid) 2>/dev/null || true; rm -rf ", repo2)
+    cleanup_sha256 = string.concat(cleanup_sha256, " ")
+    cleanup_sha256 = string.concat(cleanup_sha256, wc2)
+
+    aeocha.describe(fw, "svn verify (sha1 + sha256 + tamper)") {
+
+        // (A)
+        aeocha.it("verify HEAD on sha1 repo prints OK") callback {
+            out, _, _ = sh(verify_head)
+            aeocha.expect_stdout_contains(fw, out, "1", "1 OK line")
+        }
+
+        aeocha.it("verify --rev 1 on sha1 repo prints OK") callback {
+            out, _, _ = sh(verify_r1)
+            aeocha.expect_stdout_contains(fw, out, "1", "1 OK line")
+        }
+
+        // (B) headers on cat / list
+        aeocha.it("cat carries X-Svnae-Node-Hash + Hash-Algo + Node-Kind") callback {
+            hdrs, _, _ = sh(cat_hdrs)
+            aeocha.expect_stdout_contains(fw, hdrs, "X-Svnae-Node-Hash",
+                "Node-Hash header")
+            aeocha.expect_stdout_contains(fw, hdrs, "X-Svnae-Hash-Algo",
+                "Hash-Algo header")
+            aeocha.expect_stdout_contains(fw, hdrs, "X-Svnae-Node-Kind",
+                "Node-Kind header")
+        }
+
+        aeocha.it("list carries X-Svnae-Node-Hash") callback {
+            hdrs, _, _ = sh(list_hdrs)
+            aeocha.expect_stdout_contains(fw, hdrs, "X-Svnae-Node-Hash",
+                "Node-Hash header on list")
+        }
+
+        // (C) tamper detection
+        aeocha.it("tamper: overwrite a stored .rep blob") callback {
+            _, st, _ = sh(tamper)
+            aeocha.expect_exit(fw, st, 0, "tamper exit 0")
+        }
+
+        aeocha.it("verify after tamper does NOT print 'verify: OK'") callback {
+            // Single shell pipeline: run verify, count OK lines; should be 0.
+            check_no_ok = string.concat(svn_bin, " verify ")
+            check_no_ok = string.concat(check_no_ok, url)
+            check_no_ok = string.concat(check_no_ok, " 2>&1 | grep -c '^verify: OK' || true")
+            out, _, _ = sh(check_no_ok)
+            aeocha.expect_stdout_contains(fw, out, "0",
+                "no 'verify: OK' after tamper")
+        }
+
+        aeocha.it("restore tampered blob") callback {
+            _, st, _ = sh(restore_blob)
+            aeocha.assert_eq(fw, 1, 1, "trivial — restore best effort")
+        }
+
+        // (D) sha256 stage
+        aeocha.it("kill fixture server + spawn sha256 server") callback {
+            sh(kill_fixture)
+            _, st, _ = sh(spawn_sha256)
+            aeocha.expect_exit(fw, st, 0, "spawn exit 0")
+            sh(wait_ready)
+        }
+
+        aeocha.it("populate sha256 repo via WC + commit") callback {
+            _, st, _ = sh(populate)
+            aeocha.expect_exit(fw, st, 0, "populate exit 0")
+        }
+
+        aeocha.it("svn verify on sha256 repo prints OK + algo") callback {
+            out, _, _ = sh(verify_sha256)
+            aeocha.expect_stdout_contains(fw, out, "1",
+                "1 'verify: OK ... sha256' line")
+        }
+
+        aeocha.it("cleanup: kill sha256 server + rm repo/WC") callback {
+            sh(cleanup_sha256)
+            aeocha.assert_eq(fw, 1, 1, "trivial — best effort cleanup")
+        }
+    }
+
+    aeocha.run_summary(fw)
+}

@@ -1,0 +1,213 @@
+// Copyright 2026 Paul Hammant (portions).
+// Apache License, Version 2.0 — see LICENSE.
+//
+// Aether driver for svn blame / annotate / praise.
+// Round 248. Migrated from avn/test_blame.sh.
+
+import contrib.aeocha
+import std.os
+import std.os (os_getenv)
+import std.string
+
+extern list_new() -> ptr
+extern list_add_raw(list: ptr, item: ptr) -> int
+
+argv_new() -> { return list_new() }
+argv_push(argv: ptr, s: string) { list_add_raw(argv, s) }
+
+sh(cmd: string) -> {
+    argv = argv_new()
+    argv_push(argv, "-c")
+    argv_push(argv, cmd)
+    out, status, err = os.run_capture("/bin/bash", argv, null)
+    return out, status, err
+}
+
+main() {
+    fw = aeocha.init()
+    svn_bin = os_getenv("SVN_BIN")
+    port    = os_getenv("TEST_BLAME_PORT")
+    url     = string.concat("http://127.0.0.1:", string.concat(port, "/demo"))
+    wc      = "/tmp/avn_test_blame_wc"
+    token   = "blame-super-token"
+
+    // Build history: r4 adds file, r5 edits line 2, r6 appends, r7 inserts.
+    setup = string.concat("rm -rf ", wc)
+    setup = string.concat(setup, " && ")
+    setup = string.concat(setup, svn_bin)
+    setup = string.concat(setup, " checkout ")
+    setup = string.concat(setup, url)
+    setup = string.concat(setup, " ")
+    setup = string.concat(setup, wc)
+    setup = string.concat(setup, " >/dev/null && cd ")
+    setup = string.concat(setup, wc)
+    setup = string.concat(setup, " && printf 'line1\\nline2\\nline3\\n' > file.txt && ")
+    setup = string.concat(setup, svn_bin)
+    setup = string.concat(setup, " add file.txt >/dev/null && ")
+    setup = string.concat(setup, svn_bin)
+    setup = string.concat(setup, " commit --author alice --log 'r4 initial' >/dev/null && ")
+    setup = string.concat(setup, "printf 'line1\\nEDITED\\nline3\\n' > file.txt && ")
+    setup = string.concat(setup, svn_bin)
+    setup = string.concat(setup, " commit --author bob --log 'r5 edit' >/dev/null && ")
+    setup = string.concat(setup, "printf 'line1\\nEDITED\\nline3\\nADDED\\n' > file.txt && ")
+    setup = string.concat(setup, svn_bin)
+    setup = string.concat(setup, " commit --author carol --log 'r6 append' >/dev/null && ")
+    setup = string.concat(setup, "printf 'line1\\nMIDDLE\\nEDITED\\nline3\\nADDED\\n' > file.txt && ")
+    setup = string.concat(setup, svn_bin)
+    setup = string.concat(setup, " commit --author dave --log 'r7 insert' >/dev/null")
+
+    o0, setup_st, e0 = sh(setup)
+
+    // Helper: run blame/annotate/praise + sed -n 'Np' to extract line N
+    blame_line_n_url = string.concat(svn_bin, " blame ")
+    blame_line_n_url = string.concat(blame_line_n_url, url)
+    blame_line_n_url = string.concat(blame_line_n_url, " file.txt | sed -n '")
+
+    blame1 = string.concat(blame_line_n_url, "1p'")
+    blame2 = string.concat(blame_line_n_url, "2p'")
+    blame3 = string.concat(blame_line_n_url, "3p'")
+    blame4 = string.concat(blame_line_n_url, "4p'")
+    blame5 = string.concat(blame_line_n_url, "5p'")
+
+    // --rev 5 variants
+    blame_r5_n = string.concat(svn_bin, " blame ")
+    blame_r5_n = string.concat(blame_r5_n, url)
+    blame_r5_n = string.concat(blame_r5_n, " file.txt --rev 5 | sed -n '")
+    blame_r5_1 = string.concat(blame_r5_n, "1p'")
+    blame_r5_2 = string.concat(blame_r5_n, "2p'")
+    blame_r5_3 = string.concat(blame_r5_n, "3p'")
+    blame_r5_count = string.concat(svn_bin, " blame ")
+    blame_r5_count = string.concat(blame_r5_count, url)
+    blame_r5_count = string.concat(blame_r5_count, " file.txt --rev 5 | wc -l")
+
+    // ACL setup: add /secret/plan.txt, set ACL super-only
+    acl_setup = string.concat("cd ", wc)
+    acl_setup = string.concat(acl_setup, " && mkdir -p secret && echo 'top secret' > secret/plan.txt && ")
+    acl_setup = string.concat(acl_setup, svn_bin)
+    acl_setup = string.concat(acl_setup, " add secret >/dev/null && ")
+    acl_setup = string.concat(acl_setup, svn_bin)
+    acl_setup = string.concat(acl_setup, " add secret/plan.txt >/dev/null && ")
+    acl_setup = string.concat(acl_setup, svn_bin)
+    acl_setup = string.concat(acl_setup, " commit --author admin --log 'add secret' >/dev/null && cd / && SVN_SUPERUSER_TOKEN=")
+    acl_setup = string.concat(acl_setup, token)
+    acl_setup = string.concat(acl_setup, " ")
+    acl_setup = string.concat(acl_setup, svn_bin)
+    acl_setup = string.concat(acl_setup, " acl set ")
+    acl_setup = string.concat(acl_setup, url)
+    acl_setup = string.concat(acl_setup, " secret '-*' '+super' >/dev/null")
+
+    blame_denied = string.concat("SVN_USER=bob ", svn_bin)
+    blame_denied = string.concat(blame_denied, " blame ")
+    blame_denied = string.concat(blame_denied, url)
+    blame_denied = string.concat(blame_denied, " secret/plan.txt 2>&1 | grep -c 'top secret' || true")
+
+    blame_super = string.concat("SVN_SUPERUSER_TOKEN=", token)
+    blame_super = string.concat(blame_super, " ")
+    blame_super = string.concat(blame_super, svn_bin)
+    blame_super = string.concat(blame_super, " blame ")
+    blame_super = string.concat(blame_super, url)
+    blame_super = string.concat(blame_super, " secret/plan.txt 2>&1 | grep -c 'top secret' || true")
+
+    annotate_1 = string.concat(svn_bin, " annotate ")
+    annotate_1 = string.concat(annotate_1, url)
+    annotate_1 = string.concat(annotate_1, " file.txt | sed -n '1p'")
+    praise_1   = string.concat(svn_bin, " praise ")
+    praise_1   = string.concat(praise_1, url)
+    praise_1   = string.concat(praise_1, " file.txt | sed -n '1p'")
+
+    aeocha.describe(fw, "svn blame / annotate / praise") {
+
+        aeocha.it("setup: r4..r7 history committed") callback {
+            aeocha.expect_exit(fw, setup_st, 0, "setup exit 0")
+        }
+
+        // (A/B/C/D) HEAD blame line-by-line
+        aeocha.it("HEAD line 1: r4 alice line1") callback {
+            out, _, _ = sh(blame1)
+            aeocha.expect_stdout_contains(fw, out, "4 alice line1",
+                "r4 attribution for line1")
+        }
+
+        aeocha.it("HEAD line 2: r7 dave MIDDLE") callback {
+            out, _, _ = sh(blame2)
+            aeocha.expect_stdout_contains(fw, out, "7 dave MIDDLE",
+                "r7 attribution for MIDDLE")
+        }
+
+        aeocha.it("HEAD line 3: r5 bob EDITED") callback {
+            out, _, _ = sh(blame3)
+            aeocha.expect_stdout_contains(fw, out, "5 bob EDITED",
+                "r5 attribution for EDITED")
+        }
+
+        aeocha.it("HEAD line 4: r4 alice line3 (survived)") callback {
+            out, _, _ = sh(blame4)
+            aeocha.expect_stdout_contains(fw, out, "4 alice line3",
+                "r4 attribution for line3")
+        }
+
+        aeocha.it("HEAD line 5: r6 carol ADDED") callback {
+            out, _, _ = sh(blame5)
+            aeocha.expect_stdout_contains(fw, out, "6 carol ADDED",
+                "r6 attribution for ADDED")
+        }
+
+        // (E) --rev 5
+        aeocha.it("--rev 5 line 1: r4 alice line1") callback {
+            out, _, _ = sh(blame_r5_1)
+            aeocha.expect_stdout_contains(fw, out, "4 alice line1",
+                "r4 attribution at r5")
+        }
+
+        aeocha.it("--rev 5 line 2: r5 bob EDITED") callback {
+            out, _, _ = sh(blame_r5_2)
+            aeocha.expect_stdout_contains(fw, out, "5 bob EDITED",
+                "r5 attribution at r5")
+        }
+
+        aeocha.it("--rev 5 line 3: r4 alice line3") callback {
+            out, _, _ = sh(blame_r5_3)
+            aeocha.expect_stdout_contains(fw, out, "4 alice line3",
+                "r4 attribution at r5")
+        }
+
+        aeocha.it("--rev 5 has exactly 3 lines") callback {
+            out, _, _ = sh(blame_r5_count)
+            aeocha.expect_stdout_contains(fw, out, "3",
+                "wc -l reports 3")
+        }
+
+        // (F) ACL denied
+        aeocha.it("ACL denial: super sets -*+super on /secret") callback {
+            _, st, _ = sh(acl_setup)
+            aeocha.expect_exit(fw, st, 0, "acl_setup exit 0")
+        }
+
+        aeocha.it("denied user sees no content (top secret count = 0)") callback {
+            out, _, _ = sh(blame_denied)
+            aeocha.expect_stdout_contains(fw, out, "0",
+                "denied stdout has no 'top secret'")
+        }
+
+        aeocha.it("super user sees content (top secret count = 1)") callback {
+            out, _, _ = sh(blame_super)
+            aeocha.expect_stdout_contains(fw, out, "1",
+                "super stdout has 'top secret'")
+        }
+
+        // (G) aliases
+        aeocha.it("annotate alias yields the same line 1") callback {
+            out, _, _ = sh(annotate_1)
+            aeocha.expect_stdout_contains(fw, out, "4 alice line1",
+                "annotate = blame")
+        }
+
+        aeocha.it("praise alias yields the same line 1") callback {
+            out, _, _ = sh(praise_1)
+            aeocha.expect_stdout_contains(fw, out, "4 alice line1",
+                "praise = blame")
+        }
+    }
+
+    aeocha.run_summary(fw)
+}

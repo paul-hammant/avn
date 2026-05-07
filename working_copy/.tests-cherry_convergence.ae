@@ -21,22 +21,22 @@ import aether (driver, output, binary_under_test, path)
 
 main() {
     b = build.start()
-    build.dep(b, "svn")
-    build.dep(b, "svnadmin")
-    build.dep(b, "svnserver")
+    build.dep(b, "avn")
+    build.dep(b, "avnadmin")
+    build.dep(b, "avnserver")
 
     aether.driver_test(b) {
         driver(".test_cherry_convergence_driver.ae")
         output("test_cherry_convergence_driver")
 
         binary_under_test(b, "svn") {
-            path("target/svn/bin/svn")
+            path("target/avn/bin/svn")
         }
         binary_under_test(b, "admin") {
-            path("target/svnadmin/bin/svnadmin")
+            path("target/avnadmin/bin/svnadmin")
         }
         binary_under_test(b, "server") {
-            path("target/svnserver/bin/aether-svnserver")
+            path("target/avnserver/bin/aether-svnserver")
         }
     }
 }

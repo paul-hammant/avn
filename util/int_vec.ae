@@ -9,7 +9,7 @@
 
 // int_vec — growable wrapper around std.intarr.
 //
-// std.intarr is a fixed-size packed int buffer; svn-aether port
+// std.intarr is a fixed-size packed int buffer; avn port
 // callers (txn edit list, remote_tree node list) need append-style
 // growth without knowing the final count up-front. This wraps
 // intarr with a (capacity, count) pair encoded so we can

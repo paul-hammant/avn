@@ -18,7 +18,7 @@
 //   - $repo/head  → head revision number
 //   - $repo/revs/NNNNNN  → rev blob sha (with trailing ws trimmed)
 //
-// Mirrors the already-existing svnserver/rev_load.ae; a follow-up
+// Mirrors the already-existing avnserver/rev_load.ae; a follow-up
 // commit may collapse the two.
 
 import std.string
@@ -33,7 +33,7 @@ repos_pad6(n: int) -> string {
     return string.concat(string.substring("000000", 0, 6 - slen), s)
 }
 
-// Local name avoids colliding with svnserver/rev_load.ae's rtrim_ws.
+// Local name avoids colliding with avnserver/rev_load.ae's rtrim_ws.
 repos_rtrim_ws(s: string) -> string {
     n = string.length(s)
     keep_going = 1
@@ -98,7 +98,7 @@ export repos_rev_blob_sha(repo: string, rev: int) -> string {
 
 // Two-hop loader: read the rev's pointer file, load the referenced
 // rep blob, extract the named field. Returns "" on any miss. This
-// is the "repos" version of svnserver/rev_load.ae's identical
+// is the "repos" version of avnserver/rev_load.ae's identical
 // function; both binaries link; shim.c callers bind to whichever
 // one is in scope via the repos_rev_field name.
 extern rep_read_blob(repo: string, sha: string) -> string

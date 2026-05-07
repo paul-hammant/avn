@@ -1,0 +1,123 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// permissions and limitations under the License.
+
+// /info response body builder. Ported from handle_repo_info in
+// avnserver/shim.c — the C side now just fetches head + hash algo,
+// calls this, and writes the result to the response.
+//
+// Response shape:
+//   {
+//     "head":   42,
+//     "name":   "demo",
+//     "hash":   "sha1",                          (primary algo)
+//     "branches": ["main", "feature-x", ...],    (always includes "main")
+//     "specs":    { "main": [], "feature-x": ["src/**", "README.md"] }
+//   }
+//
+// Branch enumeration is by listing $repo/branches/; "main" is implicit
+// if no on-disk dir exists for it.
+
+import std.string
+
+extern info_prelude_json(head: int, name: string, hash_algo: string) -> string
+extern specs_to_json_array(body: string) -> string
+extern json_escape_string(s: string) -> string
+
+extern io_listdir(path: string) -> ptr
+extern io_listdir_count(handle: ptr) -> int
+extern io_listdir_name(handle: ptr, i: int) -> string
+extern io_listdir_free(handle: ptr)
+extern io_read_file(path: string) -> string
+extern io_file_size(path: string) -> int
+extern io_exists(path: string) -> int
+extern path_join_rel(prefix: string, name: string) -> string
+
+export info_json(repo: string, name: string, head: int, hash_algo: string) -> string {
+    branches_dir = path_join_rel(repo, "branches")
+    out = info_prelude_json(head, name, hash_algo)
+
+    // --- branches array -------------------------------------------------
+    out = string.concat(out, ",\"branches\":[")
+    out = string.concat(out, json_escape_string("main"))
+
+    d = io_listdir(branches_dir)
+    if d != null {
+        n = io_listdir_count(d)
+        i = 0
+        while i < n {
+            nm = io_listdir_name(d, i)
+            if string.equals(nm, "main") == 0 {
+                out = string.concat(out, ",")
+                out = string.concat(out, json_escape_string(nm))
+            }
+            i = i + 1
+        }
+        io_listdir_free(d)
+    }
+    out = string.concat(out, "]")
+
+    // --- specs object ---------------------------------------------------
+    out = string.concat(out, ",\"specs\":{")
+    first = 1
+    d2 = io_listdir(branches_dir)
+    if d2 != null {
+        n = io_listdir_count(d2)
+        i = 0
+        while i < n {
+            nm = io_listdir_name(d2, i)
+            // Snapshot — path_join_rel allocs, but
+            // io_listdir_name returns into the list's buffer.
+            nm = string.copy(nm)
+            spec_path = path_join_rel(branches_dir, nm)
+            spec_path = path_join_rel(spec_path, "spec")
+
+            if first == 0 { out = string.concat(out, ",") }
+            first = 0
+            out = string.concat(out, json_escape_string(nm))
+            out = string.concat(out, ":")
+
+            spec_sz = io_file_size(spec_path)
+            emitted = 0
+            if spec_sz > 0 {
+                if spec_sz < 65536 {
+                    spec_buf = io_read_file(spec_path)
+                    if string.length(spec_buf) > 0 {
+                        out = string.concat(out, specs_to_json_array(spec_buf))
+                        emitted = 1
+                    }
+                }
+            }
+            if emitted == 0 {
+                out = string.concat(out, "[]")
+            }
+            i = i + 1
+        }
+        io_listdir_free(d2)
+    }
+    // If main wasn't already listed (no on-disk dir), emit [] for it.
+    main_spec = path_join_rel(branches_dir, "main")
+    if io_exists(main_spec) == 0 {
+        if first == 0 { out = string.concat(out, ",") }
+        out = string.concat(out, "\"main\":[]")
+    }
+    out = string.concat(out, "}")
+    out = string.concat(out, "}")
+    return out
+}
+
+
+main() {
+    println("avnserver/info_json.ae is a library; not meant to run standalone")
+}
