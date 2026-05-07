@@ -106,6 +106,13 @@ export handler_commit(req: ptr, res: ptr) {
         svnserver_respond_error(res, 500, "commit failed")
         return
     }
+    if rv == -12 {
+        // Classical SVN's out-of-date condition: base_rev < HEAD and
+        // an intervening rev touched one of the txn's paths. Surface
+        // as 409 Conflict so the client can fetch + retry.
+        svnserver_respond_error(res, 409, "out of date — fetch and retry")
+        return
+    }
 
     svnserver_respond_json_ok(res, rev_response_json(rv))
 }

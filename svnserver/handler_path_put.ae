@@ -125,6 +125,10 @@ export handler_path_put(req: ptr, res: ptr) {
 
     new_rev = commit_finalise(repo, txn, "main", hdr_author, hdr_log, "", "")
     txn_free(txn)
+    if new_rev == 0 - 12 {
+        svnserver_respond_error(res, 409, "out of date — fetch and retry")
+        return
+    }
     if new_rev < 0 {
         svnserver_respond_error(res, 500, "commit failed")
         return

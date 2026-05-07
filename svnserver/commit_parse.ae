@@ -36,6 +36,7 @@
 //   -9   : base64 decode failed
 //   -10  : unknown op
 //   -11  : commit finalise failed
+//   -12  : out of date (base_rev predates HEAD and a path conflicts)
 
 import std.string
 import std.json
@@ -340,6 +341,9 @@ export commit_from_body(req: ptr, res: ptr, repo: string) -> int {
                                      use_props_sha, use_acl_sha)
     txn_free(txn)
 
+    // Pass through -12 (out of date) so the HTTP handler can map it
+    // to 409. Any other negative result is a generic commit failure.
+    if new_rev == 0 - 12 { return -12 }
     if new_rev < 0 { return -11 }
     return new_rev
 }

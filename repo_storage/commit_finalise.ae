@@ -64,6 +64,10 @@ extern repos_paths_count(P: ptr) -> int
 extern repos_paths_path(P: ptr, i: int) -> string
 extern repos_paths_free(P: ptr)
 
+// txn introspection — needed for the out-of-date check below.
+extern txn_count(t: ptr) -> int
+extern txn_edit_path(t: ptr, i: int) -> string
+
 // ---- private helpers ------------------------------------------------
 
 // Load the root-dir sha1 for a given revision. "" on miss (caller
@@ -156,11 +160,65 @@ count_globs_(globs_joined: string) -> int {
     return n
 }
 
+// Out-of-date detector. Returns 1 if any path the txn touches was
+// modified on `branch` in the half-open range (base_rev..head_rev],
+// 0 if not, 0 also on infrastructure failure (fail-open is the
+// classical SVN choice — the alternative is locking up commits when
+// path_rev hasn't been populated yet for very old repos).
+//
+// Uses the path_rev secondary index (one row per (branch, path, rev)
+// — see populate_path_rev_ below) so a stale-WC commit costs one
+// indexed lookup per txn edit, not a full rev-blob walk.
+check_txn_out_of_date_(repo: string, txn: ptr, branch: string,
+                       base_rev: int, head_rev: int) -> int {
+    if base_rev >= head_rev { return 0 }
+    n = txn_count(txn)
+    if n == 0 { return 0 }
+
+    db, oerr = sqlite.open("${repo}/rep-cache.db")
+    if string.length(oerr) > 0 { return 0 }
+
+    stmt, perr = sqlite.prepare(db,
+        "SELECT 1 FROM path_rev WHERE branch = ? AND path = ? AND rev > ? AND rev <= ? LIMIT 1")
+    if string.length(perr) > 0 {
+        // path_rev table missing on a very old repo — schema retrofit
+        // happens on the first populate_path_rev_ call, so bail out
+        // permissively until then.
+        sqlite.close(db)
+        return 0
+    }
+
+    found = 0
+    i = 0
+    while i < n {
+        if found == 1 { break }
+        path = txn_edit_path(txn, i)
+        sqlite.bind_text(stmt, 1, branch)
+        sqlite.bind_text(stmt, 2, path)
+        sqlite.bind_int (stmt, 3, base_rev)
+        sqlite.bind_int (stmt, 4, head_rev)
+        rc, _ = sqlite.step(stmt, db)
+        if rc == 100 { found = 1 }   // SQLITE_ROW
+        sqlite.reset(stmt)
+        i = i + 1
+    }
+    sqlite.finalize(stmt)
+    sqlite.close(db)
+    return found
+}
+
 // ---- public entry points -------------------------------------------
 
 // Branch-aware commit finalise core. Private impl so the legacy
 // wrappers below can forward to it without an export-to-export call
 // (Aether requires forward references resolve in declaration order).
+//
+// Returns:
+//   N >= 0  the new revision number on success
+//   -1      generic failure (txn invalid, base_root missing, write fail)
+//   -12     out of date: at least one txn path was modified on this
+//           branch between base_rev and HEAD. Caller (HTTP handler /
+//           svn cli) should surface this distinct from generic failure.
 finalise_on_branch_(repo: string, txn: ptr,
                      branch: string,
                      author: string, logmsg: string,
@@ -169,16 +227,34 @@ finalise_on_branch_(repo: string, txn: ptr,
 
     base_rev = txn_base_rev(txn)
     if base_rev < 0 { return 0 - 1 }
-    base_root = load_rev_root_sha1_(repo, base_rev)
+
+    prev = repos_head_rev(repo)
+    if prev < 0 { return 0 - 1 }
+    next = prev + 1
+
+    // Out-of-date check. Classical SVN refuses any commit whose
+    // base_rev predates HEAD AND touches a path another commit
+    // already modified. Without this, a stale WC silently
+    // overwrites HEAD (MB-A); a server-side `svn cp URL@PASTREV`
+    // silently drops siblings (MB-B).
+    if base_rev < prev {
+        if check_txn_out_of_date_(repo, txn, branch, base_rev, prev) == 1 {
+            return 0 - 12
+        }
+    }
+
+    // Rebuild the new tree on top of HEAD's tree, not base_rev's.
+    // Anchoring on base_rev was the load-bearing bug for both MB-A
+    // and MB-B: any sibling top-level dir created between base_rev
+    // and HEAD was absent from the resulting tree. Once the
+    // out-of-date check above rules out path conflicts, applying
+    // the txn's edits on top of HEAD is safe.
+    base_root = load_rev_root_sha1_(repo, prev)
     if string.length(base_root) == 0 { return 0 - 1 }
 
     new_root = rebuild_dir(repo, base_root, "", txn)
     if string.length(new_root) == 0 { return 0 - 1 }
     new_root = string.copy(new_root)
-
-    prev = repos_head_rev(repo)
-    if prev < 0 { return 0 - 1 }
-    next = prev + 1
 
     // Inherit props / acl from the previous rev when caller passes "".
     ps = repos_inherit_rev_field(repo, prev, "props", props_sha1)

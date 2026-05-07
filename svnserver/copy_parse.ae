@@ -27,6 +27,7 @@
 //   -5   : cross-branch copy refused
 //   -6   : from_path missing at base_rev
 //   -7   : commit failed
+//   -8   : out of date (a path conflicts with an intervening commit)
 
 import std.string
 import std.json
@@ -141,6 +142,7 @@ export copy_from_body(req: ptr, repo: string) -> int {
                                      "", new_acl_sha)
     txn_free(txn)
 
+    if new_rev == 0 - 12 { return -8 }   // out of date
     if new_rev < 0 { return -7 }
     return new_rev
 }

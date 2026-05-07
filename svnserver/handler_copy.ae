@@ -85,6 +85,10 @@ export handler_copy(req: ptr, res: ptr) {
         svnserver_respond_error(res, 500, "copy commit failed")
         return
     }
+    if rv == -8 {
+        svnserver_respond_error(res, 409, "out of date — fetch and retry")
+        return
+    }
 
     svnserver_respond_json_ok(res, rev_response_json(rv))
 }
