@@ -73,7 +73,7 @@ main() {
                     "could not read pristine store",
                     "test_error.ae", 15)
     top  = err_wrap(mid,  ERR_BAD_ARG,
-                    "svn status failed for /tmp/wc",
+                    "avn status failed for /tmp/wc",
                     "test_error.ae", 20)
 
     err_print_chain(top)

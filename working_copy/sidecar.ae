@@ -15,7 +15,7 @@
 
 // WC conflict-sidecar filename classifier.
 //
-// After a conflicting merge, svn drops three sidecar files next to the
+// After a conflicting merge, avn drops three sidecar files next to the
 // conflicted working file:
 //   <name>.mine          the user's local version before the merge
 //   <name>.r<rev-a>      common-ancestor

@@ -239,7 +239,7 @@ check_txn_out_of_date_(repo: string, txn: ptr, branch: string,
 //   -1      generic failure (txn invalid, base_root missing, write fail)
 //   -12     out of date: at least one txn path was modified on this
 //           branch between base_rev and HEAD. Caller (HTTP handler /
-//           svn cli) should surface this distinct from generic failure.
+//           avn cli) should surface this distinct from generic failure.
 finalise_on_branch_(repo: string, txn: ptr,
                      branch: string,
                      author: string, logmsg: string,
@@ -256,7 +256,7 @@ finalise_on_branch_(repo: string, txn: ptr,
     // Out-of-date check. Classical SVN refuses any commit whose
     // base_rev predates HEAD AND touches a path another commit
     // already modified. Without this, a stale WC silently
-    // overwrites HEAD (MB-A); a server-side `svn cp URL@PASTREV`
+    // overwrites HEAD (MB-A); a server-side `avn cp URL@PASTREV`
     // silently drops siblings (MB-B).
     if base_rev < prev {
         if check_txn_out_of_date_(repo, txn, branch, base_rev, prev) == 1 {

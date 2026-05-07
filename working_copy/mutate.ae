@@ -17,8 +17,8 @@
 //
 // These are tiny: they only change wc.db state rows plus on-disk
 // file presence. The actual file write (for add) is the user's
-// responsibility — they create the file first and then `svn add
-// PATH` registers it. `svn rm PATH` removes from disk AND marks
+// responsibility — they create the file first and then `avn add
+// PATH` registers it. `avn rm PATH` removes from disk AND marks
 // the node deleted in the db.
 //
 // State transitions (matching the legacy mutate_shim.c / cp_shim.c
@@ -83,7 +83,7 @@ export wc_add(wc_root: string, rel_path: string) -> int {
 
     if wc_db_node_exists(db, rel_path) == 1 {
         // Already tracked — could be a previously-scheduled delete
-        // we're un-deleting. Phase 5 just rejects; user can `svn rm`
+        // we're un-deleting. Phase 5 just rejects; user can `avn rm`
         // first to re-add.
         wc_db_close(db)
         return 0 - 1
@@ -129,7 +129,7 @@ export wc_rm(wc_root: string, rel_path: string) -> int {
     wc_db_close(db)
     if rc != 0 { return 0 - 2 }
 
-    // Remove file/dir from disk best-effort. Reference svn keeps
+    // Remove file/dir from disk best-effort. Reference avn keeps
     // deleted files until commit in some cases; we remove now since
     // this CLI is scoped for "commit soon".
     disk = "${wc_root}/${rel_path}"

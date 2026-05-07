@@ -14,16 +14,16 @@ main() {
         driver(".test_acl_driver.ae")
         output("test_acl_driver")
 
-        binary_under_test(b, "svn") {
-            path("target/avn/bin/svn")
+        binary_under_test(b, "avn") {
+            path("target/avn/bin/avn")
         }
 
         fixture_seed(b, "test_acl") {
             path("/tmp/avn_aeb_test_acl_repo")
-            seed_bin("target/avnserver/bin/svnae-seed")
+            seed_bin("target/avnserver/bin/avn-seed")
         }
         fixture_server(b, "test_acl") {
-            bin("target/avnserver/bin/aether-svnserver")
+            bin("target/avnserver/bin/avnserver")
             // Token-auth: pass --superuser-token via args.
             args("demo $TEST_ACL_PATH 9540 --superuser-token test-super-token-42")
             port(9540)

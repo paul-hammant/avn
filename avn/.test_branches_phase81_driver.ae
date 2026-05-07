@@ -25,7 +25,7 @@ sh(cmd: string) -> {
 
 main() {
     fw = aeocha.init()
-    svn_bin    = os_getenv("SVN_BIN")
+    avn_bin    = os_getenv("AVN_BIN")
     admin_bin  = os_getenv("ADMIN_BIN")
     server_bin = os_getenv("SERVER_BIN")
 
@@ -76,16 +76,16 @@ main() {
     schema_check = string.concat(schema_check, "/rep-cache.db '.schema path_rev' 2>/dev/null | grep -c 'CREATE TABLE path_rev' || true")
 
     // populate
-    populate = string.concat(svn_bin, " checkout ")
+    populate = string.concat(avn_bin, " checkout ")
     populate = string.concat(populate, url)
     populate = string.concat(populate, " ")
     populate = string.concat(populate, wc)
     populate = string.concat(populate, " >/dev/null && cd ")
     populate = string.concat(populate, wc)
     populate = string.concat(populate, " && echo hello > README.md && mkdir src && echo 'int main() { return 0; }' > src/main.c && ")
-    populate = string.concat(populate, svn_bin)
+    populate = string.concat(populate, avn_bin)
     populate = string.concat(populate, " add README.md src src/main.c >/dev/null && ")
-    populate = string.concat(populate, svn_bin)
+    populate = string.concat(populate, avn_bin)
     populate = string.concat(populate, " commit --author alice --log 'initial content' >/dev/null")
 
     // (H) heads
@@ -114,23 +114,23 @@ main() {
     info_grep_default  = string.concat(info_curl, " | grep -c '\"default_branch\":\"main\"' || true")
     info_grep_branches = string.concat(info_curl, " | grep -c '\"branches\":\\[\"main\"' || true")
 
-    // (E) svn branches
-    svn_branches = string.concat(svn_bin, " branches ")
+    // (E) avn branches
+    svn_branches = string.concat(avn_bin, " branches ")
     svn_branches = string.concat(svn_branches, url)
 
     // (F) legacy URL ops
-    legacy_cat = string.concat(svn_bin, " cat ")
+    legacy_cat = string.concat(avn_bin, " cat ")
     legacy_cat = string.concat(legacy_cat, url)
     legacy_cat = string.concat(legacy_cat, " README.md")
 
-    legacy_log = string.concat(svn_bin, " log ")
+    legacy_log = string.concat(avn_bin, " log ")
     legacy_log = string.concat(legacy_log, url)
     legacy_log = string.concat(legacy_log, " 2>&1 | grep -c 'initial content' || true")
 
     // (G) branch URL doesn't crash
-    branch_url_info = string.concat(svn_bin, " info ")
+    branch_url_info = string.concat(avn_bin, " info ")
     branch_url_info = string.concat(branch_url_info, url)
-    branch_url_info = string.concat(branch_url_info, "/main 2>&1 | grep -cE '(svn info|could not contact|no such revision|Revision:)' || true")
+    branch_url_info = string.concat(branch_url_info, "/main 2>&1 | grep -cE '(avn info|could not contact|no such revision|Revision:)' || true")
 
     cleanup = string.concat("rm -rf ", repo)
     cleanup = string.concat(cleanup, " ")
@@ -138,7 +138,7 @@ main() {
 
     aeocha.describe(fw, "branch infra + default main + path-rev index") {
 
-        aeocha.it("setup: svnadmin create + spawn server") callback {
+        aeocha.it("setup: avnadmin create + spawn server") callback {
             _, st, _ = sh(setup)
             aeocha.expect_exit(fw, st, 0, "create exit 0")
             sh(spawn_srv)
@@ -202,19 +202,19 @@ main() {
             aeocha.expect_stdout_contains(fw, r2, "1", "branches[] has main")
         }
 
-        // (E) svn branches
-        aeocha.it("(E) svn branches lists main") callback {
+        // (E) avn branches
+        aeocha.it("(E) avn branches lists main") callback {
             out, _, _ = sh(svn_branches)
             aeocha.expect_stdout_contains(fw, out, "main", "main listed")
         }
 
         // (F) legacy ops
-        aeocha.it("(F) legacy svn cat works") callback {
+        aeocha.it("(F) legacy avn cat works") callback {
             out, _, _ = sh(legacy_cat)
             aeocha.expect_stdout_contains(fw, out, "hello", "cat README.md")
         }
 
-        aeocha.it("(F) legacy svn log works") callback {
+        aeocha.it("(F) legacy avn log works") callback {
             out, _, _ = sh(legacy_log)
             aeocha.expect_stdout_contains(fw, out, "1", "1 'initial content' line")
         }

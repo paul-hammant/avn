@@ -1,7 +1,7 @@
 // Copyright 2026 Paul Hammant (portions).
 // Apache License, Version 2.0 — see LICENSE.
 //
-// Aether driver for svn revert + svn diff.
+// Aether driver for avn revert + avn diff.
 // Round 242. Migrated from working_copy/test_revert_diff.sh.
 
 import contrib.aeocha
@@ -25,7 +25,7 @@ sh(cmd: string) -> {
 
 main() {
     fw = aeocha.init()
-    svn_bin = os_getenv("SVN_BIN")
+    avn_bin = os_getenv("AVN_BIN")
     port    = os_getenv("TEST_REVERT_DIFF_PORT")
     url     = string.concat("http://127.0.0.1:", string.concat(port, "/demo"))
     wc      = "/tmp/avn_test_rd_wc"
@@ -33,7 +33,7 @@ main() {
     // prep: clean checkout
     prep = string.concat("rm -rf ", wc)
     prep = string.concat(prep, " && ")
-    prep = string.concat(prep, svn_bin)
+    prep = string.concat(prep, avn_bin)
     prep = string.concat(prep, " checkout ")
     prep = string.concat(prep, url)
     prep = string.concat(prep, " ")
@@ -43,7 +43,7 @@ main() {
 
     cd_wc = string.concat("cd ", wc)
     cd_wc = string.concat(cd_wc, " && ")
-    cd_wc = string.concat(cd_wc, svn_bin)
+    cd_wc = string.concat(cd_wc, avn_bin)
 
     // --- revert case 1: edit + revert ---
     edit_readme   = string.concat("cd ", wc)
@@ -56,7 +56,7 @@ main() {
     // --- revert case 2: add DRAFT + revert ---
     add_draft     = string.concat("cd ", wc)
     add_draft     = string.concat(add_draft, " && echo drafty > DRAFT && ")
-    add_draft     = string.concat(add_draft, svn_bin)
+    add_draft     = string.concat(add_draft, avn_bin)
     add_draft     = string.concat(add_draft, " add DRAFT >/dev/null")
     revert_draft  = string.concat(cd_wc, " revert DRAFT")
     count_draft   = string.concat("sqlite3 ", wc)
@@ -84,7 +84,7 @@ main() {
     diff_readme   = string.concat(cd_wc, " diff README")
     add_newfile   = string.concat("cd ", wc)
     add_newfile   = string.concat(add_newfile, " && echo 'new thing' > NEWFILE && ")
-    add_newfile   = string.concat(add_newfile, svn_bin)
+    add_newfile   = string.concat(add_newfile, avn_bin)
     add_newfile   = string.concat(add_newfile, " add NEWFILE >/dev/null")
 
     revert_all    = string.concat(cd_wc, " revert README >/dev/null && ")
@@ -93,7 +93,7 @@ main() {
     revert_all    = string.concat(revert_all, wc)
     revert_all    = string.concat(revert_all, "/NEWFILE")
 
-    aeocha.describe(fw, "svn revert + svn diff") {
+    aeocha.describe(fw, "avn revert + avn diff") {
 
         aeocha.it("prep: checkout exit 0") callback {
             aeocha.expect_exit(fw, prep_st_, 0, "checkout exit 0")
@@ -112,7 +112,7 @@ main() {
             aeocha.assert_str_eq(fw, r3, "", "status clean after revert")
         }
 
-        aeocha.it("revert of svn-added file drops row, keeps file") callback {
+        aeocha.it("revert of avn-added file drops row, keeps file") callback {
             sh(add_draft)
             out, status, _ = sh(revert_draft)
             aeocha.expect_exit(fw, status, 0, "revert added exit 0")
@@ -131,7 +131,7 @@ main() {
             sh(rm_main)
             r1, _, _ = sh(test_main_gone)
             aeocha.expect_stdout_contains(fw, r1, "absent",
-                "src/main.c gone after svn rm")
+                "src/main.c gone after avn rm")
             out, status, _ = sh(revert_main)
             aeocha.expect_exit(fw, status, 0, "revert exit 0")
             aeocha.expect_stdout_contains(fw, out, "Reverted 'src/main.c'",
@@ -167,7 +167,7 @@ main() {
                 "diff README has header")
         }
 
-        aeocha.it("svn-added file appears in diff with body") callback {
+        aeocha.it("avn-added file appears in diff with body") callback {
             sh(add_newfile)
             out, _, _ = sh(diff_cmd)
             aeocha.expect_stdout_contains(fw, out, "Index: NEWFILE",

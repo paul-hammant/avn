@@ -13,27 +13,27 @@ main() {
         driver(".test_switch_driver.ae")
         output("test_switch_driver")
 
-        binary_under_test(b, "svn") {
-            path("target/avn/bin/svn")
+        binary_under_test(b, "avn") {
+            path("target/avn/bin/avn")
         }
 
         // Two seeded repos + two servers — the multi-fixture shape.
         fixture_seed(b, "test_sw_primary") {
             path("/tmp/avn_aeb_test_sw_primary_repo")
-            seed_bin("target/avnserver/bin/svnae-seed")
+            seed_bin("target/avnserver/bin/avn-seed")
         }
         fixture_seed(b, "test_sw_secondary") {
             path("/tmp/avn_aeb_test_sw_secondary_repo")
-            seed_bin("target/avnserver/bin/svnae-seed")
+            seed_bin("target/avnserver/bin/avn-seed")
         }
         fixture_server(b, "test_sw_primary") {
-            bin("target/avnserver/bin/aether-svnserver")
+            bin("target/avnserver/bin/avnserver")
             args("demo $TEST_SW_PRIMARY_PATH 9480")
             port(9480)
             ready_after_ms(1500)
         }
         fixture_server(b, "test_sw_secondary") {
-            bin("target/avnserver/bin/aether-svnserver")
+            bin("target/avnserver/bin/avnserver")
             args("demo $TEST_SW_SECONDARY_PATH 9481")
             port(9481)
             ready_after_ms(1500)

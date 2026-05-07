@@ -1,7 +1,7 @@
 // Copyright 2026 Paul Hammant (portions).
 // Apache License, Version 2.0 — see LICENSE.
 //
-// Aether driver for svn status test. Round 238.
+// Aether driver for avn status test. Round 238.
 // Migrated from working_copy/test_status.sh.
 
 import contrib.aeocha
@@ -25,7 +25,7 @@ sh(cmd: string) -> {
 
 main() {
     fw = aeocha.init()
-    svn_bin = os_getenv("SVN_BIN")
+    avn_bin = os_getenv("AVN_BIN")
     port    = os_getenv("TEST_STATUS_PORT")
     url     = string.concat("http://127.0.0.1:", string.concat(port, "/demo"))
     wc      = "/tmp/avn_test_st_wc"
@@ -33,7 +33,7 @@ main() {
     // --- prep: fresh checkout ---
     co = string.concat("rm -rf ", wc)
     co = string.concat(co, " && ")
-    co = string.concat(co, svn_bin)
+    co = string.concat(co, avn_bin)
     co = string.concat(co, " checkout ")
     co = string.concat(co, url)
     co = string.concat(co, " ")
@@ -41,8 +41,8 @@ main() {
     co = string.concat(co, " >/dev/null")
     co_out, co_st, co_err = sh(co)
 
-    // svn status $WC (always run from /, pass $WC explicitly)
-    status_cmd = string.concat(svn_bin, " status ")
+    // avn status $WC (always run from /, pass $WC explicitly)
+    status_cmd = string.concat(avn_bin, " status ")
     status_cmd = string.concat(status_cmd, wc)
 
     // status sorted (for line-count + presence checks after multi changes)
@@ -58,7 +58,7 @@ main() {
     restore_main_c = string.concat("printf 'int main() { return 42; }\\n' > ", string.concat(wc, "/src/main.c"))
     rm_newfile     = string.concat("rm ", string.concat(wc, "/newfile"))
 
-    aeocha.describe(fw, "svn status") {
+    aeocha.describe(fw, "avn status") {
 
         aeocha.it("prep: clean checkout") callback {
             aeocha.expect_exit(fw, co_st, 0, "checkout exit 0")

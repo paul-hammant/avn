@@ -25,7 +25,7 @@ sh(cmd: string) -> {
 
 main() {
     fw = aeocha.init()
-    svn_bin = os_getenv("SVN_BIN")
+    avn_bin = os_getenv("AVN_BIN")
     port    = os_getenv("TEST_SERVER_PROPS_PORT")
     url     = string.concat("http://127.0.0.1:", string.concat(port, "/demo"))
     wc1     = "/tmp/avn_test_sp_wc1"
@@ -37,7 +37,7 @@ main() {
     prep1 = string.concat(prep1, " ")
     prep1 = string.concat(prep1, wc2)
     prep1 = string.concat(prep1, " && ")
-    prep1 = string.concat(prep1, svn_bin)
+    prep1 = string.concat(prep1, avn_bin)
     prep1 = string.concat(prep1, " checkout ")
     prep1 = string.concat(prep1, url)
     prep1 = string.concat(prep1, " ")
@@ -45,15 +45,15 @@ main() {
     prep1 = string.concat(prep1, " >/dev/null && cd ")
     prep1 = string.concat(prep1, wc1)
     prep1 = string.concat(prep1, " && ")
-    prep1 = string.concat(prep1, svn_bin)
+    prep1 = string.concat(prep1, avn_bin)
     prep1 = string.concat(prep1, " propset svn:mime-type text/plain README >/dev/null && ")
-    prep1 = string.concat(prep1, svn_bin)
+    prep1 = string.concat(prep1, avn_bin)
     prep1 = string.concat(prep1, " propset build:label prod src >/dev/null && ")
-    prep1 = string.concat(prep1, svn_bin)
+    prep1 = string.concat(prep1, avn_bin)
     prep1 = string.concat(prep1, " propset kv:empty '' README >/dev/null && ")
-    prep1 = string.concat(prep1, svn_bin)
+    prep1 = string.concat(prep1, avn_bin)
     prep1 = string.concat(prep1, " commit --author alice --log 'set props' >/dev/null && ")
-    prep1 = string.concat(prep1, svn_bin)
+    prep1 = string.concat(prep1, avn_bin)
     prep1 = string.concat(prep1, " checkout ")
     prep1 = string.concat(prep1, url)
     prep1 = string.concat(prep1, " ")
@@ -64,26 +64,26 @@ main() {
     // WC2 propget commands (round 1 verification)
     cd_wc2 = string.concat("cd ", wc2)
     cd_wc2 = string.concat(cd_wc2, " && ")
-    cd_wc2 = string.concat(cd_wc2, svn_bin)
+    cd_wc2 = string.concat(cd_wc2, avn_bin)
     get_mime_wc2  = string.concat(cd_wc2, " propget svn:mime-type README")
     get_label_wc2 = string.concat(cd_wc2, " propget build:label src")
     get_empty_wc2 = string.concat(cd_wc2, " propget kv:empty README")
 
     // --- prep round 2: from WC1, change mime, add owner, propdel
-    //     build:label, commit. Then `svn update` in WC2. ---
+    //     build:label, commit. Then `avn update` in WC2. ---
     prep2 = string.concat("cd ", wc1)
     prep2 = string.concat(prep2, " && ")
-    prep2 = string.concat(prep2, svn_bin)
+    prep2 = string.concat(prep2, avn_bin)
     prep2 = string.concat(prep2, " propset svn:mime-type application/octet-stream README >/dev/null && ")
-    prep2 = string.concat(prep2, svn_bin)
+    prep2 = string.concat(prep2, avn_bin)
     prep2 = string.concat(prep2, " propset owner alice README >/dev/null && ")
-    prep2 = string.concat(prep2, svn_bin)
+    prep2 = string.concat(prep2, avn_bin)
     prep2 = string.concat(prep2, " propdel build:label src >/dev/null && ")
-    prep2 = string.concat(prep2, svn_bin)
+    prep2 = string.concat(prep2, avn_bin)
     prep2 = string.concat(prep2, " commit --author alice --log 'edit props' >/dev/null && cd ")
     prep2 = string.concat(prep2, wc2)
     prep2 = string.concat(prep2, " && ")
-    prep2 = string.concat(prep2, svn_bin)
+    prep2 = string.concat(prep2, avn_bin)
     prep2 = string.concat(prep2, " update >/dev/null")
 
     get_owner_wc2  = string.concat(cd_wc2, " propget owner README")
@@ -111,7 +111,7 @@ main() {
 
         aeocha.it("empty-value prop survives the round-trip") callback {
             // propget on empty-valued prop returns exit 1 in this CLI;
-            // bash test captured stdout only (`$(svn propget ...)`) and
+            // bash test captured stdout only (`$(avn propget ...)`) and
             // didn't check exit code. Match that semantics.
             out, _, _ = sh(get_empty_wc2)
             aeocha.assert_str_eq(fw, out, "", "kv:empty stdout is empty")

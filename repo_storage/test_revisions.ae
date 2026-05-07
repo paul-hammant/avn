@@ -630,7 +630,7 @@ main() {
 
     // 2. commit rev 1 with a few files.
     tb = fsfs_tree_builder_new()
-    fsfs_tree_builder_add(tb, "README",  0, "Hello from Aether svn!\n", 23)
+    fsfs_tree_builder_add(tb, "README",  0, "Hello from Aether avn!\n", 23)
     fsfs_tree_builder_add(tb, "main.c",  0, "int main(void) { return 0; }\n", 29)
     fsfs_tree_builder_add(tb, "notes.txt", 0, "quick brown fox\n", 16)
     new_rev = fsfs_commit_flat(repo, tb, "paul", "initial commit")
@@ -640,7 +640,7 @@ main() {
 
     // 3. read files back.
     r = fsfs_read_file_at(repo, 1, "README")
-    fails = fails + expect_str("r1 README", r, "Hello from Aether svn!\n")
+    fails = fails + expect_str("r1 README", r, "Hello from Aether avn!\n")
     r = fsfs_read_file_at(repo, 1, "main.c")
     fails = fails + expect_str("r1 main.c", r, "int main(void) { return 0; }\n")
     r = fsfs_read_file_at(repo, 1, "notes.txt")
@@ -655,7 +655,7 @@ main() {
     before_count = count_rep_files(repo)
 
     tb = fsfs_tree_builder_new()
-    fsfs_tree_builder_add(tb, "README",  0, "Hello from Aether svn!\n", 23)
+    fsfs_tree_builder_add(tb, "README",  0, "Hello from Aether avn!\n", 23)
     fsfs_tree_builder_add(tb, "main.c",  0, "int main(void) { return 0; }\n", 29)
     fsfs_tree_builder_add(tb, "notes.txt", 0, "the updated note\n", 17)
     new_rev = fsfs_commit_flat(repo, tb, "paul", "update notes")
@@ -678,7 +678,7 @@ main() {
     r = fsfs_read_file_at(repo, 2, "notes.txt")
     fails = fails + expect_str("r2 notes.txt", r, "the updated note\n")
     r = fsfs_read_file_at(repo, 2, "README")
-    fails = fails + expect_str("r2 README (unchanged)", r, "Hello from Aether svn!\n")
+    fails = fails + expect_str("r2 README (unchanged)", r, "Hello from Aether avn!\n")
 
     rmtree(repo)
 

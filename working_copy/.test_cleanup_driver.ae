@@ -1,7 +1,7 @@
 // Copyright 2026 Paul Hammant (portions).
 // Apache License, Version 2.0 — see LICENSE.
 //
-// Aether driver for svn cleanup test. Round 237.
+// Aether driver for avn cleanup test. Round 237.
 // Migrated from working_copy/test_cleanup.sh.
 
 import contrib.aeocha
@@ -25,7 +25,7 @@ sh(cmd: string) -> {
 
 main() {
     fw = aeocha.init()
-    svn_bin = os_getenv("SVN_BIN")
+    avn_bin = os_getenv("AVN_BIN")
     port    = os_getenv("TEST_CLEANUP_PORT")
     url     = string.concat("http://127.0.0.1:", string.concat(port, "/demo"))
     wc      = "/tmp/avn_test_clean_wc"
@@ -33,7 +33,7 @@ main() {
     // --- (B) prep: fresh checkout ---
     co_cmd = string.concat("rm -rf ", wc)
     co_cmd = string.concat(co_cmd, " && ")
-    co_cmd = string.concat(co_cmd, svn_bin)
+    co_cmd = string.concat(co_cmd, avn_bin)
     co_cmd = string.concat(co_cmd, " checkout ")
     co_cmd = string.concat(co_cmd, url)
     co_cmd = string.concat(co_cmd, " ")
@@ -42,10 +42,10 @@ main() {
     co_out, co_st, co_err = sh(co_cmd)
 
     // --- (A) non-WC path rejection ---
-    bogus = string.concat(svn_bin, " cleanup /tmp/definitely_not_a_wc_$$ 2>&1 || true")
+    bogus = string.concat(avn_bin, " cleanup /tmp/definitely_not_a_wc_$$ 2>&1 || true")
 
     // --- (B) clean WC reports 0 stale ---
-    clean_b = string.concat(svn_bin, " cleanup ")
+    clean_b = string.concat(avn_bin, " cleanup ")
     clean_b = string.concat(clean_b, wc)
 
     // --- (C) salt then cleanup ---
@@ -70,7 +70,7 @@ main() {
     chk_readme = string.concat("test -f ", string.concat(wc, "/README && echo 1 || echo 0"))
     chk_main_c = string.concat("test -f ", string.concat(wc, "/src/main.c && echo 1 || echo 0"))
 
-    aeocha.describe(fw, "svn cleanup") {
+    aeocha.describe(fw, "avn cleanup") {
 
         aeocha.it("prep checkout succeeded") callback {
             aeocha.expect_exit(fw, co_st, 0, "checkout exit 0")

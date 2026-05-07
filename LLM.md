@@ -10,13 +10,13 @@ reference tree was deleted in Round 204, and the code has been
 through ~210 rounds of post-port naming, idiom, and architecture
 work since then.
 
-Three production binaries: `svn` (client CLI), `aether-svnserver`
-(HTTP server), `svnadmin` (repo admin). Plus `svnae-seed` and a
+Three production binaries: `avn` (client CLI), `avnserver`
+(HTTP server), `avnadmin` (repo admin). Plus `avn-seed` and a
 small `test_client` used by the integration harness.
 
 The on-disk repo format, wire protocol, dump format, ACL model, and
 Merkle verification are all our own design — they share semantics
-with reference Subversion (so users see familiar `svn` UX) but
+with reference Subversion (so users see familiar `avn` UX) but
 diverge freely on plumbing where doing so paid off.
 
 ## Layout
@@ -29,12 +29,12 @@ diverge freely on plumbing where doing so paid off.
 - `aether.toml` — `[build]` section + a handful of legacy `[[bin]]`
   entries for unused Aether-native test programs (test_wc_db,
   test_repos, etc — built but not exercised by anything). The four
-  production-binary entries (svn, svnadmin, aether-svnserver,
-  svnae-seed) were retired in Round 219; each now lives in its own
+  production-binary entries (avn, avnadmin, avnserver,
+  avn-seed) were retired in Round 219; each now lives in its own
   `.build.ae`.
 - `tests/lib.sh` — bash helpers (`tlib_check`, `tlib_summary`,
   `tlib_stop_server`) used by the two surviving shell tests under
-  `svnadmin/`. Everything else has migrated to `aether.driver_test`
+  `avnadmin/`. Everything else has migrated to `aether.driver_test`
   with a sibling `.test_*_driver.ae` driver.
 - `.tests.ae` (repo root) — aggregator. `build.dep`s every leaf
   `.tests*.ae`. Run `aeb` for scan-mode discovery or `aeb .tests.ae`
@@ -74,7 +74,7 @@ aeb              # build every binary, run all 32 integration tests
 Per-directory targets work too:
 
 ```
-aeb svn       # build the svn binary only
+aeb avn       # build the avn binary only
 aeb .tests.ae    # full test suite, target mode
 ```
 
@@ -89,7 +89,7 @@ fixture via aeb's `aether.driver_test`. A sibling
 `${name}_LOG` for each fixture_seed/fixture_server; the driver
 reads them via `os.getenv` and asserts via Aeocha matchers.
 
-The two `svnadmin/test_*.sh` scripts are *meta-tests of svnadmin
+The two `avnadmin/test_*.sh` scripts are *meta-tests of avnadmin
 itself* — their fixture *is* the test (repo creation, dump/load,
 server lifecycle inline) — so they remain shell. They share three
 helpers from `tests/lib.sh`: `tlib_check`, `tlib_summary`,
@@ -125,7 +125,7 @@ import aether (driver, output, binary_under_test,
 
 main() {
     b = build.start()
-    build.dep(b, "svn")            // build the binary-under-test first
+    build.dep(b, "avn")            // build the binary-under-test first
     build.dep(b, "svnserver")
     build.dep(b, "svnserver/.build-seed.ae")
 
@@ -133,17 +133,17 @@ main() {
         driver(".test_X_driver.ae")
         output("X_driver")
 
-        binary_under_test(b, "svn") {
-            path("target/svn/bin/svn")
-            // env_var defaults to $SVN_BIN
+        binary_under_test(b, "avn") {
+            path("target/avn/bin/avn")
+            // env_var defaults to $AVN_BIN
         }
 
         fixture_seed(b, "primary") {
             path("/tmp/svnae_test_X_repo")
-            seed_bin("target/svnserver/bin/svnae-seed")
+            seed_bin("target/svnserver/bin/avn-seed")
         }
         fixture_server(b, "primary") {
-            bin("target/svnserver/bin/aether-svnserver")
+            bin("target/svnserver/bin/avnserver")
             args("demo $PRIMARY_PATH 9540")
             port(9540)
             ready_after_ms(1500)
@@ -160,16 +160,16 @@ import std.os
 
 main() {
     fw = aeocha.init()
-    svn_bin = os.getenv("SVN_BIN")
+    avn_bin = os.getenv("AVN_BIN")
     port    = os.getenv("PRIMARY_PORT")
     url     = "http://127.0.0.1:${port}/demo"
 
-    aeocha.describe(fw, "svn cli vs demo repo") {
+    aeocha.describe(fw, "avn cli vs demo repo") {
         aeocha.it("info reports head rev 3") callback {
             argv = os.argv_new("info")
             os.argv_push(argv, url)
-            r = os.run_capture(svn_bin, argv, null)
-            aeocha.expect_exit(fw, r, 0, "svn exited 0")
+            r = os.run_capture(avn_bin, argv, null)
+            aeocha.expect_exit(fw, r, 0, "avn exited 0")
             aeocha.expect_stdout_line_field(fw, r, "Revision:", 1, "3",
                 "head rev")
         }
@@ -196,8 +196,8 @@ are present.
 `fixture_server`'s `args` string shell-interpolates at run time, so
 `args("demo $PRIMARY_PATH 9540")` picks up the seed's exported path.
 
-Two stragglers (`test_hash_algo`, `test_svnadmin`) are meta-tests
-of svnadmin itself — their fixture *is* the test, so they manage
+Two stragglers (`test_hash_algo`, `test_avnadmin`) are meta-tests
+of avnadmin itself — their fixture *is* the test, so they manage
 repo creation and server lifecycle inline. Don't migrate them.
 
 #### Driver-side gotchas (Round 234 canary findings)
@@ -239,8 +239,8 @@ repo creation and server lifecycle inline. Don't migrate them.
   `url_r4 = string.concat(paths_base, "4/paths")` to dodge the
   `string.concat`-in-closure variant. Upstream ask:
   `~/scm/aether/closure-extern-ordering.md`.
-- **No `os.chdir` in std.** Cwd-bound commands (`svn add NEW`
-  inside a WC) need `/bin/sh -c "cd $WC && svn ..."`. Driver
+- **No `os.chdir` in std.** Cwd-bound commands (`avn add NEW`
+  inside a WC) need `/bin/sh -c "cd $WC && avn ..."`. Driver
   pattern:
   ```aether
   sh(cmd: string) -> {
@@ -269,15 +269,15 @@ repo creation and server lifecycle inline. Don't migrate them.
 - **Token-auth pattern.** Inline the token in `args`:
   ```aether
   fixture_server(b, "test_acl") {
-      bin("target/svnserver/bin/aether-svnserver")
+      bin("target/svnserver/bin/avnserver")
       args("demo $TEST_ACL_PATH 9540 --superuser-token test-super-token-42")
       port(9540); ready_after_ms(1500)
   }
   ```
-  Round 236 canary: `svn/test_acl_driver.ae`.
+  Round 236 canary: `avn/test_acl_driver.ae`.
 - **Per-call env vars (SVN_USER=alice etc).** No `os.run_capture`
   env-list builder helper yet. Use `/bin/sh -c` and prefix the
-  shell variables: `sh("SVN_USER=alice ${svn_bin} ls ${url}")`.
+  shell variables: `sh("SVN_USER=alice ${avn_bin} ls ${url}")`.
   Composes with the `sh()` helper above.
 - **HTTP with custom headers.** `http_get_with_user(url, "alice")`
   / `http_get_with_super(url, token)` wrappers around
@@ -366,13 +366,13 @@ in each `.build.ae`. Our own `.ae` source compiles to C via
 # from /home/paul/scm/subversion/subversion
 aeb                        # build + run 32 tests
 aeb .tests.ae              # same, target mode
-aeb svn                 # build just the svn CLI
+aeb avn                 # build just the avn CLI
 
 # Run one bash test directly (interactively):
-bash svn/test_acl.sh    # if its fixture is satisfied
+bash avn/test_acl.sh    # if its fixture is satisfied
 
 # Run all tests for one directory:
-aeb svn                 # via the dir's .tests.ae (or first .tests-*.ae)
+aeb avn                 # via the dir's .tests.ae (or first .tests-*.ae)
 ```
 
 ## When stuck

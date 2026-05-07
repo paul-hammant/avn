@@ -1,7 +1,7 @@
 // Copyright 2026 Paul Hammant (portions).
 // Apache License, Version 2.0 — see LICENSE.
 //
-// Aether driver for svn update — two-WC scenario: pull, conflict,
+// Aether driver for avn update — two-WC scenario: pull, conflict,
 // resolve, --rev N selector. Round 244. Migrated from
 // working_copy/test_update.sh.
 
@@ -26,7 +26,7 @@ sh(cmd: string) -> {
 
 main() {
     fw = aeocha.init()
-    svn_bin = os_getenv("SVN_BIN")
+    avn_bin = os_getenv("AVN_BIN")
     port    = os_getenv("TEST_UPDATE_PORT")
     url     = string.concat("http://127.0.0.1:", string.concat(port, "/demo"))
     wc1     = "/tmp/avn_test_upd_wc1"
@@ -48,13 +48,13 @@ main() {
     prep1 = string.concat(prep1, " ")
     prep1 = string.concat(prep1, wc2)
     prep1 = string.concat(prep1, " && ")
-    prep1 = string.concat(prep1, svn_bin)
+    prep1 = string.concat(prep1, avn_bin)
     prep1 = string.concat(prep1, " checkout ")
     prep1 = string.concat(prep1, url)
     prep1 = string.concat(prep1, " ")
     prep1 = string.concat(prep1, wc1)
     prep1 = string.concat(prep1, " >/dev/null && ")
-    prep1 = string.concat(prep1, svn_bin)
+    prep1 = string.concat(prep1, avn_bin)
     prep1 = string.concat(prep1, " checkout ")
     prep1 = string.concat(prep1, url)
     prep1 = string.concat(prep1, " ")
@@ -62,17 +62,17 @@ main() {
     prep1 = string.concat(prep1, " >/dev/null && cd ")
     prep1 = string.concat(prep1, wc1)
     prep1 = string.concat(prep1, " && echo 'updated from wc1' > README && echo 'new file body' > NEWFILE && ")
-    prep1 = string.concat(prep1, svn_bin)
+    prep1 = string.concat(prep1, avn_bin)
     prep1 = string.concat(prep1, " add NEWFILE >/dev/null && ")
-    prep1 = string.concat(prep1, svn_bin)
+    prep1 = string.concat(prep1, avn_bin)
     prep1 = string.concat(prep1, " rm src/main.c >/dev/null && ")
-    prep1 = string.concat(prep1, svn_bin)
+    prep1 = string.concat(prep1, avn_bin)
     prep1 = string.concat(prep1, " commit --author alice --log 'wc1 changes' | tee ")
     prep1 = string.concat(prep1, log_wc1_commit)
     prep1 = string.concat(prep1, " && cd ")
     prep1 = string.concat(prep1, wc2)
     prep1 = string.concat(prep1, " && ")
-    prep1 = string.concat(prep1, svn_bin)
+    prep1 = string.concat(prep1, avn_bin)
     prep1 = string.concat(prep1, " update | tee ")
     prep1 = string.concat(prep1, log_wc2_update)
 
@@ -96,19 +96,19 @@ main() {
     sql_newfile_node   = string.concat(sql_newfile_node, "/.svn/wc.db \"SELECT path FROM nodes WHERE path='NEWFILE'\"")
     cd_wc2_status      = string.concat("cd ", wc2)
     cd_wc2_status      = string.concat(cd_wc2_status, " && ")
-    cd_wc2_status      = string.concat(cd_wc2_status, svn_bin)
+    cd_wc2_status      = string.concat(cd_wc2_status, avn_bin)
     cd_wc2_status      = string.concat(cd_wc2_status, " status")
 
     // === ROUND 2 prep: conflict scenario ===
     prep2 = string.concat("cd ", wc1)
     prep2 = string.concat(prep2, " && echo 'wc1 second change' > README && ")
-    prep2 = string.concat(prep2, svn_bin)
+    prep2 = string.concat(prep2, avn_bin)
     prep2 = string.concat(prep2, " commit --author alice --log 'conflict setter' | tee ")
     prep2 = string.concat(prep2, log_wc1_commit2)
     prep2 = string.concat(prep2, " && cd ")
     prep2 = string.concat(prep2, wc2)
     prep2 = string.concat(prep2, " && echo 'wc2 divergent change' > README && ")
-    prep2 = string.concat(prep2, svn_bin)
+    prep2 = string.concat(prep2, avn_bin)
     prep2 = string.concat(prep2, " update 2>&1 | tee ")
     prep2 = string.concat(prep2, log_wc2_update2)
 
@@ -128,20 +128,20 @@ main() {
     count_q_lines       = string.concat(cd_wc2_status, " | grep -c '^?' || true")
     refused_commit      = string.concat("cd ", wc2)
     refused_commit      = string.concat(refused_commit, " && ")
-    refused_commit      = string.concat(refused_commit, svn_bin)
+    refused_commit      = string.concat(refused_commit, avn_bin)
     refused_commit      = string.concat(refused_commit, " commit --author alice --log 'try anyway' 2>/dev/null")
 
     // === ROUND 3: resolve, then commit (split so the M-status assertion
     //                fires between resolve and commit) ===
     prep3a = string.concat("cd ", wc2)
     prep3a = string.concat(prep3a, " && echo reconciled > README && ")
-    prep3a = string.concat(prep3a, svn_bin)
+    prep3a = string.concat(prep3a, avn_bin)
     prep3a = string.concat(prep3a, " resolve --accept working README | tee ")
     prep3a = string.concat(prep3a, log_resolve)
 
     prep3b = string.concat("cd ", wc2)
     prep3b = string.concat(prep3b, " && ")
-    prep3b = string.concat(prep3b, svn_bin)
+    prep3b = string.concat(prep3b, avn_bin)
     prep3b = string.concat(prep3b, " commit --author alice --log 'resolve to reconciled' | tee ")
     prep3b = string.concat(prep3b, log_commit3)
 
@@ -152,13 +152,13 @@ main() {
     // === ROUND 4: --rev 4 selector ===
     prep4 = string.concat("cd ", wc2)
     prep4 = string.concat(prep4, " && ")
-    prep4 = string.concat(prep4, svn_bin)
+    prep4 = string.concat(prep4, avn_bin)
     prep4 = string.concat(prep4, " update --rev 4 | tee ")
     prep4 = string.concat(prep4, log_update_r4)
 
     cat_update_r4_log = "cat /tmp/avn_test_upd_update_r4.log"
 
-    aeocha.describe(fw, "svn update — two-WC pull / conflict / resolve / --rev N") {
+    aeocha.describe(fw, "avn update — two-WC pull / conflict / resolve / --rev N") {
 
         // --- ROUND 1 ---
         aeocha.it("prep round 1: 2x checkout + WC1 commit + WC2 update exit 0") callback {

@@ -24,7 +24,7 @@
 //   "list all source revs from B integrated into T"
 //   "filter this candidate list to revs not yet integrated into T"
 //
-// Re-buildable from rev blobs at any time (`svnadmin verify
+// Re-buildable from rev blobs at any time (`avnadmin verify
 // --rebuild-merges`, Phase 4).
 //
 // Schema:
@@ -137,7 +137,7 @@ record_each_(db: ptr, target_branch: string, source_branch: string,
 
 // ---- public API ----------------------------------------------------------
 
-// Eagerly install the schema. Called by `svnadmin create` so a fresh
+// Eagerly install the schema. Called by `avnadmin create` so a fresh
 // repo has empty merge_event / merge_source_rev tables on disk
 // immediately. The lazy-init path in `ledger_open_` handles older
 // repos that pre-date this round. Returns "" on success, error
@@ -156,7 +156,7 @@ export merge_ledger_init_schema(repo: string) -> string {
 // Returns 0 on success, -1 on infrastructure failure. Idempotent on
 // the (rev_sha, source_branch) and (target, source, source_rev_sha)
 // keys via INSERT OR IGNORE — re-running merge_ledger_record with
-// identical args is a no-op, which means svnadmin's rebuild path
+// identical args is a no-op, which means avnadmin's rebuild path
 // can safely re-record without truncate.
 export merge_ledger_record(repo: string,
                            rev_sha: string,
@@ -280,7 +280,7 @@ export merge_ledger_is_integrated_as_of(repo: string,
 
 // List all source revs from `source_branch` integrated into
 // `target_branch`. Returned as a "\n"-separated packed string of
-// SHAs (possibly empty). Intended for `svn merged --integrated`
+// SHAs (possibly empty). Intended for `avn merged --integrated`
 // and similar reporting.
 //
 // Round 281: filter on latest-verb-wins. A source rev whose most

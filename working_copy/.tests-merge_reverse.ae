@@ -13,16 +13,16 @@ main() {
         driver(".test_merge_reverse_driver.ae")
         output("test_merge_reverse_driver")
 
-        binary_under_test(b, "svn") {
-            path("target/avn/bin/svn")
+        binary_under_test(b, "avn") {
+            path("target/avn/bin/avn")
         }
 
         fixture_seed(b, "test_merge_reverse") {
             path("/tmp/avn_aeb_test_merge_reverse_repo")
-            seed_bin("target/avnserver/bin/svnae-seed")
+            seed_bin("target/avnserver/bin/avn-seed")
         }
         fixture_server(b, "test_merge_reverse") {
-            bin("target/avnserver/bin/aether-svnserver")
+            bin("target/avnserver/bin/avnserver")
             args("demo $TEST_MERGE_REVERSE_PATH 9490")
             port(9490)
             ready_after_ms(1500)

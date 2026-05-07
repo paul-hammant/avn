@@ -13,16 +13,16 @@ main() {
         driver(".test_server_props_driver.ae")
         output("test_server_props_driver")
 
-        binary_under_test(b, "svn") {
-            path("target/avn/bin/svn")
+        binary_under_test(b, "avn") {
+            path("target/avn/bin/avn")
         }
 
         fixture_seed(b, "test_server_props") {
             path("/tmp/avn_aeb_test_server_props_repo")
-            seed_bin("target/avnserver/bin/svnae-seed")
+            seed_bin("target/avnserver/bin/avn-seed")
         }
         fixture_server(b, "test_server_props") {
-            bin("target/avnserver/bin/aether-svnserver")
+            bin("target/avnserver/bin/avnserver")
             args("demo $TEST_SERVER_PROPS_PATH 9460")
             port(9460)
             ready_after_ms(1500)

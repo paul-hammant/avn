@@ -25,7 +25,7 @@ sh(cmd: string) -> {
 
 main() {
     fw = aeocha.init()
-    svn_bin = os_getenv("SVN_BIN")
+    avn_bin = os_getenv("AVN_BIN")
     port = os_getenv("TEST_PUT_PORT")
     base = string.concat("http://127.0.0.1:", string.concat(port, "/repos/demo"))
     demo_url = string.concat("http://127.0.0.1:", string.concat(port, "/demo"))
@@ -107,7 +107,7 @@ main() {
     // (I) write-ACL on src + bob denied + alice ok
     acl_set = string.concat("SVN_SUPERUSER_TOKEN=", token)
     acl_set = string.concat(acl_set, " ")
-    acl_set = string.concat(acl_set, svn_bin)
+    acl_set = string.concat(acl_set, avn_bin)
     acl_set = string.concat(acl_set, " acl set ")
     acl_set = string.concat(acl_set, demo_url)
     acl_set = string.concat(acl_set, " src '+alice:rw' '-bob' '+*' >/dev/null")

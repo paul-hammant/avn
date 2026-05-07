@@ -7,11 +7,11 @@ need answers before implementation starts.
 
 ## The proposal, as I heard it
 
-**Today (classic svn layout, which we inherited):**
+**Today (classic avn layout, which we inherited):**
 
 - Branches = server-side `cp` of a subtree (e.g. `/trunk/src` →
   `/branches/feat/src`). They live *inside the tree*.
-  `svn cp URL/trunk URL/branches/foo` makes a branch.
+  `avn cp URL/trunk URL/branches/foo` makes a branch.
 - Tags = same mechanism, different directory.
 - Sparse checkout = property-based (`svn:ignore`, selective `--depth`).
 - URL = `http://host/repo/sub/dir`.
@@ -124,7 +124,7 @@ Rules:
 - Branch name is required in every URL. No implicit default — we
   could allow it (`https://host/repo` = `main`) but making it
   explicit avoids foot-guns.
-- `@` still pegs revs, unchanged from reference svn.
+- `@` still pegs revs, unchanged from reference avn.
 
 ## What "on a branch" means at WC level
 
@@ -132,14 +132,14 @@ The WC stores `branch=<name>` in `.svn/wc.db`'s info table alongside
 `url`, `base_url`, `repo`. Every operation (update, commit, status)
 reads this and targets the right branch's head on the server.
 
-`svn switch NEWBRANCH;path` is the existing Phase 5.15 pipeline —
+`avn switch NEWBRANCH;path` is the existing Phase 5.15 pipeline —
 just targeting a different branch's tree instead of a different
 URL's tree.
 
 ## What "doesn't include" means at checkout
 
 If branch `feat`'s spec includes only `src/` and `docs/`, the WC
-materialized by `svn co http://host/repo/feat` has only those two
+materialized by `avn co http://host/repo/feat` has only those two
 subtrees. `foo/` (present in `main`) doesn't exist in the WC.
 
 Commit on `feat` that writes to `foo/bar.txt` → 403, "path outside
@@ -150,13 +150,13 @@ parallel: branch-spec-everywhere.
 
 A tag is a snapshot of `(branch, branch-spec, head-rev)` at creation
 time. Stored in a tags registry (shape like branches, but immutable
-once written). `svn tag NAME BRANCH` records the current state.
-`svn co http://host/repo/TAGNAME;path` works like a branch but the
+once written). `avn tag NAME BRANCH` records the current state.
+`avn co http://host/repo/TAGNAME;path` works like a branch but the
 head never moves.
 
 ## Merge across branches
 
-`svn merge --from A --to B` walks A's and B's trees concurrently,
+`avn merge --from A --to B` walks A's and B's trees concurrently,
 using A's spec to filter what's considered. For each path present
 in both A and B's view, find divergences and run 3-way merge.
 For paths present only in A (included by A's spec, excluded from B's
@@ -168,7 +168,7 @@ a filter."
 
 ## Migration from existing repos
 
-We drop reference-svn compatibility for tree layouts that used
+We drop reference-avn compatibility for tree layouts that used
 `/trunk`, `/branches/*`, `/tags/*` as conventions. Explicit
 divergence, consistent with earlier phases.
 
@@ -176,11 +176,11 @@ divergence, consistent with earlier phases.
   `root:` but no `branch:`). Treated as "one branch called `main`
   containing the whole old tree." Users can then carve out branch
   specs from `main` as they want.
-- `svnadmin load` on a reference-svn-format dump: same deal. The
+- `avnadmin load` on a reference-svn-format dump: same deal. The
   load produces a repo with one branch `main` containing the
   literal tree the dump described, including any `/trunk`,
   `/branches`, `/tags` dirs as ordinary dirs. No automatic magic.
-- `svnadmin create` creates a fresh repo with just a `main` branch,
+- `avnadmin create` creates a fresh repo with just a `main` branch,
   empty tree.
 
 ## Unlimited history scale
@@ -216,7 +216,7 @@ history grows. That reshapes some of the storage choices below.
   10M revs that's 10M files in one dir; `readdir` degrades.
 - `svnae_repos_log` walks every rev into an in-memory array.
   Disaster at 10M revs.
-- `svn blame` walks rev 1..N looking for revs that touched a
+- `avn blame` walks rev 1..N looking for revs that touched a
   path. Needs a secondary index — `path_rev(branch, path, rev)`
   — to be O(touched-revs), not O(total-revs).
 - One monolithic branches-registry blob rewritten on every commit
@@ -300,9 +300,9 @@ history grows. That reshapes some of the storage choices below.
 - Checkout of a 1TB tree is still O(tree size). Use a client
   spec (Phase 8.3) to carve out a workable subset — it's a
   feature, not a bug.
-- `svn log` across all branches across all time is inherently
+- `avn log` across all branches across all time is inherently
   O(branches × revs). Paginate and paginate hard.
-- `svn verify` walks the whole tree; at 80TB that's hours. Not
+- `avn verify` walks the whole tree; at 80TB that's hours. Not
   sped up in 8.x; add `--from-rev N` for resumable later.
 
 ## Proposed phase breakdown
@@ -314,7 +314,7 @@ Big enough to be a family of phases, not one commit.
   `rev=N tree=<sha> spec=<sha>` (latest for that branch).
 - Per-branch rev pointers with two-level fanout:
   `$repo/branches/<name>/revs/aa/bb/NNNNNN`.
-- `svnadmin create` initialises `$repo/branches/main/head` with
+- `avnadmin create` initialises `$repo/branches/main/head` with
   rev 0, empty tree, empty spec.
 - Rev blob gains `branch:` field identifying which branch this
   rev advanced.
@@ -324,7 +324,7 @@ Big enough to be a family of phases, not one commit.
   commit.
 - Checkout/cat/list URLs accept `branchname;...` syntax;
   `branchname` alone = branch's root.
-- `svn co http://host/repo/main` checks out the `main` branch.
+- `avn co http://host/repo/main` checks out the `main` branch.
   Bare `http://host/repo` is now an error (explicit branch
   required) — fork-divergence, per user direction no back-compat
   expected.
@@ -332,7 +332,7 @@ Big enough to be a family of phases, not one commit.
   the URL as `http://host/repo/path` grows a branch-parsing step.
 
 **Phase 8.2 — Branch creation + specs (include-only)**
-- `svn branch create NAME --from BASE --include PATH [--include PATH...]`
+- `avn branch create NAME --from BASE --include PATH [--include PATH...]`
   — registers a new branch. Initial tree is BASE's tree filtered
   through the include globs (content-addressed copy; rep-sharing
   gives us that free).
@@ -340,24 +340,24 @@ Big enough to be a family of phases, not one commit.
   registry entry.
 - Commits on a branch are validated against the spec (paths outside
   the include set → 403).
-- `svn branches` lists all.
-- `svn switch branchname;path` moves the WC to a branch.
+- `avn branches` lists all.
+- `avn switch branchname;path` moves the WC to a branch.
 
 **Phase 8.3 — Client spec**
-- `svn checkout --client-spec FILE URL` filters further. Written to
+- `avn checkout --client-spec FILE URL` filters further. Written to
   `.svn/client_spec`.
-- `svn up` respects it.
-- `svn client-spec [edit]` to manage.
+- `avn up` respects it.
+- `avn client-spec [edit]` to manage.
 
 **Phase 8.4 — Systematic cross-branch merge**
-- `svn merge --from BRANCH_A --to BRANCH_B`.
+- `avn merge --from BRANCH_A --to BRANCH_B`.
 - Walks the union of both specs, uses Merkle diff to find
   differences, runs 3-way where they overlap.
 - Conflict resolution reuses Phase 5.13.
 
 **Phase 8.5 — Tags**
 - Tags are named snapshots in a new registry.
-- `svn tag NAME BRANCH[@rev]` records (branch-spec-at-rev,
+- `avn tag NAME BRANCH[@rev]` records (branch-spec-at-rev,
   tree-sha-at-rev).
 - Immutable; attempts to commit against a tag → 403.
 
@@ -380,20 +380,20 @@ Big enough to be a family of phases, not one commit.
    file inside you write `https://host/repo/main;src/foo.c`. Or do
    we allow `https://host/repo/main/src/foo.c`? Grammar choice. I
    lean toward *requiring* `;` to make the branch/path boundary
-   unambiguous in parsers — otherwise `svn co http://host/repo/feat`
+   unambiguous in parsers — otherwise `avn co http://host/repo/feat`
    is ambiguous (is `feat` a branch or a subdir of `main`?).
 
 9. **Commit branch inference.** When the WC says `branch=feat`, does
-   `svn commit` unconditionally commit to `feat`, or does it look at
+   `avn commit` unconditionally commit to `feat`, or does it look at
    the URL on each file? I think: the WC carries the branch, every
    commit from that WC targets that branch, full stop. Switching
-   branches requires `svn switch`.
+   branches requires `avn switch`.
 
 10. **Existing tests.** We have 44 suites currently, many of which
     use the old `/trunk`, `/branches/*`, `/tags/*` layout in their
     seed data. These would continue to work (the layout is just
     directories in `main`'s tree now) but the *semantics* change —
-    e.g. `test_branch.sh` exercises `svn cp URL/src URL/src-branch`
+    e.g. `test_branch.sh` exercises `avn cp URL/src URL/src-branch`
     which is now "copy a dir on the same branch," not "make a
     branch." That's still a valid operation (server-side copy is
     still a thing for refactoring), but we should rename the test
@@ -410,12 +410,12 @@ Big enough to be a family of phases, not one commit.
     `README.md`. Later we can add excludes with `!prefix`. For now
     every pattern is an include.
 
-13. **What happens to `svn cp` on-branch?** `svn cp URL1 URL2` where
+13. **What happens to `avn cp` on-branch?** `avn cp URL1 URL2` where
     both URLs are within branch `main` — that's still a dir-copy
     operation, Phase 7.7's RW-everywhere rule still applies, the
     result is committed to `main`. Fine. The *cross-branch* case
-    (`svn cp feat;X main;Y`) is new territory — probably just
-    "forbidden in 8.1; use `svn merge --from feat --to main` for
+    (`avn cp feat;X main;Y`) is new territory — probably just
+    "forbidden in 8.1; use `avn merge --from feat --to main` for
     that."
 
 14. **Per-commit branch — what stops a writer from committing to
@@ -428,7 +428,7 @@ Big enough to be a family of phases, not one commit.
       write on every path the commit touches, where those paths
       live in feat's view. This is what Phase 7.2 already does,
       just through a different lens.
-    - Reserve `svn branch create` as a super-user operation.
+    - Reserve `avn branch create` as a super-user operation.
 
     I'd lean on the existing path-ACL system: branch-level is
     over-engineering. Creating a branch = super-user by default.
@@ -450,8 +450,8 @@ grammar and commit shape before we commit to it.
 
 **The cognitive load on users.** We're introducing: branch names,
 branch specs, client specs, the `;` URL syntax, and new merge
-semantics. That's a lot of surface. Reference svn + Phase 5.15's
-`svn switch` got away with a single URL-as-identifier model. Now
+semantics. That's a lot of surface. Reference avn + Phase 5.15's
+`avn switch` got away with a single URL-as-identifier model. Now
 every URL needs a branch disambiguation.
 
 **Whether branch specs are the right abstraction at all.** Perforce

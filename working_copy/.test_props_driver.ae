@@ -1,7 +1,7 @@
 // Copyright 2026 Paul Hammant (portions).
 // Apache License, Version 2.0 — see LICENSE.
 //
-// Aether driver for svn propset/propget/propdel/proplist test.
+// Aether driver for avn propset/propget/propdel/proplist test.
 // Round 238. Migrated from working_copy/test_props.sh.
 
 import contrib.aeocha
@@ -25,7 +25,7 @@ sh(cmd: string) -> {
 
 main() {
     fw = aeocha.init()
-    svn_bin = os_getenv("SVN_BIN")
+    avn_bin = os_getenv("AVN_BIN")
     port    = os_getenv("TEST_PROPS_PORT")
     url     = string.concat("http://127.0.0.1:", string.concat(port, "/demo"))
     wc      = "/tmp/avn_test_pr_wc"
@@ -33,7 +33,7 @@ main() {
     // prep: checkout
     prep = string.concat("rm -rf ", wc)
     prep = string.concat(prep, " && ")
-    prep = string.concat(prep, svn_bin)
+    prep = string.concat(prep, avn_bin)
     prep = string.concat(prep, " checkout ")
     prep = string.concat(prep, url)
     prep = string.concat(prep, " ")
@@ -41,10 +41,10 @@ main() {
     prep = string.concat(prep, " >/dev/null")
     prep_out, prep_st, prep_err = sh(prep)
 
-    // helpers — all run as `cd $wc && svn ...`
+    // helpers — all run as `cd $wc && avn ...`
     cd_prefix = string.concat("cd ", wc)
     cd_prefix = string.concat(cd_prefix, " && ")
-    cd_prefix = string.concat(cd_prefix, svn_bin)
+    cd_prefix = string.concat(cd_prefix, avn_bin)
 
     set_mime_text  = string.concat(cd_prefix, " propset svn:mime-type text/plain README >/dev/null")
     get_mime       = string.concat(cd_prefix, " propget svn:mime-type README")
@@ -62,7 +62,7 @@ main() {
     rm_draft        = string.concat(rm_draft, " && rm DRAFT")
     propdel_mime    = string.concat(cd_prefix, " propdel svn:mime-type README >/dev/null")
 
-    aeocha.describe(fw, "svn propset/propget/propdel/proplist") {
+    aeocha.describe(fw, "avn propset/propget/propdel/proplist") {
 
         aeocha.it("prep: clean checkout") callback {
             aeocha.expect_exit(fw, prep_st, 0, "checkout exit 0")

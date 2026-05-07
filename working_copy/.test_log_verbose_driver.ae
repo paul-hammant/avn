@@ -1,11 +1,11 @@
 // Copyright 2026 Paul Hammant (portions).
 // Apache License, Version 2.0 — see LICENSE.
 //
-// Aether driver for svn log --verbose integration test. Round 235
+// Aether driver for avn log --verbose integration test. Round 235
 // canary for HTTP-asserting tests using std.http.client +
 // aeocha.expect_http_*.
 //
-// Migrated from the bash test_log_verbose.sh. Reads $SVN_BIN
+// Migrated from the bash test_log_verbose.sh. Reads $AVN_BIN
 // (binary-under-test) and $TEST_LOG_VERBOSE_PORT (fixture
 // server port).
 //
@@ -15,7 +15,7 @@
 //      (no os.chdir in std today).
 //   2. Hit /repos/demo/rev/N/paths for r0..r6, assert each rev's
 //      action/path entries match seeder + scripted history.
-//   3. Spot-check the CLI `svn log -v` "Changed paths:" output.
+//   3. Spot-check the CLI `avn log -v` "Changed paths:" output.
 
 import contrib.aeocha
 import std.os
@@ -53,7 +53,7 @@ resp_body(resp: ptr) -> {
 }
 
 // Run a shell pipeline. Used for cwd-bound steps where /bin/sh -c
-// gives us `cd $WC && svn ...`. The driver is free to spawn its
+// gives us `cd $WC && avn ...`. The driver is free to spawn its
 // own helper processes; pre_command from the fixture is also an
 // option but inlining keeps prep visible in the test body.
 sh(cmd: string) -> {
@@ -66,7 +66,7 @@ sh(cmd: string) -> {
 
 main() {
     fw = aeocha.init()
-    svn_bin = os_getenv("SVN_BIN")
+    avn_bin = os_getenv("AVN_BIN")
     port    = os_getenv("TEST_LOG_VERBOSE_PORT")
     url     = string.concat("http://127.0.0.1:", string.concat(port, "/demo"))
     paths_base = string.concat("http://127.0.0.1:", string.concat(port, "/repos/demo/rev/"))
@@ -77,32 +77,32 @@ main() {
     // the whole suite cleanly; describe blocks expect a stable
     // server state)
     rm_out, rm_st, rm_err = sh(string.concat("rm -rf ", wc))
-    co_cmd = string.concat(svn_bin, string.concat(" checkout ",
+    co_cmd = string.concat(avn_bin, string.concat(" checkout ",
         string.concat(url, string.concat(" ", string.concat(wc, " >/dev/null")))))
     co_out, co_st, co_err = sh(co_cmd)
 
     // r4: add NEW
     r4_cmd = string.concat("cd ", string.concat(wc,
         string.concat(" && echo hi > NEW && ",
-        string.concat(svn_bin,
+        string.concat(avn_bin,
         string.concat(" add NEW >/dev/null && ",
-        string.concat(svn_bin,
+        string.concat(avn_bin,
         " commit --author alice --log 'add NEW' >/dev/null"))))))
     r4_out, r4_st, r4_err = sh(r4_cmd)
 
     // r5: modify README
     r5_cmd = string.concat("cd ", string.concat(wc,
         string.concat(" && echo updated-readme > README && ",
-        string.concat(svn_bin,
+        string.concat(avn_bin,
         " commit --author alice --log 'tweak README' >/dev/null"))))
     r5_out, r5_st, r5_err = sh(r5_cmd)
 
     // r6: delete NEW
     r6_cmd = string.concat("cd ", string.concat(wc,
         string.concat(" && ",
-        string.concat(svn_bin,
+        string.concat(avn_bin,
         string.concat(" rm NEW >/dev/null && ",
-        string.concat(svn_bin,
+        string.concat(avn_bin,
         " commit --author alice --log 'drop NEW' >/dev/null"))))))
     r6_out, r6_st, r6_err = sh(r6_cmd)
 
@@ -114,7 +114,7 @@ main() {
     url_r5 = string.concat(paths_base, "5/paths")
     url_r6 = string.concat(paths_base, "6/paths")
 
-    aeocha.describe(fw, "svn log -v + /rev/N/paths") {
+    aeocha.describe(fw, "avn log -v + /rev/N/paths") {
 
         aeocha.it("WC prep r4..r6 succeeded") callback {
             aeocha.expect_exit(fw, r4_st, 0, "r4 add NEW commit ok")
@@ -174,14 +174,14 @@ main() {
             resp_free(resp)
         }
 
-        aeocha.it("svn log -v shows Changed paths block per rev") callback {
+        aeocha.it("avn log -v shows Changed paths block per rev") callback {
             argv = argv_new()
             argv_push(argv, "log")
             argv_push(argv, "-v")
             argv_push(argv, url)
-            out, status, err = os.run_capture(svn_bin, argv, null)
+            out, status, err = os.run_capture(avn_bin, argv, null)
             aeocha.expect_no_spawn_error(fw, err, "spawn ok")
-            aeocha.expect_exit(fw, status, 0, "svn log -v exit 0")
+            aeocha.expect_exit(fw, status, 0, "avn log -v exit 0")
             // 7 revs (r0..r6) → 7 "Changed paths:" headers.
             aeocha.expect_stdout_contains(fw, out, "Changed paths:",
                 "log -v has Changed paths header")
@@ -193,13 +193,13 @@ main() {
                 "log -v shows D NEW (r6)")
         }
 
-        aeocha.it("svn log (bare) has no Changed paths header") callback {
+        aeocha.it("avn log (bare) has no Changed paths header") callback {
             argv = argv_new()
             argv_push(argv, "log")
             argv_push(argv, url)
-            out, status, err = os.run_capture(svn_bin, argv, null)
+            out, status, err = os.run_capture(avn_bin, argv, null)
             aeocha.expect_no_spawn_error(fw, err, "spawn ok")
-            aeocha.expect_exit(fw, status, 0, "svn log exit 0")
+            aeocha.expect_exit(fw, status, 0, "avn log exit 0")
             // Should NOT have "Changed paths:" anywhere
             body_has = string_contains(out, "Changed paths:")
             aeocha.assert_eq(fw, body_has, 0,

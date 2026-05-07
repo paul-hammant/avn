@@ -16,7 +16,7 @@
 // Tests for the sqlite binding. Exercises open, schema, bind, step,
 // column read (text, int, i64 hi/lo pair, blob), and error paths.
 //
-// Schema below mirrors svn's rep-cache.db with simplified columns.
+// Schema below mirrors avn's rep-cache.db with simplified columns.
 
 import std.string
 

@@ -12,7 +12,7 @@
 // introduced in the port; see TODO.md "Cherry-pick convergence"
 // for the MB-A..MB-F catalogue.
 //
-// Driver creates the repo via svnadmin and spawns the server inline,
+// Driver creates the repo via avnadmin and spawns the server inline,
 // so no fixture_seed/server here — the test owns the lifecycle.
 
 import build
@@ -29,14 +29,14 @@ main() {
         driver(".test_cherry_convergence_driver.ae")
         output("test_cherry_convergence_driver")
 
-        binary_under_test(b, "svn") {
-            path("target/avn/bin/svn")
+        binary_under_test(b, "avn") {
+            path("target/avn/bin/avn")
         }
         binary_under_test(b, "admin") {
-            path("target/avnadmin/bin/svnadmin")
+            path("target/avnadmin/bin/avnadmin")
         }
         binary_under_test(b, "server") {
-            path("target/avnserver/bin/aether-svnserver")
+            path("target/avnserver/bin/avnserver")
         }
     }
 }

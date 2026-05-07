@@ -27,7 +27,7 @@
 // Pre-Round 265, wc_db_open both fs.mkdir_p'd .svn/pristine and
 // auto-created the sqlite db, so any caller pointing at a non-WC
 // directory (a fresh WC subdir, an arbitrary path, …) silently got
-// a brand-new isolated WC. `cd $WC/sub && svn add foo.txt` would
+// a brand-new isolated WC. `cd $WC/sub && avn add foo.txt` would
 // create `$WC/sub/.svn/wc.db` from nothing; the parent's commit
 // later saw no changes — exactly the MB-C surface in TODO.md.
 

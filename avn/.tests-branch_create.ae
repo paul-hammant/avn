@@ -14,16 +14,16 @@ main() {
         driver(".test_branch_create_driver.ae")
         output("test_branch_create_driver")
 
-        binary_under_test(b, "svn") {
-            path("target/avn/bin/svn")
+        binary_under_test(b, "avn") {
+            path("target/avn/bin/avn")
         }
 
         fixture_seed(b, "test_branch_create") {
             path("/tmp/avn_aeb_test_branch_create_repo")
-            seed_bin("target/avnserver/bin/svnae-seed")
+            seed_bin("target/avnserver/bin/avn-seed")
         }
         fixture_server(b, "test_branch_create") {
-            bin("target/avnserver/bin/aether-svnserver")
+            bin("target/avnserver/bin/avnserver")
             args("demo $TEST_BRANCH_CREATE_PATH 9665 --superuser-token b82a-token")
             port(9665)
             ready_after_ms(1500)

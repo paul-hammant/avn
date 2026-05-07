@@ -13,7 +13,7 @@
 // implied. See the License for the specific language governing
 // permissions and limitations under the License.
 
-// svn resolve — clear the `conflicted` flag on a WC node, optionally
+// avn resolve — clear the `conflicted` flag on a WC node, optionally
 // choosing which version becomes the working-copy content:
 //
 //   wc_resolve(wc_root, path, accept)

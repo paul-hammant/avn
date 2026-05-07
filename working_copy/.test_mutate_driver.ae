@@ -1,7 +1,7 @@
 // Copyright 2026 Paul Hammant (portions).
 // Apache License, Version 2.0 — see LICENSE.
 //
-// Aether driver for svn add/rm test. Round 238.
+// Aether driver for avn add/rm test. Round 238.
 // Migrated from working_copy/test_mutate.sh.
 
 import contrib.aeocha
@@ -25,7 +25,7 @@ sh(cmd: string) -> {
 
 main() {
     fw = aeocha.init()
-    svn_bin = os_getenv("SVN_BIN")
+    avn_bin = os_getenv("AVN_BIN")
     port    = os_getenv("TEST_MUTATE_PORT")
     url     = string.concat("http://127.0.0.1:", string.concat(port, "/demo"))
     wc      = "/tmp/avn_test_mut_wc"
@@ -33,7 +33,7 @@ main() {
     // prep: checkout + create unversioned file NOTES
     prep = string.concat("rm -rf ", wc)
     prep = string.concat(prep, " && ")
-    prep = string.concat(prep, svn_bin)
+    prep = string.concat(prep, avn_bin)
     prep = string.concat(prep, " checkout ")
     prep = string.concat(prep, url)
     prep = string.concat(prep, " ")
@@ -46,19 +46,19 @@ main() {
     // status from inside WC, possibly sorted
     cd_status = string.concat("cd ", wc)
     cd_status = string.concat(cd_status, " && ")
-    cd_status = string.concat(cd_status, svn_bin)
+    cd_status = string.concat(cd_status, avn_bin)
     cd_status = string.concat(cd_status, " status | sort")
 
-    // svn add NOTES
+    // avn add NOTES
     add_notes = string.concat("cd ", wc)
     add_notes = string.concat(add_notes, " && ")
-    add_notes = string.concat(add_notes, svn_bin)
+    add_notes = string.concat(add_notes, avn_bin)
     add_notes = string.concat(add_notes, " add NOTES")
 
-    // svn rm README
+    // avn rm README
     rm_readme = string.concat("cd ", wc)
     rm_readme = string.concat(rm_readme, " && ")
-    rm_readme = string.concat(rm_readme, svn_bin)
+    rm_readme = string.concat(rm_readme, avn_bin)
     rm_readme = string.concat(rm_readme, " rm README")
 
     chk_readme = string.concat("test -f ", wc)
@@ -66,27 +66,27 @@ main() {
 
     cd_status_plain = string.concat("cd ", wc)
     cd_status_plain = string.concat(cd_status_plain, " && ")
-    cd_status_plain = string.concat(cd_status_plain, svn_bin)
+    cd_status_plain = string.concat(cd_status_plain, avn_bin)
     cd_status_plain = string.concat(cd_status_plain, " status")
 
-    // svn add of nonexistent — expected to fail nonzero
+    // avn add of nonexistent — expected to fail nonzero
     add_bogus = string.concat("cd ", wc)
     add_bogus = string.concat(add_bogus, " && ")
-    add_bogus = string.concat(add_bogus, svn_bin)
+    add_bogus = string.concat(add_bogus, avn_bin)
     add_bogus = string.concat(add_bogus, " add does-not-exist 2>/dev/null")
 
     // DRAFT add+rm round-trip
     draft_dance = string.concat("cd ", wc)
     draft_dance = string.concat(draft_dance, " && echo draft > DRAFT && ")
-    draft_dance = string.concat(draft_dance, svn_bin)
+    draft_dance = string.concat(draft_dance, avn_bin)
     draft_dance = string.concat(draft_dance, " add DRAFT >/dev/null && ")
-    draft_dance = string.concat(draft_dance, svn_bin)
+    draft_dance = string.concat(draft_dance, avn_bin)
     draft_dance = string.concat(draft_dance, " rm DRAFT >/dev/null")
 
     chk_draft = string.concat("test -f ", wc)
     chk_draft = string.concat(chk_draft, "/DRAFT && echo present || echo absent")
 
-    aeocha.describe(fw, "svn add / rm") {
+    aeocha.describe(fw, "avn add / rm") {
 
         aeocha.it("prep: checkout + create NOTES on disk") callback {
             aeocha.expect_exit(fw, prep_st, 0, "prep exit 0")
@@ -99,7 +99,7 @@ main() {
             aeocha.expect_stdout_contains(fw, out, "NOTES", "NOTES line")
         }
 
-        aeocha.it("svn add NOTES prints 'A' line") callback {
+        aeocha.it("avn add NOTES prints 'A' line") callback {
             out, status, _ = sh(add_notes)
             aeocha.expect_exit(fw, status, 0, "add exit 0")
             aeocha.expect_stdout_contains(fw, out, "A", "A flag present")
@@ -112,14 +112,14 @@ main() {
             aeocha.expect_stdout_contains(fw, out, "NOTES", "NOTES")
         }
 
-        aeocha.it("svn rm README prints 'D' line") callback {
+        aeocha.it("avn rm README prints 'D' line") callback {
             out, status, _ = sh(rm_readme)
             aeocha.expect_exit(fw, status, 0, "rm exit 0")
             aeocha.expect_stdout_contains(fw, out, "D", "D flag")
             aeocha.expect_stdout_contains(fw, out, "README", "README")
         }
 
-        aeocha.it("README gone from disk after svn rm") callback {
+        aeocha.it("README gone from disk after avn rm") callback {
             out, _, _ = sh(chk_readme)
             aeocha.expect_stdout_contains(fw, out, "absent",
                 "README absent")
@@ -131,7 +131,7 @@ main() {
             aeocha.expect_stdout_contains(fw, out, "README", "README line")
         }
 
-        aeocha.it("svn add of nonexistent path fails nonzero") callback {
+        aeocha.it("avn add of nonexistent path fails nonzero") callback {
             _, status, _ = sh(add_bogus)
             aeocha.assert_not_eq(fw, status, 0,
                 "add of nonexistent should fail")

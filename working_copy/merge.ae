@@ -13,13 +13,13 @@
 // implied. See the License for the specific language governing
 // permissions and limitations under the License.
 
-// svn merge — linear rev-range forward / reverse merge.
+// avn merge — linear rev-range forward / reverse merge.
 //
 //   wc_merge(wc_root, source_path, rev_a, rev_b, target_path)
 //
 // Apply the file-tree diff between two source-path revisions onto the
 // WC. Round 274+ records merge metadata into wc.db's pending_merge
-// table; svn commit drains it into the commit body's `merged_from`
+// table; avn commit drains it into the commit body's `merged_from`
 // JSON; the server writes the merge ledger.
 //
 // rev_a < rev_b: forward merge — apply (source@A → source@B) to WC.
@@ -71,7 +71,7 @@ extern fetch_merge_runs(base: string, repo: string,
                         lo: int, hi: int, as_of_rev: int) -> string
 
 // pending_merge accumulator (Round 274 / Phase 2.1) — carries
-// merge metadata from `svn merge` to `svn commit`. Server-side,
+// merge metadata from `avn merge` to `avn commit`. Server-side,
 // commit_finalise drains pending into rev blob `merged:` field
 // and merge ledger rows.
 extern wc_pending_merge_record(wc_root: string,
@@ -182,7 +182,7 @@ export wc_merge(wc_root: string, source_path: string,
     // MB-G / MB-G-2 (Rounds 268-269): split the requested range
     // into the maximal-contiguous sub-ranges that aren't already in
     // svn:mergeinfo, and apply each separately. Without this,
-    // `svn merge -r N:HEAD URL/trunk` after earlier cherry-picks
+    // `avn merge -r N:HEAD URL/trunk` after earlier cherry-picks
     // re-applies revs already in the WC and three-way-merges them
     // back onto themselves — spurious conflict markers.
     //
@@ -230,7 +230,7 @@ export wc_merge(wc_root: string, source_path: string,
                                 target_path, lo, hi, reverse, db)
         if rc != 0 { break }
         // Record each integrated rev into pending_merge so
-        // svn commit can carry the merge metadata server-side.
+        // avn commit can carry the merge metadata server-side.
         // Reverse merges (verb=2) and applied merges (verb=0)
         // both go through this path; commit_parse on the server
         // resolves rev → SHA before writing to merges.db.

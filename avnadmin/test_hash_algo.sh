@@ -7,7 +7,7 @@
 #
 # Covers:
 #   (A) default repo uses sha1 and rep files are 40-char hex
-#   (B) svnadmin create --algos sha256 writes a format file recording it
+#   (B) avnadmin create --algos sha256 writes a format file recording it
 #   (C) rep files under that repo are 64-char hex
 #   (D) server's /info advertises the algo
 #   (E) full checkout → commit → update cycle works end-to-end
@@ -46,18 +46,18 @@ tlib_check "info has hash_algo=sha256"  "1" \
 # --- (E) full end-to-end round trip on the sha256 repo ---
 WC=/tmp/avn_test_hash_wc
 rm -rf "$WC"
-"$SVN_BIN" checkout "http://127.0.0.1:$PORT/demo" "$WC" >/dev/null
+"$AVN_BIN" checkout "http://127.0.0.1:$PORT/demo" "$WC" >/dev/null
 cd "$WC"
 echo "payload on sha256 repo" > NEW.txt
-"$SVN_BIN" add NEW.txt >/dev/null
-"$SVN_BIN" commit --author alice --log "add NEW on sha256" >/dev/null
-out=$("$SVN_BIN" cat "http://127.0.0.1:$PORT/demo" NEW.txt)
+"$AVN_BIN" add NEW.txt >/dev/null
+"$AVN_BIN" commit --author alice --log "add NEW on sha256" >/dev/null
+out=$("$AVN_BIN" cat "http://127.0.0.1:$PORT/demo" NEW.txt)
 tlib_check "round-trip content"  "payload on sha256 repo"  "$out"
 cd /
 rm -rf "$WC"
 
 # Second WC: fresh checkout should pull NEW.txt down again.
-"$SVN_BIN" checkout "http://127.0.0.1:$PORT/demo" "$WC" >/dev/null
+"$AVN_BIN" checkout "http://127.0.0.1:$PORT/demo" "$WC" >/dev/null
 tlib_check "second WC saw NEW"   "payload on sha256 repo"  "$(cat "$WC/NEW.txt")"
 cd /
 rm -rf "$WC"

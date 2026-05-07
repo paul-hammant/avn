@@ -22,7 +22,7 @@
 //
 // Round 59 moved these out of repo_storage/rep_store_shim.c; the C side
 // no longer carries any direct sqlite3 calls. Same shape as round 48
-// (rep_cache primary table) and round 55 (svnadmin's path_rev table).
+// (rep_cache primary table) and round 55 (avnadmin's path_rev table).
 
 import std.string
 import contrib.sqlite

@@ -9,7 +9,7 @@
 // SDK setter), env-var-prefixed shell calls (SVN_USER=alice, ...),
 // and HTTP requests with custom headers.
 //
-// Reads $SVN_BIN, $TEST_ACL_PORT.
+// Reads $AVN_BIN, $TEST_ACL_PORT.
 
 import contrib.aeocha
 import std.os
@@ -59,7 +59,7 @@ sh(cmd: string) -> {
 
 main() {
     fw = aeocha.init()
-    svn_bin = os_getenv("SVN_BIN")
+    avn_bin = os_getenv("AVN_BIN")
     port    = os_getenv("TEST_ACL_PORT")
     token   = "test-super-token-42"
     url     = string.concat("http://127.0.0.1:", string.concat(port, "/demo"))
@@ -70,7 +70,7 @@ main() {
     // hits the codegen ordering bug.
     //
     // (B) baseline: alice ls src
-    cmd_alice_ls_src = string.concat("SVN_USER=alice ", svn_bin)
+    cmd_alice_ls_src = string.concat("SVN_USER=alice ", avn_bin)
     cmd_alice_ls_src = string.concat(cmd_alice_ls_src, " ls ")
     cmd_alice_ls_src = string.concat(cmd_alice_ls_src, url)
     cmd_alice_ls_src = string.concat(cmd_alice_ls_src, " src")
@@ -78,7 +78,7 @@ main() {
     // (A) super sets ACL on src to +bob -*
     cmd_set_acl = string.concat("SVN_SUPERUSER_TOKEN=", token)
     cmd_set_acl = string.concat(cmd_set_acl, " ")
-    cmd_set_acl = string.concat(cmd_set_acl, svn_bin)
+    cmd_set_acl = string.concat(cmd_set_acl, avn_bin)
     cmd_set_acl = string.concat(cmd_set_acl, " acl set ")
     cmd_set_acl = string.concat(cmd_set_acl, url)
     cmd_set_acl = string.concat(cmd_set_acl, " src '+bob' '-*' >/dev/null")
@@ -86,7 +86,7 @@ main() {
     // (A) super gets ACL on src
     cmd_get_acl = string.concat("SVN_SUPERUSER_TOKEN=", token)
     cmd_get_acl = string.concat(cmd_get_acl, " ")
-    cmd_get_acl = string.concat(cmd_get_acl, svn_bin)
+    cmd_get_acl = string.concat(cmd_get_acl, avn_bin)
     cmd_get_acl = string.concat(cmd_get_acl, " acl get ")
     cmd_get_acl = string.concat(cmd_get_acl, url)
     cmd_get_acl = string.concat(cmd_get_acl, " src")
@@ -94,7 +94,7 @@ main() {
     // (F) super-user cat src/main.c
     cmd_super_cat = string.concat("SVN_SUPERUSER_TOKEN=", token)
     cmd_super_cat = string.concat(cmd_super_cat, " ")
-    cmd_super_cat = string.concat(cmd_super_cat, svn_bin)
+    cmd_super_cat = string.concat(cmd_super_cat, avn_bin)
     cmd_super_cat = string.concat(cmd_super_cat, " cat ")
     cmd_super_cat = string.concat(cmd_super_cat, url)
     cmd_super_cat = string.concat(cmd_super_cat, " src/main.c")

@@ -25,7 +25,7 @@ sh(cmd: string) -> {
 
 main() {
     fw = aeocha.init()
-    svn_bin = os_getenv("SVN_BIN")
+    avn_bin = os_getenv("AVN_BIN")
     port    = os_getenv("TEST_BRANCH_ENFORCE_PORT")
     url     = string.concat("http://127.0.0.1:", string.concat(port, "/demo"))
     base_url = string.concat("http://127.0.0.1:", string.concat(port, "/repos/demo"))
@@ -34,14 +34,14 @@ main() {
     // Create both branches up front
     create_readme = string.concat("SVN_SUPERUSER_TOKEN=", token)
     create_readme = string.concat(create_readme, " ")
-    create_readme = string.concat(create_readme, svn_bin)
+    create_readme = string.concat(create_readme, avn_bin)
     create_readme = string.concat(create_readme, " branch create readme-only ")
     create_readme = string.concat(create_readme, url)
     create_readme = string.concat(create_readme, " --from main --include README >/dev/null && ")
     create_readme = string.concat(create_readme, "SVN_SUPERUSER_TOKEN=")
     create_readme = string.concat(create_readme, token)
     create_readme = string.concat(create_readme, " ")
-    create_readme = string.concat(create_readme, svn_bin)
+    create_readme = string.concat(create_readme, avn_bin)
     create_readme = string.concat(create_readme, " branch create feat ")
     create_readme = string.concat(create_readme, url)
     create_readme = string.concat(create_readme, " --from main --include 'src/**' --include README >/dev/null")

@@ -3,7 +3,7 @@
 # Copyright 2026 Paul Hammant (portions).
 # Apache License, Version 2.0 — see LICENSE.
 
-# End-to-end test for svnadmin: create, populate, dump, load into a
+# End-to-end test for avnadmin: create, populate, dump, load into a
 # fresh repo, verify the loaded repo behaves identically (same log,
 # same file contents).
 
@@ -56,15 +56,15 @@ S1=$!
 S2=$!
 sleep 1.5
 
-log1=$("$SVN_BIN" log "$URL1")
-log2=$("$SVN_BIN" log "$URL2")
+log1=$("$AVN_BIN" log "$URL1")
+log2=$("$AVN_BIN" log "$URL2")
 tlib_check "logs match"             "identical"         "$( [ "$log1" = "$log2" ] && echo identical || echo differ)"
 
 for path in README src/main.c docs/README.md; do
     for rev in 1 2 3; do
         # rev 3 drops LICENSE but not these files — they exist at all revs.
-        c1=$("$SVN_BIN" cat "$URL1" --rev "$rev" "$path" 2>/dev/null || echo MISSING)
-        c2=$("$SVN_BIN" cat "$URL2" --rev "$rev" "$path" 2>/dev/null || echo MISSING)
+        c1=$("$AVN_BIN" cat "$URL1" --rev "$rev" "$path" 2>/dev/null || echo MISSING)
+        c2=$("$AVN_BIN" cat "$URL2" --rev "$rev" "$path" 2>/dev/null || echo MISSING)
         tlib_check "cat r$rev $path matches" "$c1" "$c2"
     done
 done
@@ -89,4 +89,4 @@ rm -f "${DUMP}.trunc"
 
 rm -rf "$REPO1" "$REPO2" "$DUMP"
 
-tlib_summary "test_svnadmin"
+tlib_summary "test_avnadmin"

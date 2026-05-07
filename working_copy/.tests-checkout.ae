@@ -13,16 +13,16 @@ main() {
         driver(".test_checkout_driver.ae")
         output("test_checkout_driver")
 
-        binary_under_test(b, "svn") {
-            path("target/avn/bin/svn")
+        binary_under_test(b, "avn") {
+            path("target/avn/bin/avn")
         }
 
         fixture_seed(b, "test_checkout") {
             path("/tmp/avn_aeb_test_checkout_repo")
-            seed_bin("target/avnserver/bin/svnae-seed")
+            seed_bin("target/avnserver/bin/avn-seed")
         }
         fixture_server(b, "test_checkout") {
-            bin("target/avnserver/bin/aether-svnserver")
+            bin("target/avnserver/bin/avnserver")
             args("demo $TEST_CHECKOUT_PATH 9370")
             port(9370)
             ready_after_ms(1500)

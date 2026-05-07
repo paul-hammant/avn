@@ -1,7 +1,7 @@
 // Copyright 2026 Paul Hammant (portions).
 // Apache License, Version 2.0 — see LICENSE.
 //
-// Aether driver for `svn branch create` + spec storage.
+// Aether driver for `avn branch create` + spec storage.
 // Round 250. Migrated from avn/test_branch_create.sh.
 
 import contrib.aeocha
@@ -25,7 +25,7 @@ sh(cmd: string) -> {
 
 main() {
     fw = aeocha.init()
-    svn_bin = os_getenv("SVN_BIN")
+    avn_bin = os_getenv("AVN_BIN")
     port    = os_getenv("TEST_BRANCH_CREATE_PORT")
     repo    = os_getenv("TEST_BRANCH_CREATE_PATH")
     url     = string.concat("http://127.0.0.1:", string.concat(port, "/demo"))
@@ -33,7 +33,7 @@ main() {
     token   = "b82a-token"
 
     // (A) non-super create — count "Created branch" should be 0
-    non_super = string.concat(svn_bin, " branch create foo ")
+    non_super = string.concat(avn_bin, " branch create foo ")
     non_super = string.concat(non_super, url)
     non_super = string.concat(non_super, " --from main --include README 2>&1 | grep -c 'Created branch' || true")
 
@@ -42,7 +42,7 @@ main() {
     log_readme = "/tmp/avn_test_bc_readme.log"
     create_readme = string.concat("SVN_SUPERUSER_TOKEN=", token)
     create_readme = string.concat(create_readme, " ")
-    create_readme = string.concat(create_readme, svn_bin)
+    create_readme = string.concat(create_readme, avn_bin)
     create_readme = string.concat(create_readme, " branch create readme-only ")
     create_readme = string.concat(create_readme, url)
     create_readme = string.concat(create_readme, " --from main --include README 2>&1 | tee ")
@@ -66,7 +66,7 @@ main() {
     log_feat = "/tmp/avn_test_bc_feat.log"
     create_feat = string.concat("SVN_SUPERUSER_TOKEN=", token)
     create_feat = string.concat(create_feat, " ")
-    create_feat = string.concat(create_feat, svn_bin)
+    create_feat = string.concat(create_feat, avn_bin)
     create_feat = string.concat(create_feat, " branch create feat ")
     create_feat = string.concat(create_feat, url)
     create_feat = string.concat(create_feat, " --from main --include 'src/**' --include README 2>&1 | tee ")
@@ -85,7 +85,7 @@ main() {
     // (E) no --include → usage error
     no_include = string.concat("SVN_SUPERUSER_TOKEN=", token)
     no_include = string.concat(no_include, " ")
-    no_include = string.concat(no_include, svn_bin)
+    no_include = string.concat(no_include, avn_bin)
     no_include = string.concat(no_include, " branch create bad ")
     no_include = string.concat(no_include, url)
     no_include = string.concat(no_include, " --from main 2>&1 | grep -c 'at least one --include' || true")
@@ -93,7 +93,7 @@ main() {
     // (F) duplicate
     dup = string.concat("SVN_SUPERUSER_TOKEN=", token)
     dup = string.concat(dup, " ")
-    dup = string.concat(dup, svn_bin)
+    dup = string.concat(dup, avn_bin)
     dup = string.concat(dup, " branch create feat ")
     dup = string.concat(dup, url)
     dup = string.concat(dup, " --from main --include README 2>&1 | grep -c 'Created branch' || true")
@@ -101,13 +101,13 @@ main() {
     // (G) unknown base
     bad_base = string.concat("SVN_SUPERUSER_TOKEN=", token)
     bad_base = string.concat(bad_base, " ")
-    bad_base = string.concat(bad_base, svn_bin)
+    bad_base = string.concat(bad_base, avn_bin)
     bad_base = string.concat(bad_base, " branch create x ")
     bad_base = string.concat(bad_base, url)
     bad_base = string.concat(bad_base, " --from no-such --include README 2>&1 | grep -c 'Created branch' || true")
 
     // (H) branch list
-    blist = string.concat(svn_bin, " branch list ")
+    blist = string.concat(avn_bin, " branch list ")
     blist = string.concat(blist, url)
     list_grep_main      = string.concat(blist, " | grep -c '^main$' || true")
     list_grep_readme    = string.concat(blist, " | grep -c '^readme-only' || true")
@@ -121,7 +121,7 @@ main() {
     info_specs       = string.concat(info_curl, " | grep -c '\"specs\":{' || true")
     info_specs_ro    = string.concat(info_curl, " | grep -c '\"readme-only\":\\[\"README\"\\]' || true")
 
-    aeocha.describe(fw, "svn branch create + spec storage") {
+    aeocha.describe(fw, "avn branch create + spec storage") {
 
         aeocha.it("(A) non-super refused — Created branch count = 0") callback {
             out, _, _ = sh(non_super)

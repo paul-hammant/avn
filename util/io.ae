@@ -18,7 +18,7 @@
 //
 // Before Aether gained `--emit=lib --with=fs` (changelog [current]),
 // write_file_atomic + mkdir_p + read_small were duplicated verbatim in
-// commit_shim, rep_store_shim, pristine_shim, checkout_shim, svnadmin,
+// commit_shim, rep_store_shim, pristine_shim, checkout_shim, avnadmin,
 // txn_shim, and merge_shim. This module delegates to std.fs so the
 // copies can go away.
 //
@@ -149,7 +149,7 @@ export io_unlink(path: string) -> int {
     return 0
 }
 
-// Idempotent unlink: missing file is success. Used by svn's "delete tmp
+// Idempotent unlink: missing file is success. Used by avn's "delete tmp
 // if present" cleanup paths, where a stale tmp may or may not exist.
 // Returns 0 on success or already-absent, 1 if the file exists but
 // can't be deleted.

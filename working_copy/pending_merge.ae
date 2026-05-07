@@ -3,8 +3,8 @@
 //
 // WC-side accumulation of merge metadata (Round 274 / Phase 2.1).
 //
-// `svn merge ...` records pending merges into wc.db's pending_merge
-// table; `svn commit` drains them into the commit body's
+// `avn merge ...` records pending merges into wc.db's pending_merge
+// table; `avn commit` drains them into the commit body's
 // `merged_from` JSON; the server resolves rev numbers to SHAs and
 // writes the merge ledger; the WC clears pending_merge on success.
 //
@@ -30,7 +30,7 @@ extern wc_db_close(db: ptr)
 // reject early).
 //
 // `target_path` is the merge's WC anchor — what the user passed
-// to `svn merge ... TARGET`. Empty string means the merge target
+// to `avn merge ... TARGET`. Empty string means the merge target
 // was the WC root.
 export wc_pending_merge_record(wc_root: string,
                                target_path: string,
@@ -73,7 +73,7 @@ export wc_pending_merge_record(wc_root: string,
     return 0
 }
 
-// Number of pending merge rows. svn commit calls this to decide
+// Number of pending merge rows. avn commit calls this to decide
 // whether to attach a merged_from object to the commit body.
 export wc_pending_merge_count(wc_root: string) -> int {
     db = wc_db_open(wc_root)
@@ -94,8 +94,8 @@ export wc_pending_merge_count(wc_root: string) -> int {
 // in the convergence test are all-from-trunk, all-from-main, etc.
 // Returns "" if there are no pending merges.
 //
-// Cross-source mixing (svn merge URL/foo + svn merge URL/bar
-// before svn commit) returns the FIRST source branch encountered,
+// Cross-source mixing (avn merge URL/foo + avn merge URL/bar
+// before avn commit) returns the FIRST source branch encountered,
 // which may not match all rows. Phase 2.x handling of multi-source
 // is filed; for now, callers can scan via the per-row accessors
 // if they need the truth.
@@ -181,7 +181,7 @@ export wc_pending_merge_drain(wc_root: string) -> string {
     return out
 }
 
-// Round 278 / Phase 2.3a: dump the pending_merge table for `svn
+// Round 278 / Phase 2.3a: dump the pending_merge table for `avn
 // merged --pending`. Returns one row per line:
 //   <target_path>\t<source_branch>\t<source_rev>\t<verb>
 // Empty if nothing pending. Verb-as-int (0 applied, 1 record-only,

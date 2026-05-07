@@ -14,16 +14,16 @@ main() {
         driver(".test_acl_cp_follow_driver.ae")
         output("test_acl_cp_follow_driver")
 
-        binary_under_test(b, "svn") {
-            path("target/avn/bin/svn")
+        binary_under_test(b, "avn") {
+            path("target/avn/bin/avn")
         }
 
         fixture_seed(b, "test_acl_cp_follow") {
             path("/tmp/avn_aeb_test_acl_cp_follow_repo")
-            seed_bin("target/avnserver/bin/svnae-seed")
+            seed_bin("target/avnserver/bin/avn-seed")
         }
         fixture_server(b, "test_acl_cp_follow") {
-            bin("target/avnserver/bin/aether-svnserver")
+            bin("target/avnserver/bin/avnserver")
             args("demo $TEST_ACL_CP_FOLLOW_PATH 9625 --superuser-token cpacl-token")
             port(9625)
             ready_after_ms(1500)

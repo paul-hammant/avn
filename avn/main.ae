@@ -13,16 +13,16 @@
 // implied. See the License for the specific language governing
 // permissions and limitations under the License.
 
-// svn — stateless CLI for avn. Talks to aether-svnserver via the
+// avn — stateless CLI for avn. Talks to avnserver via the
 // Phase 7 RA. No working copy in this phase; every command hits the
 // remote directly.
 //
 // Usage:
-//   svn info   URL [--rev N]
-//   svn log    URL
-//   svn ls     URL [--rev N] [PATH]
-//   svn cat    URL [--rev N] PATH
-//   svn commit URL --author A --log M [--add-file PATH=CONTENT]...
+//   avn info   URL [--rev N]
+//   avn log    URL
+//   avn ls     URL [--rev N] [PATH]
+//   avn cat    URL [--rev N] PATH
+//   avn commit URL --author A --log M [--add-file PATH=CONTENT]...
 //                                     [--mkdir PATH]...
 //                                     [--delete PATH]...
 //
@@ -114,20 +114,20 @@ extern remote_log_date(lg: ptr, i: int) -> string
 extern remote_log_msg(lg: ptr, i: int) -> string
 extern remote_log_free(lg: ptr)
 
-// Round 274 / Phase 2.2 — `svn merged` ledger query.
+// Round 274 / Phase 2.2 — `avn merged` ledger query.
 extern fetch_merged(base: string, repo: string,
                     target_branch: string, source_branch: string) -> string
 // Round 278 / Phase 2.3a — eligible-revs dry-run.
 extern fetch_merge_runs(base: string, repo: string,
                         target_branch: string, source_branch: string,
                         lo: int, hi: int, as_of_rev: int) -> string
-// Round 278 / Phase 2.3a — `svn merged --pending` reads the WC
+// Round 278 / Phase 2.3a — `avn merged --pending` reads the WC
 // side of the merge pipeline (rows that wc_merge accumulated
 // but haven't been committed yet).
 extern wc_pending_merge_dump(wc_root: string) -> string
 
 // Round 280 — verbose mode reads source-repo URL out of the WC's
-// info table so `svn merged --pending -v` can decorate each pending
+// info table so `avn merged --pending -v` can decorate each pending
 // row with author/date/log via the existing remote_info_rev path.
 extern wc_db_open(wc_root: string) -> ptr
 extern wc_db_get_info(db: ptr, key: string) -> string
@@ -472,20 +472,20 @@ cmd_info(argv_start: int) {
     if string.length(rev_str) > 0 {
         if string.try_int(rev_str) == 1 { rev = string.get_int(rev_str) }
         else {
-            println("svn info: bad --rev value")
+            println("avn info: bad --rev value")
             return 2
         }
     } else {
         rev = remote_head_rev(base, repo)
         if rev < 0 {
-            println("svn info: could not contact server")
+            println("avn info: could not contact server")
             return 1
         }
     }
 
     I = remote_info_rev(base, repo, rev)
     if I == 0 {
-        println("svn info: no such revision")
+        println("avn info: no such revision")
         return 1
     }
     println("URL:         ${url}")
@@ -497,7 +497,7 @@ cmd_info(argv_start: int) {
     return 0
 }
 
-// svn verify URL [--rev N]
+// avn verify URL [--rev N]
 // Walks the tree at rev top-down, re-hashing every file and dir blob
 // locally, and confirms the recomputed root matches the rev blob's
 // root sha. Used to detect server-side tampering or storage
@@ -521,7 +521,7 @@ cmd_verify(argv_start: int) {
         k = k + 1
     }
     if string.length(url) == 0 {
-        println("svn verify: usage: svn verify URL [--rev N] [--secondaries]")
+        println("avn verify: usage: avn verify URL [--rev N] [--secondaries]")
         return 2
     }
     base = url_base(url)
@@ -533,39 +533,39 @@ cmd_verify(argv_start: int) {
     }
     if rev < 0 { rev = remote_head_rev(base, repo) }
     if rev < 0 {
-        println("svn verify: could not contact server")
+        println("avn verify: could not contact server")
         return 1
     }
     rc = client_verify_full(base, repo, rev, with_secondaries)
     if rc == -2 {
-        println("svn verify: MISMATCH — repository content does not match advertised hashes")
+        println("avn verify: MISMATCH — repository content does not match advertised hashes")
         return 1
     }
     if rc != 0 {
-        println("svn verify: failed (rc=${rc})")
+        println("avn verify: failed (rc=${rc})")
         return 1
     }
     return 0
 }
 
-// svn acl set URL PATH RULE [RULE ...]   — e.g. +alice -eve
-// svn acl get URL PATH
-// svn acl clear URL PATH
+// avn acl set URL PATH RULE [RULE ...]   — e.g. +alice -eve
+// avn acl get URL PATH
+// avn acl clear URL PATH
 // RULE format: a single token "+name" or "-name" (wildcard: "+*" or "-*").
 // Requires SVN_SUPERUSER_TOKEN in the environment for set/clear
 // (server enforces). get is super-user-only too (normal users can't
 // probe whether a dir has an ACL).
 cmd_acl(argv_start: int) {
     if aether_args_count() <= argv_start {
-        println("svn acl: usage:")
-        println("  svn acl set   URL PATH RULE [RULE ...]")
-        println("  svn acl get   URL PATH")
-        println("  svn acl clear URL PATH")
+        println("avn acl: usage:")
+        println("  avn acl set   URL PATH RULE [RULE ...]")
+        println("  avn acl get   URL PATH")
+        println("  avn acl clear URL PATH")
         return 2
     }
     verb = aether_args_get(argv_start)
     if aether_args_count() < argv_start + 3 {
-        println("svn acl: missing arguments")
+        println("avn acl: missing arguments")
         return 2
     }
     url  = aether_args_get(argv_start + 1)
@@ -574,7 +574,7 @@ cmd_acl(argv_start: int) {
     repo = url_repo(url)
     head = remote_head_rev(base, repo)
     if head < 0 {
-        println("svn acl: could not contact server")
+        println("avn acl: could not contact server")
         return 1
     }
 
@@ -582,7 +582,7 @@ cmd_acl(argv_start: int) {
         full = "${base}/repos/${repo}/rev/${head}/acl/${path}"
         body = http_get_body(full)
         if string.length(body) == 0 {
-            println("svn acl get: request failed")
+            println("avn acl get: request failed")
             return 1
         }
         println(body)
@@ -593,7 +593,7 @@ cmd_acl(argv_start: int) {
     // builder; only the rule source differs.
     if string.equals(verb, "set") == 1 {
         if aether_args_count() < argv_start + 4 {
-            println("svn acl set: at least one RULE required")
+            println("avn acl set: at least one RULE required")
             return 2
         }
         return cmd_acl_set(head, base, repo, path, argv_start)
@@ -602,12 +602,12 @@ cmd_acl(argv_start: int) {
         return cmd_acl_clear(head, base, repo, path)
     }
 
-    println("svn acl: unknown verb '${verb}'")
+    println("avn acl: unknown verb '${verb}'")
     return 2
 }
 
 cmd_acl_set(head: int, base: string, repo: string, path: string, argv_start: int) {
-    cb = remote_commit_begin(head, "acl-admin", "svn acl set ${path}")
+    cb = remote_commit_begin(head, "acl-admin", "avn acl set ${path}")
     i = argv_start + 3
     n = aether_args_count()
     while i < n {
@@ -616,7 +616,7 @@ cmd_acl_set(head: int, base: string, repo: string, path: string, argv_start: int
     }
     new_rev = remote_commit_finish(cb, base, repo)
     if new_rev < 0 {
-        println("svn acl set: commit failed")
+        println("avn acl set: commit failed")
         return 1
     }
     println("Committed revision ${new_rev}.")
@@ -624,18 +624,18 @@ cmd_acl_set(head: int, base: string, repo: string, path: string, argv_start: int
 }
 
 cmd_acl_clear(head: int, base: string, repo: string, path: string) {
-    cb = remote_commit_begin(head, "acl-admin", "svn acl clear ${path}")
+    cb = remote_commit_begin(head, "acl-admin", "avn acl clear ${path}")
     remote_commit_acl_add(cb, path, "+*")
     new_rev = remote_commit_finish(cb, base, repo)
     if new_rev < 0 {
-        println("svn acl clear: commit failed")
+        println("avn acl clear: commit failed")
         return 1
     }
     println("Committed revision ${new_rev}.")
     return 0
 }
 
-// svn blame URL PATH [--rev N]
+// avn blame URL PATH [--rev N]
 // Per-line revision attribution. Prints "<rev> <author> <line>".
 cmd_blame(argv_start: int) {
     url = ""
@@ -655,10 +655,10 @@ cmd_blame(argv_start: int) {
         k = k + 1
     }
     if string.length(url) == 0 {
-        println("svn blame: usage: svn blame URL [PATH] [--rev N]")
+        println("avn blame: usage: avn blame URL [PATH] [--rev N]")
         return 2
     }
-    // Allow URL with embedded path, similar to `svn cat`.
+    // Allow URL with embedded path, similar to `avn cat`.
     base = url_base(url)
     repo = url_repo(url)
     // If PATH wasn't supplied separately, treat the URL's extra
@@ -669,7 +669,7 @@ cmd_blame(argv_start: int) {
         path = in_repo_path(url)
     }
     if string.length(path) == 0 {
-        println("svn blame: PATH required")
+        println("avn blame: PATH required")
         return 2
     }
     rev = -1
@@ -679,12 +679,12 @@ cmd_blame(argv_start: int) {
     }
     if rev < 0 { rev = remote_head_rev(base, repo) }
     if rev < 0 {
-        println("svn blame: could not contact server")
+        println("avn blame: could not contact server")
         return 1
     }
     B = remote_blame(base, repo, rev, path)
     if B == 0 {
-        println("svn blame: ${path} not found at r${rev}")
+        println("avn blame: ${path} not found at r${rev}")
         return 1
     }
     n = remote_blame_count(B)
@@ -693,7 +693,7 @@ cmd_blame(argv_start: int) {
         r = remote_blame_rev(B, i)
         au = remote_blame_author(B, i)
         t = remote_blame_text(B, i)
-        // Reference svn formats as "   <rev>   <author> <line>".
+        // Reference avn formats as "   <rev>   <author> <line>".
         println("${r} ${au} ${t}")
         i = i + 1
     }
@@ -724,7 +724,7 @@ cmd_log(argv_start: int) {
         k = k + 1
     }
     if string.length(url) == 0 {
-        println("svn log: usage: svn log [-v] URL")
+        println("avn log: usage: avn log [-v] URL")
         return 2
     }
     base = url_base(url)
@@ -732,11 +732,11 @@ cmd_log(argv_start: int) {
 
     lg = remote_log(base, repo)
     if lg == 0 {
-        println("svn log: could not contact server")
+        println("avn log: could not contact server")
         return 1
     }
     n = remote_log_count(lg)
-    // Print newest first (reverse), matching reference svn log's default.
+    // Print newest first (reverse), matching reference avn log's default.
     i = n - 1
     while i >= 0 {
         println("------------------------------------------------------------")
@@ -770,13 +770,13 @@ cmd_log(argv_start: int) {
 
 // Two modes:
 //
-//   svn merged URL --target T --source S
+//   avn merged URL --target T --source S
 //     Default. Lists rev SHAs integrated from S into T per the
 //     server-side merge ledger.
 //
-//   svn merged URL --target T --source S --eligible -r A:B
+//   avn merged URL --target T --source S --eligible -r A:B
 //     Dry-run. Lists rev NUMBERS in (A..B] from S that are NOT
-//     yet integrated into T — the revs `svn merge -r A:B URL/S T`
+//     yet integrated into T — the revs `avn merge -r A:B URL/S T`
 //     would actually apply right now. Skips already-integrated revs
 //     the same way the merge engine does.
 //
@@ -785,8 +785,8 @@ cmd_log(argv_start: int) {
 // can come later.) Output: one rev number per line, prefixed `r`.
 //
 // Replaces the user-facing read access to merge tracking that
-// classical SVN exposed via `svn propget svn:mergeinfo` and
-// `svn mergeinfo --show-revs eligible`.
+// classical SVN exposed via `avn propget svn:mergeinfo` and
+// `avn mergeinfo --show-revs eligible`.
 cmd_merged(argv_start: int) {
     target   = find_flag("--target", argv_start)
     source   = find_flag("--source", argv_start)
@@ -809,7 +809,7 @@ cmd_merged(argv_start: int) {
             if json_out == 1 {
                 println("{\"error\":\"not a working copy (or any of the parent directories)\"}")
             } else {
-                println("svn merged --pending: not a working copy (or any of the parent directories)")
+                println("avn merged --pending: not a working copy (or any of the parent directories)")
             }
             return 1
         }
@@ -837,16 +837,16 @@ cmd_merged(argv_start: int) {
 
     url = aether_args_get(argv_start)
     if string.length(url) == 0 {
-        println("svn merged: usage: svn merged URL --target T --source S [--eligible -r A:B] [--json]")
-        println("            or:    svn merged --pending [--json]   (WC-local queued merges)")
+        println("avn merged: usage: avn merged URL --target T --source S [--eligible -r A:B] [--json]")
+        println("            or:    avn merged --pending [--json]   (WC-local queued merges)")
         return 2
     }
     if string.length(target) == 0 {
-        println("svn merged: --target is required")
+        println("avn merged: --target is required")
         return 2
     }
     if string.length(source) == 0 {
-        println("svn merged: --source is required")
+        println("avn merged: --source is required")
         return 2
     }
     base = base_url_deep(url)
@@ -854,12 +854,12 @@ cmd_merged(argv_start: int) {
 
     if eligible == 1 {
         if string.length(r_flag) == 0 {
-            println("svn merged --eligible: -r A:B is required")
+            println("avn merged --eligible: -r A:B is required")
             return 2
         }
         colon = string.index_of(r_flag, ":")
         if colon < 0 {
-            println("svn merged --eligible: -r expects A:B")
+            println("avn merged --eligible: -r expects A:B")
             return 2
         }
         a_s = string.substring(r_flag, 0, colon)
@@ -869,20 +869,20 @@ cmd_merged(argv_start: int) {
         hi = 0
         if string.equals(a_s, "HEAD") == 1 {
             if head_rev < 0 {
-                println("svn merged: cannot resolve HEAD"); return 1
+                println("avn merged: cannot resolve HEAD"); return 1
             }
             lo = head_rev
         } else {
-            if string.try_int(a_s) == 0 { println("svn merged: -r A not a number"); return 2 }
+            if string.try_int(a_s) == 0 { println("avn merged: -r A not a number"); return 2 }
             lo = string.get_int(a_s)
         }
         if string.equals(b_s, "HEAD") == 1 {
             if head_rev < 0 {
-                println("svn merged: cannot resolve HEAD"); return 1
+                println("avn merged: cannot resolve HEAD"); return 1
             }
             hi = head_rev
         } else {
-            if string.try_int(b_s) == 0 { println("svn merged: -r B not a number"); return 2 }
+            if string.try_int(b_s) == 0 { println("avn merged: -r B not a number"); return 2 }
             hi = string.get_int(b_s)
         }
         // Eligibility query is by-default an at-HEAD view (as_of=0 →
@@ -1458,14 +1458,14 @@ cmd_ls(argv_start: int) {
     } else {
         rev = remote_head_rev(base, repo)
         if rev < 0 {
-            println("svn ls: could not contact server")
+            println("avn ls: could not contact server")
             return 1
         }
     }
 
     L = remote_list(base, repo, rev, path)
     if L == 0 {
-        println("svn ls: not a directory (or revision missing)")
+        println("avn ls: not a directory (or revision missing)")
         return 1
     }
     c = remote_list_count(L)
@@ -1489,7 +1489,7 @@ cmd_cat(argv_start: int) {
     rev_str = find_flag("--rev", argv_start)
     path = first_positional(argv_start + 1)
     if string.length(path) == 0 {
-        println("svn cat: missing PATH")
+        println("avn cat: missing PATH")
         return 2
     }
 
@@ -1502,14 +1502,14 @@ cmd_cat(argv_start: int) {
     } else {
         rev = remote_head_rev(base, repo)
         if rev < 0 {
-            println("svn cat: could not contact server")
+            println("avn cat: could not contact server")
             return 1
         }
     }
 
     data = remote_cat(base, repo, rev, path)
     if data == 0 {
-        println("svn cat: not found")
+        println("avn cat: not found")
         return 1
     }
     // Use the binary-safe stdout writer. For ASCII text this is the same
@@ -1523,8 +1523,8 @@ cmd_cat(argv_start: int) {
 
 cmd_commit(argv_start: int) {
     // Two modes:
-    //   stateless:  svn commit URL --author A --log M --add-file P=C ...
-    //   WC-backed:  svn commit      --author A --log M   (uses $PWD/.svn/wc.db)
+    //   stateless:  avn commit URL --author A --log M --add-file P=C ...
+    //   WC-backed:  avn commit      --author A --log M   (uses $PWD/.svn/wc.db)
     // We detect stateless mode by checking if argv[argv_start] starts with
     // "http". Otherwise we're WC-backed.
 
@@ -1540,17 +1540,17 @@ cmd_commit(argv_start: int) {
 
     if is_stateless == 0 {
         // WC-backed. Walk up from cwd to find the WC root, the
-        // classical-SVN way — so `cd $WC/release_a && svn commit`
+        // classical-SVN way — so `cd $WC/release_a && avn commit`
         // works.
         author = find_flag("--author", argv_start)
         logmsg = find_flag("--log", argv_start)
         if string.length(author) == 0 || string.length(logmsg) == 0 {
-            println("svn commit: --author and --log required")
+            println("avn commit: --author and --log required")
             return 2
         }
         wc_root, _ = find_wc_anchor_()
         if string.length(wc_root) == 0 {
-            println("svn commit: not a working copy (or any of the parent directories)")
+            println("avn commit: not a working copy (or any of the parent directories)")
             return 1
         }
         new_rev = wc_commit(wc_root, author, logmsg)
@@ -1563,11 +1563,11 @@ cmd_commit(argv_start: int) {
             return 1
         }
         if new_rev == -4 {
-            println("svn commit: out of date — fetch and retry (svn update)")
+            println("avn commit: out of date — fetch and retry (avn update)")
             return 1
         }
         if new_rev < 0 {
-            println("svn commit: failed")
+            println("avn commit: failed")
             return 1
         }
         println("Committed revision ${new_rev}.")
@@ -1582,13 +1582,13 @@ cmd_commit(argv_start: int) {
     author = find_flag("--author", argv_start)
     logmsg = find_flag("--log", argv_start)
     if string.length(author) == 0 || string.length(logmsg) == 0 {
-        println("svn commit: --author and --log required")
+        println("avn commit: --author and --log required")
         return 2
     }
 
     base_rev = remote_head_rev(base, repo)
     if base_rev < 0 {
-        println("svn commit: could not contact server")
+        println("avn commit: could not contact server")
         return 1
     }
 
@@ -1632,7 +1632,7 @@ cmd_commit(argv_start: int) {
 
     new_rev = remote_commit_finish(cb, base, repo)
     if new_rev < 0 {
-        println("svn commit: server rejected commit")
+        println("avn commit: server rejected commit")
         return 1
     }
     println("Committed revision ${new_rev}.")
@@ -1640,15 +1640,15 @@ cmd_commit(argv_start: int) {
 }
 
 cmd_add(argv_start: int) {
-    // svn add PATH [PATH...]
+    // avn add PATH [PATH...]
     n = aether_args_count()
     if argv_start >= n {
-        println("svn add: requires at least one PATH")
+        println("avn add: requires at least one PATH")
         return 2
     }
     wc_root, cwd_offset = find_wc_anchor_()
     if string.length(wc_root) == 0 {
-        println("svn add: not a working copy (or any of the parent directories)")
+        println("avn add: not a working copy (or any of the parent directories)")
         return 1
     }
     fails = 0
@@ -1660,7 +1660,7 @@ cmd_add(argv_start: int) {
         if rc == 0 {
             println("A         ${p}")
         } else {
-            println("svn add: ${p} failed (rc=${rc})")
+            println("avn add: ${p} failed (rc=${rc})")
             fails = fails + 1
         }
         i = i + 1
@@ -1672,7 +1672,7 @@ cmd_add(argv_start: int) {
 cmd_rm(argv_start: int) {
     n = aether_args_count()
     if argv_start >= n {
-        println("svn rm: requires at least one PATH")
+        println("avn rm: requires at least one PATH")
         return 2
     }
     fails = 0
@@ -1683,7 +1683,7 @@ cmd_rm(argv_start: int) {
         if rc == 0 {
             println("D         ${p}")
         } else {
-            println("svn rm: ${p} failed (rc=${rc})")
+            println("avn rm: ${p} failed (rc=${rc})")
             fails = fails + 1
         }
         i = i + 1
@@ -1694,7 +1694,7 @@ cmd_rm(argv_start: int) {
 
 cmd_resolve(argv_start: int) {
     if aether_args_count() <= argv_start {
-        println("svn resolve: usage: svn resolve PATH [--accept mine|theirs|working]")
+        println("avn resolve: usage: avn resolve PATH [--accept mine|theirs|working]")
         return 2
     }
     accept_str = find_flag("--accept", argv_start)
@@ -1706,7 +1706,7 @@ cmd_resolve(argv_start: int) {
         else if string.equals(accept_str, "theirs-full") == 1 { accept = 2 }
         else if string.equals(accept_str, "theirs") == 1      { accept = 2 }
         else {
-            println("svn resolve: unknown --accept value '${accept_str}'")
+            println("avn resolve: unknown --accept value '${accept_str}'")
             return 2
         }
     }
@@ -1724,7 +1724,7 @@ cmd_resolve(argv_start: int) {
         }
         rc = wc_resolve(".", p, accept)
         if rc != 0 {
-            println("svn resolve: '${p}' is not in conflict")
+            println("avn resolve: '${p}' is not in conflict")
             fails = fails + 1
         } else {
             println("Resolved conflicted state of '${p}'")
@@ -1773,10 +1773,10 @@ cmd_merge(argv_start: int) {
     }
 
     if string.length(url) == 0 {
-        println("svn merge: usage:")
-        println("  svn merge -r A:B URL [TARGET]   # rev-range (reverse if A>B)")
-        println("  svn merge -c N URL   [TARGET]   # cherry-pick rev N (use -N to reverse)")
-        println("  svn merge URL@A:B    [TARGET]   # classic form")
+        println("avn merge: usage:")
+        println("  avn merge -r A:B URL [TARGET]   # rev-range (reverse if A>B)")
+        println("  avn merge -c N URL   [TARGET]   # cherry-pick rev N (use -N to reverse)")
+        println("  avn merge URL@A:B    [TARGET]   # classic form")
         return 2
     }
 
@@ -1786,17 +1786,17 @@ cmd_merge(argv_start: int) {
     if string.length(c_flag) > 0 {
         // -c N  → merge -r N-1:N    ; -c -N → merge -r N:N-1.
         if string.try_int(c_flag) == 0 {
-            println("svn merge: -c expects a rev number"); return 2
+            println("avn merge: -c expects a rev number"); return 2
         }
         n = string.get_int(c_flag)
-        if n == 0 { println("svn merge: -c 0 is empty"); return 2 }
+        if n == 0 { println("avn merge: -c 0 is empty"); return 2 }
         if n > 0 { rev_a = n - 1; rev_b = n }
         else     { k = 0 - n; rev_a = k; rev_b = k - 1 }
     } else {
         if string.length(r_flag) > 0 {
             colon = string.index_of(r_flag, ":")
             if colon < 0 {
-                println("svn merge: -r expects A:B"); return 2
+                println("avn merge: -r expects A:B"); return 2
             }
             a_s = string.substring(r_flag, 0, colon)
             b_s = string.substring(r_flag, colon + 1, string.length(r_flag))
@@ -1806,16 +1806,16 @@ cmd_merge(argv_start: int) {
             repo_for_head = repo_name_deep(url)
             if string.equals(a_s, "HEAD") == 1 {
                 rev_a = remote_head_rev(base_for_head, repo_for_head)
-                if rev_a < 0 { println("svn merge: cannot resolve HEAD"); return 2 }
+                if rev_a < 0 { println("avn merge: cannot resolve HEAD"); return 2 }
             } else {
-                if string.try_int(a_s) == 0 { println("svn merge: -r A not a number"); return 2 }
+                if string.try_int(a_s) == 0 { println("avn merge: -r A not a number"); return 2 }
                 rev_a = string.get_int(a_s)
             }
             if string.equals(b_s, "HEAD") == 1 {
                 rev_b = remote_head_rev(base_for_head, repo_for_head)
-                if rev_b < 0 { println("svn merge: cannot resolve HEAD"); return 2 }
+                if rev_b < 0 { println("avn merge: cannot resolve HEAD"); return 2 }
             } else {
-                if string.try_int(b_s) == 0 { println("svn merge: -r B not a number"); return 2 }
+                if string.try_int(b_s) == 0 { println("avn merge: -r B not a number"); return 2 }
                 rev_b = string.get_int(b_s)
             }
         } else {
@@ -1830,17 +1830,17 @@ cmd_merge(argv_start: int) {
                 i = i - 1
             }
             if at_pos < 0 {
-                println("svn merge: URL must carry @REVA:REVB or use -r/-c")
+                println("avn merge: URL must carry @REVA:REVB or use -r/-c")
                 return 2
             }
             url_stem = string.substring(url, 0, at_pos)
             rev_spec = string.substring(url, at_pos + 1, n)
             colon = string.index_of(rev_spec, ":")
-            if colon < 0 { println("svn merge: expected REVA:REVB after @"); return 2 }
+            if colon < 0 { println("avn merge: expected REVA:REVB after @"); return 2 }
             a_str = string.substring(rev_spec, 0, colon)
             b_str = string.substring(rev_spec, colon + 1, string.length(rev_spec))
-            if string.try_int(a_str) == 0 { println("svn merge: REVA not a number"); return 2 }
-            if string.try_int(b_str) == 0 { println("svn merge: REVB not a number"); return 2 }
+            if string.try_int(a_str) == 0 { println("avn merge: REVA not a number"); return 2 }
+            if string.try_int(b_str) == 0 { println("avn merge: REVB not a number"); return 2 }
             rev_a = string.get_int(a_str)
             rev_b = string.get_int(b_str)
             url = url_stem
@@ -1850,11 +1850,11 @@ cmd_merge(argv_start: int) {
     source = in_repo_path(url)
 
     // Walk up from cwd to find the WC anchor; combine cwd_offset
-    // with the user's `target` arg so `cd $WC/release_a && svn
+    // with the user's `target` arg so `cd $WC/release_a && avn
     // merge -c N URL .` lands on the right WC sub-path.
     wc_root, cwd_offset = find_wc_anchor_()
     if string.length(wc_root) == 0 {
-        println("svn merge: not a working copy (or any of the parent directories)")
+        println("avn merge: not a working copy (or any of the parent directories)")
         return 1
     }
     merge_target = wc_join_(cwd_offset, target)
@@ -1862,11 +1862,11 @@ cmd_merge(argv_start: int) {
 
     rc = wc_merge(wc_root, source, rev_a, rev_b, merge_target)
     if rc == -2 {
-        println("svn merge: conflict(s) prevent merge")
+        println("avn merge: conflict(s) prevent merge")
         return 1
     }
     if rc != 0 {
-        println("svn merge: failed (rc=${rc})")
+        println("avn merge: failed (rc=${rc})")
         return 1
     }
     if rev_a < rev_b {
@@ -1883,7 +1883,7 @@ cmd_merge(argv_start: int) {
 
 cmd_propset(argv_start: int) {
     if aether_args_count() < argv_start + 3 {
-        println("svn propset: usage: svn propset NAME VALUE PATH")
+        println("avn propset: usage: avn propset NAME VALUE PATH")
         return 2
     }
     name  = aether_args_get(argv_start)
@@ -1893,18 +1893,18 @@ cmd_propset(argv_start: int) {
     // direct edits to svn:mergeinfo at the CLI — server-side
     // commit_parse rejects on the wire too (defence in depth).
     if string.equals(name, "svn:mergeinfo") == 1 {
-        println("svn propset: 'svn:mergeinfo' is server-managed (Phase 2.3+)")
-        println("             — use `svn merge` to record integration; the")
+        println("avn propset: 'svn:mergeinfo' is server-managed (Phase 2.3+)")
+        println("             — use `avn merge` to record integration; the")
         println("             server's merge ledger is the source of truth.")
         return 1
     }
     rc = wc_propset(".", path, name, value)
     if rc == -2 {
-        println("svn propset: ${path} is not tracked")
+        println("avn propset: ${path} is not tracked")
         return 1
     }
     if rc != 0 {
-        println("svn propset: failed (rc=${rc})")
+        println("avn propset: failed (rc=${rc})")
         return 1
     }
     println("property '${name}' set on '${path}'")
@@ -1920,14 +1920,14 @@ prop_path(p: string) {
 
 cmd_propget(argv_start: int) {
     if aether_args_count() < argv_start + 2 {
-        println("svn propget: usage: svn propget NAME PATH")
+        println("avn propget: usage: avn propget NAME PATH")
         return 2
     }
     name = aether_args_get(argv_start)
     path = prop_path(aether_args_get(argv_start + 1))
     wc_root, cwd_offset = find_wc_anchor_()
     if string.length(wc_root) == 0 {
-        println("svn propget: not a working copy (or any of the parent directories)")
+        println("avn propget: not a working copy (or any of the parent directories)")
         return 1
     }
     rel = wc_join_(cwd_offset, path)
@@ -1941,14 +1941,14 @@ cmd_propget(argv_start: int) {
 
 cmd_propdel(argv_start: int) {
     if aether_args_count() < argv_start + 2 {
-        println("svn propdel: usage: svn propdel NAME PATH")
+        println("avn propdel: usage: avn propdel NAME PATH")
         return 2
     }
     name = aether_args_get(argv_start)
     path = prop_path(aether_args_get(argv_start + 1))
     rc = wc_propdel(".", path, name)
     if rc != 0 {
-        println("svn propdel: failed (rc=${rc})")
+        println("avn propdel: failed (rc=${rc})")
         return 1
     }
     println("property '${name}' deleted from '${path}'")
@@ -1957,13 +1957,13 @@ cmd_propdel(argv_start: int) {
 
 cmd_proplist(argv_start: int) {
     if aether_args_count() < argv_start + 1 {
-        println("svn proplist: usage: svn proplist PATH")
+        println("avn proplist: usage: avn proplist PATH")
         return 2
     }
     path = prop_path(aether_args_get(argv_start))
     L = wc_proplist(".", path)
     if L == 0 {
-        println("svn proplist: could not read properties")
+        println("avn proplist: could not read properties")
         return 1
     }
     n = wc_proplist_count(L)
@@ -1986,9 +1986,9 @@ cmd_proplist(argv_start: int) {
 
 cmd_cp(argv_start: int) {
     if aether_args_count() < argv_start + 2 {
-        println("svn cp: usage:")
-        println("  svn cp SRC DST                                    (WC-local copy)")
-        println("  svn cp URL@REV URL --author A --log M             (server-side copy)")
+        println("avn cp: usage:")
+        println("  avn cp SRC DST                                    (WC-local copy)")
+        println("  avn cp URL@REV URL --author A --log M             (server-side copy)")
         return 2
     }
     src = aether_args_get(argv_start)
@@ -2008,19 +2008,19 @@ cmd_cp(argv_start: int) {
         author = find_flag("--author", argv_start + 2)
         logmsg = find_flag("--log",    argv_start + 2)
         if string.length(author) == 0 || string.length(logmsg) == 0 {
-            println("svn cp (URL-URL): --author and --log required")
+            println("avn cp (URL-URL): --author and --log required")
             return 2
         }
         base_src = base_url_deep(src)
         base_dst = base_url_deep(dst)
         if string.equals(base_src, base_dst) == 0 {
-            println("svn cp: cross-server copy not supported")
+            println("avn cp: cross-server copy not supported")
             return 1
         }
         repo_src = repo_name_deep(src)
         repo_dst = repo_name_deep(dst)
         if string.equals(repo_src, repo_dst) == 0 {
-            println("svn cp: cross-repo copy not supported")
+            println("avn cp: cross-repo copy not supported")
             return 1
         }
         from_path = in_repo_path(src)
@@ -2029,10 +2029,10 @@ cmd_cp(argv_start: int) {
         if rev < 0 {
             // Default to head.
             rev = remote_head_rev(base_src, repo_src)
-            if rev < 0 { println("svn cp: cannot contact server"); return 1 }
+            if rev < 0 { println("avn cp: cannot contact server"); return 1 }
         }
         new_rev = remote_server_copy(base_src, repo_src, rev, from_path, to_path, author, logmsg)
-        if new_rev < 0 { println("svn cp: server-side copy failed"); return 1 }
+        if new_rev < 0 { println("avn cp: server-side copy failed"); return 1 }
         println("Committed revision ${new_rev}.")
         return 0
     }
@@ -2040,7 +2040,7 @@ cmd_cp(argv_start: int) {
     // WC-local mode (original Phase 5.9 behaviour).
     rc = wc_cp(".", src, dst)
     if rc != 0 {
-        println("svn cp: failed (rc=${rc})")
+        println("avn cp: failed (rc=${rc})")
         return 1
     }
     println("A         ${dst}")
@@ -2049,14 +2049,14 @@ cmd_cp(argv_start: int) {
 
 cmd_mv(argv_start: int) {
     if aether_args_count() < argv_start + 2 {
-        println("svn mv: usage: svn mv SRC DST")
+        println("avn mv: usage: avn mv SRC DST")
         return 2
     }
     src = aether_args_get(argv_start)
     dst = aether_args_get(argv_start + 1)
     rc = wc_mv(".", src, dst)
     if rc != 0 {
-        println("svn mv: failed (rc=${rc})")
+        println("avn mv: failed (rc=${rc})")
         return 1
     }
     println("A         ${dst}")
@@ -2064,7 +2064,7 @@ cmd_mv(argv_start: int) {
     return 0
 }
 
-// svn cleanup [PATH]
+// avn cleanup [PATH]
 // Removes stale *.tmp.* files left behind by aborted atomic writes
 // anywhere in the WC, and clears a stale wc.db-journal if present.
 // PATH defaults to ".". Reports the number of files deleted.
@@ -2080,17 +2080,17 @@ cmd_cleanup(argv_start: int) {
     }
     rc = wc_cleanup(wc)
     if rc < 0 {
-        println("svn cleanup: ${wc} is not a working copy")
+        println("avn cleanup: ${wc} is not a working copy")
         return 1
     }
-    println("svn cleanup: ${rc} stale file(s) removed from ${wc}")
+    println("avn cleanup: ${rc} stale file(s) removed from ${wc}")
     return 0
 }
 
 cmd_revert(argv_start: int) {
     n = aether_args_count()
     if argv_start >= n {
-        println("svn revert: requires at least one PATH")
+        println("avn revert: requires at least one PATH")
         return 2
     }
     fails = 0
@@ -2101,7 +2101,7 @@ cmd_revert(argv_start: int) {
         if rc == 0 {
             println("Reverted '${p}'")
         } else {
-            println("svn revert: ${p} failed (rc=${rc})")
+            println("avn revert: ${p} failed (rc=${rc})")
             fails = fails + 1
         }
         i = i + 1
@@ -2131,36 +2131,36 @@ cmd_update(argv_start: int) {
     }
     rc = wc_update(".", target)
     if rc == -2 {
-        println("svn update: conflict(s) prevent update. Resolve and retry.")
+        println("avn update: conflict(s) prevent update. Resolve and retry.")
         return 1
     }
     if rc < 0 {
-        println("svn update: failed")
+        println("avn update: failed")
         return 1
     }
     println("At revision ${rc}.")
     return 0
 }
 
-// svn switch NEW_URL [--rev N]
+// avn switch NEW_URL [--rev N]
 // Relocates the WC to a different branch/repo URL at the given rev
 // (defaults to new location's head). Reuses the update pipeline, so
 // locally-modified files flow through 3-way merge and conflict flags
-// the same way `svn update` does.
+// the same way `avn update` does.
 cmd_switch(argv_start: int) {
     if aether_args_count() <= argv_start {
-        println("usage: svn switch NEW_URL [--rev N]")
+        println("usage: avn switch NEW_URL [--rev N]")
         return 2
     }
     url = aether_args_get(argv_start)
     if string.length(url) == 0 {
-        println("usage: svn switch NEW_URL [--rev N]")
+        println("usage: avn switch NEW_URL [--rev N]")
         return 2
     }
     base = url_base(url)
     repo = url_repo(url)
     if string.length(repo) == 0 {
-        println("svn switch: URL must look like http://host:port/repo")
+        println("avn switch: URL must look like http://host:port/repo")
         return 2
     }
     rev_str = find_flag("--rev", argv_start)
@@ -2170,7 +2170,7 @@ cmd_switch(argv_start: int) {
     }
     rc = wc_switch(".", base, repo, target)
     if rc < 0 {
-        println("svn switch: failed")
+        println("avn switch: failed")
         return 1
     }
     println("At revision ${rc}.")
@@ -2178,7 +2178,7 @@ cmd_switch(argv_start: int) {
 }
 
 cmd_status(argv_start: int) {
-    // `svn status` takes an optional WC path argument. With a path,
+    // `avn status` takes an optional WC path argument. With a path,
     // pass it through directly (the path itself is treated as a WC
     // root by wc_status — classical SVN walks up from the path,
     // but our wc_status handler is happier with a real root). Only
@@ -2195,14 +2195,14 @@ cmd_status(argv_start: int) {
     if string.length(wc) == 0 {
         wc, _ = find_wc_anchor_()
         if string.length(wc) == 0 {
-            println("svn status: not a working copy (or any of the parent directories)")
+            println("avn status: not a working copy (or any of the parent directories)")
             return 1
         }
     }
 
     L = wc_status(wc)
     if L == 0 {
-        println("svn status: cannot read WC at ${wc}")
+        println("avn status: cannot read WC at ${wc}")
         return 1
     }
     n = wc_statuslist_count(L)
@@ -2210,7 +2210,7 @@ cmd_status(argv_start: int) {
     while i < n {
         code = wc_statuslist_code(L, i)
         path = wc_statuslist_path(L, i)
-        // Format: "<code> <spaces> <path>" matching reference svn's layout.
+        // Format: "<code> <spaces> <path>" matching reference avn's layout.
         // We don't fill the inline columns yet — just "<code>       <path>".
         // Build the code char from its int.
         ch = "?"
@@ -2227,14 +2227,14 @@ cmd_status(argv_start: int) {
     return 0
 }
 
-// svn branch <verb> ... — top-level dispatcher.
-//   svn branch create NAME URL --from BASE --include PATH [...]
-//   svn branch list URL
+// avn branch <verb> ... — top-level dispatcher.
+//   avn branch create NAME URL --from BASE --include PATH [...]
+//   avn branch list URL
 cmd_branch(argv_start: int) {
     if aether_args_count() <= argv_start {
-        println("svn branch: usage:")
-        println("  svn branch create NAME URL --from BASE --include PATH [--include PATH...]")
-        println("  svn branch list   URL")
+        println("avn branch: usage:")
+        println("  avn branch create NAME URL --from BASE --include PATH [--include PATH...]")
+        println("  avn branch list   URL")
         return 2
     }
     verb = aether_args_get(argv_start)
@@ -2244,11 +2244,11 @@ cmd_branch(argv_start: int) {
     if string.equals(verb, "list") == 1 {
         return cmd_branches(argv_start + 1)
     }
-    println("svn branch: unknown verb '${verb}'")
+    println("avn branch: unknown verb '${verb}'")
     return 2
 }
 
-// svn branch create NAME URL --from BASE --include PATH [--include PATH...]
+// avn branch create NAME URL --from BASE --include PATH [--include PATH...]
 // Creates a new branch filtered through the given include globs.
 // Super-user only (SVN_SUPERUSER_TOKEN env var).
 cmd_branch_create(argv_start: int) {
@@ -2279,11 +2279,11 @@ cmd_branch_create(argv_start: int) {
         } else { k = k + 1 }
     }
     if string.length(name) == 0 {
-        println("svn branch create: usage: svn branch create NAME URL --from BASE --include PATH [...]")
+        println("avn branch create: usage: avn branch create NAME URL --from BASE --include PATH [...]")
         return 2
     }
     if string.length(url) == 0 {
-        println("svn branch create: URL required")
+        println("avn branch create: URL required")
         return 2
     }
 
@@ -2306,7 +2306,7 @@ cmd_branch_create(argv_start: int) {
         } else { k = k + 1 }
     }
     if string.length(includes_joined) == 0 {
-        println("svn branch create: at least one --include is required")
+        println("avn branch create: at least one --include is required")
         return 2
     }
 
@@ -2314,14 +2314,14 @@ cmd_branch_create(argv_start: int) {
     repo = url_repo(url)
     rc = remote_branch_create(base_url, repo, name, from_branch, includes_joined)
     if rc < 0 {
-        println("svn branch create: failed (branch exists, bad base, or not super-user?)")
+        println("avn branch create: failed (branch exists, bad base, or not super-user?)")
         return 1
     }
     println("Created branch '${name}' at r${rc}")
     return 0
 }
 
-// svn branch list URL   — lists branches (alias: svn branches URL).
+// avn branch list URL   — lists branches (alias: avn branches URL).
 // Phase 8.2a: also shows each branch's include list parsed from the
 // server's /info "specs" map.
 //
@@ -2331,7 +2331,7 @@ cmd_branch_create(argv_start: int) {
 //   feat         (src/**, docs/**)
 cmd_branches(argv_start: int) {
     if aether_args_count() <= argv_start {
-        println("svn branches: usage: svn branches URL")
+        println("avn branches: usage: avn branches URL")
         return 2
     }
     url = aether_args_get(argv_start)
@@ -2340,7 +2340,7 @@ cmd_branches(argv_start: int) {
     info_url = "${base}/repos/${repo}/info"
     body = http_get_body(info_url)
     if string.length(body) == 0 {
-        println("svn branches: could not contact server")
+        println("avn branches: could not contact server")
         return 1
     }
     idx = string.index_of(body, "\"branches\":[")
@@ -2438,7 +2438,7 @@ cmd_checkout(argv_start: int) {
         // as TODO MB-D follow-up. Until that lands, refuse with a
         // clear message rather than silently checking out the wrong
         // tree.
-        println("svn checkout: sub-path checkout not yet supported")
+        println("avn checkout: sub-path checkout not yet supported")
         println("              (URL has trailing path '${sub}'; check out the")
         println("              repo root and `cd` into the subdir instead)")
         return 1
@@ -2450,14 +2450,14 @@ cmd_checkout(argv_start: int) {
     } else {
         rev = remote_head_rev(base, repo)
         if rev < 0 {
-            println("svn checkout: could not contact server")
+            println("avn checkout: could not contact server")
             return 1
         }
     }
 
     rc = wc_checkout(base, repo, dest, rev)
     if rc != 0 {
-        println("svn checkout: failed (rc=${rc})")
+        println("avn checkout: failed (rc=${rc})")
         return 1
     }
     println("Checked out revision ${rev} into ${dest}")
@@ -2465,7 +2465,7 @@ cmd_checkout(argv_start: int) {
 }
 
 print_usage() {
-    println("usage: svn <subcommand> URL [options]")
+    println("usage: avn <subcommand> URL [options]")
     println("")
     println("subcommands:")
     println("  info     URL [--rev N]")

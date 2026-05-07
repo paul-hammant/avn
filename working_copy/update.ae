@@ -13,7 +13,7 @@
 // implied. See the License for the specific language governing
 // permissions and limitations under the License.
 
-// svn update — pull remote state at target rev into a checked-out
+// avn update — pull remote state at target rev into a checked-out
 // WC. Returns target_rev on success, -1 on error.
 //
 //   wc_update(wc_root, target_rev)
@@ -30,7 +30,7 @@
 //      (working_copy/update_apply.ae).
 //   5. Bump base_rev in info table.
 //
-// svn switch is the same algorithm with the wc.db url/base_url/repo
+// avn switch is the same algorithm with the wc.db url/base_url/repo
 // rows rewritten first; we reuse wc_update for the heavy lift.
 
 import std.string
@@ -127,7 +127,7 @@ export wc_update(wc_root: string, target_rev: int) -> int {
 }
 
 
-// svn switch: relocate the WC to a different branch (or repo) at
+// avn switch: relocate the WC to a different branch (or repo) at
 // target_rev. Rewrite the url/base_url/repo info rows then call
 // wc_update — the update algorithm is exactly what switch
 // needs (fetch remote, diff against local, 3-way merge on overlap).

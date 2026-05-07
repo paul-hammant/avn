@@ -16,7 +16,7 @@ main() {
         // stage a temp dir. The test calls merge_ledger_init_schema
         // directly rather than going through avnadmin/create.ae —
         // the ledger is the unit-under-test, the create-time wiring
-        // is exercised end-to-end by the existing svnadmin tests.
+        // is exercised end-to-end by the existing avnadmin tests.
         //
         // Phase 1.2 adds format_line.ae (rev_blob_body +
         // format_merged_field + parse_merged_field) and

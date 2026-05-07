@@ -19,7 +19,7 @@ main() {
     build.dep(b, "avnserver/.tests-server.ae")
     build.dep(b, "avnserver/.tests-put.ae")
 
-    // svn — all 10 tests on SDK fixtures, one .tests-<tag>.ae each.
+    // avn — all 10 tests on SDK fixtures, one .tests-<tag>.ae each.
     build.dep(b, "avn/.tests-acl.ae")
     build.dep(b, "avn/.tests-acl_cp_follow.ae")
     build.dep(b, "avn/.tests-acl_write.ae")
@@ -27,7 +27,7 @@ main() {
     build.dep(b, "avn/.tests-branch_create.ae")
     build.dep(b, "avn/.tests-branch_enforce.ae")
     build.dep(b, "avn/.tests-branches_phase81.ae")
-    build.dep(b, "avn/.tests-svn.ae")
+    build.dep(b, "avn/.tests-avn.ae")
     build.dep(b, "avn/.tests-verify.ae")
     build.dep(b, "avn/.tests-verify_secondaries.ae")
 

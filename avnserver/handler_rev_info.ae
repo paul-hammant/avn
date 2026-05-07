@@ -20,7 +20,7 @@
 //
 // Non-super-users see a redacted root sha (hash of a dir-blob
 // where hidden-to-them children are replaced with "H <sha>\n"
-// lines) so `svn verify` can still Merkle-walk the visible
+// lines) so `avn verify` can still Merkle-walk the visible
 // subtree.
 
 import std.string

@@ -13,7 +13,7 @@
 // implied. See the License for the specific language governing
 // permissions and limitations under the License.
 
-// svn diff — for every modified tracked file, shell out to
+// avn diff — for every modified tracked file, shell out to
 // /usr/bin/diff -u with svn-style labels and let the diff tool's
 // stdout flow through ours.
 //
@@ -55,7 +55,7 @@ diff_tmp_write_pristine_(wc_root: string, sha: string, path: string) -> int {
     if sz < 0 { return 0 - 1 }
     data = wc_pristine_get(wc_root, sha)
     // wc_pristine_get returns "" on miss; even legitimate empty
-    // blobs are size>=1 (svn never stores zero-length pristines),
+    // blobs are size>=1 (avn never stores zero-length pristines),
     // so length-0 is unambiguously a miss.
     if string.length(data) == 0 { return 0 - 1 }
     return io_write_atomic(path, data, sz)
@@ -71,7 +71,7 @@ extern list_new() -> ptr
 extern list_add_raw(list: ptr, item: ptr) -> int
 extern list_free(list: ptr)
 
-// Globally-monotonic counter for tmp filenames so two svn diff calls
+// Globally-monotonic counter for tmp filenames so two avn diff calls
 // running concurrently in the same process don't collide.
 tmp_seq_(prefix: string, seq: int) -> string {
     pid = os_getpid_raw()

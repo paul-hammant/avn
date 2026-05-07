@@ -159,7 +159,7 @@ export merge3_apply(wc_path: string,
     }
 
     if status == 1 {
-        // Conflicts: drop sidecars for `svn resolve`.
+        // Conflicts: drop sidecars for `avn resolve`.
         side_mine = "${wc_path}.mine"
         io_write_atomic(side_mine, mine, mine_len)
         side_base = "${wc_path}.r${base_rev}"

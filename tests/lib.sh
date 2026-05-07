@@ -11,10 +11,10 @@
 # After sourcing, $ROOT is the repo root and the four binary paths
 # below are pre-set (env-overridable):
 #
-#   $ADMIN_BIN   target/avnadmin/bin/svnadmin
-#   $SERVER_BIN  target/avnserver/bin/aether-svnserver
-#   $SEED_BIN    target/avnserver/bin/svnae-seed
-#   $SVN_BIN     target/avn/bin/svn
+#   $ADMIN_BIN   target/avnadmin/bin/avnadmin
+#   $SERVER_BIN  target/avnserver/bin/avnserver
+#   $SEED_BIN    target/avnserver/bin/avn-seed
+#   $AVN_BIN     target/avn/bin/avn
 
 if [ -n "${BASH_SOURCE[1]:-}" ] && [ -f "${BASH_SOURCE[1]}" ]; then
     cd "$(dirname "${BASH_SOURCE[1]}")/.."
@@ -22,10 +22,10 @@ if [ -n "${BASH_SOURCE[1]:-}" ] && [ -f "${BASH_SOURCE[1]}" ]; then
 fi
 ROOT="$(pwd)"
 
-ADMIN_BIN="${ADMIN_BIN:-$ROOT/target/avnadmin/bin/svnadmin}"
-SERVER_BIN="${SERVER_BIN:-$ROOT/target/avnserver/bin/aether-svnserver}"
-SEED_BIN="${SEED_BIN:-$ROOT/target/avnserver/bin/svnae-seed}"
-SVN_BIN="${SVN_BIN:-$ROOT/target/avn/bin/svn}"
+ADMIN_BIN="${ADMIN_BIN:-$ROOT/target/avnadmin/bin/avnadmin}"
+SERVER_BIN="${SERVER_BIN:-$ROOT/target/avnserver/bin/avnserver}"
+SEED_BIN="${SEED_BIN:-$ROOT/target/avnserver/bin/avn-seed}"
+AVN_BIN="${AVN_BIN:-$ROOT/target/avn/bin/avn}"
 
 FAILS=0
 tlib_check() {

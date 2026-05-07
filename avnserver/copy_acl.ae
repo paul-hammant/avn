@@ -13,7 +13,7 @@
 // implied. See the License for the specific language governing
 // permissions and limitations under the License.
 
-// svn cp ACL-auto-follow: when `svn cp from_path to_path` creates a new
+// avn cp ACL-auto-follow: when `avn cp from_path to_path` creates a new
 // subtree, every paths-acl entry under `from_path` must have a parallel
 // entry under `to_path`. This helper takes the existing paths-acl blob
 // body and returns a new body that preserves all original entries plus

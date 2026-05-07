@@ -1,5 +1,5 @@
 [project]
-name = "svn-aether"
+name = "avn-aether"
 
 [build]
 link_flags = "-laether_sqlite -lsqlite3 -lz -lssl -lcrypto"

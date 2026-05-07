@@ -9,7 +9,7 @@
 //
 // `wc_merge` will use this in Phase 2.1: query the integrated set
 // for (target, source), compute eligible candidates client-side
-// by set-subtraction. Reporting tools (`svn merged`, future
+// by set-subtraction. Reporting tools (`avn merged`, future
 // admin UIs) consume the same shape.
 //
 // Path components after `/merged/` are the target and source

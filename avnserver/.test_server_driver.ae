@@ -1,7 +1,7 @@
 // Copyright 2026 Paul Hammant (portions).
 // Apache License, Version 2.0 — see LICENSE.
 //
-// Aether driver for the aether-svnserver HTTP endpoint suite.
+// Aether driver for the avnserver HTTP endpoint suite.
 // Round 256. Migrated from avnserver/test_server.sh.
 
 import contrib.aeocha
@@ -107,7 +107,7 @@ main() {
     commit_nosuch = string.concat(commit_nosuch, port)
     commit_nosuch = string.concat(commit_nosuch, "/repos/nosuch/commit")
 
-    aeocha.describe(fw, "aether-svnserver HTTP endpoint suite") {
+    aeocha.describe(fw, "avnserver HTTP endpoint suite") {
 
         // info
         aeocha.it("/info head == 3") callback {

@@ -14,7 +14,7 @@
 // permissions and limitations under the License.
 
 // Reconcile local WC props with a server's view at a given revision.
-// Called once per path that changed during svn update.
+// Called once per path that changed during avn update.
 //
 // Strategy:
 //   (a) overwrite / add every remote (key, value) locally.

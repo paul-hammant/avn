@@ -13,16 +13,16 @@ main() {
         driver(".test_revert_diff_driver.ae")
         output("test_revert_diff_driver")
 
-        binary_under_test(b, "svn") {
-            path("target/avn/bin/svn")
+        binary_under_test(b, "avn") {
+            path("target/avn/bin/avn")
         }
 
         fixture_seed(b, "test_revert_diff") {
             path("/tmp/avn_aeb_test_revert_diff_repo")
-            seed_bin("target/avnserver/bin/svnae-seed")
+            seed_bin("target/avnserver/bin/avn-seed")
         }
         fixture_server(b, "test_revert_diff") {
-            bin("target/avnserver/bin/aether-svnserver")
+            bin("target/avnserver/bin/avnserver")
             args("demo $TEST_REVERT_DIFF_PATH 9420")
             port(9420)
             ready_after_ms(1500)

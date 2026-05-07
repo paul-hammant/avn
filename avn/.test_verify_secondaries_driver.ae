@@ -25,7 +25,7 @@ sh(cmd: string) -> {
 
 main() {
     fw = aeocha.init()
-    svn_bin    = os_getenv("SVN_BIN")
+    avn_bin    = os_getenv("AVN_BIN")
     admin_bin  = os_getenv("ADMIN_BIN")
     server_bin = os_getenv("SERVER_BIN")
 
@@ -38,7 +38,7 @@ main() {
     base  = string.concat("http://127.0.0.1:", string.concat(port, "/repos/demo"))
     pidf  = "/tmp/avn_test_sec_srv.pid"
 
-    // Setup: rm + svnadmin create --algos sha256,sha1
+    // Setup: rm + avnadmin create --algos sha256,sha1
     setup = string.concat("rm -rf ", repo)
     setup = string.concat(setup, " ")
     setup = string.concat(setup, wc)
@@ -70,16 +70,16 @@ main() {
     kill_srv = string.concat(kill_srv, ") 2>/dev/null || true; sleep 0.3")
 
     // Populate via WC
-    populate = string.concat(svn_bin, " checkout ")
+    populate = string.concat(avn_bin, " checkout ")
     populate = string.concat(populate, url)
     populate = string.concat(populate, " ")
     populate = string.concat(populate, wc)
     populate = string.concat(populate, " >/dev/null && cd ")
     populate = string.concat(populate, wc)
     populate = string.concat(populate, " && echo 'hello secondary' > note.txt && ")
-    populate = string.concat(populate, svn_bin)
+    populate = string.concat(populate, avn_bin)
     populate = string.concat(populate, " add note.txt >/dev/null && ")
-    populate = string.concat(populate, svn_bin)
+    populate = string.concat(populate, avn_bin)
     populate = string.concat(populate, " commit --author alice --log 'with content' >/dev/null")
 
     hashes_curl = string.concat("curl -s ", base)
@@ -88,11 +88,11 @@ main() {
     sql_count_sec = string.concat("sqlite3 ", repo)
     sql_count_sec = string.concat(sql_count_sec, "/rep-cache.db 'SELECT COUNT(*) FROM rep_cache_sec'")
 
-    verify_default = string.concat(svn_bin, " verify ")
+    verify_default = string.concat(avn_bin, " verify ")
     verify_default = string.concat(verify_default, url)
     verify_default = string.concat(verify_default, " --rev 1 2>&1 | grep -c '^verify: OK' || true")
 
-    verify_secs = string.concat(svn_bin, " verify ")
+    verify_secs = string.concat(avn_bin, " verify ")
     verify_secs = string.concat(verify_secs, url)
     verify_secs = string.concat(verify_secs, " --rev 1 --secondaries 2>&1")
     verify_secs_grep_msg   = string.concat(verify_secs, " | grep -c 'secondary hash(es) verified' || true")
@@ -109,11 +109,11 @@ main() {
     corrupt_sec_for_sha = string.concat(corrupt_sec_for_sha, repo)
     corrupt_sec_for_sha = string.concat(corrupt_sec_for_sha, "/rep-cache.db \"UPDATE rep_cache_sec SET secondary_hash='0000000000000000000000000000000000000000' WHERE algo='sha1' AND primary_hash='$sha'\"")
 
-    verify_default_after_tamper = string.concat(svn_bin, " verify ")
+    verify_default_after_tamper = string.concat(avn_bin, " verify ")
     verify_default_after_tamper = string.concat(verify_default_after_tamper, url)
     verify_default_after_tamper = string.concat(verify_default_after_tamper, " --rev 1 2>&1 | grep -c '^verify: OK' || true")
 
-    verify_secs_after_tamper = string.concat(svn_bin, " verify ")
+    verify_secs_after_tamper = string.concat(avn_bin, " verify ")
     verify_secs_after_tamper = string.concat(verify_secs_after_tamper, url)
     verify_secs_after_tamper = string.concat(verify_secs_after_tamper, " --rev 1 --secondaries 2>&1 | grep -c '^verify: OK' || true")
 
@@ -124,9 +124,9 @@ main() {
     aeocha.describe(fw, "multi-algo secondary verification") {
 
         // (A) repo creation + format + rep file widths
-        aeocha.it("setup: create sha256,sha1 repo via svnadmin") callback {
+        aeocha.it("setup: create sha256,sha1 repo via avnadmin") callback {
             _, st, _ = sh(setup)
-            aeocha.expect_exit(fw, st, 0, "svnadmin create exit 0")
+            aeocha.expect_exit(fw, st, 0, "avnadmin create exit 0")
         }
 
         aeocha.it("(A) format line is 'svnae-fsfs-1 sha256,sha1'") callback {

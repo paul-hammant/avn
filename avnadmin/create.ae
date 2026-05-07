@@ -13,9 +13,9 @@
 // implied. See the License for the specific language governing
 // permissions and limitations under the License.
 
-// svnadmin create — initialise an empty repo on disk.
+// avnadmin create — initialise an empty repo on disk.
 //
-//   svnadmin_create(repo, algos_spec)
+//   avnadmin_create(repo, algos_spec)
 //
 // Empty algos_spec defaults to sha1.
 //
@@ -86,10 +86,10 @@ create_bare_(repo: string, algos_spec: string) -> int {
     return 0
 }
 
-// Bare entry point — used by `svnadmin load` which provides its own
+// Bare entry point — used by `avnadmin load` which provides its own
 // dump-replay rev 0. Exported so the C-side load can reach it via
 // extern.
-export svnadmin_create_bare(repo: string, algos_spec: string) -> int {
+export avnadmin_create_bare(repo: string, algos_spec: string) -> int {
     return create_bare_(repo, algos_spec)
 }
 
@@ -139,7 +139,7 @@ seed_rev0_(repo: string) -> int {
     return 0
 }
 
-export svnadmin_create(repo: string, algos_spec: string) -> int {
+export avnadmin_create(repo: string, algos_spec: string) -> int {
     if create_bare_(repo, algos_spec) != 0 { return 0 - 1 }
     if write_main_branch_layout_(repo) != 0 { return 0 - 1 }
     if seed_rev0_(repo) != 0 { return 0 - 1 }

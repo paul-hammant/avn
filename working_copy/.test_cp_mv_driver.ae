@@ -1,7 +1,7 @@
 // Copyright 2026 Paul Hammant (portions).
 // Apache License, Version 2.0 — see LICENSE.
 //
-// Aether driver for svn cp + mv on a WC, with commit round-trip.
+// Aether driver for avn cp + mv on a WC, with commit round-trip.
 // Round 241. Migrated from working_copy/test_cp_mv.sh.
 
 import contrib.aeocha
@@ -25,7 +25,7 @@ sh(cmd: string) -> {
 
 main() {
     fw = aeocha.init()
-    svn_bin = os_getenv("SVN_BIN")
+    avn_bin = os_getenv("AVN_BIN")
     port    = os_getenv("TEST_CP_MV_PORT")
     url     = string.concat("http://127.0.0.1:", string.concat(port, "/demo"))
     base    = string.concat("http://127.0.0.1:", string.concat(port, "/repos/demo"))
@@ -34,7 +34,7 @@ main() {
     // prep: clean checkout
     prep = string.concat("rm -rf ", wc)
     prep = string.concat(prep, " && ")
-    prep = string.concat(prep, svn_bin)
+    prep = string.concat(prep, avn_bin)
     prep = string.concat(prep, " checkout ")
     prep = string.concat(prep, url)
     prep = string.concat(prep, " ")
@@ -44,7 +44,7 @@ main() {
 
     cd_wc = string.concat("cd ", wc)
     cd_wc = string.concat(cd_wc, " && ")
-    cd_wc = string.concat(cd_wc, svn_bin)
+    cd_wc = string.concat(cd_wc, avn_bin)
 
     cp_readme       = string.concat(cd_wc, " cp README README.bak")
     cat_readme_wc   = string.concat("cat ", wc)
@@ -67,17 +67,17 @@ main() {
 
     commit_cmd      = string.concat(cd_wc, " commit --author cpuser --log 'cp + mv'")
 
-    cat_remote_bak      = string.concat(svn_bin, " cat ")
+    cat_remote_bak      = string.concat(avn_bin, " cat ")
     cat_remote_bak      = string.concat(cat_remote_bak, url)
     cat_remote_bak      = string.concat(cat_remote_bak, " README.bak")
-    cat_remote_new_main = string.concat(svn_bin, " cat ")
+    cat_remote_new_main = string.concat(avn_bin, " cat ")
     cat_remote_new_main = string.concat(cat_remote_new_main, url)
     cat_remote_new_main = string.concat(cat_remote_new_main, " src/new_main.c")
 
     main_c_curl     = string.concat("curl -s -o /dev/null -w '%{http_code}' ", base)
     main_c_curl     = string.concat(main_c_curl, "/rev/4/cat/src/main.c")
 
-    aeocha.describe(fw, "svn cp + mv on a WC, commit round-trip") {
+    aeocha.describe(fw, "avn cp + mv on a WC, commit round-trip") {
 
         aeocha.it("prep: checkout exit 0") callback {
             aeocha.expect_exit(fw, prep_st_, 0, "checkout exit 0")

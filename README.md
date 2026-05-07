@@ -2,11 +2,11 @@
 
 A clean-sheet reimplementation of [Apache Subversion] in the [Aether
 systems language]. The goal isn't a mechanical C→Aether translation —
-we read the svn C tree as a *reference for behaviour contracts* and
+we read the avn C tree as a *reference for behaviour contracts* and
 wrote our own on-disk format, wire protocol, and algorithms.
 
-The reference svn C code still lives at `libsvn_*/` in this repo,
-read-only. The port lives at the repo root in per-area dirs (`client/`, `delta/`, `repo_storage/`, `working_copy/`, etc). The old Apache-svn README is
+The reference avn C code still lives at `libsvn_*/` in this repo,
+read-only. The port lives at the repo root in per-area dirs (`client/`, `delta/`, `repo_storage/`, `working_copy/`, etc). The old Apache-avn README is
 preserved at [`README.apache-svn-upstream`](./README.apache-svn-upstream).
 
 [Apache Subversion]: https://subversion.apache.org/
@@ -26,10 +26,10 @@ Full phase map and feature matrix: **[PORT_STATUS.md](./PORT_STATUS.md)**.
 
 | Binary | Role |
 |---|---|
-| `svn` | Client CLI: `checkout`, `status`, `add`, `rm`, `cp`, `mv`, `commit`, `update`, `revert`, `diff`, `log`, `cat`, `ls`, `info`, `propset`/`get`/`del`/`list`, `merge`, `branch create`/`list`, `switch`, `blame`, `verify` |
-| `aether-svnserver` | Read/write HTTP server. JSON for metadata, base64 for bytes over JSON, raw bytes for cat. |
-| `svnadmin` | Repository admin: `create`, `dump`, `load` (our own portable dump format; not reference-svn compatible by design). |
-| `svnae-seed` | Test-only helper that populates a repo with a known tree across three commits. |
+| `avn` | Client CLI: `checkout`, `status`, `add`, `rm`, `cp`, `mv`, `commit`, `update`, `revert`, `diff`, `log`, `cat`, `ls`, `info`, `propset`/`get`/`del`/`list`, `merge`, `branch create`/`list`, `switch`, `blame`, `verify` |
+| `avnserver` | Read/write HTTP server. JSON for metadata, base64 for bytes over JSON, raw bytes for cat. |
+| `avnadmin` | Repository admin: `create`, `dump`, `load` (our own portable dump format; not reference-avn compatible by design). |
+| `avn-seed` | Test-only helper that populates a repo with a known tree across three commits. |
 
 ## Quickstart
 
@@ -45,16 +45,16 @@ full 32-test suite.
 aeb
 
 # Build a single binary
-aeb svn         # just svn — output at target/svn/bin/svn
+aeb avn         # just avn — output at target/avn/bin/avn
 
 # Outputs land under target/<dir>/bin/<name>
-target/svnadmin/bin/svnadmin create /srv/repo
-target/svnserver/bin/svnae-seed   /srv/repo        # three-commit known tree
-target/svnserver/bin/aether-svnserver demo /srv/repo 8080 &
-target/svn/bin/svn checkout http://localhost:8080/demo wc
+target/avnadmin/bin/avnadmin create /srv/repo
+target/svnserver/bin/avn-seed   /srv/repo        # three-commit known tree
+target/svnserver/bin/avnserver demo /srv/repo 8080 &
+target/avn/bin/avn checkout http://localhost:8080/demo wc
 cd wc
 echo "hi" >> README
-../target/svn/bin/svn commit --author alice --log "tweak"
+../target/avn/bin/avn commit --author alice --log "tweak"
 ```
 
 ### Generated sources
@@ -65,9 +65,9 @@ into git** — aeb's `aether.program(b) { regen(...) }` setter
 regenerates them on demand. Never hand-edit a `_generated.c`; the next
 regen blows your changes away. Edit the `.ae` source instead.
 
-## What's intentionally different from reference svn
+## What's intentionally different from reference avn
 
-The port shares svn's commands, data model, and user-facing semantics,
+The port shares avn's commands, data model, and user-facing semantics,
 but diverges freely on the plumbing where doing so pays off.
 
 ### Storage
@@ -75,12 +75,12 @@ but diverges freely on the plumbing where doing so pays off.
 - **Content-addressable rep store** at `$repo/reps/aa/bb/<sha>.rep`
   with `Z` (zlib) or `R` (raw) header byte. SHA-1 by default, SHA-256
   selectable at repo-create time; format file records the choice.
-- **Per-repo pluggable hash:** `svnadmin create PATH --algos sha256`.
+- **Per-repo pluggable hash:** `avnadmin create PATH --algos sha256`.
   Server advertises via `GET /info`; clients adapt at checkout time
   and persist the algo in `wc.db`. Golden list enforced at create
   time — you can't open a repo whose hash your build doesn't support.
 - **Multi-algo secondary hashes** (Phase 7.5): add SHA-256 to an
-  existing SHA-1 repo so you can migrate gradually. `svn verify
+  existing SHA-1 repo so you can migrate gradually. `avn verify
   --secondaries` cross-checks both.
 - **Merkle verification with per-user redaction** (Phase 7.1): a
   restricted user's recomputed root hash matches what the server
@@ -125,8 +125,8 @@ but diverges freely on the plumbing where doing so pays off.
 
 ### Dump format
 
-- Our own portable format (Phase 12). Round-trips through `svnadmin
-  dump` / `svnadmin load`. Not byte-compatible with reference svn's
+- Our own portable format (Phase 12). Round-trips through `avnadmin
+  dump` / `avnadmin load`. Not byte-compatible with reference avn's
   dumpfile format — if you need to migrate *into* this port, you're
   on your own for now.
 
@@ -134,12 +134,12 @@ but diverges freely on the plumbing where doing so pays off.
 
 - **ACL lines** (`+alice`, `-eve`) stored at per-path granularity,
   anchored to each rev. No `svn:mergeinfo`-style property hackery.
-- **svn cp refuses unless RW-everywhere** (Phase 7.7): you can't
+- **avn cp refuses unless RW-everywhere** (Phase 7.7): you can't
   server-copy a subtree you don't have full RW access to, closing
   the "branch off a locked area to escape its ACLs" gap.
 - **Branches are first-class** (Phase 8.1+). Each branch has an
   include-glob spec; paths outside the spec are rejected at commit
-  time. Cross-branch `svn cp` is refused. Super-user bypasses.
+  time. Cross-branch `avn cp` is refused. Super-user bypasses.
 
 ### Working copy
 
@@ -150,11 +150,11 @@ but diverges freely on the plumbing where doing so pays off.
 
 ### What we inherited unchanged
 
-- Command names and semantics. `svn status` means what you'd expect,
+- Command names and semantics. `avn status` means what you'd expect,
   including `?` / `M` / `A` / `D` / `R` / conflict markers.
 - Three-way merge with svn-style conflict markers in working files.
 - `svn:ignore` read by `status`.
-- `svn log -v` per-rev path list.
+- `avn log -v` per-rev path list.
 - `svn:mergeinfo` range arithmetic (adjacent ranges collapse;
   reverse ranges cancel forward ranges of the same rev).
 
@@ -163,7 +163,7 @@ but diverges freely on the plumbing where doing so pays off.
 - Real authentication beyond the `X-Svnae-Superuser:` token stub
 - TLS (deferred; plain HTTP today)
 - Hooks (pre/post-commit scripts)
-- Locks (`svn lock`/`unlock`)
+- Locks (`avn lock`/`unlock`)
 - `svn:externals`
 - `libmagic` replacement (extension-based mime stub when needed)
 
@@ -183,8 +183,8 @@ svnserver/      HTTP server wrapping repos/, per-route handlers,
 working_copy/   working copy: db, pristine, checkout, status,
                 mutate (add/rm), commit, update, revert, diff,
                 cp/mv, props, merge.
-svn/            the svn CLI.
-svnadmin/       svnadmin CLI (create/dump/load).
+avn/            the avn CLI.
+avnadmin/       avnadmin CLI (create/dump/load).
 ffi/            third-party FFI bindings (openssl).
 ```
 

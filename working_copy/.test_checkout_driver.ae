@@ -1,7 +1,7 @@
 // Copyright 2026 Paul Hammant (portions).
 // Apache License, Version 2.0 — see LICENSE.
 //
-// Aether driver for svn checkout test. Round 237.
+// Aether driver for avn checkout test. Round 237.
 // Migrated from working_copy/test_checkout.sh.
 //
 // Asserts disk state via `cat`/`test` (through /bin/sh -c), and
@@ -28,7 +28,7 @@ sh(cmd: string) -> {
 
 main() {
     fw = aeocha.init()
-    svn_bin = os_getenv("SVN_BIN")
+    avn_bin = os_getenv("AVN_BIN")
     port    = os_getenv("TEST_CHECKOUT_PORT")
     url     = string.concat("http://127.0.0.1:", string.concat(port, "/demo"))
     wc      = "/tmp/avn_test_co_wc"
@@ -37,7 +37,7 @@ main() {
     // --- prep: head checkout, then r1 checkout ---
     head_co = string.concat("rm -rf ", wc)
     head_co = string.concat(head_co, " && ")
-    head_co = string.concat(head_co, svn_bin)
+    head_co = string.concat(head_co, avn_bin)
     head_co = string.concat(head_co, " checkout ")
     head_co = string.concat(head_co, url)
     head_co = string.concat(head_co, " ")
@@ -47,7 +47,7 @@ main() {
 
     r1_co = string.concat("rm -rf ", wc1)
     r1_co = string.concat(r1_co, " && ")
-    r1_co = string.concat(r1_co, svn_bin)
+    r1_co = string.concat(r1_co, avn_bin)
     r1_co = string.concat(r1_co, " checkout ")
     r1_co = string.concat(r1_co, url)
     r1_co = string.concat(r1_co, " ")
@@ -69,7 +69,7 @@ main() {
     q_r1_main      = string.concat("cat ", string.concat(wc1, "/src/main.c"))
     q_r1_base_rev  = string.concat("sqlite3 ", string.concat(wc1, "/.svn/wc.db \"SELECT value FROM info WHERE key='base_rev'\""))
 
-    aeocha.describe(fw, "svn checkout") {
+    aeocha.describe(fw, "avn checkout") {
 
         aeocha.it("checkouts at HEAD and r1 succeed") callback {
             aeocha.expect_exit(fw, head_st, 0, "head checkout exit 0")

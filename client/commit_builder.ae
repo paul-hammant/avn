@@ -53,7 +53,7 @@ struct RaCommit {
     // newline-separated decimal ints (rev numbers); the server
     // resolves to SHAs at commit-parse time. merge_target_path
     // (Round 276 / Phase 2.3) is the WC anchor of the merge —
-    // what the user passed to `svn merge ... TARGET`. The ledger
+    // what the user passed to `avn merge ... TARGET`. The ledger
     // keys on it so subdirectory merges can have distinct
     // mergeinfo without colliding.
     merge_target_path: string

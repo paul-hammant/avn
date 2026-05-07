@@ -1,7 +1,7 @@
 // Copyright 2026 Paul Hammant (portions).
 // Apache License, Version 2.0 — see LICENSE.
 //
-// Aether driver for `svn cp` ACL gate + auto-follow.
+// Aether driver for `avn cp` ACL gate + auto-follow.
 // Round 252. Migrated from avn/test_acl_cp_follow.sh.
 
 import contrib.aeocha
@@ -25,7 +25,7 @@ sh(cmd: string) -> {
 
 main() {
     fw = aeocha.init()
-    svn_bin = os_getenv("SVN_BIN")
+    avn_bin = os_getenv("AVN_BIN")
     port    = os_getenv("TEST_ACL_CP_FOLLOW_PORT")
     url     = string.concat("http://127.0.0.1:", string.concat(port, "/demo"))
     base    = string.concat("http://127.0.0.1:", string.concat(port, "/repos/demo"))
@@ -35,7 +35,7 @@ main() {
     // r4: add nested
     setup = string.concat("rm -rf ", wc)
     setup = string.concat(setup, " && ")
-    setup = string.concat(setup, svn_bin)
+    setup = string.concat(setup, avn_bin)
     setup = string.concat(setup, " checkout ")
     setup = string.concat(setup, url)
     setup = string.concat(setup, " ")
@@ -43,23 +43,23 @@ main() {
     setup = string.concat(setup, " >/dev/null && cd ")
     setup = string.concat(setup, wc)
     setup = string.concat(setup, " && mkdir -p src/nested && echo 'nested content' > src/nested/note.txt && ")
-    setup = string.concat(setup, svn_bin)
+    setup = string.concat(setup, avn_bin)
     setup = string.concat(setup, " add src/nested >/dev/null && ")
-    setup = string.concat(setup, svn_bin)
+    setup = string.concat(setup, avn_bin)
     setup = string.concat(setup, " add src/nested/note.txt >/dev/null && ")
-    setup = string.concat(setup, svn_bin)
+    setup = string.concat(setup, avn_bin)
     setup = string.concat(setup, " commit --author admin --log 'add nested' >/dev/null")
 
     // (A) acl set src +alice:rw +chuck:r -*  (r5)
     acl_set_src = string.concat("SVN_SUPERUSER_TOKEN=", token)
     acl_set_src = string.concat(acl_set_src, " ")
-    acl_set_src = string.concat(acl_set_src, svn_bin)
+    acl_set_src = string.concat(acl_set_src, avn_bin)
     acl_set_src = string.concat(acl_set_src, " acl set ")
     acl_set_src = string.concat(acl_set_src, url)
     acl_set_src = string.concat(acl_set_src, " src '+alice:rw' '+chuck:r' '-*' >/dev/null")
 
     // alice cp src → src-branch (r6) — count "Committed revision"
-    alice_cp = string.concat("SVN_USER=alice ", svn_bin)
+    alice_cp = string.concat("SVN_USER=alice ", avn_bin)
     alice_cp = string.concat(alice_cp, " cp ")
     alice_cp = string.concat(alice_cp, url)
     alice_cp = string.concat(alice_cp, "/src ")
@@ -74,7 +74,7 @@ main() {
     alice_branch_curl = string.concat(alice_branch_curl, "/rev/6/cat/src-branch/nested/note.txt")
 
     // (B) bob's cp refused
-    bob_cp = string.concat("SVN_USER=bob ", svn_bin)
+    bob_cp = string.concat("SVN_USER=bob ", avn_bin)
     bob_cp = string.concat(bob_cp, " cp ")
     bob_cp = string.concat(bob_cp, url)
     bob_cp = string.concat(bob_cp, "/src ")
@@ -82,7 +82,7 @@ main() {
     bob_cp = string.concat(bob_cp, "/bob-branch --author bob --log 'bob steal' 2>&1 | grep -c 'Committed revision' || true")
 
     // (C) chuck (r-only) cp refused
-    chuck_cp = string.concat("SVN_USER=chuck ", svn_bin)
+    chuck_cp = string.concat("SVN_USER=chuck ", avn_bin)
     chuck_cp = string.concat(chuck_cp, " cp ")
     chuck_cp = string.concat(chuck_cp, url)
     chuck_cp = string.concat(chuck_cp, "/src ")
@@ -90,7 +90,7 @@ main() {
     chuck_cp = string.concat(chuck_cp, "/chuck-branch --author chuck --log 'chuck branch' 2>&1 | grep -c 'Committed revision' || true")
 
     // (D) anon cp refused
-    anon_cp = string.concat(svn_bin, " cp ")
+    anon_cp = string.concat(avn_bin, " cp ")
     anon_cp = string.concat(anon_cp, url)
     anon_cp = string.concat(anon_cp, "/src ")
     anon_cp = string.concat(anon_cp, url)
@@ -99,7 +99,7 @@ main() {
     // (E) super cp succeeds (r7)
     super_cp = string.concat("SVN_SUPERUSER_TOKEN=", token)
     super_cp = string.concat(super_cp, " ")
-    super_cp = string.concat(super_cp, svn_bin)
+    super_cp = string.concat(super_cp, avn_bin)
     super_cp = string.concat(super_cp, " cp ")
     super_cp = string.concat(super_cp, url)
     super_cp = string.concat(super_cp, "/src ")
@@ -112,12 +112,12 @@ main() {
     // (G) nested ACL on src/nested (r8) then alice cp → src-branch2 (r9)
     acl_nested = string.concat("SVN_SUPERUSER_TOKEN=", token)
     acl_nested = string.concat(acl_nested, " ")
-    acl_nested = string.concat(acl_nested, svn_bin)
+    acl_nested = string.concat(acl_nested, avn_bin)
     acl_nested = string.concat(acl_nested, " acl set ")
     acl_nested = string.concat(acl_nested, url)
     acl_nested = string.concat(acl_nested, " src/nested '+alice:rw' '-*' >/dev/null")
 
-    alice_branch2 = string.concat("SVN_USER=alice ", svn_bin)
+    alice_branch2 = string.concat("SVN_USER=alice ", avn_bin)
     alice_branch2 = string.concat(alice_branch2, " cp ")
     alice_branch2 = string.concat(alice_branch2, url)
     alice_branch2 = string.concat(alice_branch2, "/src ")
@@ -129,7 +129,7 @@ main() {
     nested_rebased_check = string.concat(nested_rebased_check, base)
     nested_rebased_check = string.concat(nested_rebased_check, "/rev/9/acl/src-branch2/nested | grep -c '\"+alice:rw\"' || true")
 
-    aeocha.describe(fw, "svn cp ACL gate + auto-follow") {
+    aeocha.describe(fw, "avn cp ACL gate + auto-follow") {
 
         aeocha.it("setup: r4 add nested") callback {
             _, st, _ = sh(setup)

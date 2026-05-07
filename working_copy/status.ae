@@ -13,7 +13,7 @@
 // implied. See the License for the specific language governing
 // permissions and limitations under the License.
 
-// svn status — compare on-disk WC against wc.db + pristine to produce
+// avn status — compare on-disk WC against wc.db + pristine to produce
 // a list of (path, code) entries:
 //
 //     ' '  Normal (filtered from output)
@@ -183,7 +183,7 @@ walk_unversioned_(wc_root: string, rel: string, tracked: ptr) -> string {
         skip = 0
         if string.equals(name, ".svn") == 1 { skip = 1 }
         // Skip conflict sidecars — .mine and .r<N>. They'll be cleaned
-        // up by `svn resolve`.
+        // up by `avn resolve`.
         if skip == 0 {
             if is_sidecar_name(name) == 1 { skip = 1 }
         }

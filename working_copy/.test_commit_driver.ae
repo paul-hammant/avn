@@ -25,7 +25,7 @@ sh(cmd: string) -> {
 
 main() {
     fw = aeocha.init()
-    svn_bin = os_getenv("SVN_BIN")
+    avn_bin = os_getenv("AVN_BIN")
     port    = os_getenv("TEST_COMMIT_PORT")
     url     = string.concat("http://127.0.0.1:", string.concat(port, "/demo"))
     base    = string.concat("http://127.0.0.1:", string.concat(port, "/repos/demo"))
@@ -34,7 +34,7 @@ main() {
     // --- prep: checkout + edit + add + rm + commit (one big shell pipeline) ---
     prep = string.concat("rm -rf ", wc)
     prep = string.concat(prep, " && ")
-    prep = string.concat(prep, svn_bin)
+    prep = string.concat(prep, avn_bin)
     prep = string.concat(prep, " checkout ")
     prep = string.concat(prep, url)
     prep = string.concat(prep, " ")
@@ -42,18 +42,18 @@ main() {
     prep = string.concat(prep, " >/dev/null && cd ")
     prep = string.concat(prep, wc)
     prep = string.concat(prep, " && echo 'new hello content' > README && echo 'new file body' > NEWFILE && ")
-    prep = string.concat(prep, svn_bin)
+    prep = string.concat(prep, avn_bin)
     prep = string.concat(prep, " add NEWFILE >/dev/null && ")
-    prep = string.concat(prep, svn_bin)
+    prep = string.concat(prep, avn_bin)
     prep = string.concat(prep, " rm src/main.c >/dev/null && ")
-    prep = string.concat(prep, svn_bin)
+    prep = string.concat(prep, avn_bin)
     prep = string.concat(prep, " commit --author wc-user --log 'WC-backed commit demo'")
     prep_out_, prep_st_, prep_err_ = sh(prep)
 
     // status from inside WC
     cd_status = string.concat("cd ", wc)
     cd_status = string.concat(cd_status, " && ")
-    cd_status = string.concat(cd_status, svn_bin)
+    cd_status = string.concat(cd_status, avn_bin)
     cd_status = string.concat(cd_status, " status")
 
     // base_rev query
@@ -61,15 +61,15 @@ main() {
     q_base_rev = string.concat(q_base_rev, "/.svn/wc.db \"SELECT value FROM info WHERE key='base_rev'\"")
 
     // remote cat README + NEWFILE
-    cat_readme  = string.concat(svn_bin, " cat ")
+    cat_readme  = string.concat(avn_bin, " cat ")
     cat_readme  = string.concat(cat_readme, url)
     cat_readme  = string.concat(cat_readme, " README")
-    cat_newfile = string.concat(svn_bin, " cat ")
+    cat_newfile = string.concat(avn_bin, " cat ")
     cat_newfile = string.concat(cat_newfile, url)
     cat_newfile = string.concat(cat_newfile, " NEWFILE")
 
     // info --rev 4 author + log
-    info_r4 = string.concat(svn_bin, " info ")
+    info_r4 = string.concat(avn_bin, " info ")
     info_r4 = string.concat(info_r4, url)
     info_r4 = string.concat(info_r4, " --rev 4")
 
@@ -81,7 +81,7 @@ main() {
     // No-op commit message
     cd_noop_commit = string.concat("cd ", wc)
     cd_noop_commit = string.concat(cd_noop_commit, " && ")
-    cd_noop_commit = string.concat(cd_noop_commit, svn_bin)
+    cd_noop_commit = string.concat(cd_noop_commit, avn_bin)
     cd_noop_commit = string.concat(cd_noop_commit, " commit --author foo --log empty")
 
     aeocha.describe(fw, "WC-backed commit") {
@@ -121,7 +121,7 @@ main() {
                 "main.c gone at r4 (curl reports 404)")
         }
 
-        aeocha.it("rev 4 author + log via svn info") callback {
+        aeocha.it("rev 4 author + log via avn info") callback {
             out, status, _ = sh(info_r4)
             aeocha.expect_exit(fw, status, 0, "info exit 0")
             aeocha.expect_stdout_line_after(fw, out, "Author:", "wc-user",

@@ -25,10 +25,10 @@ main() {
 
         fixture_seed(b, "test_client") {
             path("/tmp/avn_aeb_test_client_repo")
-            seed_bin("target/avnserver/bin/svnae-seed")
+            seed_bin("target/avnserver/bin/avn-seed")
         }
         fixture_server(b, "test_client") {
-            bin("target/avnserver/bin/aether-svnserver")
+            bin("target/avnserver/bin/avnserver")
             args("demo $TEST_CLIENT_PATH 9320")
             port(9320)
             ready_after_ms(1500)

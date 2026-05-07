@@ -1,12 +1,12 @@
 // Copyright 2026 Paul Hammant (portions).
 // Apache License, Version 2.0 — see LICENSE.
 //
-// Aether driver for svn CLI integration test. Migrated from the
+// Aether driver for avn CLI integration test. Migrated from the
 // bash test_svn.sh as the Round 234 canary for the
 // aether.driver_test + Aeocha integration-shape matchers shape.
 //
-// Reads $SVN_BIN (binary-under-test) and $TEST_SVN_PORT (fixture
-// server port), builds an `svn ... URL` argv and asserts about
+// Reads $AVN_BIN (binary-under-test) and $TEST_AVN_PORT (fixture
+// server port), builds an `avn ... URL` argv and asserts about
 // stdout/exit via Aeocha.
 
 import contrib.aeocha
@@ -32,19 +32,19 @@ argv_push(argv: ptr, s: string) {
 
 main() {
     fw = aeocha.init()
-    svn_bin = os_getenv("SVN_BIN")
-    port    = os_getenv("TEST_SVN_PORT")
+    avn_bin = os_getenv("AVN_BIN")
+    port    = os_getenv("TEST_AVN_PORT")
     url     = string.concat("http://127.0.0.1:", string.concat(port, "/demo"))
 
-    aeocha.describe(fw, "svn cli vs demo repo") {
+    aeocha.describe(fw, "avn cli vs demo repo") {
 
         aeocha.it("info reports head rev 3") callback {
             argv = argv_new()
             argv_push(argv, "info")
             argv_push(argv, url)
-            out, status, err = os.run_capture(svn_bin, argv, null)
+            out, status, err = os.run_capture(avn_bin, argv, null)
             aeocha.expect_no_spawn_error(fw, err, "spawn ok")
-            aeocha.expect_exit(fw, status, 0, "svn info exit 0")
+            aeocha.expect_exit(fw, status, 0, "avn info exit 0")
             aeocha.expect_stdout_line_field(fw, out, "Revision:", 1, "3",
                 "head rev = 3")
         }
@@ -55,8 +55,8 @@ main() {
             argv_push(argv, url)
             argv_push(argv, "--rev")
             argv_push(argv, "1")
-            out, status, err = os.run_capture(svn_bin, argv, null)
-            aeocha.expect_exit(fw, status, 0, "svn info --rev 1 exit 0")
+            out, status, err = os.run_capture(avn_bin, argv, null)
+            aeocha.expect_exit(fw, status, 0, "avn info --rev 1 exit 0")
             aeocha.expect_stdout_line_after(fw, out, "Log:", "first commit",
                 "info r1 log line is 'first commit'")
         }
@@ -65,9 +65,9 @@ main() {
             argv = argv_new()
             argv_push(argv, "log")
             argv_push(argv, url)
-            out, status, err = os.run_capture(svn_bin, argv, null)
-            aeocha.expect_exit(fw, status, 0, "svn log exit 0")
-            // First line of `svn log` is "r3 | author | ...". Use
+            out, status, err = os.run_capture(avn_bin, argv, null)
+            aeocha.expect_exit(fw, status, 0, "avn log exit 0")
+            // First line of `avn log` is "r3 | author | ...". Use
             // expect_stdout_line_field with prefix "r" — first match wins.
             aeocha.expect_stdout_contains(fw, out, "r3 |",
                 "log shows rev 3 first")
@@ -78,8 +78,8 @@ main() {
             argv = argv_new()
             argv_push(argv, "ls")
             argv_push(argv, url)
-            out, status, err = os.run_capture(svn_bin, argv, null)
-            aeocha.expect_exit(fw, status, 0, "svn ls exit 0")
+            out, status, err = os.run_capture(avn_bin, argv, null)
+            aeocha.expect_exit(fw, status, 0, "avn ls exit 0")
             aeocha.expect_stdout_line_count(fw, out, 2, "ls head 2 entries")
         }
 
@@ -89,8 +89,8 @@ main() {
             argv_push(argv, url)
             argv_push(argv, "--rev")
             argv_push(argv, "1")
-            out, status, err = os.run_capture(svn_bin, argv, null)
-            aeocha.expect_exit(fw, status, 0, "svn ls r1 exit 0")
+            out, status, err = os.run_capture(avn_bin, argv, null)
+            aeocha.expect_exit(fw, status, 0, "avn ls r1 exit 0")
             aeocha.expect_stdout_line_count(fw, out, 3, "ls r1 3 entries")
         }
 
@@ -101,8 +101,8 @@ main() {
             argv_push(argv, "--rev")
             argv_push(argv, "1")
             argv_push(argv, "README")
-            out, status, err = os.run_capture(svn_bin, argv, null)
-            aeocha.expect_exit(fw, status, 0, "svn cat exit 0")
+            out, status, err = os.run_capture(avn_bin, argv, null)
+            aeocha.expect_exit(fw, status, 0, "avn cat exit 0")
             aeocha.expect_stdout_contains(fw, out, "Hello", "cat r1 README")
         }
 
@@ -113,8 +113,8 @@ main() {
             argv_push(argv, "--rev")
             argv_push(argv, "2")
             argv_push(argv, "src/main.c")
-            out, status, err = os.run_capture(svn_bin, argv, null)
-            aeocha.expect_exit(fw, status, 0, "svn cat r2 exit 0")
+            out, status, err = os.run_capture(avn_bin, argv, null)
+            aeocha.expect_exit(fw, status, 0, "avn cat r2 exit 0")
             aeocha.expect_stdout_contains(fw, out, "int main() { return 42; }",
                 "cat r2 main.c body")
         }
@@ -126,13 +126,13 @@ main() {
             argv_push(argv, "--author")
             argv_push(argv, "cli-user")
             argv_push(argv, "--log")
-            argv_push(argv, "via svn cli")
+            argv_push(argv, "via avn cli")
             argv_push(argv, "--add-file")
             argv_push(argv, "NEWFILE=hello from cli")
             argv_push(argv, "--mkdir")
             argv_push(argv, "dir1")
-            out, status, err = os.run_capture(svn_bin, argv, null)
-            aeocha.expect_exit(fw, status, 0, "svn commit exit 0")
+            out, status, err = os.run_capture(avn_bin, argv, null)
+            aeocha.expect_exit(fw, status, 0, "avn commit exit 0")
             aeocha.expect_stdout_contains(fw, out, "Committed revision 4",
                 "commit returned rev 4")
         }
@@ -141,11 +141,11 @@ main() {
             argv = argv_new()
             argv_push(argv, "info")
             argv_push(argv, url)
-            out, status, err = os.run_capture(svn_bin, argv, null)
-            aeocha.expect_exit(fw, status, 0, "svn info exit 0")
+            out, status, err = os.run_capture(avn_bin, argv, null)
+            aeocha.expect_exit(fw, status, 0, "avn info exit 0")
             aeocha.expect_stdout_line_after(fw, out, "Author:", "cli-user",
                 "r4 author")
-            aeocha.expect_stdout_line_after(fw, out, "Log:", "via svn cli",
+            aeocha.expect_stdout_line_after(fw, out, "Log:", "via avn cli",
                 "r4 log")
         }
 
@@ -154,8 +154,8 @@ main() {
             argv_push(argv, "cat")
             argv_push(argv, url)
             argv_push(argv, "NEWFILE")
-            out, status, err = os.run_capture(svn_bin, argv, null)
-            aeocha.expect_exit(fw, status, 0, "svn cat NEWFILE exit 0")
+            out, status, err = os.run_capture(avn_bin, argv, null)
+            aeocha.expect_exit(fw, status, 0, "avn cat NEWFILE exit 0")
             aeocha.expect_stdout_contains(fw, out, "hello from cli",
                 "NEWFILE content")
         }
@@ -164,8 +164,8 @@ main() {
             argv = argv_new()
             argv_push(argv, "ls")
             argv_push(argv, url)
-            out, status, err = os.run_capture(svn_bin, argv, null)
-            aeocha.expect_exit(fw, status, 0, "svn ls exit 0")
+            out, status, err = os.run_capture(avn_bin, argv, null)
+            aeocha.expect_exit(fw, status, 0, "avn ls exit 0")
             aeocha.expect_stdout_line_count(fw, out, 4,
                 "ls after commit 4 entries")
         }
@@ -173,7 +173,7 @@ main() {
         aeocha.it("unknown subcommand exits non-zero") callback {
             argv = argv_new()
             argv_push(argv, "unknown")
-            out, status, err = os.run_capture(svn_bin, argv, null)
+            out, status, err = os.run_capture(avn_bin, argv, null)
             aeocha.expect_no_spawn_error(fw, err, "spawn ok")
             aeocha.assert_not_eq(fw, status, 0,
                 "unknown subcommand should exit non-zero")

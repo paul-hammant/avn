@@ -13,15 +13,15 @@
 // implied. See the License for the specific language governing
 // permissions and limitations under the License.
 
-// svnadmin — admin CLI for avn repositories.
+// avnadmin — admin CLI for avn repositories.
 //
 // Usage:
-//   svnadmin create PATH
-//   svnadmin dump   PATH [--file OUT]    -- default stdout
-//   svnadmin load   PATH [--file IN]     -- default stdin
+//   avnadmin create PATH
+//   avnadmin dump   PATH [--file OUT]    -- default stdout
+//   avnadmin load   PATH [--file IN]     -- default stdin
 //
 // Dump/load stream format is our own (see avnadmin/shim.c) — not
-// compatible with reference svn's svnadmin dump.
+// compatible with reference avn's avnadmin dump.
 
 import std.string
 import std.io
@@ -29,9 +29,9 @@ import std.io
 extern aether_args_count() -> int
 extern aether_args_get(index: int) -> string
 
-extern svnadmin_create(repo: string, algos_spec: string) -> int
-extern svnadmin_dump  (repo: string, out_fd: int) -> int
-extern svnadmin_load  (repo: string, in_fd: int) -> int
+extern avnadmin_create(repo: string, algos_spec: string) -> int
+extern avnadmin_dump  (repo: string, out_fd: int) -> int
+extern avnadmin_load  (repo: string, in_fd: int) -> int
 
 // Round 188: switched to std.io fd surface (Aether 0.110 follow-up
 // — Section 1 of nuther-ask-of-aether-team.md). io.fd_open_*
@@ -53,7 +53,7 @@ find_flag(flag: string, from_idx: int) {
 
 cmd_create(argv_start: int) {
     if aether_args_count() <= argv_start {
-        println("svnadmin create: missing PATH")
+        println("avnadmin create: missing PATH")
         return 2
     }
     // First non-flag argv value is the path.
@@ -70,16 +70,16 @@ cmd_create(argv_start: int) {
         k = k + 1
     }
     if string.length(path) == 0 {
-        println("svnadmin create: missing PATH")
+        println("avnadmin create: missing PATH")
         return 2
     }
     algos = find_flag("--algos", argv_start)
-    rc = svnadmin_create(path, algos)
+    rc = avnadmin_create(path, algos)
     if rc != 0 {
         if string.length(algos) > 0 {
-            println("svnadmin create: unsupported or invalid --algos '${algos}'")
+            println("avnadmin create: unsupported or invalid --algos '${algos}'")
         } else {
-            println("svnadmin create: failed (rc=${rc})")
+            println("avnadmin create: failed (rc=${rc})")
         }
         return 1
     }
@@ -88,7 +88,7 @@ cmd_create(argv_start: int) {
 
 cmd_dump(argv_start: int) {
     if aether_args_count() <= argv_start {
-        println("svnadmin dump: missing PATH")
+        println("avnadmin dump: missing PATH")
         return 2
     }
     path = aether_args_get(argv_start)
@@ -99,16 +99,16 @@ cmd_dump(argv_start: int) {
     if string.length(out_file) > 0 {
         new_fd, oerr = io.fd_open_write(out_file)
         if string.length(oerr) > 0 {
-            println("svnadmin dump: cannot open ${out_file}: ${oerr}")
+            println("avnadmin dump: cannot open ${out_file}: ${oerr}")
             return 1
         }
         fd = new_fd
         opened = 1
     }
-    rc = svnadmin_dump(path, fd)
+    rc = avnadmin_dump(path, fd)
     if opened == 1 { io.fd_close(fd) }
     if rc != 0 {
-        println("svnadmin dump: failed (rc=${rc})")
+        println("avnadmin dump: failed (rc=${rc})")
         return 1
     }
     return 0
@@ -116,7 +116,7 @@ cmd_dump(argv_start: int) {
 
 cmd_load(argv_start: int) {
     if aether_args_count() <= argv_start {
-        println("svnadmin load: missing PATH")
+        println("avnadmin load: missing PATH")
         return 2
     }
     path = aether_args_get(argv_start)
@@ -127,23 +127,23 @@ cmd_load(argv_start: int) {
     if string.length(in_file) > 0 {
         new_fd, oerr = io.fd_open_read(in_file)
         if string.length(oerr) > 0 {
-            println("svnadmin load: cannot open ${in_file}: ${oerr}")
+            println("avnadmin load: cannot open ${in_file}: ${oerr}")
             return 1
         }
         fd = new_fd
         opened = 1
     }
-    rc = svnadmin_load(path, fd)
+    rc = avnadmin_load(path, fd)
     if opened == 1 { io.fd_close(fd) }
     if rc != 0 {
-        println("svnadmin load: failed (rc=${rc})")
+        println("avnadmin load: failed (rc=${rc})")
         return 1
     }
     return 0
 }
 
 print_usage() {
-    println("usage: svnadmin <subcommand> PATH [options]")
+    println("usage: avnadmin <subcommand> PATH [options]")
     println("")
     println("subcommands:")
     println("  create PATH")
@@ -163,7 +163,7 @@ main() {
     if string.equals(sub, "load") == 1   { exit(cmd_load(2)) }
     if string.equals(sub, "--help") == 1 { print_usage(); exit(0) }
     if string.equals(sub, "help") == 1   { print_usage(); exit(0) }
-    println("svnadmin: unknown subcommand: ${sub}")
+    println("avnadmin: unknown subcommand: ${sub}")
     print_usage()
     exit(2)
 }

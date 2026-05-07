@@ -13,16 +13,16 @@ main() {
         driver(".test_rest_put_driver.ae")
         output("test_rest_put_driver")
 
-        binary_under_test(b, "svn") {
-            path("target/avn/bin/svn")
+        binary_under_test(b, "avn") {
+            path("target/avn/bin/avn")
         }
 
         fixture_seed(b, "test_put") {
             path("/tmp/avn_aeb_test_put_repo")
-            seed_bin("target/avnserver/bin/svnae-seed")
+            seed_bin("target/avnserver/bin/avn-seed")
         }
         fixture_server(b, "test_put") {
-            bin("target/avnserver/bin/aether-svnserver")
+            bin("target/avnserver/bin/avnserver")
             args("demo $TEST_PUT_PATH 9580 --superuser-token test-put-token")
             port(9580)
             ready_after_ms(1500)

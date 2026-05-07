@@ -27,10 +27,10 @@ stopped being valuable.
    functions could move, pick the one with more callers and fewer
    dependencies. That function's port unlocks all its callers'
    future ports; the other direction gets stuck. `fs_fs/rep_store`
-   and `ae/repos/*` moved before `svnserver` and `svn`.
+   and `ae/repos/*` moved before `svnserver` and `avn`.
 
 4. **The C code is a reference, not a target.** We're reading the
-   original svn C to learn the behaviour contract — not to
+   original avn C to learn the behaviour contract — not to
    translate line-by-line. An idiomatic Aether implementation is
    the goal. Line-count growth on the Aether side is often fine;
    line-count reduction on the C side is what we're actually
@@ -331,7 +331,7 @@ Not every candidate is worth doing. Some we looked at and shelved:
   and 20% text assembly, the text can move but the function stays.
   Often the 20% isn't worth splitting into a separate Aether entry.
 
-- **Stream I/O.** `svnae_svnadmin_load` reads a dump file one line
+- **Stream I/O.** `svnae_avnadmin_load` reads a dump file one line
   at a time via raw `read(2)`. Aether's `std.fs` doesn't expose an
   incremental line reader. The function stays C.
 

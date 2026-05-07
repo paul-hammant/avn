@@ -13,7 +13,7 @@
 // implied. See the License for the specific language governing
 // permissions and limitations under the License.
 
-// svn status classification — the pure decision table mapping the
+// avn status classification — the pure decision table mapping the
 // wc.db node st + on-disk reality to a single-char code.
 //
 // The C side of working_copy/status_shim.c gathers the inputs (is the node

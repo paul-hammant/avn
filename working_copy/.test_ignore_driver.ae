@@ -5,7 +5,7 @@
 // Migrated from working_copy/test_ignore.sh.
 //
 // Each step does setup-and-assert in one shell pipeline through
-// /bin/sh -c (cd + svn ops + status capture + grep).
+// /bin/sh -c (cd + avn ops + status capture + grep).
 
 import contrib.aeocha
 import std.os
@@ -31,7 +31,7 @@ sh(cmd: string) -> {
 
 main() {
     fw = aeocha.init()
-    svn_bin = os_getenv("SVN_BIN")
+    avn_bin = os_getenv("AVN_BIN")
     port    = os_getenv("TEST_IGNORE_PORT")
     url     = string.concat("http://127.0.0.1:", string.concat(port, "/demo"))
     wc      = "/tmp/avn_test_ig_wc"
@@ -39,7 +39,7 @@ main() {
     // --- prep: fresh WC, three unversioned files in src/ ---
     prep = string.concat("rm -rf ", wc)
     prep = string.concat(prep, " && ")
-    prep = string.concat(prep, svn_bin)
+    prep = string.concat(prep, avn_bin)
     prep = string.concat(prep, " checkout ")
     prep = string.concat(prep, url)
     prep = string.concat(prep, " ")
@@ -49,29 +49,29 @@ main() {
     prep = string.concat(prep, " && echo a > src/something.o && echo b > src/other.o && echo c > src/notes.txt")
     prep_out, prep_st, prep_err = sh(prep)
 
-    // svn status from inside the WC
+    // avn status from inside the WC
     cd_status = string.concat("cd ", string.concat(wc, " && "))
-    cd_status = string.concat(cd_status, svn_bin)
+    cd_status = string.concat(cd_status, avn_bin)
     cd_status = string.concat(cd_status, " status | grep -c '^?' || true")
 
-    // svn propset svn:ignore '*.o' src
+    // avn propset svn:ignore '*.o' src
     set_o = string.concat("cd ", string.concat(wc, " && "))
-    set_o = string.concat(set_o, svn_bin)
+    set_o = string.concat(set_o, avn_bin)
     set_o = string.concat(set_o, " propset svn:ignore '*.o' src >/dev/null")
 
-    // svn propset svn:ignore $'*.o\nnotes.txt' src — multi-pattern
+    // avn propset svn:ignore $'*.o\nnotes.txt' src — multi-pattern
     set_both = string.concat("cd ", string.concat(wc, " && "))
-    set_both = string.concat(set_both, svn_bin)
+    set_both = string.concat(set_both, avn_bin)
     set_both = string.concat(set_both, " propset svn:ignore $'*.o\\nnotes.txt' src >/dev/null")
 
-    // svn propset with leading/trailing blank lines (tolerated)
+    // avn propset with leading/trailing blank lines (tolerated)
     set_blanks = string.concat("cd ", string.concat(wc, " && "))
-    set_blanks = string.concat(set_blanks, svn_bin)
+    set_blanks = string.concat(set_blanks, avn_bin)
     set_blanks = string.concat(set_blanks, " propset svn:ignore $'\\n*.o\\n\\n' src >/dev/null")
 
     // status output capture (full line)
     cd_status_full = string.concat("cd ", string.concat(wc, " && "))
-    cd_status_full = string.concat(cd_status_full, svn_bin)
+    cd_status_full = string.concat(cd_status_full, avn_bin)
     cd_status_full = string.concat(cd_status_full, " status")
 
     // create top-level *.o (no ignore at root)
@@ -79,7 +79,7 @@ main() {
 
     // cleanup unversioned files + propdel + final status
     cleanup = string.concat("cd ", string.concat(wc, " && rm -f top-ignore-me.o src/something.o src/other.o src/notes.txt && "))
-    cleanup = string.concat(cleanup, svn_bin)
+    cleanup = string.concat(cleanup, avn_bin)
     cleanup = string.concat(cleanup, " propdel svn:ignore src >/dev/null")
 
     aeocha.describe(fw, "svn:ignore") {

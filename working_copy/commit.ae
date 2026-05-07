@@ -13,7 +13,7 @@
 // implied. See the License for the specific language governing
 // permissions and limitations under the License.
 
-// svn commit — wc-backed commit pipeline.
+// avn commit — wc-backed commit pipeline.
 //
 //   wc_commit(wc_root, author, logmsg) -> new_rev | -1 (error)
 //                                              | -2 (no edits) | -3 (conflicts)
@@ -159,7 +159,7 @@ export wc_commit(wc_root: string, author: string, logmsg: string) -> int {
         if wc_nodelist_conflicted(L, i) == 1 {
             confl_path = wc_nodelist_path(L, i)
             confl_path = string.copy(confl_path)
-            println("svn: commit failed: '${confl_path}' remains in conflict; run svn resolve first")
+            println("svn: commit failed: '${confl_path}' remains in conflict; run avn resolve first")
             wc_nodelist_free(L)
             wc_db_close(db)
             return 0 - 3
@@ -226,7 +226,7 @@ export wc_commit(wc_root: string, author: string, logmsg: string) -> int {
 
     // Drain pending_merge into the commit body. wc_merge accumulated
     // (source_branch, source_rev, verb) rows in the WC's
-    // pending_merge table; svn commit hands them to the server in
+    // pending_merge table; avn commit hands them to the server in
     // the body's `merged_from` JSON field. commit_parse on the
     // server resolves rev numbers to SHAs and routes them to
     // commit_finalise, which writes the rev blob's `merged:` field
@@ -310,7 +310,7 @@ export wc_commit(wc_root: string, author: string, logmsg: string) -> int {
 
     // Commit accepted by the server — pending_merge metadata is now
     // recorded in the rev blob + ledger. Clear the WC side so a
-    // follow-up `svn merge` doesn't re-send the same revs.
+    // follow-up `avn merge` doesn't re-send the same revs.
     if pending_n > 0 { wc_pending_merge_clear(wc_root) }
 
     return new_rev

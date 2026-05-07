@@ -182,7 +182,7 @@ the bug until the patch lands upstream.
 
 Hit during round 30 (fs_fs rep-store port attempt). Adding one more
 `_generated.c` to the `[[bin]] extra_sources` line for the
-aether-svnserver binary — total 2271 chars on one logical line —
+avnserver binary — total 2271 chars on one logical line —
 caused the link command to be cut mid-filename, with the linker
 reporting `cannot find svnserver/handler_copy_generat: No such
 file or directory`. Subtracting 40 chars from the line brought the

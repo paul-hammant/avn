@@ -47,7 +47,7 @@ _sha_cmd(wc: string, file: string, missing: string) -> string {
 
 main() {
     fw = aeocha.init()
-    svn_bin    = os_getenv("SVN_BIN")
+    avn_bin    = os_getenv("AVN_BIN")
     admin_bin  = os_getenv("ADMIN_BIN")
     server_bin = os_getenv("SERVER_BIN")
 
@@ -58,13 +58,13 @@ main() {
     wc_b = "/tmp/avn_cherry_b_wc"
     url  = "http://127.0.0.1:9720/demo"
     pidf = "/tmp/avn_cherry_srv.pid"
-    // Workspace root derived from SVN_BIN (= $WORKSPACE/target/avn/bin/svn)
+    // Workspace root derived from AVN_BIN (= $WORKSPACE/target/avn/bin/avn)
     // via bash parameter expansion stripping the trailing four segments.
     // file.exists() rejects directories so we can't binary_under_test
     // the fixtures dir directly. Aether eats `${...}` in string literals,
     // so we splice the parameter-expansion sigil in via concat.
     dollar = "$"
-    fix = string.concat(dollar, "{SVN_BIN%/*/*/*/*}/tests/fixtures/cherry")
+    fix = string.concat(dollar, "{AVN_BIN%/*/*/*/*}/tests/fixtures/cherry")
 
     // ---- bring up server ---------------------------------------------------
     setup = "rm -rf "
@@ -107,7 +107,7 @@ main() {
     build_trunk = string.concat(build_trunk, "FIX=")
     build_trunk = string.concat(build_trunk, fix)
     build_trunk = string.concat(build_trunk, " && ")
-    build_trunk = string.concat(build_trunk, svn_bin)
+    build_trunk = string.concat(build_trunk, avn_bin)
     build_trunk = string.concat(build_trunk, " checkout ")
     build_trunk = string.concat(build_trunk, url)
     build_trunk = string.concat(build_trunk, " ")
@@ -116,9 +116,9 @@ main() {
     build_trunk = string.concat(build_trunk, wc_t)
     build_trunk = string.concat(build_trunk, " && ")
     // SVN-classical layout: /trunk/ holds the source. Branches are
-    // server-side dir copies (`svn cp URL/trunk URL/release_x`).
+    // server-side dir copies (`avn cp URL/trunk URL/release_x`).
     //
-    // Order matters here: avn has a bug where `svn cp URL/path@PASTREV
+    // Order matters here: avn has a bug where `avn cp URL/path@PASTREV
     // URL/dst` clobbers sibling top-level dirs in the resulting tree.
     // We side-step it by branching at HEAD *between* C2 and C3 — both
     // branches get C2's content, and trunk continues with C3..C5.
@@ -132,61 +132,61 @@ main() {
     //   r6: C4 in trunk
     //   r7: C5 in trunk
     build_trunk = string.concat(build_trunk, "mkdir trunk && ")
-    build_trunk = string.concat(build_trunk, svn_bin)
+    build_trunk = string.concat(build_trunk, avn_bin)
     build_trunk = string.concat(build_trunk, " add trunk >/dev/null && ")
     // C1: baseline files into /trunk/
     build_trunk = string.concat(build_trunk, "cp $FIX/baseline/Gemfile $FIX/baseline/app.rb $FIX/baseline/happy_path_test.rb trunk/ && ")
-    build_trunk = string.concat(build_trunk, svn_bin)
+    build_trunk = string.concat(build_trunk, avn_bin)
     build_trunk = string.concat(build_trunk, " add trunk/Gemfile trunk/app.rb trunk/happy_path_test.rb >/dev/null && ")
-    build_trunk = string.concat(build_trunk, svn_bin)
+    build_trunk = string.concat(build_trunk, avn_bin)
     build_trunk = string.concat(build_trunk, " commit --author paul --log 'C1: baseline' >/dev/null && ")
     // C2
     build_trunk = string.concat(build_trunk, "cd trunk && patch -p1 --no-backup-if-mismatch < $FIX/patches/c2-hair-color-string.patch >/dev/null && cd .. && ")
-    build_trunk = string.concat(build_trunk, svn_bin)
+    build_trunk = string.concat(build_trunk, avn_bin)
     build_trunk = string.concat(build_trunk, " commit --author paul --log 'C2: hair_color (string)' >/dev/null && ")
     // Branches at HEAD (= C2 content)
-    build_trunk = string.concat(build_trunk, svn_bin)
+    build_trunk = string.concat(build_trunk, avn_bin)
     build_trunk = string.concat(build_trunk, " cp ")
     build_trunk = string.concat(build_trunk, url)
     build_trunk = string.concat(build_trunk, "/trunk ")
     build_trunk = string.concat(build_trunk, url)
     build_trunk = string.concat(build_trunk, "/release_a --author paul --log 'branch a (post-C2)' >/dev/null && ")
-    build_trunk = string.concat(build_trunk, svn_bin)
+    build_trunk = string.concat(build_trunk, avn_bin)
     build_trunk = string.concat(build_trunk, " cp ")
     build_trunk = string.concat(build_trunk, url)
     build_trunk = string.concat(build_trunk, "/trunk ")
     build_trunk = string.concat(build_trunk, url)
     build_trunk = string.concat(build_trunk, "/release_b --author paul --log 'branch b (post-C2)' >/dev/null && ")
-    // svn update brings the WC in sync with HEAD's tree. Without
+    // avn update brings the WC in sync with HEAD's tree. Without
     // this, the next commit's txn starts from the WC's base rev
     // (which predates the branch creations) and ends up dropping
     // /release_a and /release_b from the new tree — avn's commit
     // doesn't detect the out-of-date condition.
-    build_trunk = string.concat(build_trunk, svn_bin)
+    build_trunk = string.concat(build_trunk, avn_bin)
     build_trunk = string.concat(build_trunk, " update >/dev/null && ")
     // C3..C5 in trunk
     build_trunk = string.concat(build_trunk, "cd trunk && patch -p1 --no-backup-if-mismatch < $FIX/patches/c3-uppercase-buttons.patch >/dev/null && cd .. && ")
-    build_trunk = string.concat(build_trunk, svn_bin)
+    build_trunk = string.concat(build_trunk, avn_bin)
     build_trunk = string.concat(build_trunk, " commit --author paul --log 'C3: uppercase buttons' >/dev/null && ")
     build_trunk = string.concat(build_trunk, "cd trunk && patch -p1 --no-backup-if-mismatch < $FIX/patches/c4-hair-color-int.patch >/dev/null && cd .. && ")
-    build_trunk = string.concat(build_trunk, svn_bin)
+    build_trunk = string.concat(build_trunk, avn_bin)
     build_trunk = string.concat(build_trunk, " commit --author paul --log 'C4: hair_color (int)' >/dev/null && ")
     build_trunk = string.concat(build_trunk, "cd trunk && patch -p1 --no-backup-if-mismatch < $FIX/patches/c5-maintainer-comment.patch >/dev/null && cd .. && ")
-    build_trunk = string.concat(build_trunk, svn_bin)
+    build_trunk = string.concat(build_trunk, avn_bin)
     build_trunk = string.concat(build_trunk, " commit --author paul --log 'C5: maintainer comment' >/dev/null")
 
     _, build_trunk_st, _ = sh(build_trunk)
 
     // ---- scenario A: release_a — cherry-pick C4 then C3, then sweep ------
     // Round 268: avn doesn't yet support sub-path checkout
-    // (`svn checkout URL/release_a $WC_A` — see TODO MB-D follow-up).
+    // (`avn checkout URL/release_a $WC_A` — see TODO MB-D follow-up).
     // Workaround: checkout the repo root, then cd into release_a.
     // wc_root walk-up (Round 267) handles the rest — merge/commit
     // ops from inside the subdir find $WC_A as the WC root.
     do_a = "cd / && rm -rf "
     do_a = string.concat(do_a, wc_a)
     do_a = string.concat(do_a, " && ")
-    do_a = string.concat(do_a, svn_bin)
+    do_a = string.concat(do_a, avn_bin)
     do_a = string.concat(do_a, " checkout ")
     do_a = string.concat(do_a, url)
     do_a = string.concat(do_a, " ")
@@ -195,25 +195,25 @@ main() {
     do_a = string.concat(do_a, wc_a)
     do_a = string.concat(do_a, "/release_a && ")
     // -c 4 then commit
-    do_a = string.concat(do_a, svn_bin)
+    do_a = string.concat(do_a, avn_bin)
     do_a = string.concat(do_a, " merge -c 6 ")
     do_a = string.concat(do_a, url)
     do_a = string.concat(do_a, "/trunk . >/tmp/avn_cherry_a_m4.log 2>&1 && ")
-    do_a = string.concat(do_a, svn_bin)
+    do_a = string.concat(do_a, avn_bin)
     do_a = string.concat(do_a, " commit --author paul --log 'cherry-pick C4 (a)' >/dev/null && ")
     // -c 3 then commit
-    do_a = string.concat(do_a, svn_bin)
+    do_a = string.concat(do_a, avn_bin)
     do_a = string.concat(do_a, " merge -c 5 ")
     do_a = string.concat(do_a, url)
     do_a = string.concat(do_a, "/trunk . >/tmp/avn_cherry_a_m3.log 2>&1 && ")
-    do_a = string.concat(do_a, svn_bin)
+    do_a = string.concat(do_a, avn_bin)
     do_a = string.concat(do_a, " commit --author paul --log 'cherry-pick C3 (a)' >/dev/null && ")
     // sweep r2:HEAD — should only apply C5 (C3,C4 in mergeinfo)
-    do_a = string.concat(do_a, svn_bin)
+    do_a = string.concat(do_a, avn_bin)
     do_a = string.concat(do_a, " merge -r 4:HEAD ")
     do_a = string.concat(do_a, url)
     do_a = string.concat(do_a, "/trunk . >/tmp/avn_cherry_a_sweep.log 2>&1 && ")
-    do_a = string.concat(do_a, svn_bin)
+    do_a = string.concat(do_a, avn_bin)
     do_a = string.concat(do_a, " commit --author paul --log 'sweep main → release_a' >/dev/null")
 
     _, do_a_st, _ = sh(do_a)
@@ -223,7 +223,7 @@ main() {
     do_b = "cd / && rm -rf "
     do_b = string.concat(do_b, wc_b)
     do_b = string.concat(do_b, " && ")
-    do_b = string.concat(do_b, svn_bin)
+    do_b = string.concat(do_b, avn_bin)
     do_b = string.concat(do_b, " checkout ")
     do_b = string.concat(do_b, url)
     do_b = string.concat(do_b, " ")
@@ -232,25 +232,25 @@ main() {
     do_b = string.concat(do_b, wc_b)
     do_b = string.concat(do_b, "/release_b && ")
     // -c 3 then commit
-    do_b = string.concat(do_b, svn_bin)
+    do_b = string.concat(do_b, avn_bin)
     do_b = string.concat(do_b, " merge -c 5 ")
     do_b = string.concat(do_b, url)
     do_b = string.concat(do_b, "/trunk . >/tmp/avn_cherry_b_m3.log 2>&1 && ")
-    do_b = string.concat(do_b, svn_bin)
+    do_b = string.concat(do_b, avn_bin)
     do_b = string.concat(do_b, " commit --author paul --log 'cherry-pick C3 (b)' >/dev/null && ")
     // -c 4 then commit
-    do_b = string.concat(do_b, svn_bin)
+    do_b = string.concat(do_b, avn_bin)
     do_b = string.concat(do_b, " merge -c 6 ")
     do_b = string.concat(do_b, url)
     do_b = string.concat(do_b, "/trunk . >/tmp/avn_cherry_b_m4.log 2>&1 && ")
-    do_b = string.concat(do_b, svn_bin)
+    do_b = string.concat(do_b, avn_bin)
     do_b = string.concat(do_b, " commit --author paul --log 'cherry-pick C4 (b)' >/dev/null && ")
     // sweep
-    do_b = string.concat(do_b, svn_bin)
+    do_b = string.concat(do_b, avn_bin)
     do_b = string.concat(do_b, " merge -r 4:HEAD ")
     do_b = string.concat(do_b, url)
     do_b = string.concat(do_b, "/trunk . >/tmp/avn_cherry_b_sweep.log 2>&1 && ")
-    do_b = string.concat(do_b, svn_bin)
+    do_b = string.concat(do_b, avn_bin)
     do_b = string.concat(do_b, " commit --author paul --log 'sweep main → release_b' >/dev/null")
 
     _, do_b_st, _ = sh(do_b)
@@ -270,21 +270,21 @@ main() {
     sha_t_app = _sha_cmd(wc_t, "trunk/app.rb",        "MISSING_T")
 
     // Round 276 / Phase 2.3: mergeinfo lives in the server-side
-    // ledger now (svn:mergeinfo property retired). `svn merged`
+    // ledger now (svn:mergeinfo property retired). `avn merged`
     // queries it; the response is one rev SHA per integrated rev.
-    // `svn merged` prints one rev SHA per line; pipe through wc -l
+    // `avn merged` prints one rev SHA per line; pipe through wc -l
     // and grep for "wc -l > 0" via a literal count-mark assertion.
-    mi_a = string.concat(svn_bin, " merged ")
+    mi_a = string.concat(avn_bin, " merged ")
     mi_a = string.concat(mi_a, url)
     mi_a = string.concat(mi_a, " --target release_a --source trunk | wc -l")
-    mi_b = string.concat(svn_bin, " merged ")
+    mi_b = string.concat(avn_bin, " merged ")
     mi_b = string.concat(mi_b, url)
     mi_b = string.concat(mi_b, " --target release_b --source trunk | wc -l")
 
     aeocha.describe(fw, "cherry-pick convergence (limits-of-merging)") {
 
         aeocha.it("setup: empty repo created") callback {
-            aeocha.expect_exit(fw, setup_st, 0, "svnadmin create exit 0")
+            aeocha.expect_exit(fw, setup_st, 0, "avnadmin create exit 0")
         }
 
         aeocha.it("setup: server up on port 9720") callback {
@@ -334,7 +334,7 @@ main() {
         }
 
         aeocha.it("ledger: release_a has integrated revs from trunk") callback {
-            // The mi_a command pipes `svn merged ... | wc -l`,
+            // The mi_a command pipes `avn merged ... | wc -l`,
             // so stdout is a single-line decimal count. Three
             // cherry-picked revs (C3, C4, C5) means at least 3 SHAs
             // — assert ≥ "3" in the output. (mergeinfo creep also

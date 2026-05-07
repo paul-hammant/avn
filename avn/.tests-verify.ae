@@ -16,22 +16,22 @@ main() {
 
         // Stage 1: fixture sha1 server. Stage 2 (sha256) spawned
         // inline by the driver after killing the fixture (via PID).
-        binary_under_test(b, "svn") {
-            path("target/avn/bin/svn")
+        binary_under_test(b, "avn") {
+            path("target/avn/bin/avn")
         }
         binary_under_test(b, "admin") {
-            path("target/avnadmin/bin/svnadmin")
+            path("target/avnadmin/bin/avnadmin")
         }
         binary_under_test(b, "server") {
-            path("target/avnserver/bin/aether-svnserver")
+            path("target/avnserver/bin/avnserver")
         }
 
         fixture_seed(b, "test_verify") {
             path("/tmp/avn_aeb_test_verify_repo")
-            seed_bin("target/avnserver/bin/svnae-seed")
+            seed_bin("target/avnserver/bin/avn-seed")
         }
         fixture_server(b, "test_verify") {
-            bin("target/avnserver/bin/aether-svnserver")
+            bin("target/avnserver/bin/avnserver")
             args("demo $TEST_VERIFY_PATH 9530")
             port(9530)
             ready_after_ms(1500)

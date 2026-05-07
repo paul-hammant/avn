@@ -36,7 +36,7 @@ const SQLITE_ROW = 100
 // failure along the way (caller closes the handle and bails).
 //
 // Round 274 / Phase 2.1: pending_merge accumulates merge-record
-// state between `svn merge ...` invocations. svn commit drains it
+// state between `avn merge ...` invocations. avn commit drains it
 // into the commit body's `merged_from` JSON; server resolves rev
 // numbers to SHAs and writes the ledger row. After successful
 // commit the WC clears the table.

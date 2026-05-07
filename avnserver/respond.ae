@@ -36,7 +36,7 @@ export svnserver_respond_json_ok(res: ptr, body: string) {
 }
 
 // Binary-body response. Length is explicit — the body may carry
-// embedded NULs (binary file content from svn cat etc.) and the
+// embedded NULs (binary file content from avn cat etc.) and the
 // length-aware setter preserves them end-to-end.
 export svnserver_respond_binary_ok(res: ptr, data: string, length: int,
                                     content_type: string) {

@@ -15,7 +15,7 @@
 
 // Phase 7: libsvn_ra (REST client) tests.
 //
-// This test assumes the caller has already spawned aether-svnserver with
+// This test assumes the caller has already spawned avnserver with
 // a seeded repo. It takes (base_url, repo_name) via argv, exercises every
 // public RA function, and exits nonzero on mismatch. The companion shell
 // wrapper client/test_client.sh handles the server lifecycle.

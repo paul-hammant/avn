@@ -2,9 +2,9 @@
 
 A clean-sheet reimplementation of Apache Subversion in the Aether
 systems language. Not a mechanical C → Aether translation — we read
-the svn C tree as a *reference for behaviour contracts* and wrote
+the avn C tree as a *reference for behaviour contracts* and wrote
 our own on-disk formats, wire protocol, and algorithms. The reference
-svn C code still lives at `subversion/libsvn_*` in this repo, read-only.
+avn C code still lives at `subversion/libsvn_*` in this repo, read-only.
 
 Plan document: `../svn-to-aether.md`
 Aether bug/feature feedback: `AETHER_ISSUES.md`
@@ -21,8 +21,8 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
   (replacing 8 near-duplicate C scanners), $repo/format line parser,
   /info prelude, /rev/N/info body, /rev/N/hashes body, /rev/N/acl body,
   /list per-entry + redact-line builders, rev-blob body assembly,
-  paths-index sort for acl/props blobs, svn cp ACL-auto-follow body
-  scan, svnadmin dump-header builders, algos-spec comma split, full RA
+  paths-index sort for acl/props blobs, avn cp ACL-auto-follow body
+  scan, avnadmin dump-header builders, algos-spec comma split, full RA
   URL builder family. Each lives in an Aether source under
   `ae/*/<name>.ae`, compiled with `aetherc --emit=lib` and linked into
   its consumers. Hand-written C%: **82% → 69%** by end of round 5.
@@ -33,7 +33,7 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
   zlib,utf8proc}/`. WC conflict-sidecar classifier, svn-status
   decision table, dir-blob find-by-name, dir-blob parse helpers,
   repo-path predicates (is_immediate_child / basename_after /
-  covers), svnadmin dump-line parsers, and several hand-written
+  covers), avnadmin dump-line parsers, and several hand-written
   JSON parsers in the verify path all ported. Issue #16's
   packed-int workaround unwound after discovering the real cause
   was `state` being a reserved keyword.  Hand-written C%: now
@@ -65,7 +65,7 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
   - C side of rep_store_shim.c drops the direct `#include
     <zlib.h>` and the inline `compress2`/`uncompress` calls;
     the sqlite rep-cache + hash dispatch stay.
-  - Binaries linking pristine-but-not-rep_store (svn,
+  - Binaries linking pristine-but-not-rep_store (avn,
     test_wc_pristine) also link rep_store_shim.c now so the
     hoisted concat/slice symbols resolve.
   - net: -17 LOC C, +175 LOC Aether. rep_store_shim.c
@@ -154,9 +154,9 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
 
 - **Round 30** (current): **36.66% C, 63.34% Aether.** Inlined
   trivial `mkdir_p` and `write_file_atomic` wrappers in
-  svnadmin/shim.c. Both are pure pass-throughs to aether_io_mkdir_p
+  avnadmin/shim.c. Both are pure pass-throughs to aether_io_mkdir_p
   and aether_io_write_atomic (7-11 call sites each); fall in the
-  "always inline" range per pattern 3. svnadmin/shim.c: 511 → 504
+  "always inline" range per pattern 3. avnadmin/shim.c: 511 → 504
   LOC (-7 LOC). Total C drop: -7 LOC. Final steady state: 36.66% C.
 
 - **Rounds 26-27**: **37.85% C, 62.15% Aether.** Leaf
@@ -174,7 +174,7 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
     the ports landed incrementally.
   - mkdir_p + write_atomic alias pairs inlined in wc/checkout,
     wc/pristine, wc/revert, fs_fs/rep_store. Kept the ones in
-    commit_shim.c (12 uses) and svnadmin/shim.c (17 uses) where
+    commit_shim.c (12 uses) and avnadmin/shim.c (17 uses) where
     the short alias still earns its line.
 
 - **Round 25**: **38.08% C, 61.92% Aether** (C now
@@ -255,7 +255,7 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
     handle + pin_str helper pattern round 21 established for
     ra/shim.c.
   - Packed-accessor reuse: client/packed_generated.c is now linked
-    by svnadmin, svnserver, and test_repos in addition to the
+    by avnadmin, svnserver, and test_repos in addition to the
     existing RA consumers. One set of walkers serves both
     sides of the wire.
 
@@ -331,14 +331,14 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
   up and pruning stale forward decls:
   - svnae_repo_secondary_hashes parse → repos/rev_io.ae
     (\n-joined names; C splits into char[4][32]).
-  - svnadmin dump rev-pointer read → aether_repos_rev_blob_sha.
+  - avnadmin dump rev-pointer read → aether_repos_rev_blob_sha.
   - repos_info_rev + root_dir_sha1_for_rev both use the shared
     aether_repos_load_rev_blob_field helper now.
   - count_reps_recurse → repo_storage/count_reps.ae.
   - Dead trampolines gone from update_shim.c (ingest_props),
     svnserver/shim.c (acl_user_has_rw_subtree, 24 stale aether_*
     extern decls, 5 obsolete svnae_txn_*/commit_finalise forward
-    decls), svnadmin/shim.c (slurp_small).
+    decls), avnadmin/shim.c (slurp_small).
   - Dead read_format_line in rep_store_shim.c.
 
   svnserver/shim.c: 918 → 868 LOC.
@@ -386,7 +386,7 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
   - `verify_secondaries_in_dir`: its two inline cJSON walkers
     (list and /hashes secondaries) switch to the already-ported
     `ra_parse_list` and a new `ra_parse_hashes_secondaries`.
-  - `ingest_props` (svn update's per-path prop reconciliation)
+  - `ingest_props` (avn update's per-path prop reconciliation)
     → working_copy/update_props.ae. Opaque-handle walk via already-
     Aether-callable ra/wc accessors.
   - `read_format_line` ($repo/format reader) →
@@ -407,8 +407,8 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
   - verify_dir: swapped inline cJSON walker for the already-ported
     ra_parse_list packed-string parser.
   - `head_rev` + `rev_blob_sha1` → repos/rev_io.ae.
-  - `walk_remote` (svn update) → working_copy/update_walk.ae.
-  - `walk_remote` (svn merge) → working_copy/merge_walk.ae.
+  - `walk_remote` (avn update) → working_copy/update_walk.ae.
+  - `walk_remote` (avn merge) → working_copy/merge_walk.ae.
 
   One attempted port deferred: fs_fs/commit_shim.c::load_rev_root_sha1
   via the new repos_load_rev_blob_field helper produced a runtime
@@ -459,7 +459,7 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
     field" utility used by every rev-scoped ACL/props/root read.
   - `auto_follow_copy_acl` (21 LOC C → added to
     svnserver/copy_acl.ae): end-to-end ACL auto-follow for
-    svn cp — now composes copy_acl_follow alongside its users.
+    avn cp — now composes copy_acl_follow alongside its users.
   - `acl_allows_mode` (35 LOC C → svnserver/acl_mode.ae): the
     ancestry-walking mode check. Retires the last hand-written
     newline-string tokeniser in svnserver/shim.c.
@@ -540,7 +540,7 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
   round-7 baseline).
   Mix of in-language `.ae` tests and end-to-end shell harnesses that
   spin up a real HTTP server and drive it with curl and the built
-  `svn` CLI.
+  `avn` CLI.
 - **~14,400 lines** total (Aether + C shims + shell test drivers).
 - Daily-driver workflow works end to end: checkout → edit → status
   → diff → add → rm → commit → update → branch → merge.
@@ -549,10 +549,10 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
 
 | Binary | What it does |
 |---|---|
-| `svn` | Client CLI: `checkout`, `status`, `add`, `rm`, `cp`, `mv`, `commit`, `update`, `revert`, `diff`, `log`, `cat`, `ls`, `info`, `propset`/`get`/`del`/`list`, `merge` |
-| `aether-svnserver` | Read/write HTTP server. JSON for metadata, base64 for bytes over JSON, raw bytes for cat. |
-| `svnadmin` | Repository admin: `create`, `dump`, `load` (our own portable dump format; not reference-svn compatible by design). |
-| `svnae-seed` | Test-only helper that populates a repo with a known tree across three commits. |
+| `avn` | Client CLI: `checkout`, `status`, `add`, `rm`, `cp`, `mv`, `commit`, `update`, `revert`, `diff`, `log`, `cat`, `ls`, `info`, `propset`/`get`/`del`/`list`, `merge` |
+| `avnserver` | Read/write HTTP server. JSON for metadata, base64 for bytes over JSON, raw bytes for cat. |
+| `avnadmin` | Repository admin: `create`, `dump`, `load` (our own portable dump format; not reference-avn compatible by design). |
+| `avn-seed` | Test-only helper that populates a repo with a known tree across three commits. |
 
 ## Running the stack
 
@@ -560,14 +560,14 @@ Aether bug/feature feedback: `AETHER_ISSUES.md`
 ae=/home/paul/scm/aether/build/ae
 
 # Build what you need, or run the full test sweep:
-for f in svn/main.ae svnserver/main.ae svnserver/seed.ae \
-         svnadmin/main.ae; do
+for f in avn/main.ae svnserver/main.ae svnserver/seed.ae \
+         avnadmin/main.ae; do
     "$ae" build "$f" -o "/tmp/$(basename "${f%.ae}")"
 done
 
 # Or from the project root:
-/tmp/svnadmin create /srv/repo
-/tmp/main demo /srv/repo 8080 &     # that's aether-svnserver
+/tmp/avnadmin create /srv/repo
+/tmp/main demo /srv/repo 8080 &     # that's avnserver
 /tmp/main checkout http://localhost:8080/demo wc
 ```
 
@@ -590,43 +590,43 @@ Named after the plan's Phase N. Plan: `../svn-to-aether.md`.
 | 3.2 | Revisions + rep-sharing across revisions | ✅ | `f1aebfe` |
 | 3.3 | Nested dirs + txn API | ✅ | `df9d77c` |
 | 4 | libsvn_repos query API (log, cat, list, info) | ✅ | `9d032af` |
-| 6 | aether-svnserver (read-only HTTP) | ✅ | `c6cef15` |
+| 6 | avnserver (read-only HTTP) | ✅ | `c6cef15` |
 | 6.5 | POST /commit (read/write loop closed) | ✅ | `dfd6567` |
 | 7 | libsvn_ra (Aether-callable REST client) | ✅ | `b411afa` |
-| 10 (stateless subset) | svn CLI | ✅ | `f90f31d` |
+| 10 (stateless subset) | avn CLI | ✅ | `f90f31d` |
 | 5.1 | wc.db metadata store | ✅ | `f882fb6` |
 | 5.2 | Pristine store | ✅ | `bb865f1` |
 | 5.3 | Checkout | ✅ | `69ec5bc` |
 | 5.4 | Status | ✅ | `f009280` |
 | 5.5 | add/rm | ✅ | `b1f7c79` |
 | 5.6 | WC-backed commit | ✅ | `211ba67` |
-| 5.7 | svn update | ✅ | `5aa005e` |
-| 5.8 | svn revert + svn diff | ✅ | `1ffafb8` |
-| 5.9 | svn cp / mv (WC-local) | ✅ | `b6f2741` |
+| 5.7 | avn update | ✅ | `5aa005e` |
+| 5.8 | avn revert + avn diff | ✅ | `1ffafb8` |
+| 5.9 | avn cp / mv (WC-local) | ✅ | `b6f2741` |
 | 5.10 | WC-side properties | ✅ | `2c37fc4` |
 | 5.11 | svn:ignore filter for status | ✅ | `6202fb5` |
 | 5.12a | Branches (server-side copy) | ✅ | `94c06f0` |
-| 5.12b | svn merge + svn:mergeinfo | ✅ | `b04433c` |
-| 5.13 | 3-way conflict resolution + `svn resolve` | ✅ | (prev commit) |
+| 5.12b | avn merge + svn:mergeinfo | ✅ | `b04433c` |
+| 5.13 | 3-way conflict resolution + `avn resolve` | ✅ | (prev commit) |
 | 5.14 | Server-side properties (propset round-trips through commit/checkout/update) | ✅ | (prev commit) |
-| 5.15 | `svn switch` — relocate WC to a different branch URL, reusing update pipeline | ✅ | (prev commit) |
-| 5.16 | `svn merge -c N` cherry-pick + reverse merge (`-r A:B` with A>B or `-c -N`) | ✅ | (prev commit) |
-| 5.17 | `svn log -v` — per-rev A/M/D path list via new /rev/N/paths endpoint | ✅ | (prev commit) |
+| 5.15 | `avn switch` — relocate WC to a different branch URL, reusing update pipeline | ✅ | (prev commit) |
+| 5.16 | `avn merge -c N` cherry-pick + reverse merge (`-r A:B` with A>B or `-c -N`) | ✅ | (prev commit) |
+| 5.17 | `avn log -v` — per-rev A/M/D path list via new /rev/N/paths endpoint | ✅ | (prev commit) |
 | 5.18 | mergeinfo arithmetic (cancel/collapse) + prop-delete propagation on update | ✅ | (prev commit) |
 | 6.1  | Pluggable hash algorithms (sha1 golden-list default, sha256 via `--algos`) | ✅ | (prev commit) |
-| 6.2  | Merkle verification: node-hash headers + `svn verify` re-hash walk | ✅ | (prev commit) |
-| 7.1  | Authorization: out-of-line ACLs + `svn acl` CLI + Merkle redaction | ✅ | (prev commit) |
+| 6.2  | Merkle verification: node-hash headers + `avn verify` re-hash walk | ✅ | (prev commit) |
+| 7.1  | Authorization: out-of-line ACLs + `avn acl` CLI + Merkle redaction | ✅ | (prev commit) |
 | 7.2  | Write-side ACL enforcement + copy guard; rw/r/w rule modes | ✅ | (prev commit) |
-| 7.3  | `svn cleanup` — remove stale `.tmp.*` files + wc.db-journal | ✅ | `60589f5` |
+| 7.3  | `avn cleanup` — remove stale `.tmp.*` files + wc.db-journal | ✅ | `60589f5` |
 | 7.4  | REST PUT/DELETE on `/path/<rel>` with Svn-Based-On concurrency token | ✅ | (prev commit) |
-| 7.5  | Multi-algo secondary verification (`svn verify --secondaries`) | ✅ | (prev commit) |
-| 7.6  | `svn blame` — per-line revision attribution (LCS-based) | ✅ | (prev commit) |
-| 7.7  | `svn cp` refuse-unless-RW-everywhere + ACL auto-follow | ✅ | (prev commit) |
+| 7.5  | Multi-algo secondary verification (`avn verify --secondaries`) | ✅ | (prev commit) |
+| 7.6  | `avn blame` — per-line revision attribution (LCS-based) | ✅ | (prev commit) |
+| 7.7  | `avn cp` refuse-unless-RW-everywhere + ACL auto-follow | ✅ | (prev commit) |
 | 8.1  | Branch infrastructure + default `main` + path-rev index | ✅ | `795dfe8` |
-| 8.2a | `svn branch create` + include-glob spec storage (no enforcement yet) | ✅ | `7a698e2` |
+| 8.2a | `avn branch create` + include-glob spec storage (no enforcement yet) | ✅ | `7a698e2` |
 | 8.2b | Branch-spec enforcement on commits + cross-branch cp refusal | ✅ | `0f57c60` |
 | 8.2c | First C→Aether port: branch-spec glob matcher (`spec.ae` + `aetherc --emit=lib`) | ✅ | (this commit) |
-| 12 | svnadmin create/dump/load | ✅ | `52380a5` |
+| 12 | avnadmin create/dump/load | ✅ | `52380a5` |
 
 ## Phases not yet done (from the plan)
 
@@ -636,7 +636,7 @@ Named after the plan's Phase N. Plan: `../svn-to-aether.md`.
 | 8 (auth) | Basic/Bearer auth over TLS | Same — deferred. |
 | 11 | libmagic replacement | Not on critical path; stub with extension-based mime detection when needed. |
 
-## Feature matrix — reference svn vs avn
+## Feature matrix — reference avn vs avn
 
 Implemented:
 
@@ -645,8 +645,8 @@ Implemented:
 - `log` (with `-v`/`--verbose` per-rev path list), `cat`, `ls`, `info` (all over the wire)
 - `propset`/`get`/`del`/`list` (WC-local)
 - `svn:ignore` read by status
-- Server-side copy (`svn cp URL URL`) — full-subtree rep-sharing
-- `svn merge` — forward rev-range (`-r A:B`, A<B), reverse (A>B), and
+- Server-side copy (`avn cp URL URL`) — full-subtree rep-sharing
+- `avn merge` — forward rev-range (`-r A:B`, A<B), reverse (A>B), and
   cherry-pick (`-c N` or `-c -N` for reverse). Classic `URL@A:B` form
   still supported. Always uses 3-way merge so cherry-pick onto a tree
   the source never saw does the right thing.
@@ -654,15 +654,15 @@ Implemented:
   ranges collapse (`src:5-5` + `src:6-6` → `src:5-6`), forward and
   reverse ranges of the same rev cancel out, empty results remove the
   property entirely.
-- `svnadmin create/dump/load` with portable dump round-trip
+- `avnadmin create/dump/load` with portable dump round-trip
 - Per-repo pluggable content-address hash: sha1 (default) or sha256 via
-  `svnadmin create PATH --algos sha256`. Format file records the choice.
+  `avnadmin create PATH --algos sha256`. Format file records the choice.
   Server advertises via GET /info; clients adapt at checkout time and
   persist the algo in wc.db so pristine + change-detection use the same
   hash the server does. Golden list enforced at create time.
 - Merkle verification end-to-end: server stamps every cat/list/props
   response with `X-Svnae-Hash-Algo`, `X-Svnae-Node-Kind`, and
-  `X-Svnae-Node-Hash` headers. `svn verify URL [--rev N]` walks the
+  `X-Svnae-Node-Hash` headers. `avn verify URL [--rev N]` walks the
   tree top-down, re-hashes every file and dir blob locally, rebuilds
   each dir blob from its children's hashes, and confirms the
   recomputed root matches `/info`'s root sha. Detects tampering with
@@ -672,16 +672,16 @@ Implemented:
   ACLs are `+alice` / `-eve` / `+*` / `-*` rule lines, with optional
   mode suffix (`+alice:r` read-only, `+alice:w` write-only, `+alice:rw`
   = the shorthand `+alice`). Inheritance: nearest ancestor wins; no
-  rule anywhere = open. `svn acl set/get/clear` manages via commits
+  rule anywhere = open. `avn acl set/get/clear` manages via commits
   (super-user required). Server filters cat (404), list (blinds
   denied children as `{kind:hidden, sha}`), props, log entries, and
   paths endpoints. `/info` root sha is re-computed per user so
-  `svn verify` anchors at the caller's *view* of the tree; Merkle
+  `avn verify` anchors at the caller's *view* of the tree; Merkle
   verification still succeeds through hidden entries.
   Write enforcement: commit returns 403 on any denied path; self-
   elevation refused (user with no write on X can't set ACL on X);
   anonymous users (no header) can't write ACL'd paths. Copy guard:
-  `svn cp URL URL` refuses unless the caller has RW on every path
+  `avn cp URL URL` refuses unless the caller has RW on every path
   in the source subtree; super-user bypasses. On success, the
   source's paths-acl entries auto-follow — rebased onto the
   destination — so the branch inherits its source's restrictions
@@ -698,15 +698,15 @@ Implemented:
   match (real auth deferred). Clients set `SVN_USER` /
   `SVN_SUPERUSER_TOKEN` env vars.
 
-Not implemented (items the plan calls out or that reference svn has):
+Not implemented (items the plan calls out or that reference avn has):
 
 - HTTPS / TLS transport
 - Real authentication (LDAP/AD/Basic — placeholder in place today)
 - Hooks (pre/post-commit scripts)
-- Locks (`svn lock`/`unlock`)
-- `svn externals` (svn:externals property pulling sub-WCs)
+- Locks (`avn lock`/`unlock`)
+- `avn externals` (svn:externals property pulling sub-WCs)
 - Pre-1.7 WC compatibility (intentionally dropped)
-- Reference-svn dump-format compatibility (intentionally dropped;
+- Reference-avn dump-format compatibility (intentionally dropped;
   we have our own portable format)
 
 ## Where the code lives
@@ -726,8 +726,8 @@ ae/
   wc/             working copy: db, pristine, checkout, status,
                   mutate (add/rm), commit, update, revert, diff,
                   cp/mv, props, merge.
-  svn/            the svn CLI.
-  svnadmin/       svnadmin CLI (create/dump/load).
+  avn/            the avn CLI.
+  avnadmin/       avnadmin CLI (create/dump/load).
 ```
 
 Each module has one or two C `shim.c` files (the real implementation)
@@ -736,7 +736,7 @@ and an Aether wrapper/driver. Tests are either in-language `.ae` or
 
 ## Design choices the plan gave us, and we kept
 
-- **Clean-sheet storage:** not byte-compatible with reference svn's
+- **Clean-sheet storage:** not byte-compatible with reference avn's
   FSFS. Our `$repo/reps/aa/bb/<sha1>.rep` layout is simpler and uses
   content-addressable SHA-1 keys directly.
 - **Single RA, no plugin loader:** one wire protocol, no `ra_serf` /
@@ -781,17 +781,17 @@ for t in wc_db wc_pristine; do
   "$AE" run "working_copy/test_${t#wc_}.ae" 2>/dev/null | tail -1
 done
 
-# End-to-end shell suites (spin up a real server, hit it with curl + svn CLI)
-for t in server ra svn wc_checkout wc_status wc_mutate wc_commit \
+# End-to-end shell suites (spin up a real server, hit it with curl + avn CLI)
+for t in server ra avn wc_checkout wc_status wc_mutate wc_commit \
          wc_update wc_revert_diff wc_cp_mv wc_props wc_ignore \
-         wc_branch wc_merge svnadmin; do
+         wc_branch wc_merge avnadmin; do
   printf '%-27s ' "test_$t"
   case $t in
     server)   s=svnserver/test_server.sh ;;
     ra)       s=client/test_client.sh ;;
-    svn)      s=svn/test_svn.sh ;;
+    avn)      s=avn/test_svn.sh ;;
     wc_*)     s=working_copy/test_${t#wc_}.sh ;;
-    svnadmin) s=svnadmin/test_svnadmin.sh ;;
+    avnadmin) s=avnadmin/test_avnadmin.sh ;;
   esac
   "$s" >/dev/null 2>&1 && echo "test_$t: OK" || echo "test_$t: FAIL"
 done

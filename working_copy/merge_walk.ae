@@ -13,7 +13,7 @@
 // implied. See the License for the specific language governing
 // permissions and limitations under the License.
 
-// Recursive remote-tree walker for `svn merge`.
+// Recursive remote-tree walker for `avn merge`.
 //
 // Differs from update_walk in that the URL is built from
 // source_path + sub_prefix but entries are recorded against

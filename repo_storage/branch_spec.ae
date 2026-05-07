@@ -216,7 +216,7 @@ export rev_pointer_write(repo: string, branch: string, next_rev: int,
 
     nn = branch_pad6(next_rev)
 
-    // Legacy $repo/revs/NNNNNN. Parent dir already exists — svnadmin
+    // Legacy $repo/revs/NNNNNN. Parent dir already exists — avnadmin
     // create / seed ensure $repo/revs/ is present before the first
     // commit writes into it.
     legacy_ptr = string.concat(string.concat(repo, "/revs/"), nn)

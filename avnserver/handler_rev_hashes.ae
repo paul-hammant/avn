@@ -21,7 +21,7 @@
 //   - fetch newline-separated "algo hash" pairs for secondary digests
 //   - hashes_json builds the final {primary, secondaries} body
 //
-// Used by `svn verify --secondaries`: client fetches content bytes
+// Used by `avn verify --secondaries`: client fetches content bytes
 // separately (via /cat or /list child shas), rehashes under each
 // algorithm, compares with these server-reported digests.
 

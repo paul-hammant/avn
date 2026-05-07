@@ -13,16 +13,16 @@ main() {
         driver(".test_cp_mv_driver.ae")
         output("test_cp_mv_driver")
 
-        binary_under_test(b, "svn") {
-            path("target/avn/bin/svn")
+        binary_under_test(b, "avn") {
+            path("target/avn/bin/avn")
         }
 
         fixture_seed(b, "test_cp_mv") {
             path("/tmp/avn_aeb_test_cp_mv_repo")
-            seed_bin("target/avnserver/bin/svnae-seed")
+            seed_bin("target/avnserver/bin/avn-seed")
         }
         fixture_server(b, "test_cp_mv") {
-            bin("target/avnserver/bin/aether-svnserver")
+            bin("target/avnserver/bin/avnserver")
             args("demo $TEST_CP_MV_PATH 9440")
             port(9440)
             ready_after_ms(1500)

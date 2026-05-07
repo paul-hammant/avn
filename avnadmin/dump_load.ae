@@ -13,10 +13,10 @@
 // implied. See the License for the specific language governing
 // permissions and limitations under the License.
 
-// svnadmin dump + load orchestration.
+// avnadmin dump + load orchestration.
 //
-//   svnadmin_dump(repo, out_fd) → 0 ok, -1 error
-//   svnadmin_load(repo, in_fd)  → 0 ok, -1 error
+//   avnadmin_dump(repo, out_fd) → 0 ok, -1 error
+//   avnadmin_load(repo, in_fd)  → 0 ok, -1 error
 //
 // Round 84 (Gordian) ports the dump/load orchestration out of
 // avnadmin/shim.c. Raw read(2)/write(2) loops on the fd stay
@@ -29,7 +29,7 @@ import std.io
 
 // Repo metadata.
 extern repos_head_rev(repo: string) -> int
-extern svnadmin_create_bare(repo: string, algos_spec: string) -> int
+extern avnadmin_create_bare(repo: string, algos_spec: string) -> int
 
 // Dump-format builders (avnadmin/dump.ae).
 extern dump_prelude(head: int, rev_count: int, rep_count: int) -> string
@@ -97,7 +97,7 @@ const TAG_SENTINEL = 0 - 2147483647
 
 // ---- dump -----------------------------------------------------------
 
-export svnadmin_dump(repo: string, out_fd: int) -> int {
+export avnadmin_dump(repo: string, out_fd: int) -> int {
     head = repos_head_rev(repo)
     if head < 0 { return 0 - 1 }
 
@@ -176,7 +176,7 @@ expect_tagged_int_(in_fd: int, prefix: string) -> int {
     return parse_tagged_int(line, prefix, TAG_SENTINEL)
 }
 
-export svnadmin_load(repo: string, in_fd: int) -> int {
+export avnadmin_load(repo: string, in_fd: int) -> int {
     // Header.
     if expect_literal_(in_fd, "SVNAE-DUMP 1") != 0 { return 0 - 1 }
     fmt = expect_tagged_(in_fd, "FORMAT")
@@ -190,7 +190,7 @@ export svnadmin_load(repo: string, in_fd: int) -> int {
 
     // Initialise target repo as sha1 (current dump format only carries
     // sha1 blobs). The dump replays its own rev 0 below, so don't seed.
-    if svnadmin_create_bare(repo, "sha1") != 0 { return 0 - 1 }
+    if avnadmin_create_bare(repo, "sha1") != 0 { return 0 - 1 }
 
     // REP-COUNT blocks.
     i = 0

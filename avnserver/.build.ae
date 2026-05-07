@@ -6,7 +6,7 @@ main() {
     b = build.start()
     aether.program(b) {
         source("main.ae")
-        output("aether-svnserver")
+        output("avnserver")
         link_flag("-laether_sqlite")
         link_flag("-lsqlite3")
         link_flag("-lz")

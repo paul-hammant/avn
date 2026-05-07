@@ -16,14 +16,14 @@ main() {
         // it needs to restart the server mid-test (corrupt rep-cache.db
         // between server runs). It uses ADMIN_BIN to create the repo
         // with --algos sha256,sha1 and SERVER_BIN to spawn directly.
-        binary_under_test(b, "svn") {
-            path("target/avn/bin/svn")
+        binary_under_test(b, "avn") {
+            path("target/avn/bin/avn")
         }
         binary_under_test(b, "admin") {
-            path("target/avnadmin/bin/svnadmin")
+            path("target/avnadmin/bin/avnadmin")
         }
         binary_under_test(b, "server") {
-            path("target/avnserver/bin/aether-svnserver")
+            path("target/avnserver/bin/avnserver")
         }
     }
 }

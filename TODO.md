@@ -19,7 +19,7 @@ Plan (each numbered item is one baby commit):
       (`merge_ledger_init_schema`, `merge_ledger_record`,
       `merge_ledger_is_integrated`, `merge_ledger_integrated_set`,
       `merge_ledger_eligible_revs`). Eager schema install in
-      `svnadmin/create.ae`'s `create_bare_`. Lazy install on
+      `avnadmin/create.ae`'s `create_bare_`. Lazy install on
       first use for older repos. Unit test
       `util/.tests-merge_ledger.ae` (44/44 green). No callers
       yet — surface only.
@@ -41,16 +41,16 @@ Plan (each numbered item is one baby commit):
       `svn:mergeinfo` property). Property still gets written
       (dual-state) until 2.3.
 
-  2.2 New `svn merged` CLI subcommand.
+  2.2 New `avn merged` CLI subcommand.
 
   2.3 Stop writing `svn:mergeinfo`. Server rejects incoming
       `svn:mergeinfo` with HTTP 400. Tests update:
       test_merge / test_merge_reverse / test_mergeinfo_arith /
-      cherry_convergence — assert via `svn merged` instead.
+      cherry_convergence — assert via `avn merged` instead.
 
   3.1 *DONE Round 277*. Deleted `working_copy/mergeinfo.ae` (612
       lines: rangeset string parse/emit, cancel-pairs, source-set
-      extraction). Dropped from svn/.build.ae. The retired
+      extraction). Dropped from avn/.build.ae. The retired
       .test_mergeinfo_arith_driver.ae + .tests-mergeinfo_arith.ae
       went with it.
   3.2 *DONE Round 277*. svnserver/commit_parse.ae rejects any
@@ -58,11 +58,11 @@ Plan (each numbered item is one baby commit):
       entry, with HTTP 400. Wire-level rejection — defence
       against buggy or malicious clients trying to poke the
       ledger via the property carrier.
-  3.3 *DONE Round 277*. svn/main.ae cmd_propset rejects
+  3.3 *DONE Round 277*. avn/main.ae cmd_propset rejects
       `svn:mergeinfo` at the CLI with a clear "server-managed"
       message.
 
-  4.1 (optional) `svnadmin verify --rebuild-merges` rebuilds the
+  4.1 (optional) `avnadmin verify --rebuild-merges` rebuilds the
       ledger from rev blobs.
 
 Architectural rationale captured at length in the Round 264-269
@@ -97,7 +97,7 @@ cleanly — including the `svn:mergeinfo` consultation on sweep
 merge. Anything our port fails at that the C version does not is
 a regression we introduced.
 
-### MB-A. `svn commit` from a stale WC silently overwrites HEAD ⚠ **CORRECTNESS BUG**
+### MB-A. `avn commit` from a stale WC silently overwrites HEAD ⚠ **CORRECTNESS BUG**
 Two WCs check out at r1, both edit the same file, both commit in
 sequence. Classical SVN rejects the second commit with "File or
 directory ... is out of date". avn's commits both as r2 and r3,
@@ -106,38 +106,38 @@ directory ... is out of date". avn's commits both as r2 and r3,
 
 This is a data-loss bug, not a missing feature.
 
-### MB-B. `svn cp URL/path@PASTREV URL/dst` clobbers sibling top-level dirs
+### MB-B. `avn cp URL/path@PASTREV URL/dst` clobbers sibling top-level dirs
 With `/trunk`, `/release_a` already at HEAD, run
-`svn cp URL/trunk@1 URL/release_b`. Resulting tree drops
-`/release_a`. Classical SVN's `svn copy -r1 URL/trunk URL/branches/release`
+`avn cp URL/trunk@1 URL/release_b`. Resulting tree drops
+`/release_a`. Classical SVN's `avn copy -r1 URL/trunk URL/branches/release`
 adds the new dir leaving siblings intact. Likely the avn server-
 side copy from past rev rebuilds the tree from the source-rev
 snapshot rather than starting from HEAD.
 
 ### MB-C. WC subdirs aren't versioned
-`mkdir $WC/sub && cp file $WC/sub/ && cd $WC/sub && svn add file`
+`mkdir $WC/sub && cp file $WC/sub/ && cd $WC/sub && avn add file`
 prints `A  file` but the parent WC sees `?  sub` (unversioned). A
-subsequent `svn commit` from either the subdir OR the root says
-"No changes to commit" or "svn commit: failed". This breaks the
+subsequent `avn commit` from either the subdir OR the root says
+"No changes to commit" or "avn commit: failed". This breaks the
 SVN-classical `/trunk + /branches` layout entirely — `cd $WC/trunk &&
-svn add x && svn commit` is the canonical form and it doesn't
+avn add x && avn commit` is the canonical form and it doesn't
 work. Looks like the WC.db indexes a flat path-set keyed on
 the root-checkout dir.
 
 ### MB-D. Sub-path checkout fails
-`svn checkout URL/sub_path $WC` returns "could not contact server"
+`avn checkout URL/sub_path $WC` returns "could not contact server"
 even when the path exists. Only root checkout works. Blocks the
 "branch into its own WC" workflow needed for cherry-picking onto
 a release branch in classical layout.
 
 ### MB-E. Branch URL checkout (first-class branch syntax) fails
-`svn checkout URL;branch_name` (avn's first-class branch URL
-syntax) also returns "could not contact server". `svn branch
+`avn checkout URL;branch_name` (avn's first-class branch URL
+syntax) also returns "could not contact server". `avn branch
 create` works server-side but there's no way to get a WC of the
 branch.
 
-### MB-F. `svn add /absolute/path/to/file` fails (rc=-2)
-Only `cd $WC/.. && svn add relative/path` works. Classical SVN
+### MB-F. `avn add /absolute/path/to/file` fails (rc=-2)
+Only `cd $WC/.. && avn add relative/path` works. Classical SVN
 accepts both.
 
 ### MB-A / MB-B diagnosis (2026-05-07)
@@ -174,7 +174,7 @@ the POST /commit endpoint landed. No out-of-date check has ever
 existed in the avn commit pipeline. Bisecting [Phase 6.5..HEAD]
 would just say "always bad."
 
-**MB-B is the same architectural gap.** Server-side `svn cp
+**MB-B is the same architectural gap.** Server-side `avn cp
 URL/path@PASTREV URL/dst` opens a txn with `base_rev = PASTREV`,
 runs the same `rebuild_dir(repo, base_root, ..., txn)` and lands
 the result as a fresh rev. Anything that existed at root between
@@ -193,7 +193,7 @@ explicitly.
 For MB-B specifically, also worth deciding whether server-side
 copy should *merge* the past-rev source into the HEAD tree
 (preserving siblings) or *replace* HEAD with `base_rev + dst-only`
-(current behaviour). Classical SVN's `svn copy URL@REV URL/dst`
+(current behaviour). Classical SVN's `avn copy URL@REV URL/dst`
 does the former — only the new dst path is added; everything else
 at HEAD survives.
 
@@ -214,10 +214,10 @@ export wc_db_open(wc_root: string) -> ptr {
 ```
 
 Verified by probe: with a real WC at `$WC` and an unversioned
-`$WC/sub/`, running `cd $WC/sub && svn add foo.txt` silently
+`$WC/sub/`, running `cd $WC/sub && avn add foo.txt` silently
 creates a brand-new isolated `$WC/sub/.svn/wc.db`. The add
 "succeeds" against this fake WC but the parent's `$WC/.svn/wc.db`
-never learns about it, so a later `svn commit` from `$WC` sees
+never learns about it, so a later `avn commit` from `$WC` sees
 nothing scheduled.
 
 **Fix**: `wc_db_open` should distinguish "open an existing WC"
@@ -239,7 +239,7 @@ url_repo(url) → everything after the last "/"
 ```
 
 For `URL = http://host/demo/release_a` (avn's first-class branch
-URL grammar — see `branch_of` at `svn/main.ae:271`), this gives
+URL grammar — see `branch_of` at `avn/main.ae:271`), this gives
 `base = http://host/demo`, `repo = release_a`. The subsequent
 `remote_head_rev(base, repo)` queries
 `http://host/demo/repos/release_a/info` → 404 → "could not contact
@@ -258,7 +258,7 @@ so the WC stores the correct anchor.
 
 ### MB-F diagnosis (2026-05-07)
 
-**`cmd_add` hard-codes `wc_root="."`**, see `svn/main.ae:881`:
+**`cmd_add` hard-codes `wc_root="."`**, see `avn/main.ae:881`:
 
 ```aether
 rc = wc_add(".", p)
@@ -287,7 +287,7 @@ calls this the "WC anchor" lookup; it's a well-trodden algorithm.
 | MB-F | 267 | cmd_* hard-coded `wc_root="."` | `find_wc_anchor_()` walks up from cwd; cmd_add / cmd_commit / cmd_merge / cmd_propget / cmd_status converted |
 | MB-G | 268 | sweep `merge -r A:HEAD` ignored existing svn:mergeinfo, re-applied already-merged revs | (Round 268 partial) shift `rev_base` past contiguous-prefix; mergeinfo recorded on the merge target (not WC root). (Round 269) **full non-contiguous filtering** — `mergeinfo_eligible_runs` splits the requested range into maximal-eligible chunks and applies each as a separate diff |
 
-**MB-D follow-up**: sub-path checkout (`svn checkout URL/release_a $WC`)
+**MB-D follow-up**: sub-path checkout (`avn checkout URL/release_a $WC`)
 still refuses with a clear "not yet supported" message. Full anchor
 support requires recording the WC anchor in wc.db.info and having
 every wc_* call prepend it when sending paths server-ward. Filed as
@@ -312,7 +312,7 @@ question: avn may simply not support cd-into-subdir for those
 commands — held until a real workflow needs it.
 
 Convergence claim from svnbook §4
-(https://svnbook.red-bean.com/en/1.6/svn.branchmerge.advanced.html#svn.branchmerge.cherrypicking)
+(https://svnbook.red-bean.com/en/1.6/avn.branchmerge.advanced.html#avn.branchmerge.cherrypicking)
 verified in Round 268: cherry-pick C4→C3 vs C3→C4 followed by
 sweep produce byte-identical files matching trunk@HEAD's content.
 
@@ -331,7 +331,7 @@ populated for free; no scan); the wire shape of `/merged` becomes
 `{integrated:[{"sha":"…","rev":N},…]}` and the existing SHA-only
 shape goes away (no other clients to break).
 
-Filed for after we have a real workflow asking for it. Today's `svn
+Filed for after we have a real workflow asking for it. Today's `avn
 merged URL --target T --source S` returns SHAs which dump cleanly into
 shell pipes; verbose decoration is the future-proofing.
 
@@ -413,7 +413,7 @@ the green build). Each needs its own debugging round.
 
 ### F1. delta/test_svndiff.ae — 6 cases failing (svndiff is real, not dead)
 
-**svndiff is production-bound**: it's the wire format for `svn diff`
+**svndiff is production-bound**: it's the wire format for `avn diff`
 and the dump/load delta encoding. Currently used by no production
 binary, but we want it long-term. Keep the .ae source.
 
@@ -460,7 +460,7 @@ shape), the practical paths are:
 2. **Defer**. svndiff has no production caller today. Tests stay
    broken (not in aggregator); .ae source stays in tree.
 
-Going with (2) until something needs `svn diff` against a remote
+Going with (2) until something needs `avn diff` against a remote
 or dump-format delta encoding. Then tackle (1) as part of the
 adoption work.
 
@@ -512,15 +512,15 @@ only indirectly. Each is small.
 `sw`/`switch`, `di`/`diff`, `ann`/`annotate`/`praise`/`blame`).
 The long form is exercised in existing tests; the alias form is
 not. A regression that broke an alias would land in a user's
-muscle-memory `svn co` and surprise them.
-**Shape**: `svn/test_aliases.sh` — for each alias pair, run
+muscle-memory `avn co` and surprise them.
+**Shape**: `avn/test_aliases.sh` — for each alias pair, run
 both forms against the same in-process server, diff stdout/stderr.
 
-### T2. `svn help` and unknown-subcommand error path (single test, ~10 lines)
-**Why**: `svn help` should print usage and exit 0; `svn nosuchcmd`
+### T2. `avn help` and unknown-subcommand error path (single test, ~10 lines)
+**Why**: `avn help` should print usage and exit 0; `avn nosuchcmd`
 should print an error and exit non-zero. Neither path is exercised
 by any test today.
-**Shape**: `svn/test_help.sh`.
+**Shape**: `avn/test_help.sh`.
 
 ### T3. paths_index_lookup empty-path branch (unit test in test_*.ae form)
 **Why**: Round 206 merged `paths_index_lookup_impl` into the
@@ -534,7 +534,7 @@ is returned.
 
 ### T4. Concurrent server requests (1 test, ~50 lines)
 **Why**: every existing server test is sequential. The
-aether-svnserver is multi-threaded under std.http; an actor-related
+avnserver is multi-threaded under std.http; an actor-related
 data race would survive every existing test. `std.config`'s
 reader/writer lock is the kind of thing that would hide a bug here.
 **Shape**: `svnserver/test_concurrent.sh` — spawn server, fire
@@ -542,10 +542,10 @@ reader/writer lock is the kind of thing that would hide a bug here.
 matching bodies. (Cheap insurance against a lock regression.)
 
 ### T5. Round-trip equivalence: dump → load → re-dump (1 test, ~40 lines)
-**Why**: `test_svnadmin.sh` tests dump and load separately. A
+**Why**: `test_avnadmin.sh` tests dump and load separately. A
 round-trip property check would catch dump-format bugs that
 preserve loadability but mutate content.
-**Shape**: `svnadmin/test_roundtrip.sh` — seed a repo, dump it,
+**Shape**: `avnadmin/test_roundtrip.sh` — seed a repo, dump it,
 load into a fresh repo, dump that, assert byte-identical dumps.
 
 ---
@@ -556,7 +556,7 @@ load into a fresh repo, dump that, assert byte-identical dumps.
 All three `_with_X` overload-style exports collapsed into their
 non-`_with` siblings:
 - `commit_finalise(repo, txn, branch, author, log, props_sha, acl_sha)` — Round 208
-- `svnadmin_create(repo, algos_spec)` — Round 209
+- `avnadmin_create(repo, algos_spec)` — Round 209
 
 Empty strings stand in for unused optional args. An options-struct
 form is still cleaner once we want to grow the parameter list, but

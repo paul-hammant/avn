@@ -25,7 +25,7 @@ sh(cmd: string) -> {
 
 main() {
     fw = aeocha.init()
-    svn_bin = os_getenv("SVN_BIN")
+    avn_bin = os_getenv("AVN_BIN")
     port    = os_getenv("TEST_BRANCH_PORT")
     repo    = os_getenv("TEST_BRANCH_PATH")
     url     = string.concat("http://127.0.0.1:", string.concat(port, "/demo"))
@@ -44,7 +44,7 @@ main() {
     branch_pipeline = string.concat(branch_pipeline, " && before=$(find ")
     branch_pipeline = string.concat(branch_pipeline, repo)
     branch_pipeline = string.concat(branch_pipeline, "/reps -name '*.rep' | wc -l) && ")
-    branch_pipeline = string.concat(branch_pipeline, svn_bin)
+    branch_pipeline = string.concat(branch_pipeline, avn_bin)
     branch_pipeline = string.concat(branch_pipeline, " cp ")
     branch_pipeline = string.concat(branch_pipeline, url)
     branch_pipeline = string.concat(branch_pipeline, "/src ")
@@ -60,12 +60,12 @@ main() {
     branch_out_, branch_st_, branch_err_ = sh(branch_pipeline)
     cat_branch_log = "cat /tmp/avn_test_branch_log"
 
-    ls_root         = string.concat(svn_bin, " ls ")
+    ls_root         = string.concat(avn_bin, " ls ")
     ls_root         = string.concat(ls_root, url)
-    cat_trunk_main  = string.concat(svn_bin, " cat ")
+    cat_trunk_main  = string.concat(avn_bin, " cat ")
     cat_trunk_main  = string.concat(cat_trunk_main, url)
     cat_trunk_main  = string.concat(cat_trunk_main, " src/main.c")
-    cat_branch_main = string.concat(svn_bin, " cat ")
+    cat_branch_main = string.concat(avn_bin, " cat ")
     cat_branch_main = string.concat(cat_branch_main, url)
     cat_branch_main = string.concat(cat_branch_main, " src-branch/main.c")
     r3_branch_curl  = string.concat("curl -s -o /dev/null -w '%{http_code}' ", base)
@@ -73,7 +73,7 @@ main() {
 
     co_wc = string.concat("rm -rf ", wc)
     co_wc = string.concat(co_wc, " && ")
-    co_wc = string.concat(co_wc, svn_bin)
+    co_wc = string.concat(co_wc, avn_bin)
     co_wc = string.concat(co_wc, " checkout ")
     co_wc = string.concat(co_wc, url)
     co_wc = string.concat(co_wc, " ")
@@ -82,12 +82,12 @@ main() {
 
     edit_trunk = string.concat("cd ", wc)
     edit_trunk = string.concat(edit_trunk, " && echo 'trunk change' > src/main.c && ")
-    edit_trunk = string.concat(edit_trunk, svn_bin)
+    edit_trunk = string.concat(edit_trunk, avn_bin)
     edit_trunk = string.concat(edit_trunk, " commit --author alice --log 'trunk edit'")
 
     edit_branch = string.concat("cd ", wc)
     edit_branch = string.concat(edit_branch, " && echo 'branch change' > src-branch/main.c && ")
-    edit_branch = string.concat(edit_branch, svn_bin)
+    edit_branch = string.concat(edit_branch, avn_bin)
     edit_branch = string.concat(edit_branch, " commit --author alice --log 'branch edit'")
 
     aeocha.describe(fw, "server-side copy = branching") {

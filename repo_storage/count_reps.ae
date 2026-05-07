@@ -14,7 +14,7 @@
 // permissions and limitations under the License.
 
 // Count .rep files under $repo/reps (recursively), skipping
-// hidden entries. Used by svnadmin for size reporting; every
+// hidden entries. Used by avnadmin for size reporting; every
 // rep-blob file lives under the two-level XX/YY fanout.
 
 import std.string

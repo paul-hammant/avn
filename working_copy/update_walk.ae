@@ -13,7 +13,7 @@
 // implied. See the License for the specific language governing
 // permissions and limitations under the License.
 
-// Recursive remote-tree walker for `svn update` / `svn switch`.
+// Recursive remote-tree walker for `avn update` / `avn switch`.
 // Calls the RA list/cat accessors and populates a C-side
 // remote_tree via the remote_tree_add_{dir,file} wrappers.
 //
