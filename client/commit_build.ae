@@ -36,6 +36,11 @@ extern remote_cb_edits_packed(cb: ptr) -> string
 extern remote_cb_props_packed(cb: ptr) -> string
 extern remote_cb_acls_packed(cb: ptr) -> string
 
+// Round 274 / Phase 2.1 — merged_from accessors.
+extern remote_cb_merge_source_branch(cb: ptr) -> string
+extern remote_cb_merge_source_revs_packed(cb: ptr) -> string
+extern remote_cb_merge_verb(cb: ptr) -> int
+
 // Round 146: writers ported from C (remote_commit_add_file etc.
 // in ra/shim.c). The struct stays C-side; setters below replace
 // the old pack_append + 5 add-op pile.
@@ -289,6 +294,42 @@ export remote_commit_build_body(cb: ptr) -> string {
         json.object_set(body, "acl", ja)
     }
     string.array_free(aarr)
+
+    // Round 274 / Phase 2.1 — merged_from. When the WC's
+    // pending_merge accumulator had rows, wc_commit threaded them
+    // here via remote_commit_set_merged_from. Empty source_branch
+    // means non-merge commit; we omit the field so older servers
+    // that don't recognise it (none today, but Phase 2.x's wire
+    // contract is forward-compatible) ignore it.
+    msrc = remote_cb_merge_source_branch(cb)
+    if string.length(msrc) > 0 {
+        mf = json_create_object()
+        json.object_set(mf, "source_branch", json_create_string(msrc))
+        json.object_set(mf, "verb",          json.create_number(remote_cb_merge_verb(cb)))
+        revs = json_create_array()
+        rpacked = remote_cb_merge_source_revs_packed(cb)
+        rn = string.length(rpacked)
+        seg_start = 0
+        ri = 0
+        while ri <= rn {
+            at_end = 0
+            if ri == rn { at_end = 1 }
+            if at_end == 0 {
+                c = string.char_at(rpacked, ri)
+                if c == 10 { at_end = 1 }
+            }
+            if at_end == 1 {
+                if ri > seg_start {
+                    s = string.substring(rpacked, seg_start, ri)
+                    json.array_add(revs, json.create_number(string.get_int(s)))
+                }
+                seg_start = ri + 1
+            }
+            ri = ri + 1
+        }
+        json.object_set(mf, "source_revs", revs)
+        json.object_set(body, "merged_from", mf)
+    }
 
     out, _ = json.stringify(body)
     json.free(body)

@@ -54,6 +54,11 @@ extern txn_mkdir(t: ptr, path: string) -> int
 extern txn_delete(t: ptr, path: string) -> int
 extern txn_add_file(t: ptr, path: string, content: string, len: int) -> int
 extern txn_free(t: ptr)
+// Round 274 / Phase 2.1 — merge metadata setters.
+extern txn_merge_set_source(t: ptr, source_branch: string, verb: int) -> int
+extern txn_merge_record_rev(t: ptr, source_sha: string) -> int
+// Resolve rev number (sent on the wire) → rev SHA (stored in ledger).
+extern repos_rev_blob_sha(repo: string, rev: int) -> string
 
 // b64-decode + txn_add_file. crypto_b64_decode returns the
 // (bytes, length, err) triple cleanly via export-tuple-return —
@@ -331,6 +336,42 @@ export commit_from_body(req: ptr, res: ptr, repo: string) -> int {
                 use_acl_sha = build_paths_acl_blob_joined(repo,
                                 paths_joined, shas_joined)
                 use_acl_sha = string.copy(use_acl_sha)
+            }
+        }
+    }
+
+    // Round 274 / Phase 2.1 — merged_from. Optional commit-body
+    // object; when present, the server resolves rev numbers to
+    // rev-blob SHAs and stamps the txn so commit_finalise emits
+    // the rev blob's `merged:` field and writes the merge ledger.
+    jmf, _ = json.object_get(root, "merged_from")
+    if jmf != null {
+        jms, _ = json.object_get(jmf, "source_branch")
+        msrc = ""
+        if jms != null {
+            mss, msse = json.get_string(jms)
+            if string.length(msse) == 0 { msrc = string.copy(mss) }
+        }
+        mverb = 0
+        jmv, _ = json.object_get(jmf, "verb")
+        if jmv != null { mverb = json.get_int(jmv) }
+        if string.length(msrc) > 0 {
+            txn_merge_set_source(txn, msrc, mverb)
+            jmrevs, _ = json.object_get(jmf, "source_revs")
+            if jmrevs != null {
+                rcount = json.array_size(jmrevs)
+                ri = 0
+                while ri < rcount {
+                    revj, _ = json.array_get(jmrevs, ri)
+                    if revj != null {
+                        rnum = json.get_int(revj)
+                        rsha = repos_rev_blob_sha(repo, rnum)
+                        if string.length(rsha) > 0 {
+                            txn_merge_record_rev(txn, string.copy(rsha))
+                        }
+                    }
+                    ri = ri + 1
+                }
             }
         }
     }

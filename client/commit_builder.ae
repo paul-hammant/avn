@@ -47,10 +47,20 @@ struct RaCommit {
     edits_packed: string
     props_packed: string
     acls_packed: string
+    // Round 274 / Phase 2.1 — merged_from metadata. Empty
+    // merge_source_branch means "non-merge commit"; the JSON
+    // builder omits the field. merge_source_revs_packed is
+    // newline-separated decimal ints (rev numbers); the server
+    // resolves to SHAs at commit-parse time.
+    merge_source_branch: string
+    merge_source_revs_packed: string
+    merge_verb: int
 }
 
 export remote_commit_begin(base_rev: int, author: string, logmsg: string) -> ptr {
-    raw = malloc(128)
+    // 160 bytes covers the 12-field struct (3 ints + 8 strings + 1
+    // int) on 64-bit. Pre-Round-274 was 128 (9 fields).
+    raw = malloc(160)
     if raw == null { return null }
     cb = raw as *RaCommit
     cb.base_rev = base_rev
@@ -62,7 +72,43 @@ export remote_commit_begin(base_rev: int, author: string, logmsg: string) -> ptr
     cb.edits_packed = string.copy("")
     cb.props_packed = string.copy("")
     cb.acls_packed = string.copy("")
+    cb.merge_source_branch = string.copy("")
+    cb.merge_source_revs_packed = string.copy("")
+    cb.merge_verb = 0
     return raw
+}
+
+// Phase 2.1 — attach merged_from to a commit body. Called by
+// wc_commit when pending_merge has rows. `source_revs_packed` is
+// newline-separated decimal ints (rev numbers); commit_parse on
+// the server resolves to SHAs.
+export remote_commit_set_merged_from(cb_ptr: ptr,
+                                     source_branch: string,
+                                     source_revs_packed: string,
+                                     verb: int) -> int {
+    if cb_ptr == null { return 0 - 1 }
+    cb = cb_ptr as *RaCommit
+    cb.merge_source_branch = string.copy(source_branch)
+    cb.merge_source_revs_packed = string.copy(source_revs_packed)
+    cb.merge_verb = verb
+    return 0
+}
+
+// Read accessors used by remote_commit_build_body.
+export remote_cb_merge_source_branch(cb_ptr: ptr) -> string {
+    if cb_ptr == null { return "" }
+    cb = cb_ptr as *RaCommit
+    return cb.merge_source_branch
+}
+export remote_cb_merge_source_revs_packed(cb_ptr: ptr) -> string {
+    if cb_ptr == null { return "" }
+    cb = cb_ptr as *RaCommit
+    return cb.merge_source_revs_packed
+}
+export remote_cb_merge_verb(cb_ptr: ptr) -> int {
+    if cb_ptr == null { return 0 }
+    cb = cb_ptr as *RaCommit
+    return cb.merge_verb
 }
 
 export remote_commit_finish(cb_ptr: ptr, base_url: string, repo_name: string) -> int {

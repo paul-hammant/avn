@@ -1,0 +1,171 @@
+// Copyright 2026 Paul Hammant (portions).
+// Apache License, Version 2.0 — see LICENSE.
+//
+// WC-side accumulation of merge metadata (Round 274 / Phase 2.1).
+//
+// `svn merge ...` records pending merges into wc.db's pending_merge
+// table; `svn commit` drains them into the commit body's
+// `merged_from` JSON; the server resolves rev numbers to SHAs and
+// writes the merge ledger; the WC clears pending_merge on success.
+//
+// Replaces the role `svn:mergeinfo`-property mutations played
+// pre-Round 274: instead of versioned content carrying merge
+// state to the server, an opaque side-table on the WC carries it
+// for one commit and gets cleaned out.
+
+import std.string
+import contrib.sqlite
+
+const SQLITE_ROW  = 100
+const SQLITE_DONE = 101
+
+extern wc_db_open(wc_root: string) -> ptr
+extern wc_db_close(db: ptr)
+
+// Record one (source_branch, source_rev, verb) row. Idempotent on
+// the (source_branch, source_rev) primary key — re-recording the
+// same rev with the same verb is a no-op. Returns 0 on success,
+// -1 on infrastructure failure, -2 if there's already a row with
+// the SAME source_rev but a DIFFERENT verb (caller's commit will
+// be inconsistent — reject early with a clear signal).
+export wc_pending_merge_record(wc_root: string,
+                               source_branch: string,
+                               source_rev: int,
+                               verb: int) -> int {
+    if string.length(source_branch) == 0 { return 0 - 1 }
+
+    db = wc_db_open(wc_root)
+    if db == null { return 0 - 1 }
+
+    // Reject conflicting verb on the same (source_branch, rev).
+    chk, perr = sqlite.prepare(db,
+        "SELECT verb FROM pending_merge WHERE source_branch = ? AND source_rev = ?")
+    if string.length(perr) > 0 { wc_db_close(db); return 0 - 1 }
+    sqlite.bind_text(chk, 1, source_branch)
+    sqlite.bind_int (chk, 2, source_rev)
+    sc, _ = sqlite.step(chk, db)
+    if sc == SQLITE_ROW {
+        existing = sqlite.column_int(chk, 0)
+        sqlite.finalize(chk)
+        if existing != verb { wc_db_close(db); return 0 - 2 }
+        wc_db_close(db)
+        return 0
+    }
+    sqlite.finalize(chk)
+
+    stmt, p2 = sqlite.prepare(db,
+        "INSERT INTO pending_merge (source_branch, source_rev, verb) VALUES (?, ?, ?)")
+    if string.length(p2) > 0 { wc_db_close(db); return 0 - 1 }
+    sqlite.bind_text(stmt, 1, source_branch)
+    sqlite.bind_int (stmt, 2, source_rev)
+    sqlite.bind_int (stmt, 3, verb)
+    sc2, _ = sqlite.step(stmt, db)
+    sqlite.finalize(stmt)
+    wc_db_close(db)
+    if sc2 != SQLITE_DONE { return 0 - 1 }
+    return 0
+}
+
+// Number of pending merge rows. svn commit calls this to decide
+// whether to attach a merged_from object to the commit body.
+export wc_pending_merge_count(wc_root: string) -> int {
+    db = wc_db_open(wc_root)
+    if db == null { return 0 }
+
+    stmt, perr = sqlite.prepare(db, "SELECT COUNT(*) FROM pending_merge")
+    if string.length(perr) > 0 { wc_db_close(db); return 0 }
+    sc, _ = sqlite.step(stmt, db)
+    n = 0
+    if sc == SQLITE_ROW { n = sqlite.column_int(stmt, 0) }
+    sqlite.finalize(stmt)
+    wc_db_close(db)
+    return n
+}
+
+// Source branch of the pending merges. Phase 2.1 assumes a single
+// source branch per pending session — the cherry-pick scenarios
+// in the convergence test are all-from-trunk, all-from-main, etc.
+// Returns "" if there are no pending merges.
+//
+// Cross-source mixing (svn merge URL/foo + svn merge URL/bar
+// before svn commit) returns the FIRST source branch encountered,
+// which may not match all rows. Phase 2.x handling of multi-source
+// is filed; for now, callers can scan via the per-row accessors
+// if they need the truth.
+export wc_pending_merge_source_branch(wc_root: string) -> string {
+    db = wc_db_open(wc_root)
+    if db == null { return "" }
+
+    stmt, perr = sqlite.prepare(db,
+        "SELECT source_branch FROM pending_merge ORDER BY source_branch LIMIT 1")
+    if string.length(perr) > 0 { wc_db_close(db); return "" }
+    sc, _ = sqlite.step(stmt, db)
+    out = ""
+    if sc == SQLITE_ROW {
+        out = string.copy(sqlite.column_text(stmt, 0))
+    }
+    sqlite.finalize(stmt)
+    wc_db_close(db)
+    return out
+}
+
+// Verb of the pending merges. Like _source_branch above, returns
+// the first row's verb when multiple verbs are present; defaults
+// to 0 (applied) when no rows.
+export wc_pending_merge_verb(wc_root: string) -> int {
+    db = wc_db_open(wc_root)
+    if db == null { return 0 }
+
+    stmt, perr = sqlite.prepare(db,
+        "SELECT verb FROM pending_merge ORDER BY source_branch, source_rev LIMIT 1")
+    if string.length(perr) > 0 { wc_db_close(db); return 0 }
+    sc, _ = sqlite.step(stmt, db)
+    v = 0
+    if sc == SQLITE_ROW { v = sqlite.column_int(stmt, 0) }
+    sqlite.finalize(stmt)
+    wc_db_close(db)
+    return v
+}
+
+// Drain the pending source revs as a "\n"-separated decimal-int
+// string ("5\n6\n7\n"). Server resolves each int to a SHA via
+// repos_rev_blob_sha at commit-parse time. Returns "" if empty.
+//
+// Doesn't delete anything — `wc_pending_merge_clear` does that
+// after the commit succeeds. Drain-then-clear gives wc_commit a
+// chance to abort cleanly if the server rejects.
+export wc_pending_merge_drain(wc_root: string) -> string {
+    db = wc_db_open(wc_root)
+    if db == null { return "" }
+
+    stmt, perr = sqlite.prepare(db,
+        "SELECT source_rev FROM pending_merge ORDER BY source_rev")
+    if string.length(perr) > 0 { wc_db_close(db); return "" }
+
+    out = ""
+    sc, _ = sqlite.step(stmt, db)
+    while sc == SQLITE_ROW {
+        rev = sqlite.column_int(stmt, 0)
+        out = string.concat(out, "${rev}")
+        out = string.concat(out, "\n")
+        sc, _ = sqlite.step(stmt, db)
+    }
+    sqlite.finalize(stmt)
+    wc_db_close(db)
+    return out
+}
+
+// Wipe pending_merge. Called after a commit that has carried the
+// merge metadata to the server.
+export wc_pending_merge_clear(wc_root: string) -> int {
+    db = wc_db_open(wc_root)
+    if db == null { return 0 - 1 }
+    err = sqlite.exec(db, "DELETE FROM pending_merge")
+    wc_db_close(db)
+    if string.length(err) > 0 { return 0 - 1 }
+    return 0
+}
+
+main() {
+    println("working_copy/pending_merge.ae is a library; not meant to run standalone")
+}

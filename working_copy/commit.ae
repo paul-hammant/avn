@@ -69,7 +69,16 @@ extern remote_commit_add_file(cb: ptr, path: string, content: string, len: int) 
 extern remote_commit_mkdir(cb: ptr, path: string) -> int
 extern remote_commit_delete(cb: ptr, path: string) -> int
 extern remote_commit_set_prop(cb: ptr, path: string, key: string, value: string) -> int
+extern remote_commit_set_merged_from(cb: ptr, source_branch: string,
+                                     source_revs_packed: string, verb: int) -> int
 extern remote_commit_finish(cb: ptr, base_url: string, repo_name: string) -> int
+
+// pending_merge accumulator (Round 274 / Phase 2.1).
+extern wc_pending_merge_count(wc_root: string) -> int
+extern wc_pending_merge_source_branch(wc_root: string) -> string
+extern wc_pending_merge_verb(wc_root: string) -> int
+extern wc_pending_merge_drain(wc_root: string) -> string
+extern wc_pending_merge_clear(wc_root: string) -> int
 
 // WC proplist (Aether export, C-side handle).
 extern wc_proplist(wc_root: string, path: string) -> ptr
@@ -213,7 +222,25 @@ export wc_commit(wc_root: string, author: string, logmsg: string) -> int {
         i = i + 1
     }
 
-    if any_edits == 0 {
+    // Drain pending_merge into the commit body. wc_merge accumulated
+    // (source_branch, source_rev, verb) rows in the WC's
+    // pending_merge table; svn commit hands them to the server in
+    // the body's `merged_from` JSON field. commit_parse on the
+    // server resolves rev numbers to SHAs and routes them to
+    // commit_finalise, which writes the rev blob's `merged:` field
+    // and the merge ledger. After a successful commit the WC
+    // clears pending_merge.
+    pending_n = wc_pending_merge_count(wc_root)
+    if pending_n > 0 {
+        psrc  = wc_pending_merge_source_branch(wc_root)
+        pverb = wc_pending_merge_verb(wc_root)
+        prevs = wc_pending_merge_drain(wc_root)
+        psrc  = string.copy(psrc)
+        prevs = string.copy(prevs)
+        remote_commit_set_merged_from(cb, psrc, prevs, pverb)
+    }
+
+    if any_edits == 0 && pending_n == 0 {
         // Nothing to commit. We finish to free the builder; the server
         // produces a new rev for an empty edit list (matches HTTP-layer
         // behaviour). Tests want a meaningful sentinel, so return -2.
@@ -276,6 +303,12 @@ export wc_commit(wc_root: string, author: string, logmsg: string) -> int {
 
     wc_nodelist_free(L)
     wc_db_close(db)
+
+    // Commit accepted by the server — pending_merge metadata is now
+    // recorded in the rev blob + ledger. Clear the WC side so a
+    // follow-up `svn merge` doesn't re-send the same revs.
+    if pending_n > 0 { wc_pending_merge_clear(wc_root) }
+
     return new_rev
 }
 

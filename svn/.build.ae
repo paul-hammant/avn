@@ -30,6 +30,7 @@ main() {
         regen("../working_copy/db_accessors.ae")
         regen("../working_copy/db_open.ae")
         regen("../working_copy/db_schema.ae")
+        regen("../working_copy/pending_merge.ae")
         regen("../working_copy/db_nodes.ae")
         regen("../working_copy/db_node_packed.ae")
         regen("../working_copy/pristine_path.ae")

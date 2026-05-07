@@ -34,9 +34,15 @@ const SQLITE_ROW = 100
 // predates the `conflicted` column on `nodes`, add it with a
 // default of 0. Returns 0 on success, non-zero on any sqlite
 // failure along the way (caller closes the handle and bails).
+//
+// Round 274 / Phase 2.1: pending_merge accumulates merge-record
+// state between `svn merge ...` invocations. svn commit drains it
+// into the commit body's `merged_from` JSON; server resolves rev
+// numbers to SHAs and writes the ledger row. After successful
+// commit the WC clears the table.
 export wc_db_install_schema(db: ptr) -> int {
     err = sqlite.exec(db,
-        "CREATE TABLE IF NOT EXISTS nodes (  path       TEXT PRIMARY KEY,  kind       INT NOT NULL,  base_rev   INT NOT NULL,  base_sha1  TEXT NOT NULL,  state      INT NOT NULL,  conflicted INT NOT NULL DEFAULT 0);CREATE TABLE IF NOT EXISTS info (  key   TEXT PRIMARY KEY,  value TEXT NOT NULL);")
+        "CREATE TABLE IF NOT EXISTS nodes (  path       TEXT PRIMARY KEY,  kind       INT NOT NULL,  base_rev   INT NOT NULL,  base_sha1  TEXT NOT NULL,  state      INT NOT NULL,  conflicted INT NOT NULL DEFAULT 0);CREATE TABLE IF NOT EXISTS info (  key   TEXT PRIMARY KEY,  value TEXT NOT NULL);CREATE TABLE IF NOT EXISTS pending_merge (  source_branch TEXT NOT NULL,  source_rev    INTEGER NOT NULL,  verb          INTEGER NOT NULL,  PRIMARY KEY (source_branch, source_rev));")
     if string.length(err) > 0 { return 1 }
 
     // Migration: add `conflicted` on older wc.db files that have

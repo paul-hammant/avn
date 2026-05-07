@@ -68,6 +68,15 @@ extern mergeinfo_add_range(existing: string, source: string,
 extern mergeinfo_eligible_runs(existing: string, source: string,
                                lo: int, hi: int) -> string
 
+// pending_merge accumulator (Round 274 / Phase 2.1). Replaces the
+// `svn:mergeinfo`-property write as the carrier between `svn merge`
+// and `svn commit`. Property still gets written by
+// mergeinfo_add_range_ below — Phase 2.3 cuts over to ledger-only.
+extern wc_pending_merge_record(wc_root: string,
+                               source_branch: string,
+                               source_rev: int,
+                               verb: int) -> int
+
 // Update svn:mergeinfo on `target` (a WC-relative path; "" = WC root)
 // to include (source, lo, hi, reverse). Ensures a tracked dir row
 // exists at `target`. Pre-Round 268 the property was hard-coded to
@@ -234,6 +243,18 @@ export wc_merge(wc_root: string, source_path: string,
         rc = apply_merge_chunk_(wc_root, base_url, repo, source_path,
                                 target_path, lo, hi, reverse, db)
         if rc != 0 { break }
+        // Record each integrated rev into pending_merge so
+        // svn commit can carry the merge metadata server-side.
+        // Reverse merges (verb=2) and applied merges (verb=0)
+        // both go through this path; commit_parse on the server
+        // resolves rev → SHA before writing to merges.db.
+        verb_ = 0
+        if reverse == 1 { verb_ = 2 }
+        rev_i = lo + 1
+        while rev_i <= hi {
+            wc_pending_merge_record(wc_root, source_path, rev_i, verb_)
+            rev_i = rev_i + 1
+        }
         pos = next_pos
     }
     wc_db_close(db)
@@ -244,6 +265,11 @@ export wc_merge(wc_root: string, source_path: string,
     // not just the eligible sub-runs — that matches classical SVN's
     // "you asked for r4:9; mergeinfo now reflects r4:9". Idempotency
     // comes from mergeinfo_add_range's range merging.
+    //
+    // Round 274 / Phase 2.1: dual-state — property still written
+    // for backward-compat with existing eligibility filter; ledger
+    // populated via pending_merge above. Phase 2.3 retires the
+    // property write.
     mergeinfo_add_range_(wc_root, target_path, source_path,
                          rev_base, rev_theirs, reverse)
     return 0
