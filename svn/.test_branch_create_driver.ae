@@ -27,7 +27,7 @@ main() {
     fw = aeocha.init()
     svn_bin = os_getenv("SVN_BIN")
     port    = os_getenv("TEST_BRANCH_CREATE_PORT")
-    repo    = os_getenv("TEST_BRANCH_CREATE_REPO")
+    repo    = os_getenv("TEST_BRANCH_CREATE_PATH")
     url     = string.concat("http://127.0.0.1:", string.concat(port, "/demo"))
     base    = string.concat("http://127.0.0.1:", string.concat(port, "/repos/demo"))
     token   = "b82a-token"

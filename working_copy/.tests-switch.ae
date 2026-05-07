@@ -1,7 +1,7 @@
 import build
 import aether
 import aether (driver, output, binary_under_test, fixture_seed, fixture_server,
-               path, env_var, repo, seed_bin, bin, args, port, ready_after_ms)
+               path, env_var, seed_bin, bin, args, port, ready_after_ms)
 
 main() {
     b = build.start()
@@ -10,7 +10,7 @@ main() {
     build.dep(b, "svnserver/.build-seed.ae")
 
     aether.driver_test(b) {
-        driver("test_switch_driver.ae")
+        driver(".test_switch_driver.ae")
         output("test_switch_driver")
 
         binary_under_test(b, "svn") {
@@ -19,22 +19,22 @@ main() {
 
         // Two seeded repos + two servers — the multi-fixture shape.
         fixture_seed(b, "test_sw_primary") {
-            repo("/tmp/svnae_aeb_test_sw_primary_repo")
+            path("/tmp/svnae_aeb_test_sw_primary_repo")
             seed_bin("target/svnserver/bin/svnae-seed")
         }
         fixture_seed(b, "test_sw_secondary") {
-            repo("/tmp/svnae_aeb_test_sw_secondary_repo")
+            path("/tmp/svnae_aeb_test_sw_secondary_repo")
             seed_bin("target/svnserver/bin/svnae-seed")
         }
         fixture_server(b, "test_sw_primary") {
             bin("target/svnserver/bin/aether-svnserver")
-            args("demo $TEST_SW_PRIMARY_REPO 9480")
+            args("demo $TEST_SW_PRIMARY_PATH 9480")
             port(9480)
             ready_after_ms(1500)
         }
         fixture_server(b, "test_sw_secondary") {
             bin("target/svnserver/bin/aether-svnserver")
-            args("demo $TEST_SW_SECONDARY_REPO 9481")
+            args("demo $TEST_SW_SECONDARY_PATH 9481")
             port(9481)
             ready_after_ms(1500)
         }

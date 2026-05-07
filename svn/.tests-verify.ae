@@ -1,7 +1,7 @@
 import build
 import aether
 import aether (driver, output, binary_under_test, fixture_seed, fixture_server,
-               path, repo, seed_bin, bin, args, port, ready_after_ms)
+               path, seed_bin, bin, args, port, ready_after_ms)
 
 main() {
     b = build.start()
@@ -11,7 +11,7 @@ main() {
     build.dep(b, "svnserver/.build-seed.ae")
 
     aether.driver_test(b) {
-        driver("test_verify_driver.ae")
+        driver(".test_verify_driver.ae")
         output("test_verify_driver")
 
         // Stage 1: fixture sha1 server. Stage 2 (sha256) spawned
@@ -27,12 +27,12 @@ main() {
         }
 
         fixture_seed(b, "test_verify") {
-            repo("/tmp/svnae_aeb_test_verify_repo")
+            path("/tmp/svnae_aeb_test_verify_repo")
             seed_bin("target/svnserver/bin/svnae-seed")
         }
         fixture_server(b, "test_verify") {
             bin("target/svnserver/bin/aether-svnserver")
-            args("demo $TEST_VERIFY_REPO 9530")
+            args("demo $TEST_VERIFY_PATH 9530")
             port(9530)
             ready_after_ms(1500)
         }

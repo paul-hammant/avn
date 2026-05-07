@@ -1,7 +1,7 @@
 import build
 import aether
 import aether (driver, output, binary_under_test, fixture_seed, fixture_server,
-               path, repo, seed_bin, bin, args, port, ready_after_ms)
+               path, seed_bin, bin, args, port, ready_after_ms)
 
 main() {
     b = build.start()
@@ -10,7 +10,7 @@ main() {
     build.dep(b, "svnserver/.build-seed.ae")
 
     aether.driver_test(b) {
-        driver("test_mergeinfo_arith_driver.ae")
+        driver(".test_mergeinfo_arith_driver.ae")
         output("test_mergeinfo_arith_driver")
 
         binary_under_test(b, "svn") {
@@ -18,12 +18,12 @@ main() {
         }
 
         fixture_seed(b, "test_mergeinfo_arith") {
-            repo("/tmp/svnae_aeb_test_mergeinfo_arith_repo")
+            path("/tmp/svnae_aeb_test_mergeinfo_arith_repo")
             seed_bin("target/svnserver/bin/svnae-seed")
         }
         fixture_server(b, "test_mergeinfo_arith") {
             bin("target/svnserver/bin/aether-svnserver")
-            args("demo $TEST_MERGEINFO_ARITH_REPO 9510")
+            args("demo $TEST_MERGEINFO_ARITH_PATH 9510")
             port(9510)
             ready_after_ms(1500)
         }

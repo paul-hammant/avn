@@ -9,8 +9,9 @@
 // inline-spawned the second server; this driver declares both
 // up front so aeb manages spawn/kill for both.
 //
-// Reads $SVN_BIN, $TEST_SW_PRIMARY_PORT, $TEST_SW_PRIMARY_REPO,
-// $TEST_SW_SECONDARY_PORT, $TEST_SW_SECONDARY_REPO.
+// Reads $SVN_BIN, $TEST_SW_PRIMARY_PORT, $TEST_SW_SECONDARY_PORT.
+// (aeb also exports $TEST_SW_PRIMARY_PATH / $TEST_SW_SECONDARY_PATH
+//  for the seeded directories; this driver doesn't currently use them.)
 
 import contrib.aeocha
 import std.os

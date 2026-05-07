@@ -30,7 +30,7 @@ main() {
     server_bin = os_getenv("SERVER_BIN")
     port_s     = os_getenv("TEST_VERIFY_PORT")
     pid_s      = os_getenv("TEST_VERIFY_PID")
-    repo       = os_getenv("TEST_VERIFY_REPO")
+    repo       = os_getenv("TEST_VERIFY_PATH")
     url        = string.concat("http://127.0.0.1:", string.concat(port_s, "/demo"))
     base       = string.concat("http://127.0.0.1:", string.concat(port_s, "/repos/demo"))
 

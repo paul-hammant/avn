@@ -9,7 +9,7 @@
 // SDK setter), env-var-prefixed shell calls (SVN_USER=alice, ...),
 // and HTTP requests with custom headers.
 //
-// Reads $SVN_BIN, $TEST_ACL_PORT, $TEST_ACL_REPO.
+// Reads $SVN_BIN, $TEST_ACL_PORT.
 
 import contrib.aeocha
 import std.os

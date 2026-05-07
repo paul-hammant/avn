@@ -1,7 +1,7 @@
 import build
 import aether
 import aether (driver, output, binary_under_test, fixture_seed, fixture_server,
-               path, env_var, repo, seed_bin, bin, args, port, ready_after_ms)
+               path, env_var, seed_bin, bin, args, port, ready_after_ms)
 
 main() {
     b = build.start()
@@ -10,7 +10,7 @@ main() {
     build.dep(b, "svnserver/.build-seed.ae")
 
     aether.driver_test(b) {
-        driver("test_checkout_driver.ae")
+        driver(".test_checkout_driver.ae")
         output("test_checkout_driver")
 
         binary_under_test(b, "svn") {
@@ -18,12 +18,12 @@ main() {
         }
 
         fixture_seed(b, "test_checkout") {
-            repo("/tmp/svnae_aeb_test_checkout_repo")
+            path("/tmp/svnae_aeb_test_checkout_repo")
             seed_bin("target/svnserver/bin/svnae-seed")
         }
         fixture_server(b, "test_checkout") {
             bin("target/svnserver/bin/aether-svnserver")
-            args("demo $TEST_CHECKOUT_REPO 9370")
+            args("demo $TEST_CHECKOUT_PATH 9370")
             port(9370)
             ready_after_ms(1500)
         }
