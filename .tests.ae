@@ -50,10 +50,7 @@ main() {
     build.dep(b, "working_copy/.tests-server_props.ae")
     build.dep(b, "working_copy/.tests-status.ae")
     build.dep(b, "working_copy/.tests-update.ae")
-    // working_copy/.tests-cherry_convergence.ae — exploratory; surfaces
-    // known avn bugs around server-side branch creation and stale-WC
-    // commit. Run on demand: `aeb working_copy/.tests-cherry_convergence.ae`.
-    // Documented in TODO.md.
+    build.dep(b, "working_copy/.tests-cherry_convergence.ae")
 
     // Aether-native unit tests (aether.program_test wrappers).
     // Build, run, exit code is the test result. Cover pure helper

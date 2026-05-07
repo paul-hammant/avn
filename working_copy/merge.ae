@@ -65,27 +65,35 @@ extern merge_apply_adds_mods(wc_root: string, target_path: string,
 // Mergeinfo helpers.
 extern mergeinfo_add_range(existing: string, source: string,
                                    lo: int, hi: int, reverse: int) -> string
+extern mergeinfo_highest_contiguous(existing: string, source: string,
+                                    lo: int, hi: int) -> int
 
-// Update the WC root's svn:mergeinfo property to include
-// (source, lo, hi, reverse). Ensures a tracked dir row exists at "".
-mergeinfo_add_range_(wc_root: string, source: string,
+// Update svn:mergeinfo on `target` (a WC-relative path; "" = WC root)
+// to include (source, lo, hi, reverse). Ensures a tracked dir row
+// exists at `target`. Pre-Round 268 the property was hard-coded to
+// the WC root, which was wrong: classical SVN records mergeinfo on
+// the merge *target*, not the WC root, so a `cd $WC/sub && svn
+// merge -c N URL/foo .` records `svn:mergeinfo` on $WC/sub, not on
+// $WC. Without that, a follow-up sweep on the same target couldn't
+// see the cherry-pick history.
+mergeinfo_add_range_(wc_root: string, target: string, source: string,
                      lo: int, hi: int, reverse: int) -> int {
     db = wc_db_open(wc_root)
     if db == null { return 0 - 1 }
-    if wc_db_node_exists(db, "") == 0 {
-        wc_db_upsert_node(db, "", 1, 0, "", 0)
+    if wc_db_node_exists(db, target) == 0 {
+        wc_db_upsert_node(db, target, 1, 0, "", 0)
     }
     wc_db_close(db)
 
-    existing = propget_value(wc_root, "", "svn:mergeinfo")
+    existing = propget_value(wc_root, target, "svn:mergeinfo")
     existing = string.copy(existing)
     new_val = mergeinfo_add_range(existing, source, lo, hi, reverse)
     new_val = string.copy(new_val)
     if string.length(new_val) > 0 {
-        return wc_propset(wc_root, "", "svn:mergeinfo", new_val)
+        return wc_propset(wc_root, target, "svn:mergeinfo", new_val)
     }
     // Empty result — delete the property entirely.
-    wc_propdel(wc_root, "", "svn:mergeinfo")
+    wc_propdel(wc_root, target, "svn:mergeinfo")
     return 0
 }
 
@@ -117,6 +125,32 @@ export wc_merge(wc_root: string, source_path: string,
     if string.length(repo) == 0 { return 0 - 1 }
     base_url = string.copy(base_url)
     repo     = string.copy(repo)
+
+    // MB-G fix (Round 268): for a forward sweep merge, consult the
+    // existing svn:mergeinfo for `source_path` and shift `rev_base`
+    // forward through the contiguous prefix of revs already merged.
+    // Without this, `svn merge -r N:HEAD URL/trunk` after earlier
+    // cherry-picks of revs (N+1..M) re-applies those revs on top of
+    // a WC that already has them — producing spurious conflict
+    // markers (the failure mode in the cherry-pick convergence
+    // test). Reverse merges aren't shifted (the cancel-pairs logic
+    // in mergeinfo_add_range handles those at the bookkeeping
+    // layer; reverse-of-already-reversed is a different concern).
+    if reverse == 0 {
+        existing = propget_value(wc_root, target_path, "svn:mergeinfo")
+        existing = string.copy(existing)
+        if string.length(existing) > 0 {
+            shifted = mergeinfo_highest_contiguous(existing, source_path,
+                                                   rev_base, rev_theirs)
+            if shifted > rev_base { rev_base = shifted }
+        }
+        if rev_base == rev_theirs {
+            // Whole range already merged → record the no-op (idempotent)
+            // and bail without touching the WC tree.
+            mergeinfo_add_range_(wc_root, target_path, source_path, rev_a, rev_b, 0)
+            return 0
+        }
+    }
 
     // Fetch the source tree at both endpoints. wc_root threads
     // through so add_file can hash files at add-time.
@@ -153,9 +187,12 @@ export wc_merge(wc_root: string, source_path: string,
     remote_tree_free(a)
     remote_tree_free(b)
 
-    // Record merged range in svn:mergeinfo. The reverse flag turns
+    // Record merged range in svn:mergeinfo on the merge *target*
+    // (which is "" for a WC-root merge, "release_a" for a sub-tree
+    // merge cd'd into release_a, etc.). The reverse flag turns
     // into the leading '-' on the emitted line.
-    mergeinfo_add_range_(wc_root, source_path, rev_base, rev_theirs, reverse)
+    mergeinfo_add_range_(wc_root, target_path, source_path,
+                         rev_base, rev_theirs, reverse)
     return 0
 }
 

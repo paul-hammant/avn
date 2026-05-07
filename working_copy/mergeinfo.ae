@@ -482,6 +482,31 @@ split_right(joined: string) -> string {
 
 // --- main entry point -----------------------------------------------------
 
+// `mergeinfo_highest_contiguous(existing, source, lo, hi)` walks
+// forward from `lo+1` while each successive rev is already in the
+// forward-set of `source`'s mergeinfo. Returns the highest such rev
+// (or `lo` if `lo+1` is already not merged). Used by wc_merge to
+// adjust the merge range upwards through revs that were
+// cherry-picked earlier — without this, a sweep `merge -r lo:hi`
+// re-applies everything in the range and re-conflicts on revs
+// already merged.
+//
+// Round 268 (MB-G fix): only the contiguous prefix is shifted —
+// non-contiguous mergeinfo (e.g. {6,8} with request {5..9}) still
+// re-applies the gaps. Documented limitation; real classical SVN
+// runs each contiguous eligible chunk separately. Follow-up work.
+export mergeinfo_highest_contiguous(existing: string, source: string,
+                                    lo: int, hi: int) -> int {
+    pair = extract_source_sets(existing, source)
+    fwd = split_left(pair)
+    cur = lo
+    while cur < hi {
+        if rs_contains(fwd, cur + 1) == 0 { break }
+        cur = cur + 1
+    }
+    return cur
+}
+
 // Add rev-range (lo, hi] to mergeinfo for `source`. Forward merge when
 // `reverse == 0`, reverse merge when `reverse == 1`. Returns the fresh
 // mergeinfo property text (possibly empty, meaning "delete the property").

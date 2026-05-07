@@ -5,18 +5,20 @@ Tests are 32/32 green at HEAD (bash integration suite) plus 8/8
 Aether-native unit tests; 100% Aether (zero hand-written C); naming
 sweep finished through Round 206.
 
-## Cherry-pick convergence — bug-bait test (2026-05-06)
+## Cherry-pick convergence — bug-bait test (2026-05-06; FIXED 2026-05-07)
 
 `working_copy/.tests-cherry_convergence.ae` + `.test_cherry_convergence_driver.ae`
 mirrors the "limits of merging" blog
 (https://github.com/paul-hammant/limits-of-merging-experiment):
 build a 5-rev trunk on /trunk/, branch twice, run cherry-pick C4→C3
 then C3→C4 followed by sweep merge, assert both branches end byte-
-identical. Currently fails — surfaces several **regressions** vs.
-classical (C-implementation) Subversion, plus some features not yet
-ported. NOT in the root aggregator; run on demand:
+identical.
 
-    aeb working_copy/.tests-cherry_convergence.ae
+**Status: 11/11 GREEN** as of Round 268. In the root aggregator.
+
+Surfaced six gaps that consolidated to five root-cause fixes
+(MB-A..MB-G). All five landed in Rounds 264-268. The historical
+catalogue stays below for reference.
 
 The classical-SVN reference is the `svn-version` branch of the same
 upstream repo
@@ -205,26 +207,39 @@ the same lookup in every `cmd_*` that takes WC paths
 (`cmd_status`, `cmd_commit`, `cmd_revert`, ...). Classical SVN
 calls this the "WC anchor" lookup; it's a well-trodden algorithm.
 
-### Severity & ordering — six gaps, four root causes
+### Severity & ordering — six gaps, five root-cause fixes (all landed)
 
-| Gap | Root cause | One-line fix |
-|---|---|---|
-| MB-A | (1) commit_finalise rebuilds from base_rev's tree without scanning `(base_rev..HEAD]` | walk txn paths against intervening revs, reject on conflict |
-| MB-B | (1) — same as MB-A | same fix; also decide cp-from-past-rev should merge into HEAD |
-| MB-C | (2) wc_db_open auto-creates a new WC | refuse-unless-exists in non-checkout call paths |
-| MB-D | (3) cmd_checkout uses shallow url parser; wc_checkout has no sub-path arg | use `base_url_deep` etc.; extend wc_checkout signature |
-| MB-E | (3) — same as MB-D | same fix |
-| MB-F | (4) cmd_add hard-codes `wc_root="."`, no walk-up to find anchor | walk-up `.svn/wc.db` lookup before calling `wc_*` |
+| Gap | Round | Root cause | Fix |
+|---|---|---|---|
+| MB-A | 264 | commit_finalise rebuilds from base_rev's tree without scanning `(base_rev..HEAD]` | walk txn paths against intervening revs via path_rev table; rebuild on HEAD's tree; return -12 (HTTP 409) on conflict |
+| MB-B | 264 | (same as MB-A) | (same fix lifts both — past-rev cp now applies on top of HEAD) |
+| MB-C | 265 | wc_db_open auto-creates a new WC | split into `wc_db_open` (refuse-unless-exists) + `wc_db_init` (only `wc_checkout` calls) |
+| MB-D | 266 | cmd_checkout/cmd_ls used shallow `url_base`/`url_repo` (last-/-split) | use `base_url_deep` / `repo_name_deep` / `in_repo_path` (already existed for cmd_cp / cmd_merge) |
+| MB-E | 266 | (same as MB-D — `URL/branch_name` is the right grammar) | (same fix) |
+| MB-F | 267 | cmd_* hard-coded `wc_root="."` | `find_wc_anchor_()` walks up from cwd; cmd_add / cmd_commit / cmd_merge / cmd_propget / cmd_status converted |
+| MB-G | 268 | sweep `merge -r A:HEAD` ignored existing svn:mergeinfo, re-applied already-merged revs | `mergeinfo_highest_contiguous` shifts `rev_base` past the contiguous-prefix of already-merged revs; mergeinfo recorded on the merge target (not WC root) |
 
-**Priority**: (1) is data loss → fix first. (2) is data
-integrity-adjacent (silent split-WC) → fix second. (3) blocks the
-classical / and first-class branch workflows → fix third. (4) is
-a paper cut but obvious to users → fix fourth.
+**MB-D follow-up**: sub-path checkout (`svn checkout URL/release_a $WC`)
+still refuses with a clear "not yet supported" message. Full anchor
+support requires recording the WC anchor in wc.db.info and having
+every wc_* call prepend it when sending paths server-ward. Filed as
+MB-D-2 if a real workflow needs it.
 
-Once (1), (2), (3) land, the cherry-pick convergence test should
-green up — that's the canary. svnbook §4
+**MB-G follow-up**: only the *contiguous prefix* of already-merged
+revs is shifted. Non-contiguous mergeinfo (e.g. `{6,8}` with sweep
+`{5..9}`) still re-applies the gaps. Real classical SVN runs each
+contiguous eligible chunk separately. Follow-up — file MB-G-2.
+
+**MB-F follow-up**: 11 cmd_* still hardcode `"."`: cmd_rm,
+cmd_revert, cmd_diff, cmd_resolve, cmd_propset/del/list, cmd_cp,
+cmd_mv, cmd_update, cmd_switch, cmd_cleanup. Pattern is now
+established (`find_wc_anchor_()` + `wc_join_(cwd_offset, arg)`);
+mechanical sweep.
+
+Convergence claim from svnbook §4
 (https://svnbook.red-bean.com/en/1.6/svn.branchmerge.advanced.html#svn.branchmerge.cherrypicking)
-becomes the reference for what's expected to work.
+verified in Round 268: cherry-pick C4→C3 vs C3→C4 followed by
+sweep produce byte-identical files matching trunk@HEAD's content.
 
 
 ## Round 228 update

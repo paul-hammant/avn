@@ -90,8 +90,9 @@ main() {
     case_a_post = string.concat("diff -q /tmp/svnae_test_rmrg_expected.r5 ", wc)
     case_a_post = string.concat(case_a_post, "/src/main.c >/dev/null 2>&1 && echo same || echo diff")
 
+    // Round 268: mergeinfo on the merge *target* (src) not WC root.
     case_a_mi   = string.concat("cd ", wc)
-    case_a_mi   = string.concat(case_a_mi, " && ")
+    case_a_mi   = string.concat(case_a_mi, "/src && ")
     case_a_mi   = string.concat(case_a_mi, svn_bin)
     case_a_mi   = string.concat(case_a_mi, " propget svn:mergeinfo . 2>/dev/null || echo ''")
 

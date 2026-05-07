@@ -82,8 +82,11 @@ main() {
     status_cmd      = string.concat(status_cmd, " status")
     count_m_branch  = string.concat(status_cmd, " | grep -c '^M.*src-branch/main.c' || true")
     count_m_trunk   = string.concat(status_cmd, " | grep -c '^M.*src/main.c' || true")
+    // Round 268: mergeinfo records on the merge *target*, not the WC
+    // root. After `svn merge URL/src@4:5 src-branch`, the property
+    // lives on src-branch. Pre-Round 268 it was hard-coded to "".
     propget_mi      = string.concat("cd ", wc)
-    propget_mi      = string.concat(propget_mi, " && ")
+    propget_mi      = string.concat(propget_mi, "/src-branch && ")
     propget_mi      = string.concat(propget_mi, svn_bin)
     propget_mi      = string.concat(propget_mi, " propget svn:mergeinfo . 2>/dev/null || echo ''")
 

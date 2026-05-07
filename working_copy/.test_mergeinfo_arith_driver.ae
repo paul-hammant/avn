@@ -57,8 +57,11 @@ main() {
 
     o0, setup_st, e0 = sh(setup)
 
+    // Round 268: mergeinfo lives on the merge *target* — `src` in
+    // every test below — not on the WC root. Pre-Round 268 it was
+    // hard-coded to "".
     propget_mi = string.concat("cd ", wc)
-    propget_mi = string.concat(propget_mi, " && ")
+    propget_mi = string.concat(propget_mi, "/src && ")
     propget_mi = string.concat(propget_mi, svn_bin)
     propget_mi = string.concat(propget_mi, " propget svn:mergeinfo . 2>/dev/null || echo '<empty>'")
 
