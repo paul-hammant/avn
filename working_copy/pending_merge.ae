@@ -181,6 +181,41 @@ export wc_pending_merge_drain(wc_root: string) -> string {
     return out
 }
 
+// Round 278 / Phase 2.3a: dump the pending_merge table for `svn
+// merged --pending`. Returns one row per line:
+//   <target_path>\t<source_branch>\t<source_rev>\t<verb>
+// Empty if nothing pending. Verb-as-int (0 applied, 1 record-only,
+// 2 reverse) — caller turns into a label.
+export wc_pending_merge_dump(wc_root: string) -> string {
+    db = wc_db_open(wc_root)
+    if db == null { return "" }
+
+    stmt, perr = sqlite.prepare(db,
+        "SELECT target_path, source_branch, source_rev, verb FROM pending_merge ORDER BY target_path, source_branch, source_rev")
+    if string.length(perr) > 0 { wc_db_close(db); return "" }
+
+    out = ""
+    sc, _ = sqlite.step(stmt, db)
+    while sc == SQLITE_ROW {
+        tgt = sqlite.column_text(stmt, 0)
+        src = sqlite.column_text(stmt, 1)
+        rev = sqlite.column_int (stmt, 2)
+        v   = sqlite.column_int (stmt, 3)
+        out = string.concat(out, tgt)
+        out = string.concat(out, "\t")
+        out = string.concat(out, src)
+        out = string.concat(out, "\t")
+        out = string.concat(out, "${rev}")
+        out = string.concat(out, "\t")
+        out = string.concat(out, "${v}")
+        out = string.concat(out, "\n")
+        sc, _ = sqlite.step(stmt, db)
+    }
+    sqlite.finalize(stmt)
+    wc_db_close(db)
+    return out
+}
+
 // Wipe pending_merge. Called after a commit that has carried the
 // merge metadata to the server.
 export wc_pending_merge_clear(wc_root: string) -> int {
