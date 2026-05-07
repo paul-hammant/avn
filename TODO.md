@@ -230,11 +230,15 @@ revs is shifted. Non-contiguous mergeinfo (e.g. `{6,8}` with sweep
 `{5..9}`) still re-applies the gaps. Real classical SVN runs each
 contiguous eligible chunk separately. Follow-up — file MB-G-2.
 
-**MB-F follow-up**: 11 cmd_* still hardcode `"."`: cmd_rm,
-cmd_revert, cmd_diff, cmd_resolve, cmd_propset/del/list, cmd_cp,
-cmd_mv, cmd_update, cmd_switch, cmd_cleanup. Pattern is now
-established (`find_wc_anchor_()` + `wc_join_(cwd_offset, arg)`);
-mechanical sweep.
+**MB-F decision pending** — 11 cmd_* still hardcode `wc_root="."`
+(cmd_rm, cmd_revert, cmd_diff, cmd_resolve, cmd_propset/del/list,
+cmd_cp, cmd_mv, cmd_update, cmd_switch, cmd_cleanup). Walk-up was
+applied only to the five commands the cherry-pick test exercises
+(add, commit, merge, propget, status). The pattern is established
+(`find_wc_anchor_()` + `wc_join_(cwd_offset, arg)`) — sweeping the
+remaining 11 is mechanical IF we decide to support them. Open
+question: avn may simply not support cd-into-subdir for those
+commands — held until a real workflow needs it.
 
 Convergence claim from svnbook §4
 (https://svnbook.red-bean.com/en/1.6/svn.branchmerge.advanced.html#svn.branchmerge.cherrypicking)
