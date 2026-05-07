@@ -17,6 +17,11 @@ extern merge_ledger_is_integrated_as_of(repo: string,
                                         source_branch: string,
                                         source_rev_sha: string,
                                         as_of_rev: int) -> int
+extern merge_ledger_was_last_reverse_as_of(repo: string,
+                                           target_branch: string,
+                                           source_branch: string,
+                                           source_rev_sha: string,
+                                           as_of_rev: int) -> int
 
 // Walk rev numbers in (lo..hi], resolve each to its rev-blob SHA,
 // ask the ledger if it's already integrated. Group consecutive
@@ -60,6 +65,59 @@ export merge_ledger_eligible_runs_for_range(repo: string,
             if integrated == 0 { is_eligible = 1 }
         }
         if is_eligible == 1 {
+            if in_run == 0 {
+                run_lo = cur - 1
+                in_run = 1
+            }
+            run_hi = cur
+        } else {
+            if in_run == 1 {
+                out = string.concat(out, "${run_lo}:${run_hi}\n")
+                in_run = 0
+            }
+        }
+        cur = cur + 1
+    }
+    if in_run == 1 {
+        out = string.concat(out, "${run_lo}:${run_hi}\n")
+    }
+    return out
+}
+
+// R284 — runs of revs in (lo..hi] that are reverse-eligible: i.e.,
+// their latest merge_event (if any) is NOT a reverse merge (verb=2).
+// Used by `wc_merge` when applying a reverse merge so:
+//
+//   merge -c 5; commit;        -- ledger: forward
+//   merge -c -5; commit;       -- ledger: reverse — last verb=2
+//   merge -c -5                -- now a no-op (filter excludes r5)
+//
+// Crucially this DOES include revs that were never tracked (no
+// merge_event) — classical-SVN semantics: `merge -c -N` against a
+// fresh checkout applies the inverse diff regardless of tracking.
+// We only skip if there's a recorded merge_event whose latest verb
+// is REVERSE; that's the "already reversed, don't re-reverse"
+// case.
+export merge_ledger_reverse_eligible_runs(repo: string,
+                                           target_branch: string,
+                                           source_branch: string,
+                                           lo: int, hi: int,
+                                           as_of_rev: int) -> string {
+    if lo >= hi { return "" }
+    out = ""
+    in_run = 0
+    run_lo = 0
+    run_hi = 0
+    cur = lo + 1
+    while cur <= hi {
+        rev_sha = repos_rev_blob_sha(repo, cur)
+        skip = 0
+        if string.length(rev_sha) > 0 {
+            already_reversed = merge_ledger_was_last_reverse_as_of(repo,
+                target_branch, source_branch, rev_sha, as_of_rev)
+            if already_reversed == 1 { skip = 1 }
+        }
+        if skip == 0 {
             if in_run == 0 {
                 run_lo = cur - 1
                 in_run = 1

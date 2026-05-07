@@ -138,6 +138,33 @@ export fetch_merge_runs(base: string, repo: string,
     return remote_parse_merge_runs(body)
 }
 
+// R284 — runs of revs in (lo..hi] that are reverse-eligible: their
+// latest merge_event (if any) is NOT a reverse merge. Used by
+// wc_merge's reverse-merge path so `merge -c -N` twice in a row →
+// second is a no-op. Untracked revs (no merge_event) are INCLUDED:
+// classical-SVN reverse merge of an untracked rev still applies the
+// inverse diff. Same wire shape ("lo:hi\n..."), served by the
+// /reverse_runs endpoint.
+export fetch_reverse_runs(base: string, repo: string,
+                          target_branch: string, source_branch: string,
+                          lo: int, hi: int, as_of_rev: int) -> string {
+    url = string.concat(base, "/repos/")
+    url = string.concat(url, repo)
+    url = string.concat(url, "/reverse_runs/")
+    url = string.concat(url, target_branch)
+    url = string.concat(url, "/")
+    url = string.concat(url, source_branch)
+    url = string.concat(url, "/")
+    url = string.concat(url, "${lo}")
+    url = string.concat(url, "/")
+    url = string.concat(url, "${hi}")
+    url = string.concat(url, "/")
+    url = string.concat(url, "${as_of_rev}")
+    body = get_200(url)
+    if string.length(body) == 0 { return "" }
+    return remote_parse_merge_runs(body)
+}
+
 // POST `body` (JSON) to `url`, expect HTTP <expected_status>, parse
 // rev from response. Returns -1 on any failure (transport, wrong
 // status, parse error). Shared by:

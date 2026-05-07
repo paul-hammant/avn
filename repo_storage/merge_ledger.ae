@@ -278,6 +278,49 @@ export merge_ledger_is_integrated_as_of(repo: string,
                                              as_of_rev)
 }
 
+// R284 — was the LATEST merge event for this (target, source,
+// source_rev_sha) a reverse merge (verb=2)? Used by the
+// reverse-merge filter to skip revs that are already in a reversed
+// state (so `merge -c -N` twice in a row → second is a no-op).
+//
+// Returns:
+//   1 if a row exists AND latest verb == REVERSE
+//   0 if no row OR latest verb != REVERSE  (classical-SVN reverse
+//                                            of an untracked rev
+//                                            still applies)
+//  -1 on infrastructure failure
+//
+// as_of_rev=0 means "no time filter" (any-time history).
+export merge_ledger_was_last_reverse_as_of(repo: string,
+                                           target_branch: string,
+                                           source_branch: string,
+                                           source_rev_sha: string,
+                                           as_of_rev: int) -> int {
+    db = ledger_open_(repo)
+    if db == null { return 0 - 1 }
+
+    sql_text = ""
+    if as_of_rev <= 0 {
+        sql_text = "SELECT me.verb FROM merge_source_rev msr JOIN merge_event me ON msr.rev_sha = me.rev_sha AND msr.source_branch = me.source_branch WHERE msr.target_branch = ? AND msr.source_branch = ? AND msr.source_rev_sha = ? ORDER BY me.rev_num DESC LIMIT 1"
+    } else {
+        sql_text = "SELECT me.verb FROM merge_source_rev msr JOIN merge_event me ON msr.rev_sha = me.rev_sha AND msr.source_branch = me.source_branch WHERE msr.target_branch = ? AND msr.source_branch = ? AND msr.source_rev_sha = ? AND me.rev_num <= ? ORDER BY me.rev_num DESC LIMIT 1"
+    }
+    stmt, perr = sqlite.prepare(db, sql_text)
+    if string.length(perr) > 0 { sqlite.close(db); return 0 - 1 }
+    sqlite.bind_text(stmt, 1, target_branch)
+    sqlite.bind_text(stmt, 2, source_branch)
+    sqlite.bind_text(stmt, 3, source_rev_sha)
+    if as_of_rev > 0 { sqlite.bind_int(stmt, 4, as_of_rev) }
+    sc, _ = sqlite.step(stmt, db)
+    verb = 0 - 1
+    if sc == SQLITE_ROW { verb = sqlite.column_int(stmt, 0) }
+    sqlite.finalize(stmt)
+    sqlite.close(db)
+    if sc != SQLITE_ROW { return 0 }
+    if verb == MERGE_VERB_REVERSE { return 1 }
+    return 0
+}
+
 // List all source revs from `source_branch` integrated into
 // `target_branch`. Returned as a "\n"-separated packed string of
 // SHAs (possibly empty). Intended for `avn merged --integrated`

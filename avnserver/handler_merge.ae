@@ -30,6 +30,11 @@ extern merge_ledger_eligible_runs_for_range(repo: string,
                                             source_branch: string,
                                             lo: int, hi: int,
                                             as_of_rev: int) -> string
+extern merge_ledger_reverse_eligible_runs(repo: string,
+                                          target_branch: string,
+                                          source_branch: string,
+                                          lo: int, hi: int,
+                                          as_of_rev: int) -> string
 
 // Build the JSON `{"integrated":[...]}` body. `packed` is the
 // "\n"-separated SHA list returned by merge_ledger_integrated_set.
@@ -201,6 +206,29 @@ export merge_runs_handle(req: ptr, res: ptr, repo: string, sub: string) {
         return
     }
     runs = merge_ledger_eligible_runs_for_range(repo, target, source, lo, hi, as_of)
+    body = build_runs_json_(runs)
+    svnserver_respond_json_ok(res, body)
+}
+
+// `GET /repos/{r}/reverse_runs/<target>/<source>/<lo>/<hi>[/<as_of>]`
+// — runs of revs in (lo..hi] that are reverse-eligible (R284). Used
+// by `wc_merge` when applying a reverse merge: skip revs whose latest
+// merge_event was a reverse (so `merge -c -N` twice → second is a
+// no-op). Untracked revs (no merge_event) are INCLUDED in the
+// runs — classical-SVN reverse-merge of an untracked rev still
+// applies the inverse diff.
+export reverse_runs_handle(req: ptr, res: ptr, repo: string, sub: string) {
+    target, source, lo, hi, as_of = split_quint_(sub)
+    if string.length(target) == 0 {
+        svnserver_respond_error(res, 400,
+            "expected /reverse_runs/<target>/<source>/<lo>/<hi>[/<as_of>]")
+        return
+    }
+    if lo < 0 || hi < 0 {
+        svnserver_respond_error(res, 400, "lo and hi must be non-negative ints")
+        return
+    }
+    runs = merge_ledger_reverse_eligible_runs(repo, target, source, lo, hi, as_of)
     body = build_runs_json_(runs)
     svnserver_respond_json_ok(res, body)
 }

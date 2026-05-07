@@ -885,11 +885,42 @@ cmd_merged(argv_start: int) {
             if string.try_int(b_s) == 0 { println("avn merged: -r B not a number"); return 2 }
             hi = string.get_int(b_s)
         }
-        // Eligibility query is by-default an at-HEAD view (as_of=0 →
-        // no time filter). The cli's caller is asking "what would
-        // a fresh sweep do right now?", not "what would my old WC
-        // see?" — pass 0.
-        runs = fetch_merge_runs(base, repo, target, source, lo, hi, 0)
+        // R284 — default `as_of_rev` to the WC's base_rev when run
+        // from inside a WC, so the eligibility view matches what
+        // the WC would see if it ran a sweep right now (the same
+        // view-versioning classical SVN got from versioning the
+        // svn:mergeinfo property). Outside a WC, fall through to 0
+        // (= HEAD view) as before.
+        //
+        // --as-of N overrides both. --as-of HEAD means 0 explicitly.
+        as_of_flag = find_flag("--as-of", argv_start)
+        as_of = 0
+        if string.length(as_of_flag) > 0 {
+            if string.equals(as_of_flag, "HEAD") == 1 {
+                as_of = 0
+            } else {
+                if string.try_int(as_of_flag) == 0 {
+                    println("avn merged --eligible: --as-of expects an int or HEAD")
+                    return 2
+                }
+                as_of = string.get_int(as_of_flag)
+            }
+        } else {
+            wc_root_e, _ = find_wc_anchor_()
+            if string.length(wc_root_e) > 0 {
+                db_e = wc_db_open(wc_root_e)
+                if db_e != null {
+                    bre = wc_db_get_info(db_e, "base_rev")
+                    if string.length(bre) > 0 {
+                        if string.try_int(bre) == 1 {
+                            as_of = string.get_int(bre)
+                        }
+                    }
+                    wc_db_close(db_e)
+                }
+            }
+        }
+        runs = fetch_merge_runs(base, repo, target, source, lo, hi, as_of)
         if json_out == 1 {
             print_eligible_json_(target, source, lo, hi, runs, verbose, base, repo)
         } else {
