@@ -789,43 +789,32 @@ cmd_merged(argv_start: int) {
     }
     eligible = find_bool_flag_("--eligible", argv_start)
     pending  = find_bool_flag_("--pending",  argv_start)
+    json_out = find_bool_flag_("--json",     argv_start)
 
     // --pending reads WC-local state — no URL needed, walk up from cwd.
     if pending == 1 {
         wc_root, _ = find_wc_anchor_()
         if string.length(wc_root) == 0 {
-            println("svn merged --pending: not a working copy (or any of the parent directories)")
+            if json_out == 1 {
+                println("{\"error\":\"not a working copy (or any of the parent directories)\"}")
+            } else {
+                println("svn merged --pending: not a working copy (or any of the parent directories)")
+            }
             return 1
         }
         dump = wc_pending_merge_dump(wc_root)
-        n = string.length(dump)
-        if n == 0 { return 0 }
-        // Format each row "<target>\t<source>\t<rev>\t<verb>" → human:
-        //   <verb_label> r<rev> from <source> → <target>
-        i = 0
-        seg_start = 0
-        while i <= n {
-            at_end = 0
-            if i == n { at_end = 1 }
-            if at_end == 0 {
-                if string.char_at(dump, i) == 10 { at_end = 1 }
-            }
-            if at_end == 1 {
-                if i > seg_start {
-                    line = string.substring(dump, seg_start, i)
-                    print_pending_row_(line)
-                }
-                seg_start = i + 1
-            }
-            i = i + 1
+        if json_out == 1 {
+            print_pending_json_(wc_root, dump)
+        } else {
+            print_pending_text_(dump)
         }
         return 0
     }
 
     url = aether_args_get(argv_start)
     if string.length(url) == 0 {
-        println("svn merged: usage: svn merged URL --target T --source S [--eligible -r A:B]")
-        println("            or:    svn merged --pending           (WC-local queued merges)")
+        println("svn merged: usage: svn merged URL --target T --source S [--eligible -r A:B] [--json]")
+        println("            or:    svn merged --pending [--json]   (WC-local queued merges)")
         return 2
     }
     if string.length(target) == 0 {
@@ -877,50 +866,124 @@ cmd_merged(argv_start: int) {
         // a fresh sweep do right now?", not "what would my old WC
         // see?" — pass 0.
         runs = fetch_merge_runs(base, repo, target, source, lo, hi, 0)
-        // Expand "lo:hi\n" runs into individual rev numbers (lo..hi].
-        rn = string.length(runs)
-        i = 0
-        seg_start = 0
-        while i <= rn {
-            at_end = 0
-            if i == rn { at_end = 1 }
-            if at_end == 0 {
-                c = string.char_at(runs, i)
-                if c == 10 { at_end = 1 }
-            }
-            if at_end == 1 {
-                if i > seg_start {
-                    line = string.substring(runs, seg_start, i)
-                    cc = string.index_of(line, ":")
-                    if cc > 0 {
-                        run_lo_s = string.substring(line, 0, cc)
-                        run_hi_s = string.substring(line, cc + 1, string.length(line))
-                        if string.try_int(run_lo_s) == 1 {
-                            if string.try_int(run_hi_s) == 1 {
-                                run_lo = string.get_int(run_lo_s)
-                                run_hi = string.get_int(run_hi_s)
-                                rv = run_lo + 1
-                                while rv <= run_hi {
-                                    println("r${rv}")
-                                    rv = rv + 1
-                                }
-                            }
-                        }
-                    }
-                }
-                seg_start = i + 1
-            }
-            i = i + 1
+        if json_out == 1 {
+            print_eligible_json_(target, source, lo, hi, runs)
+        } else {
+            print_eligible_text_(runs)
         }
         return 0
     }
 
-    // Default: list integrated SHAs, one per line.
+    // Default: list integrated SHAs.
     out = fetch_merged(base, repo, target, source)
+    if json_out == 1 {
+        print_integrated_json_(target, source, out)
+    } else {
+        print_integrated_text_(out)
+    }
+    return 0
+}
+
+// ---- output helpers -----------------------------------------------------
+
+// Emit one rev number per line, prefixed `r`. `runs` is the
+// "lo:hi\n..." packed shape from fetch_merge_runs.
+print_eligible_text_(runs: string) {
+    rn = string.length(runs)
+    i = 0
+    seg_start = 0
+    while i <= rn {
+        at_end = 0
+        if i == rn { at_end = 1 }
+        if at_end == 0 {
+            c = string.char_at(runs, i)
+            if c == 10 { at_end = 1 }
+        }
+        if at_end == 1 {
+            if i > seg_start {
+                line = string.substring(runs, seg_start, i)
+                cc = string.index_of(line, ":")
+                if cc > 0 {
+                    run_lo_s = string.substring(line, 0, cc)
+                    run_hi_s = string.substring(line, cc + 1, string.length(line))
+                    if string.try_int(run_lo_s) == 1 {
+                        if string.try_int(run_hi_s) == 1 {
+                            run_lo = string.get_int(run_lo_s)
+                            run_hi = string.get_int(run_hi_s)
+                            rv = run_lo + 1
+                            while rv <= run_hi {
+                                println("r${rv}")
+                                rv = rv + 1
+                            }
+                        }
+                    }
+                }
+            }
+            seg_start = i + 1
+        }
+        i = i + 1
+    }
+}
+
+// JSON: {"target":"…","source":"…","range":{"from":N,"to":M},"eligible":[…]}
+// Rev numbers (not SHAs) — matches what the human reads. Comma-separated.
+print_eligible_json_(target: string, source: string, lo: int, hi: int,
+                     runs: string) {
+    out = "{\"target\":\""
+    out = string.concat(out, target)
+    out = string.concat(out, "\",\"source\":\"")
+    out = string.concat(out, source)
+    out = string.concat(out, "\",\"range\":{\"from\":")
+    out = string.concat(out, "${lo}")
+    out = string.concat(out, ",\"to\":")
+    out = string.concat(out, "${hi}")
+    out = string.concat(out, "},\"eligible\":[")
+    rn = string.length(runs)
+    i = 0
+    seg_start = 0
+    first = 1
+    while i <= rn {
+        at_end = 0
+        if i == rn { at_end = 1 }
+        if at_end == 0 {
+            c = string.char_at(runs, i)
+            if c == 10 { at_end = 1 }
+        }
+        if at_end == 1 {
+            if i > seg_start {
+                line = string.substring(runs, seg_start, i)
+                cc = string.index_of(line, ":")
+                if cc > 0 {
+                    run_lo_s = string.substring(line, 0, cc)
+                    run_hi_s = string.substring(line, cc + 1, string.length(line))
+                    if string.try_int(run_lo_s) == 1 {
+                        if string.try_int(run_hi_s) == 1 {
+                            run_lo = string.get_int(run_lo_s)
+                            run_hi = string.get_int(run_hi_s)
+                            rv = run_lo + 1
+                            while rv <= run_hi {
+                                if first == 0 { out = string.concat(out, ",") }
+                                out = string.concat(out, "${rv}")
+                                first = 0
+                                rv = rv + 1
+                            }
+                        }
+                    }
+                }
+            }
+            seg_start = i + 1
+        }
+        i = i + 1
+    }
+    out = string.concat(out, "]}")
+    println(out)
+}
+
+// SHAs as a "\n"-separated string (what fetch_merged returns) → stdout
+// minus any trailing newline so we don't double-print.
+print_integrated_text_(out: string) {
     n = string.length(out)
     if n == 0 { return 0 }
-    // out is "\n"-separated SHAs already; print verbatim minus any
-    // trailing "\n" so we don't double up.
     last = string.char_at(out, n - 1)
     if last == 10 {
         io.stdout_write(out, n - 1)
@@ -929,6 +992,134 @@ cmd_merged(argv_start: int) {
     }
     println("")
     return 0
+}
+
+// JSON: {"target":"…","source":"…","integrated":["sha","sha",…]}
+print_integrated_json_(target: string, source: string, packed: string) {
+    out = "{\"target\":\""
+    out = string.concat(out, target)
+    out = string.concat(out, "\",\"source\":\"")
+    out = string.concat(out, source)
+    out = string.concat(out, "\",\"integrated\":[")
+    n = string.length(packed)
+    i = 0
+    seg_start = 0
+    first = 1
+    while i <= n {
+        at_end = 0
+        if i == n { at_end = 1 }
+        if at_end == 0 {
+            c = string.char_at(packed, i)
+            if c == 10 { at_end = 1 }
+        }
+        if at_end == 1 {
+            if i > seg_start {
+                if first == 0 { out = string.concat(out, ",") }
+                out = string.concat(out, "\"")
+                out = string.concat(out, string.substring(packed, seg_start, i))
+                out = string.concat(out, "\"")
+                first = 0
+            }
+            seg_start = i + 1
+        }
+        i = i + 1
+    }
+    out = string.concat(out, "]}")
+    println(out)
+}
+
+// One pending row per line, human form via print_pending_row_.
+print_pending_text_(dump: string) {
+    n = string.length(dump)
+    i = 0
+    seg_start = 0
+    while i <= n {
+        at_end = 0
+        if i == n { at_end = 1 }
+        if at_end == 0 {
+            if string.char_at(dump, i) == 10 { at_end = 1 }
+        }
+        if at_end == 1 {
+            if i > seg_start {
+                line = string.substring(dump, seg_start, i)
+                print_pending_row_(line)
+            }
+            seg_start = i + 1
+        }
+        i = i + 1
+    }
+}
+
+// JSON: {"wc_root":"…","pending":[{"target":"…","source":"…","rev":N,"verb":"applied"}, …]}
+print_pending_json_(wc_root: string, dump: string) {
+    out = "{\"wc_root\":\""
+    out = string.concat(out, wc_root)
+    out = string.concat(out, "\",\"pending\":[")
+    n = string.length(dump)
+    i = 0
+    seg_start = 0
+    first = 1
+    while i <= n {
+        at_end = 0
+        if i == n { at_end = 1 }
+        if at_end == 0 {
+            if string.char_at(dump, i) == 10 { at_end = 1 }
+        }
+        if at_end == 1 {
+            if i > seg_start {
+                line = string.substring(dump, seg_start, i)
+                row_json = pending_row_to_json_(line)
+                if string.length(row_json) > 0 {
+                    if first == 0 { out = string.concat(out, ",") }
+                    out = string.concat(out, row_json)
+                    first = 0
+                }
+            }
+            seg_start = i + 1
+        }
+        i = i + 1
+    }
+    out = string.concat(out, "]}")
+    println(out)
+}
+
+// Convert one tab-separated row into a single JSON object:
+//   "<target>\t<source>\t<rev>\t<verb>" →
+//   "{\"target\":\"…\",\"source\":\"…\",\"rev\":N,\"verb\":\"applied\"}"
+// Returns "" on malformed input.
+pending_row_to_json_(line: string) -> string {
+    n = string.length(line)
+    t1 = 0 - 1
+    t2 = 0 - 1
+    t3 = 0 - 1
+    i = 0
+    while i < n {
+        if string.char_at(line, i) == 9 {
+            if t1 < 0      { t1 = i }
+            else { if t2 < 0 { t2 = i } else { if t3 < 0 { t3 = i; break } } }
+        }
+        i = i + 1
+    }
+    if t1 < 0 { return "" }
+    if t2 < 0 { return "" }
+    if t3 < 0 { return "" }
+    tgt   = string.substring(line, 0,      t1)
+    src   = string.substring(line, t1 + 1, t2)
+    rev_s = string.substring(line, t2 + 1, t3)
+    v_s   = string.substring(line, t3 + 1, n)
+    label = "applied"
+    if string.equals(v_s, "1") == 1 { label = "blocked" }
+    if string.equals(v_s, "2") == 1 { label = "reverse" }
+    out = "{\"target\":\""
+    out = string.concat(out, tgt)
+    out = string.concat(out, "\",\"source\":\"")
+    out = string.concat(out, src)
+    out = string.concat(out, "\",\"rev\":")
+    out = string.concat(out, rev_s)
+    out = string.concat(out, ",\"verb\":\"")
+    out = string.concat(out, label)
+    out = string.concat(out, "\"}")
+    return out
 }
 
 // Pretty-print one row from wc_pending_merge_dump:
