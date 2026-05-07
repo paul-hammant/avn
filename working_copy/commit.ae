@@ -224,6 +224,14 @@ export wc_commit(wc_root: string, author: string, logmsg: string) -> int {
     }
 
     new_rev = remote_commit_finish(cb, base_url, repo)
+    if new_rev == 0 - 12 {
+        // Server rejected with 409 — WC's base_rev predates HEAD and
+        // a path conflicts with an intervening commit. Pass -4 up so
+        // cmd_commit can print a distinct "out of date" message.
+        wc_nodelist_free(L)
+        wc_db_close(db)
+        return 0 - 4
+    }
     if new_rev < 0 {
         wc_nodelist_free(L)
         wc_db_close(db)

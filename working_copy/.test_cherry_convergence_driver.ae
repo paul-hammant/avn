@@ -178,17 +178,22 @@ main() {
     _, build_trunk_st, _ = sh(build_trunk)
 
     // ---- scenario A: release_a — cherry-pick C4 then C3, then sweep ------
+    // Round 268: avn doesn't yet support sub-path checkout
+    // (`svn checkout URL/release_a $WC_A` — see TODO MB-D follow-up).
+    // Workaround: checkout the repo root, then cd into release_a.
+    // wc_root walk-up (Round 267) handles the rest — merge/commit
+    // ops from inside the subdir find $WC_A as the WC root.
     do_a = "cd / && rm -rf "
     do_a = string.concat(do_a, wc_a)
     do_a = string.concat(do_a, " && ")
     do_a = string.concat(do_a, svn_bin)
     do_a = string.concat(do_a, " checkout ")
     do_a = string.concat(do_a, url)
-    do_a = string.concat(do_a, "/release_a ")
+    do_a = string.concat(do_a, " ")
     do_a = string.concat(do_a, wc_a)
     do_a = string.concat(do_a, " >/dev/null && cd ")
     do_a = string.concat(do_a, wc_a)
-    do_a = string.concat(do_a, " && ")
+    do_a = string.concat(do_a, "/release_a && ")
     // -c 4 then commit
     do_a = string.concat(do_a, svn_bin)
     do_a = string.concat(do_a, " merge -c 6 ")
@@ -214,17 +219,18 @@ main() {
     _, do_a_st, _ = sh(do_a)
 
     // ---- scenario B: release_b — cherry-pick C3 then C4, then sweep ------
+    // Same root-checkout-then-cd workaround as scenario A.
     do_b = "cd / && rm -rf "
     do_b = string.concat(do_b, wc_b)
     do_b = string.concat(do_b, " && ")
     do_b = string.concat(do_b, svn_bin)
     do_b = string.concat(do_b, " checkout ")
     do_b = string.concat(do_b, url)
-    do_b = string.concat(do_b, "/release_b ")
+    do_b = string.concat(do_b, " ")
     do_b = string.concat(do_b, wc_b)
     do_b = string.concat(do_b, " >/dev/null && cd ")
     do_b = string.concat(do_b, wc_b)
-    do_b = string.concat(do_b, " && ")
+    do_b = string.concat(do_b, "/release_b && ")
     // -c 3 then commit
     do_b = string.concat(do_b, svn_bin)
     do_b = string.concat(do_b, " merge -c 5 ")
@@ -250,25 +256,27 @@ main() {
     _, do_b_st, _ = sh(do_b)
 
     // ---- compare files ----------------------------------------------------
-    sha_a_app  = _sha_cmd(wc_a, "app.rb",             "MISSING_A")
-    sha_b_app  = _sha_cmd(wc_b, "app.rb",             "MISSING_B")
-    sha_a_test = _sha_cmd(wc_a, "happy_path_test.rb", "MISSING_A")
-    sha_b_test = _sha_cmd(wc_b, "happy_path_test.rb", "MISSING_B")
-    sha_a_gem  = _sha_cmd(wc_a, "Gemfile",            "MISSING_A")
-    sha_b_gem  = _sha_cmd(wc_b, "Gemfile",            "MISSING_B")
+    // Files now live under $WC_X/release_X/ rather than $WC_X/ (root
+    // checkout, see do_a / do_b above).
+    sha_a_app  = _sha_cmd(wc_a, "release_a/app.rb",             "MISSING_A")
+    sha_b_app  = _sha_cmd(wc_b, "release_b/app.rb",             "MISSING_B")
+    sha_a_test = _sha_cmd(wc_a, "release_a/happy_path_test.rb", "MISSING_A")
+    sha_b_test = _sha_cmd(wc_b, "release_b/happy_path_test.rb", "MISSING_B")
+    sha_a_gem  = _sha_cmd(wc_a, "release_a/Gemfile",            "MISSING_A")
+    sha_b_gem  = _sha_cmd(wc_b, "release_b/Gemfile",            "MISSING_B")
 
     // Diagnostic: trunk's own app.rb at HEAD (for context if convergence
     // fails — what should branches converge TO?).
     sha_t_app = _sha_cmd(wc_t, "trunk/app.rb",        "MISSING_T")
 
-    // Mergeinfo on release_a / release_b — should record main:3,4,5
+    // Mergeinfo on release_a / release_b — should record main:5,6,7
     // (the three revs swept in via cherry-pick + sweep).
     mi_a = string.concat("cd ", wc_a)
-    mi_a = string.concat(mi_a, " && ")
+    mi_a = string.concat(mi_a, "/release_a && ")
     mi_a = string.concat(mi_a, svn_bin)
     mi_a = string.concat(mi_a, " propget svn:mergeinfo . 2>/dev/null || echo ''")
     mi_b = string.concat("cd ", wc_b)
-    mi_b = string.concat(mi_b, " && ")
+    mi_b = string.concat(mi_b, "/release_b && ")
     mi_b = string.concat(mi_b, svn_bin)
     mi_b = string.concat(mi_b, " propget svn:mergeinfo . 2>/dev/null || echo ''")
 

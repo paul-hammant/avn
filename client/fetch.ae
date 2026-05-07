@@ -107,6 +107,10 @@ export post_for_rev(url: string, body: string, expected_status: int) -> int {
     status = response_status(resp)
     if status != expected_status {
         response_free(resp)
+        // Surface 409 (out of date — Round 264 added this on the
+        // server side) as -12 so wc_commit can pass it up to the CLI
+        // for a "WC out of date" message instead of generic failure.
+        if status == 409 { return 0 - 12 }
         return 0 - 1
     }
     body_str = response_body(resp)

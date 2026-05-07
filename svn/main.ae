@@ -32,9 +32,75 @@
 
 import std.string
 import std.io
+import std.os
 
 extern aether_args_count() -> int
 extern aether_args_get(index: int) -> string
+
+// Path helpers for the find_wc_anchor walk-up below.
+extern path_dirname(path: string) -> string
+extern path_basename(path: string) -> string
+extern io_is_regular_file(path: string) -> int
+
+// argv builder for shelling out to /bin/sh — used only by getcwd_,
+// the rest of svn/main.ae stays argv-list-free.
+extern list_new() -> ptr
+extern list_add_raw(list: ptr, item: ptr) -> int
+
+// ---- WC anchor (walk-up) -------------------------------------------------
+//
+// Classical SVN's CLI commands all walk up from cwd to find the WC
+// root (the dir containing `.svn/wc.db`). The pre-walk-up port
+// hardcoded `wc_root="."`, so any cmd run from a subdirectory of a
+// WC misbehaved — `wc_db_open` either silently created a phantom
+// WC (Round 264 / MB-C fixed that) or, post-MB-C, just failed.
+//
+// `find_wc_anchor_()` returns two values:
+//   wc_root     — absolute path of the WC root, or "" if none found
+//   cwd_offset  — path from wc_root to cwd. "" if cwd is the WC
+//                 root itself; e.g. "release_a" if the user is one
+//                 level deep, "release_a/sub" two levels deep.
+// `wc_join_(arg)` resolves a CLI path argument into a WC-relative
+// path: prepends cwd_offset (when non-empty) to the user's arg.
+
+getcwd_() -> string {
+    argv = list_new()
+    list_add_raw(argv, "-c")
+    list_add_raw(argv, "pwd -P")
+    out, _, _ = os.run_capture("/bin/sh", argv, null)
+    return string.trim(out)
+}
+
+find_wc_anchor_() -> (string, string) {
+    cur = getcwd_()
+    if string.length(cur) == 0 { return "", "" }
+    suffix = ""
+    while string.length(cur) > 0 {
+        candidate = string.concat(cur, "/.svn/wc.db")
+        if io_is_regular_file(candidate) == 1 { return cur, suffix }
+        parent = path_dirname(cur)
+        if string.equals(parent, cur) == 1 { return "", "" }
+        leaf = path_basename(cur)
+        if string.length(suffix) == 0 {
+            suffix = leaf
+        } else {
+            suffix = string.concat(leaf, string.concat("/", suffix))
+        }
+        cur = parent
+    }
+    return "", ""
+}
+
+// Resolve a CLI path argument into a WC-relative path. `cwd_offset`
+// is the second value from find_wc_anchor_; `arg` is what the user
+// typed. If arg is "" or ".", the WC-relative path is just
+// cwd_offset. Otherwise it's joined.
+wc_join_(cwd_offset: string, arg: string) -> string {
+    if string.equals(arg, ".") == 1 { return cwd_offset }
+    if string.length(arg) == 0     { return cwd_offset }
+    if string.length(cwd_offset) == 0 { return arg }
+    return string.concat(cwd_offset, string.concat("/", arg))
+}
 
 // --- RA externs (same as test_client.ae) --------------------------------------
 
@@ -796,20 +862,31 @@ cmd_commit(argv_start: int) {
     }
 
     if is_stateless == 0 {
-        // WC-backed.
+        // WC-backed. Walk up from cwd to find the WC root, the
+        // classical-SVN way — so `cd $WC/release_a && svn commit`
+        // works.
         author = find_flag("--author", argv_start)
         logmsg = find_flag("--log", argv_start)
         if string.length(author) == 0 || string.length(logmsg) == 0 {
             println("svn commit: --author and --log required")
             return 2
         }
-        new_rev = wc_commit(".", author, logmsg)
+        wc_root, _ = find_wc_anchor_()
+        if string.length(wc_root) == 0 {
+            println("svn commit: not a working copy (or any of the parent directories)")
+            return 1
+        }
+        new_rev = wc_commit(wc_root, author, logmsg)
         if new_rev == -2 {
             println("No changes to commit.")
             return 0
         }
         if new_rev == -3 {
             // conflicted paths present — error already printed by shim.
+            return 1
+        }
+        if new_rev == -4 {
+            println("svn commit: out of date — fetch and retry (svn update)")
             return 1
         }
         if new_rev < 0 {
@@ -892,11 +969,17 @@ cmd_add(argv_start: int) {
         println("svn add: requires at least one PATH")
         return 2
     }
+    wc_root, cwd_offset = find_wc_anchor_()
+    if string.length(wc_root) == 0 {
+        println("svn add: not a working copy (or any of the parent directories)")
+        return 1
+    }
     fails = 0
     i = argv_start
     while i < n {
         p = aether_args_get(i)
-        rc = wc_add(".", p)
+        rel = wc_join_(cwd_offset, p)
+        rc = wc_add(wc_root, rel)
         if rc == 0 {
             println("A         ${p}")
         } else {
@@ -1040,10 +1123,24 @@ cmd_merge(argv_start: int) {
             }
             a_s = string.substring(r_flag, 0, colon)
             b_s = string.substring(r_flag, colon + 1, string.length(r_flag))
-            if string.try_int(a_s) == 0 { println("svn merge: -r A not a number"); return 2 }
-            if string.try_int(b_s) == 0 { println("svn merge: -r B not a number"); return 2 }
-            rev_a = string.get_int(a_s)
-            rev_b = string.get_int(b_s)
+            // Allow HEAD as a symbolic name on either side — classical
+            // SVN's `-r N:HEAD` is the canonical "sweep merge".
+            base_for_head = base_url_deep(url)
+            repo_for_head = repo_name_deep(url)
+            if string.equals(a_s, "HEAD") == 1 {
+                rev_a = remote_head_rev(base_for_head, repo_for_head)
+                if rev_a < 0 { println("svn merge: cannot resolve HEAD"); return 2 }
+            } else {
+                if string.try_int(a_s) == 0 { println("svn merge: -r A not a number"); return 2 }
+                rev_a = string.get_int(a_s)
+            }
+            if string.equals(b_s, "HEAD") == 1 {
+                rev_b = remote_head_rev(base_for_head, repo_for_head)
+                if rev_b < 0 { println("svn merge: cannot resolve HEAD"); return 2 }
+            } else {
+                if string.try_int(b_s) == 0 { println("svn merge: -r B not a number"); return 2 }
+                rev_b = string.get_int(b_s)
+            }
         } else {
             // Fall back to URL@A:B classic form.
             n = string.length(url)
@@ -1075,7 +1172,18 @@ cmd_merge(argv_start: int) {
 
     source = in_repo_path(url)
 
-    rc = wc_merge(".", source, rev_a, rev_b, target)
+    // Walk up from cwd to find the WC anchor; combine cwd_offset
+    // with the user's `target` arg so `cd $WC/release_a && svn
+    // merge -c N URL .` lands on the right WC sub-path.
+    wc_root, cwd_offset = find_wc_anchor_()
+    if string.length(wc_root) == 0 {
+        println("svn merge: not a working copy (or any of the parent directories)")
+        return 1
+    }
+    merge_target = wc_join_(cwd_offset, target)
+    if string.length(merge_target) == 0 { merge_target = "." }
+
+    rc = wc_merge(wc_root, source, rev_a, rev_b, merge_target)
     if rc == -2 {
         println("svn merge: conflict(s) prevent merge")
         return 1
@@ -1131,7 +1239,13 @@ cmd_propget(argv_start: int) {
     }
     name = aether_args_get(argv_start)
     path = prop_path(aether_args_get(argv_start + 1))
-    v = propget_value(".", path, name)
+    wc_root, cwd_offset = find_wc_anchor_()
+    if string.length(wc_root) == 0 {
+        println("svn propget: not a working copy (or any of the parent directories)")
+        return 1
+    }
+    rel = wc_join_(cwd_offset, path)
+    v = propget_value(wc_root, rel, name)
     if string.length(v) == 0 {
         return 1
     }
@@ -1378,14 +1492,25 @@ cmd_switch(argv_start: int) {
 }
 
 cmd_status(argv_start: int) {
-    // `svn status` takes an optional WC path argument; defaults to '.'.
-    wc = "."
+    // `svn status` takes an optional WC path argument. With a path,
+    // pass it through directly (the path itself is treated as a WC
+    // root by wc_status — classical SVN walks up from the path,
+    // but our wc_status handler is happier with a real root). Only
+    // when no arg is given do we walk up from cwd.
+    wc = ""
     if aether_args_count() > argv_start {
         candidate = aether_args_get(argv_start)
         if string.length(candidate) > 0 {
             if string.char_at(candidate, 0) != 45 {
                 wc = candidate
             }
+        }
+    }
+    if string.length(wc) == 0 {
+        wc, _ = find_wc_anchor_()
+        if string.length(wc) == 0 {
+            println("svn status: not a working copy (or any of the parent directories)")
+            return 1
         }
     }
 
