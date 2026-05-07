@@ -217,7 +217,7 @@ calls this the "WC anchor" lookup; it's a well-trodden algorithm.
 | MB-D | 266 | cmd_checkout/cmd_ls used shallow `url_base`/`url_repo` (last-/-split) | use `base_url_deep` / `repo_name_deep` / `in_repo_path` (already existed for cmd_cp / cmd_merge) |
 | MB-E | 266 | (same as MB-D — `URL/branch_name` is the right grammar) | (same fix) |
 | MB-F | 267 | cmd_* hard-coded `wc_root="."` | `find_wc_anchor_()` walks up from cwd; cmd_add / cmd_commit / cmd_merge / cmd_propget / cmd_status converted |
-| MB-G | 268 | sweep `merge -r A:HEAD` ignored existing svn:mergeinfo, re-applied already-merged revs | `mergeinfo_highest_contiguous` shifts `rev_base` past the contiguous-prefix of already-merged revs; mergeinfo recorded on the merge target (not WC root) |
+| MB-G | 268 | sweep `merge -r A:HEAD` ignored existing svn:mergeinfo, re-applied already-merged revs | (Round 268 partial) shift `rev_base` past contiguous-prefix; mergeinfo recorded on the merge target (not WC root). (Round 269) **full non-contiguous filtering** — `mergeinfo_eligible_runs` splits the requested range into maximal-eligible chunks and applies each as a separate diff |
 
 **MB-D follow-up**: sub-path checkout (`svn checkout URL/release_a $WC`)
 still refuses with a clear "not yet supported" message. Full anchor
@@ -225,10 +225,13 @@ support requires recording the WC anchor in wc.db.info and having
 every wc_* call prepend it when sending paths server-ward. Filed as
 MB-D-2 if a real workflow needs it.
 
-**MB-G follow-up**: only the *contiguous prefix* of already-merged
-revs is shifted. Non-contiguous mergeinfo (e.g. `{6,8}` with sweep
-`{5..9}`) still re-applies the gaps. Real classical SVN runs each
-contiguous eligible chunk separately. Follow-up — file MB-G-2.
+**MB-G-2 (Round 269)**: non-contiguous mergeinfo handling now
+matches classical SVN. `mergeinfo_eligible_runs(existing, source,
+lo, hi)` splits the requested range into maximal contiguous runs
+of revs not yet merged; `wc_merge` iterates those runs and applies
+each as a separate `(lo..hi]` diff against the WC. Each chunk is
+its own `merge_walk_remote` × 2 + `merge_apply_*` pass, sharing
+one wc.db handle for the whole sweep.
 
 **MB-F decision pending** — 11 cmd_* still hardcode `wc_root="."`
 (cmd_rm, cmd_revert, cmd_diff, cmd_resolve, cmd_propset/del/list,
