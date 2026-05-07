@@ -46,7 +46,8 @@ extern repos_head_rev(repo: string) -> int
 extern repos_rev_field(repo: string, rev: int, key: string) -> string
 extern repos_inherit_rev_field(repo: string, prev: int, key: string, override: string) -> string
 extern rev_blob_body(root: string, branch: string, props: string, acl: string,
-                             prev: int, author: string, date: string, log: string) -> string
+                             prev: int, merged: string,
+                             author: string, date: string, log: string) -> string
 extern rev_pointer_write(repo: string, branch: string, next_rev: int,
                                      rev_sha: string) -> int
 extern branch_head_rev(repo: string, base: string) -> int
@@ -262,8 +263,10 @@ finalise_on_branch_(repo: string, txn: ptr,
     ps = string.copy(ps)
     as_ = string.copy(as_)
 
-    rev_body = rev_blob_body(new_root, branch, ps, as_, prev, author,
-                                     os.now_utc_iso8601(), logmsg)
+    // Phase 1.2: rev blob carries `merged:` field. Phase 1.3 will
+    // pass real merge data here from the txn — for now always "".
+    rev_body = rev_blob_body(new_root, branch, ps, as_, prev, "",
+                                     author, os.now_utc_iso8601(), logmsg)
     rev_sha_borrowed = rep_write_blob(repo, rev_body, string.length(rev_body))
     if string.length(rev_sha_borrowed) == 0 { return 0 - 1 }
     rev_sha = string.copy(rev_sha_borrowed)
@@ -337,8 +340,9 @@ export branch_create(repo: string, name: string, base: string,
     n_globs = count_globs_(globs_joined)
     logmsg = "create branch ${name} from ${base} with ${n_globs} include(s)"
 
-    rev_body = rev_blob_body(new_root, name, "", "", base_rev, author,
-                                     os.now_utc_iso8601(), logmsg)
+    // Branch creation is never a merge — `merged:` stays empty.
+    rev_body = rev_blob_body(new_root, name, "", "", base_rev, "",
+                                     author, os.now_utc_iso8601(), logmsg)
     rev_sha_borrowed = rep_write_blob(repo, rev_body, string.length(rev_body))
     if string.length(rev_sha_borrowed) == 0 { return 0 - 1 }
     rev_sha = string.copy(rev_sha_borrowed)

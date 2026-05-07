@@ -120,18 +120,27 @@ export format_secondary_hash(line: string, target: int) -> string {
 }
 
 // Rev-blob body formatter — ported from the three snprintf sites in
-// repo_storage/commit_shim.c that all build the same 8-field header:
+// repo_storage/commit_shim.c that all build the same header.
+// Fields, in order:
 //
 //   root: <sha>
 //   branch: <name>
 //   props: <sha>
 //   acl: <sha>
 //   prev: <int>
+//   merged: <source_branch>:<sha1>,<sha2>,...   (Round 271+; omitted when "")
 //   author: <user>
 //   date: <iso8601>
 //   log: <message>
+//
+// `merged` is the canonical record of what source revs this commit
+// integrated — see TODO MB-H. Empty `merged` means a non-merge
+// commit (the common case); the line is then omitted entirely so
+// the blob's bytes don't change for non-merge commits and old
+// rev-blob layouts continue to round-trip exactly.
 export rev_blob_body(root: string, branch: string, props: string, acl: string,
-                     prev: int, author: string, date: string, log: string) -> string {
+                     prev: int, merged: string,
+                     author: string, date: string, log: string) -> string {
     out = "root: "
     out = string.concat(out, root)
     out = string.concat(out, "\nbranch: ")
@@ -142,6 +151,10 @@ export rev_blob_body(root: string, branch: string, props: string, acl: string,
     out = string.concat(out, acl)
     out = string.concat(out, "\nprev: ")
     out = string.concat(out, string.from_int(prev))
+    if string.length(merged) > 0 {
+        out = string.concat(out, "\nmerged: ")
+        out = string.concat(out, merged)
+    }
     out = string.concat(out, "\nauthor: ")
     out = string.concat(out, author)
     out = string.concat(out, "\ndate: ")
@@ -150,6 +163,93 @@ export rev_blob_body(root: string, branch: string, props: string, acl: string,
     out = string.concat(out, log)
     out = string.concat(out, "\n")
     return out
+}
+
+// Encode the `merged:` line value. Phase 1.2 shape:
+//
+//   <source_branch>:<sha1>,<sha2>,<sha3>
+//
+// `source_revs_packed` is "\n"-separated SHAs (the same shape that
+// merge_ledger_record consumes). Returns "" when the source branch
+// is empty or no source revs were recorded — caller passes that
+// through to rev_blob_body and the merged: line is omitted.
+//
+// Verb (applied / record-only / reverse) is NOT in the rev blob
+// field — that's a ledger-only concern. Rebuild from rev blob
+// (Phase 4.1) assumes verb=applied; record-only and reverse are
+// special cases relevant to forward sweeps and reportage but not
+// to the canonical "what got integrated" question.
+export format_merged_field(source_branch: string,
+                           source_revs_packed: string) -> string {
+    if string.length(source_branch) == 0     { return "" }
+    if string.length(source_revs_packed) == 0 { return "" }
+    n = string.length(source_revs_packed)
+    out = string.concat(source_branch, ":")
+    first = 1
+    seg_start = 0
+    i = 0
+    while i <= n {
+        at_end = 0
+        if i == n { at_end = 1 }
+        if at_end == 0 {
+            c = string.char_at(source_revs_packed, i)
+            if c == 10 { at_end = 1 }
+        }
+        if at_end == 1 {
+            if i > seg_start {
+                sha = string.substring(source_revs_packed, seg_start, i)
+                if first == 0 { out = string.concat(out, ",") }
+                out = string.concat(out, sha)
+                first = 0
+            }
+            seg_start = i + 1
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// Decode a `merged:` field value back into (source_branch,
+// source_revs_packed). Inverse of format_merged_field. Returns
+// ("", "") on malformed input.
+//
+// Returns the SHA list in the same "\n"-separated shape the rest
+// of merge_ledger consumes.
+export parse_merged_field(value: string) -> (string, string) {
+    n = string.length(value)
+    if n == 0 { return "", "" }
+    // Split on the first ':'.
+    colon = 0 - 1
+    i = 0
+    while i < n {
+        if string.char_at(value, i) == 58 { colon = i; break }
+        i = i + 1
+    }
+    if colon < 0     { return "", "" }
+    if colon == 0    { return "", "" }
+    if colon == n - 1 { return "", "" }
+    src = string.substring(value, 0, colon)
+    // Remaining is comma-separated SHAs; convert to newline-separated.
+    out = ""
+    seg_start = colon + 1
+    j = colon + 1
+    while j <= n {
+        at_end = 0
+        if j == n { at_end = 1 }
+        if at_end == 0 {
+            c = string.char_at(value, j)
+            if c == 44 { at_end = 1 }   // ','
+        }
+        if at_end == 1 {
+            if j > seg_start {
+                out = string.concat(out, string.substring(value, seg_start, j))
+                out = string.concat(out, "\n")
+            }
+            seg_start = j + 1
+        }
+        j = j + 1
+    }
+    return src, out
 }
 
 

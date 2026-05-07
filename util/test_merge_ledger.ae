@@ -13,6 +13,14 @@ extern os_getpid_raw() -> int
 extern system(cmd: string) -> int
 
 extern merge_ledger_init_schema(repo: string) -> string
+
+// Phase 1.2: rev blob `merged:` field encode/decode.
+extern format_merged_field(source_branch: string, source_revs_packed: string) -> string
+extern parse_merged_field(value: string) -> (string, string)
+extern rev_blob_body(root: string, branch: string, props: string, acl: string,
+                     prev: int, merged: string,
+                     author: string, date: string, log: string) -> string
+extern blobfield_get(body: string, key: string) -> string
 extern merge_ledger_record(repo: string,
                            rev_sha: string,
                            target_branch: string, source_branch: string,
@@ -144,6 +152,63 @@ main() {
     fails = fails + expect_int("record-only of blocked sha", rec4, 0)
     fails = fails + expect_int("record-only counts as integrated for skip",
         merge_ledger_is_integrated(repo, "release_a", "main", sha_blocked), 1)
+
+    // ---- Phase 1.2: rev blob `merged:` field encode/decode ------
+
+    // Encoder: source + multiple SHAs → "src:sha1,sha2,sha3"
+    enc_three = format_merged_field("main", "${sha_src_a}\n${sha_src_b}\n${sha_src_c}\n")
+    fails = fails + expect_str("encode 3 SHAs",
+        enc_three, "main:${sha_src_a},${sha_src_b},${sha_src_c}")
+
+    // Encoder: empty source branch → ""
+    fails = fails + expect_str("encode empty src → empty",
+        format_merged_field("", "${sha_src_a}\n"), "")
+
+    // Encoder: empty SHA list → ""
+    fails = fails + expect_str("encode empty SHAs → empty",
+        format_merged_field("main", ""), "")
+
+    // Decoder: round-trip
+    dec_src, dec_revs = parse_merged_field(enc_three)
+    fails = fails + expect_str("decode src", dec_src, "main")
+    fails = fails + expect_str("decode SHAs",
+        dec_revs, "${sha_src_a}\n${sha_src_b}\n${sha_src_c}\n")
+
+    // Decoder: malformed (no colon)
+    bad_src, bad_revs = parse_merged_field("nocolon")
+    fails = fails + expect_str("decode no colon → empty src", bad_src, "")
+    fails = fails + expect_str("decode no colon → empty revs", bad_revs, "")
+
+    // Decoder: empty value
+    e_src, e_revs = parse_merged_field("")
+    fails = fails + expect_str("decode empty value → empty src", e_src, "")
+    fails = fails + expect_str("decode empty value → empty revs", e_revs, "")
+
+    // rev_blob_body: with merged → field appears in body, retrievable
+    // by blobfield_get (the canonical reader downstream callers use).
+    body_with = rev_blob_body("rsha", "release_a", "", "", 7, enc_three,
+                              "alice", "2026-05-07T12:00:00Z", "merge log")
+    got_merged = blobfield_get(body_with, "merged")
+    fails = fails + expect_str("rev_blob round-trip merged",
+        got_merged, enc_three)
+
+    // rev_blob_body: empty merged → no "merged:" line in body. Old
+    // rev blobs round-trip exactly the same as before this round.
+    body_no_merge = rev_blob_body("rsha", "main", "", "", 6, "",
+                                  "bob", "2026-05-07T12:00:00Z", "non-merge log")
+    no_merged = blobfield_get(body_no_merge, "merged")
+    fails = fails + expect_str("rev_blob_body omits merged: when empty",
+        no_merged, "")
+
+    // Other fields unaffected by merged: presence.
+    fails = fails + expect_str("root unchanged",
+        blobfield_get(body_with, "root"), "rsha")
+    fails = fails + expect_str("branch unchanged",
+        blobfield_get(body_with, "branch"), "release_a")
+    fails = fails + expect_str("author unchanged",
+        blobfield_get(body_with, "author"), "alice")
+    fails = fails + expect_str("log unchanged",
+        blobfield_get(body_with, "log"), "merge log")
 
     // Cleanup.
     system("rm -rf ${repo}")

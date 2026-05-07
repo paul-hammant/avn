@@ -42,7 +42,7 @@ extern admin_db_init_schema(repo: string) -> string
 extern merge_ledger_init_schema(repo: string) -> string
 
 extern rep_write_blob(repo: string, data: string, len: int) -> string
-extern rev_blob_body(root: string, branch: string, props: string, acl: string, prev: int, author: string, date: string, log: string) -> string
+extern rev_blob_body(root: string, branch: string, props: string, acl: string, prev: int, merged: string, author: string, date: string, log: string) -> string
 
 // Lay down the empty disk layout: dirs, format file, rep-cache schema.
 // No rev 0, no head — shared by `create` (which seeds rev 0 below)
@@ -113,7 +113,7 @@ seed_rev0_(repo: string) -> int {
     if string.length(empty_sha) == 0 { return 0 - 1 }
     empty_sha = string.copy(empty_sha)
 
-    rev0 = rev_blob_body(empty_sha, "main", "", "", 0,
+    rev0 = rev_blob_body(empty_sha, "main", "", "", 0, "",
                                  "(init)", os.now_utc_iso8601(),
                                  "initial empty revision")
     rev0_sha = rep_write_blob(repo, rev0, string.length(rev0))

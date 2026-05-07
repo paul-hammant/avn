@@ -17,7 +17,14 @@ main() {
         // directly rather than going through svnadmin/create.ae —
         // the ledger is the unit-under-test, the create-time wiring
         // is exercised end-to-end by the existing svnadmin tests.
+        //
+        // Phase 1.2 adds format_line.ae (rev_blob_body +
+        // format_merged_field + parse_merged_field) and
+        // blobfield.ae (the parser the rest of the port uses)
+        // for round-trip assertions.
         regen("../repo_storage/merge_ledger.ae")
+        regen("../repo_storage/format_line.ae")
+        regen("../repos/blobfield.ae")
         regen("../util/io.ae")
     }
 }
