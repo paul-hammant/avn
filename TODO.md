@@ -5,6 +5,83 @@ Tests are 32/32 green at HEAD (bash integration suite) plus 8/8
 Aether-native unit tests; 100% Aether (zero hand-written C); naming
 sweep finished through Round 206.
 
+## Cherry-pick convergence — bug-bait test (2026-05-06)
+
+`working_copy/.tests-cherry_convergence.ae` + `.test_cherry_convergence_driver.ae`
+mirrors the "limits of merging" blog
+(https://github.com/paul-hammant/limits-of-merging-experiment):
+build a 5-rev trunk on /trunk/, branch twice, run cherry-pick C4→C3
+then C3→C4 followed by sweep merge, assert both branches end byte-
+identical. Currently fails — surfaces several **regressions** vs.
+classical (C-implementation) Subversion, plus some features not yet
+ported. NOT in the root aggregator; run on demand:
+
+    aeb working_copy/.tests-cherry_convergence.ae
+
+The classical-SVN reference is the `svn-version` branch of the same
+upstream repo
+(https://github.com/paul-hammant/limits-of-merging-experiment/tree/svn-version).
+That branch's `start.sh` + `scenario-{a,b,c}*.sh` run the same
+workflow against `subversion` (Apache C implementation) and pass
+cleanly — including the `svn:mergeinfo` consultation on sweep
+merge. Anything our port fails at that the C version does not is
+a regression we introduced.
+
+### MB-A. `svn commit` from a stale WC silently overwrites HEAD ⚠ **CORRECTNESS BUG**
+Two WCs check out at r1, both edit the same file, both commit in
+sequence. Classical SVN rejects the second commit with "File or
+directory ... is out of date". avn's commits both as r2 and r3,
+**silently losing WC1's content**. Repro pinned in
+`/tmp/probe.log` from the 2026-05-07 probe.
+
+This is a data-loss bug, not a missing feature.
+
+### MB-B. `svn cp URL/path@PASTREV URL/dst` clobbers sibling top-level dirs
+With `/trunk`, `/release_a` already at HEAD, run
+`svn cp URL/trunk@1 URL/release_b`. Resulting tree drops
+`/release_a`. Classical SVN's `svn copy -r1 URL/trunk URL/branches/release`
+adds the new dir leaving siblings intact. Likely the avn server-
+side copy from past rev rebuilds the tree from the source-rev
+snapshot rather than starting from HEAD.
+
+### MB-C. WC subdirs aren't versioned
+`mkdir $WC/sub && cp file $WC/sub/ && cd $WC/sub && svn add file`
+prints `A  file` but the parent WC sees `?  sub` (unversioned). A
+subsequent `svn commit` from either the subdir OR the root says
+"No changes to commit" or "svn commit: failed". This breaks the
+SVN-classical `/trunk + /branches` layout entirely — `cd $WC/trunk &&
+svn add x && svn commit` is the canonical form and it doesn't
+work. Looks like the WC.db indexes a flat path-set keyed on
+the root-checkout dir.
+
+### MB-D. Sub-path checkout fails
+`svn checkout URL/sub_path $WC` returns "could not contact server"
+even when the path exists. Only root checkout works. Blocks the
+"branch into its own WC" workflow needed for cherry-picking onto
+a release branch in classical layout.
+
+### MB-E. Branch URL checkout (first-class branch syntax) fails
+`svn checkout URL;branch_name` (avn's first-class branch URL
+syntax) also returns "could not contact server". `svn branch
+create` works server-side but there's no way to get a WC of the
+branch.
+
+### MB-F. `svn add /absolute/path/to/file` fails (rc=-2)
+Only `cd $WC/.. && svn add relative/path` works. Classical SVN
+accepts both.
+
+### Severity & ordering
+- MB-A is a real bug (data loss, no warning) — fix first.
+- MB-D + MB-E together prevent any branch-shaped WC workflow.
+- MB-C prevents the classical `/trunk + /branches` layout in any
+  configuration.
+- MB-B + MB-F are paper cuts but visible at the surface.
+
+Until at least MB-A and MB-C/D are fixed, the cherry-pick
+convergence dance from svnbook §4 (https://svnbook.red-bean.com/en/1.6/svn.branchmerge.advanced.html#svn.branchmerge.cherrypicking)
+can't be reproduced in avn.
+
+
 ## Round 228 update
 
 Aether 0.116 shipped the `@aether string` per-param extern annotation
@@ -230,7 +307,7 @@ from inside a `@c_callback` body). Doc-only fix; lower urgency than
 when first filed.
 
 ### A2. Port-local module imports (`import port.X.Y`)
-Would unlock the `binbuf.slice(...)` / `Card.add()` ergonomics.
+Would unlock the `byte_ops.slice(...)` / `Card.add()` ergonomics.
 Sketched in N2 above. The link-symbol-flat-namespace shape
 forces noun-stacked names like `wc_db_node_exists` instead of
 `wc.db.node.exists` or `wc.db.node_exists`. A real ask but I'd

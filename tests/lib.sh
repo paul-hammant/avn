@@ -1,40 +1,23 @@
-# Shared bash test helpers. Sourced from two contexts:
+# Shared bash helpers for the surviving shell tests under svnadmin/.
 #
-#  1. A test_*.sh script under <dir>/        (BASH_SOURCE[1] points there)
-#  2. aeb's pre_command via .aeb/lib/svnae/  (cwd is already repo root)
+# All other test areas have migrated to aether.driver_test (Aether
+# drivers under .test_*_driver.ae). This file keeps just what those
+# two .sh scripts still need:
 #
-# After sourcing, $ROOT is the repo root and these are pre-set with
-# canonical default paths to the four port binaries (env-overridable):
+#   tlib_check LABEL EXPECTED ACTUAL
+#   tlib_summary "test_name"
+#   tlib_stop_server                  # kill $SRV; wait for it
+#
+# After sourcing, $ROOT is the repo root and the four binary paths
+# below are pre-set (env-overridable):
 #
 #   $ADMIN_BIN   target/svnadmin/bin/svnadmin
 #   $SERVER_BIN  target/svnserver/bin/aether-svnserver
 #   $SEED_BIN    target/svnserver/bin/svnae-seed
 #   $SVN_BIN     target/svn/bin/svn
-#
-# Test bodies (inside test_*.sh):
-#
-#   tlib_check LABEL EXPECTED ACTUAL
-#   tlib_summary "test_name"
-#
-# Inline-spawn helpers (kept for tests not yet on the SDK):
-#
-#   tlib_seed REPO                       # rm -rf REPO; seed it
-#   tlib_start_server PORT REPO [args]   # spawn server, $SRV gets the pid,
-#                                        # trap pkill on EXIT, sleep 1.5
-#   tlib_stop_server                     # kill $SRV, wait for it
-#
-# SDK-driven fixture (used from .aeb/lib/svnae's pre/post hooks):
-#
-#   tlib_seed_named NAME REPO              # like tlib_seed but exports ${NAME}_REPO
-#   tlib_fixture_server NAME PORT [args]   # spawn server (reads ${NAME}_REPO);
-#                                          # export ${NAME}_PORT/_PID/_LOG
-#   tlib_kill_servers                      # kill every fixture server
 
 if [ -n "${BASH_SOURCE[1]:-}" ] && [ -f "${BASH_SOURCE[1]}" ]; then
     cd "$(dirname "${BASH_SOURCE[1]}")/.."
-    # Sourced from a test script — fail-fast so a bad cd or failed
-    # binary launch doesn't leak files to cwd. (Pre_command from the
-    # SDK isn't a real script, so we skip this in that mode.)
     set -e
 fi
 ROOT="$(pwd)"
@@ -43,8 +26,6 @@ ADMIN_BIN="${ADMIN_BIN:-$ROOT/target/svnadmin/bin/svnadmin}"
 SERVER_BIN="${SERVER_BIN:-$ROOT/target/svnserver/bin/aether-svnserver}"
 SEED_BIN="${SEED_BIN:-$ROOT/target/svnserver/bin/svnae-seed}"
 SVN_BIN="${SVN_BIN:-$ROOT/target/svn/bin/svn}"
-
-TLIB_PIDS=""
 
 FAILS=0
 tlib_check() {
@@ -69,109 +50,11 @@ tlib_summary() {
     echo "${1:-test}: OK"
 }
 
-# --- Inline-spawn helpers (legacy; called from test bodies) ---
-
-# tlib_seed REPO — wipe and seed the canonical 3-commit tree.
-tlib_seed() {
-    local repo="$1"
-    rm -rf "$repo"
-    "$SEED_BIN" "$repo" >/dev/null
-}
-
-# tlib_start_server PORT REPO [REPO_NAME] [extra args...]
-# REPO_NAME defaults to "demo". $SRV gets the pid; trap pkill on EXIT.
-tlib_start_server() {
-    local port="$1" repo="$2" name="${3:-demo}"
-    shift 3 2>/dev/null || shift "$#"
-    "$SERVER_BIN" "$name" "$repo" "$port" "$@" >"/tmp/svnae_srv_${port}.log" 2>&1 &
-    SRV=$!
-    # shellcheck disable=SC2064
-    trap "pkill -f \"\${SERVER_BIN} .* ${port}\" 2>/dev/null || true" EXIT
-    sleep 1.5
-}
-
-# tlib_stop_server — kill $SRV (set by tlib_start_server). Idempotent.
+# tlib_stop_server — kill $SRV (set inline by callers). Idempotent.
 tlib_stop_server() {
     if [ -n "${SRV:-}" ]; then
         kill "$SRV" 2>/dev/null || true
         wait "$SRV" 2>/dev/null || true
         SRV=""
     fi
-}
-
-# --- SDK-driven fixture helpers (called from .aeb/lib/svnae pre/post) ---
-
-# tlib_seed_named NAME REPO — wipe REPO, seed it, export ${NAME}_REPO.
-tlib_seed_named() {
-    local name="$1" repo="$2"
-    rm -rf "$repo"
-    "$SEED_BIN" "$repo" >/dev/null
-    export "${name}_REPO=$repo"
-}
-
-# tlib_empty_repo NAME REPO — wipe REPO, run `svnadmin create`, export
-# ${NAME}_REPO. Used by tests that exercise create-time layout or
-# spawn their own server.
-tlib_empty_repo() {
-    local name="$1" repo="$2"
-    rm -rf "$repo"
-    "$ADMIN_BIN" create "$repo" >/dev/null
-    export "${name}_REPO=$repo"
-}
-
-# tlib_empty_repo_with_algos NAME REPO ALGOS — like tlib_empty_repo but
-# passes --algos ALGOS to svnadmin create. Used for multi-algo
-# (secondary hash) test fixtures.
-tlib_empty_repo_with_algos() {
-    local name="$1" repo="$2" algos="$3"
-    rm -rf "$repo"
-    "$ADMIN_BIN" create "$repo" --algos "$algos" >/dev/null
-    export "${name}_REPO=$repo"
-}
-
-# tlib_fixture_server NAME PORT [extra-server-args...]
-# Reads ${NAME}_REPO. Exports ${NAME}_PORT, ${NAME}_PID, ${NAME}_LOG.
-# Server is invoked as `aether-svnserver demo $repo $port $@` — URL
-# prefix "demo" is the convention every test already hardcodes; NAME
-# is just the fixture handle.
-tlib_fixture_server() {
-    local name="$1" port="$2"
-    shift 2
-    local repo_var="${name}_REPO" log="/tmp/svnae_srv_${name}_${port}.log"
-    local repo="${!repo_var}"
-    if [ -z "$repo" ]; then
-        echo "tlib_fixture_server: ${name}_REPO unset — call tlib_seed_named first" >&2
-        return 2
-    fi
-    "$SERVER_BIN" demo "$repo" "$port" "$@" >"$log" 2>&1 &
-    local pid=$!
-    export "${name}_PORT=$port"
-    export "${name}_PID=$pid"
-    export "${name}_LOG=$log"
-    TLIB_PIDS="$TLIB_PIDS $pid"
-    sleep 1.5
-}
-
-# tlib_kill_servers — kill every fixture server. Idempotent.
-tlib_kill_servers() {
-    if [ -n "$TLIB_PIDS" ]; then
-        # shellcheck disable=SC2086
-        kill $TLIB_PIDS 2>/dev/null || true
-        # shellcheck disable=SC2086
-        wait $TLIB_PIDS 2>/dev/null || true
-        TLIB_PIDS=""
-    fi
-}
-
-# tlib_use_fixture NAME — convenience for tests using the svnae SDK
-# fixture. Reads ${NAME}_PORT and ${NAME}_REPO that the SDK's
-# pre_command exported, sets local PORT, REPO, URL for the test body.
-# URL is the standard demo URL (every fixture spawns the server with
-# repo name "demo" — see tlib_fixture_server).
-tlib_use_fixture() {
-    local name="$1"
-    local port_var="${name}_PORT" repo_var="${name}_REPO"
-    PORT="${!port_var}"
-    REPO="${!repo_var}"
-    URL="http://127.0.0.1:$PORT/demo"
 }

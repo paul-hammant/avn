@@ -32,13 +32,10 @@ diverge freely on plumbing where doing so paid off.
   production-binary entries (svn, svnadmin, aether-svnserver,
   svnae-seed) were retired in Round 219; each now lives in its own
   `.build.ae`.
-- `.aeb/lib/svnae/module.ae` — port-local aeb SDK. Exposes
-  `svn_server`, `svn_server_with_token`, `empty_repo`, `empty_server`,
-  `empty_repo_with_algos`, `empty_server_with_algos` setters that
-  generate the right pre/post_command pairs for bash test fixtures.
-- `tests/lib.sh` — bash glue under the swan: `tlib_check`,
-  `tlib_summary`, plus `tlib_seed_named` / `tlib_fixture_server` /
-  `tlib_kill_servers` that the SDK setters call from pre/post_command.
+- `tests/lib.sh` — bash helpers (`tlib_check`, `tlib_summary`,
+  `tlib_stop_server`) used by the two surviving shell tests under
+  `svnadmin/`. Everything else has migrated to `aether.driver_test`
+  with a sibling `.test_*_driver.ae` driver.
 - `.tests.ae` (repo root) — aggregator. `build.dep`s every leaf
   `.tests*.ae`. Run `aeb` for scan-mode discovery or `aeb .tests.ae`
   for target-mode equivalent.
@@ -54,9 +51,9 @@ diverge freely on plumbing where doing so paid off.
   Paul mentions one.
 - **aetherBuild**: `~/scm/aetherBuild/`. Provides `aeb`, the build
   driver. `aeb --init` creates the `.aeb/lib/*` symlinks for the
-  shipped SDKs (build, aether, bash, …). The port-local svnae SDK
-  is tracked in-tree; it lives at `.aeb/lib/svnae/` (gitignore is
-  set up to exclude the symlinked SDKs but track `svnae`).
+  shipped SDKs (build, aether, bash, …). No port-local SDK any more
+  — fixtures use `aether.driver_test`'s `fixture_seed`/`fixture_server`
+  primitives directly.
 - **Aeocha** (Aether-native test framework): installed by Aether to
   `~/.local/share/aether/contrib/aeocha/`. Not used for the existing
   32 integration tests (those are bash scripts driving compiled
@@ -86,41 +83,17 @@ Outputs land under `target/<dir>/bin/<name>`.
 ### Test grammar
 
 Each integration test has its own `.tests-<tag>.ae` declaring the
-fixture via the svnae SDK:
+fixture via aeb's `aether.driver_test`. A sibling
+`.test_<tag>_driver.ae` is the test body. The fixture exports
+`${name}_PATH`, `${name}_BIN`, `${name}_PORT`, `${name}_PID`,
+`${name}_LOG` for each fixture_seed/fixture_server; the driver
+reads them via `os.getenv` and asserts via Aeocha matchers.
 
-```aether
-import build
-import bash
-import bash (script, pre_command, post_command)
-import svnae
-import svnae (svn_server)
-
-main() {
-    b = build.start()
-    build.dep(b, "svnserver")
-    build.dep(b, "svn")
-    bash.test(b) {
-        svn_server("acl", "9540")
-        script("test_acl.sh")
-    }
-}
-```
-
-The fixture spawns a seeded server, exports `${name}_PORT` and
-`${name}_REPO` into the script's env, kills the server after.
-Test scripts contain assertion logic only, no spawn/kill code.
-
-30 of 32 tests use this pattern. The 2 stragglers (`test_hash_algo`,
-`test_svnadmin`) are *meta-tests of svnadmin itself* — their fixture
-*is* the test, so they manage repo creation and server lifecycle
-inline. Don't migrate them.
-
-### Adding a new bash integration test
-
-1. Write `<area>/test_X.sh` with `source "$(dirname "$0")/../tests/lib.sh"` then assertions calling `tlib_check`. End with `tlib_summary "test_X"`.
-2. Add `<area>/.tests-X.ae` declaring the fixture.
-3. Add a `build.dep(b, "<area>/.tests-X.ae")` line to the root `.tests.ae` aggregator.
-4. Run `aeb` — should pass.
+The two `svnadmin/test_*.sh` scripts are *meta-tests of svnadmin
+itself* — their fixture *is* the test (repo creation, dump/load,
+server lifecycle inline) — so they remain shell. They share three
+helpers from `tests/lib.sh`: `tlib_check`, `tlib_summary`,
+`tlib_stop_server`.
 
 ### Adding a new Aether-native unit test (Aeocha)
 
@@ -147,7 +120,7 @@ import build
 import aether
 import aether (driver, output, binary_under_test,
                fixture_seed, fixture_server,
-               path, env_var, repo, seed_bin, bin, args, port,
+               path, env_var, seed_bin, bin, args, port,
                ready_after_ms)
 
 main() {
@@ -157,7 +130,7 @@ main() {
     build.dep(b, "svnserver/.build-seed.ae")
 
     aether.driver_test(b) {
-        driver("test_X_driver.ae")
+        driver(".test_X_driver.ae")
         output("X_driver")
 
         binary_under_test(b, "svn") {
@@ -166,12 +139,12 @@ main() {
         }
 
         fixture_seed(b, "primary") {
-            repo("/tmp/svnae_test_X_repo")
+            path("/tmp/svnae_test_X_repo")
             seed_bin("target/svnserver/bin/svnae-seed")
         }
         fixture_server(b, "primary") {
             bin("target/svnserver/bin/aether-svnserver")
-            args("demo $PRIMARY_REPO 9540")
+            args("demo $PRIMARY_PATH 9540")
             port(9540)
             ready_after_ms(1500)
         }
@@ -179,7 +152,7 @@ main() {
 }
 ```
 
-Skeleton `test_X_driver.ae`:
+Skeleton `.test_X_driver.ae`:
 
 ```aether
 import contrib.aeocha
@@ -207,21 +180,21 @@ main() {
 
 Required vs optional sub-setters:
 
-- `fixture_seed`: `repo` required, `seed_bin` optional (omit → just `mkdir -p`).
+- `fixture_seed`: `path` required, `seed_bin` optional (omit → just `mkdir -p`).
 - `fixture_server`: `bin` and `port` required, `args` defaults to "",
   `ready_after_ms` defaults to 0.
 - `binary_under_test`: `path` required, `env_var` defaults to `<UPPER(name)>_BIN`.
 
 Env-var contract exposed to the driver:
-`$<NAME>_REPO`, `$<NAME>_PORT`, `$<NAME>_PID`, `$<NAME>_BIN`.
+`$<NAME>_PATH`, `$<NAME>_PORT`, `$<NAME>_PID`, `$<NAME>_BIN`.
 
 Lifecycle: per-script seeds-then-servers spawn → sleep
 `ready_after_ms` → run driver → kill servers in reverse order →
-rm repos. Sequential test mode is forced when fixtures are present.
+rm fixture paths. Sequential test mode is forced when fixtures
+are present.
 
 `fixture_server`'s `args` string shell-interpolates at run time, so
-`args("demo $PRIMARY_REPO 9540")` picks up the seed's exported repo
-path.
+`args("demo $PRIMARY_PATH 9540")` picks up the seed's exported path.
 
 Two stragglers (`test_hash_algo`, `test_svnadmin`) are meta-tests
 of svnadmin itself — their fixture *is* the test, so they manage
@@ -284,27 +257,24 @@ repo creation and server lifecycle inline. Don't migrate them.
   `test_switch` switching between two repos) declare each
   fixture explicitly:
   ```aether
-  fixture_seed(b, "primary")   { repo("..."); seed_bin("...") }
-  fixture_seed(b, "secondary") { repo("..."); seed_bin("...") }
-  fixture_server(b, "primary")   { bin("..."); args("demo $PRIMARY_REPO 9480"); port(9480); ... }
-  fixture_server(b, "secondary") { bin("..."); args("demo $SECONDARY_REPO 9481"); port(9481); ... }
+  fixture_seed(b, "primary")   { path("..."); seed_bin("...") }
+  fixture_seed(b, "secondary") { path("..."); seed_bin("...") }
+  fixture_server(b, "primary")   { bin("..."); args("demo $PRIMARY_PATH 9480"); port(9480); ... }
+  fixture_server(b, "secondary") { bin("..."); args("demo $SECONDARY_PATH 9481"); port(9481); ... }
   ```
   Each fixture's name uppercases to a prefix: `$PRIMARY_PORT`,
-  `$PRIMARY_REPO`, `$SECONDARY_PORT`, etc. aeb spawns/kills both
+  `$PRIMARY_PATH`, `$SECONDARY_PORT`, etc. aeb spawns/kills both
   per test invocation. Round 236 canary:
   `working_copy/test_switch_driver.ae`.
-- **Token-auth pattern (svn_server_with_token replacement).** The
-  bash svnae SDK had `svn_server_with_token(name, port, token)`;
-  the closure-form way is to inline the token in `args`:
+- **Token-auth pattern.** Inline the token in `args`:
   ```aether
   fixture_server(b, "test_acl") {
       bin("target/svnserver/bin/aether-svnserver")
-      args("demo $TEST_ACL_REPO 9540 --superuser-token test-super-token-42")
+      args("demo $TEST_ACL_PATH 9540 --superuser-token test-super-token-42")
       port(9540); ready_after_ms(1500)
   }
   ```
-  Round 236 canary: `svn/test_acl_driver.ae`. The svnae SDK could
-  grow a closure-form variant later but inlining is fine for now.
+  Round 236 canary: `svn/test_acl_driver.ae`.
 - **Per-call env vars (SVN_USER=alice etc).** No `os.run_capture`
   env-list builder helper yet. Use `/bin/sh -c` and prefix the
   shell variables: `sh("SVN_USER=alice ${svn_bin} ls ${url}")`.
@@ -358,15 +328,10 @@ repo creation and server lifecycle inline. Don't migrate them.
   imported module changes transitively. If you see "Built (cache
   hit)" but suspect old code is being run, `ae cache clear`
   forces a re-emit.
-- **svnae SDK setters target `bash.test`, not `aether.driver_test`.**
-  Our `svn_server`/`empty_server` setters in `.aeb/lib/svnae/`
-  emit `pre_command`/`post_command` that `bash.test` consumes;
-  `aether.driver_test` only reads `fixture_seeds`/`fixture_servers`
-  map keys. For driver-test migrations, write the fixture inline
-  using aeb's native `fixture_seed(b, NAME) { repo(...); seed_bin(...) }`
-  and `fixture_server(b, NAME) { bin(...); args(...); port(...) }`
-  setters — see the skeleton above. Extending the svnae SDK with
-  driver-aware setters is a separate cleanup.
+- **Fixture authoring is inline now.** No port-local SDK; write
+  `fixture_seed(b, NAME) { path(...); seed_bin(...) }` and
+  `fixture_server(b, NAME) { bin(...); args(...); port(...) }`
+  directly in `.tests-<tag>.ae`.
 
 ## What stays in C
 
@@ -379,7 +344,7 @@ in each `.build.ae`. Our own `.ae` source compiles to C via
 ## Aether specifics that bite
 
 1. **`--emit=lib` requires `--with=net|fs|os` for capability-touching
-   imports.** The svnae SDK's `regen(...)` setter auto-detects from
+   imports.** aeb's `regen(...)` setter auto-detects from
    `import std.<X>` lines. Use `regen_with(NAME, "net,fs")` to override
    when imports are transitive.
 2. **Setters are fixed-arity.** `extra_source("a", "b", "c")` won't
@@ -416,8 +381,6 @@ aeb svn                 # via the dir's .tests.ae (or first .tests-*.ae)
 - `TODO.md` — outstanding small work.
 - `~/scm/aether/LLM.md` for Aether-side conventions.
 - `~/scm/aetherBuild/README.md` for aeb DSL reference.
-- `.aeb/lib/svnae/module.ae` is short — read it directly when
-  designing a new fixture setter.
 
 ## Don't
 
@@ -425,7 +388,7 @@ aeb svn                 # via the dir's .tests.ae (or first .tests-*.ae)
   aeb's `aether.program(b) { regen(...) }` setter handles codegen.
 - Don't add `[[bin]]` blocks to `aether.toml`. Each binary owns its
   own `.build.ae`.
-- Don't put server spawn/kill code in test bodies. Use the svnae SDK
-  fixture setters (or extend the SDK if a new shape is needed).
+- Don't put server spawn/kill code in test bodies. Use
+  `fixture_server(b, NAME) { ... }` inside `aether.driver_test`.
 - Don't batch into mega-commits. Baby commits, tests green between
   each.
