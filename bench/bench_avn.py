@@ -23,11 +23,17 @@
 import argparse
 import os
 import random
+import re
 import string
 import subprocess
 import sys
 import time
 from pathlib import Path
+
+# R286 — `avn commit` success line shape. We grep the new rev_sha out
+# and thread it as --parent-sha on the next commit, so each commit is
+# a single round-trip (no /info GET).
+SHA_RE = re.compile(r"\(sha: ([a-f0-9]{40})\)")
 
 REPO_DIR     = Path("/media/paul/eeee2/avn_bench_repo")
 PORT         = 9990
@@ -141,6 +147,10 @@ def main() -> int:
     wall_start  = time.time()
     batch_start = wall_start
     last_i      = 0
+    last_sha    = ""    # R286 chain CAS: empty for first commit (empty
+                        # repo); subsequent commits pass the previous
+                        # response's rev_sha as --parent-sha, eliminating
+                        # the /info round-trip avn would otherwise issue.
 
     try:
         log(f"starting {TOTAL} commits × {TEXT_SIZE}B random text, batches of {BATCH_SIZE}")
@@ -153,12 +163,23 @@ def main() -> int:
                 "--log", f"r{i}: random",
                 "--add-file", f"{file_path}={content}",
             ]
+            if last_sha:
+                argv.extend(["--parent-sha", last_sha])
             r = subprocess.run(argv, capture_output=True, timeout=120)
             if r.returncode != 0:
                 tail = (r.stderr or r.stdout or b"")[-300:]
                 log(f"COMMIT FAIL at i={i}: rc={r.returncode}: {tail!r}")
                 break
-            last_i = i
+            # Pull rev_sha out of "Committed revision N (sha: <40hex>)"
+            # for the next commit's --parent-sha. If the line shape
+            # changes (no sha), bail loudly — running blind would
+            # silently downgrade to /info-per-commit.
+            m = SHA_RE.search((r.stdout or b"").decode("utf-8", "replace"))
+            if not m:
+                log(f"COMMIT OUTPUT MISSING SHA at i={i}: {r.stdout[:200]!r}")
+                break
+            last_sha = m.group(1)
+            last_i   = i
 
             if i % BATCH_SIZE == 0:
                 now         = time.time()
