@@ -28,6 +28,7 @@ extern free(p: ptr)
 // HTTP plumbing + URL builder (still C-side / Aether-side modules).
 extern url_commit(base_url: string, repo_name: string) -> string
 extern post_for_rev(url: string, body: string, expected_status: int) -> int
+extern post_for_rev_sha(url: string, body: string, expected_status: int) -> (int, string)
 
 // Body builder lives in client/commit_build.ae; we drive it at
 // finish time. (The C side used to declare this as
@@ -60,12 +61,16 @@ struct RaCommit {
     merge_source_branch: string
     merge_source_revs_packed: string
     merge_verb: int
+    // R286 — parent_sha (mandatory chain CAS). Server requires this
+    // be the rev_sha currently at HEAD when base_rev > 0; absent /
+    // empty when base_rev == 0 (first commit on empty repo).
+    parent_sha: string
 }
 
 export remote_commit_begin(base_rev: int, author: string, logmsg: string) -> ptr {
-    // 160 bytes covers the 12-field struct (3 ints + 8 strings + 1
-    // int) on 64-bit. Pre-Round-274 was 128 (9 fields).
-    raw = malloc(160)
+    // 168 bytes covers the 13-field struct (3 ints + 9 strings + 1
+    // int) on 64-bit. Pre-Round-286 was 160 (12 fields, no parent_sha).
+    raw = malloc(168)
     if raw == null { return null }
     cb = raw as *RaCommit
     cb.base_rev = base_rev
@@ -81,7 +86,24 @@ export remote_commit_begin(base_rev: int, author: string, logmsg: string) -> ptr
     cb.merge_source_branch = string.copy("")
     cb.merge_source_revs_packed = string.copy("")
     cb.merge_verb = 0
+    cb.parent_sha = string.copy("")
     return raw
+}
+
+// R286 — set parent_sha for the upcoming commit. Called by the
+// caller (cmd_commit, wc_commit) once they've determined HEAD's
+// rev_sha (via remote_head_sha or threaded from a prior response).
+export remote_commit_set_parent_sha(cb_ptr: ptr, parent_sha: string) -> int {
+    if cb_ptr == null { return 0 - 1 }
+    cb = cb_ptr as *RaCommit
+    cb.parent_sha = string.copy(parent_sha)
+    return 0
+}
+
+export remote_cb_parent_sha(cb_ptr: ptr) -> string {
+    if cb_ptr == null { return "" }
+    cb = cb_ptr as *RaCommit
+    return cb.parent_sha
 }
 
 // Phase 2.1 — attach merged_from to a commit body. Called by
@@ -131,6 +153,19 @@ export remote_commit_finish(cb_ptr: ptr, base_url: string, repo_name: string) ->
     new_rev = post_for_rev(url, body_json, 200)
     free(cb_ptr)
     return new_rev
+}
+
+// R286 — same as remote_commit_finish but also returns the new
+// commit's rev_sha. Callers thread that sha as parent_sha on the
+// next commit (chain CAS, no /info round-trip needed).
+export remote_commit_finish_with_sha(cb_ptr: ptr, base_url: string,
+                                     repo_name: string) -> (int, string) {
+    if cb_ptr == null { return 0 - 1, "" }
+    body_json = remote_commit_build_body(cb_ptr)
+    url = url_commit(base_url, repo_name)
+    new_rev, new_sha = post_for_rev_sha(url, body_json, 200)
+    free(cb_ptr)
+    return new_rev, new_sha
 }
 
 // ---- accessors ---------------------------------------------------

@@ -105,6 +105,9 @@ wc_join_(cwd_offset: string, arg: string) -> string {
 // --- RA externs (same as test_client.ae) --------------------------------------
 
 extern remote_head_rev(base_url: string, repo_name: string) -> int
+// R286 — combined head_rev + head_sha lookup; saves a /info round-trip
+// per commit on the stateless path.
+extern remote_head(base_url: string, repo_name: string) -> (int, string)
 
 extern remote_log(base_url: string, repo_name: string) -> ptr
 extern remote_log_count(lg: ptr) -> int
@@ -170,6 +173,9 @@ extern remote_commit_add_file(cb: ptr, path: string, content: string, len: int) 
 extern remote_commit_mkdir(cb: ptr, path: string) -> int
 extern remote_commit_delete(cb: ptr, path: string) -> int
 extern remote_commit_finish(cb: ptr, base_url: string, repo_name: string) -> int
+// R286 — variant that also returns the new commit's rev_sha (for chain CAS).
+extern remote_commit_finish_with_sha(cb: ptr, base_url: string, repo_name: string) -> (int, string)
+extern remote_commit_set_parent_sha(cb: ptr, parent_sha: string) -> int
 extern remote_commit_acl_add(cb: ptr, path: string, rule: string) -> int
 
 extern set_user(user: string)
@@ -572,7 +578,9 @@ cmd_acl(argv_start: int) {
     path = aether_args_get(argv_start + 2)
     base = url_base(url)
     repo = url_repo(url)
-    head = remote_head_rev(base, repo)
+    // R286 — combined HEAD lookup; pass both rev and sha down so
+    // the commit body can carry parent_sha (server now requires it).
+    head, head_sha = remote_head(base, repo)
     if head < 0 {
         println("avn acl: could not contact server")
         return 1
@@ -596,18 +604,20 @@ cmd_acl(argv_start: int) {
             println("avn acl set: at least one RULE required")
             return 2
         }
-        return cmd_acl_set(head, base, repo, path, argv_start)
+        return cmd_acl_set(head, head_sha, base, repo, path, argv_start)
     }
     if string.equals(verb, "clear") == 1 {
-        return cmd_acl_clear(head, base, repo, path)
+        return cmd_acl_clear(head, head_sha, base, repo, path)
     }
 
     println("avn acl: unknown verb '${verb}'")
     return 2
 }
 
-cmd_acl_set(head: int, base: string, repo: string, path: string, argv_start: int) {
+cmd_acl_set(head: int, head_sha: string, base: string, repo: string,
+            path: string, argv_start: int) {
     cb = remote_commit_begin(head, "acl-admin", "avn acl set ${path}")
+    remote_commit_set_parent_sha(cb, head_sha)
     i = argv_start + 3
     n = aether_args_count()
     while i < n {
@@ -623,8 +633,9 @@ cmd_acl_set(head: int, base: string, repo: string, path: string, argv_start: int
     return 0
 }
 
-cmd_acl_clear(head: int, base: string, repo: string, path: string) {
+cmd_acl_clear(head: int, head_sha: string, base: string, repo: string, path: string) {
     cb = remote_commit_begin(head, "acl-admin", "avn acl clear ${path}")
+    remote_commit_set_parent_sha(cb, head_sha)
     remote_commit_acl_add(cb, path, "+*")
     new_rev = remote_commit_finish(cb, base, repo)
     if new_rev < 0 {
@@ -1652,13 +1663,24 @@ cmd_commit(argv_start: int) {
         return 2
     }
 
-    base_rev = remote_head_rev(base, repo)
+    // R286 — fetch base_rev AND HEAD's rev_sha together (one /info
+    // round-trip for both). The CLI flag --parent-sha SHA overrides
+    // the auto-fetched sha — useful for programmatic callers that
+    // thread the sha across commits without re-querying HEAD, and
+    // for explicit conflict-detection ("I want to commit ON TOP OF
+    // exactly this sha").
+    base_rev, head_sha = remote_head(base, repo)
     if base_rev < 0 {
         println("avn commit: could not contact server")
         return 1
     }
+    parent_override = find_flag("--parent-sha", argv_start)
+    if string.length(parent_override) > 0 {
+        head_sha = parent_override
+    }
 
     cb = remote_commit_begin(base_rev, author, logmsg)
+    remote_commit_set_parent_sha(cb, head_sha)
 
     // R285 — stateless commit auto-creates parent directories for any
     // --add-file path. Pre-R285 the user had to interleave matching
@@ -1712,12 +1734,20 @@ cmd_commit(argv_start: int) {
         i = i + 1
     }
 
-    new_rev = remote_commit_finish(cb, base, repo)
+    new_rev, new_sha = remote_commit_finish_with_sha(cb, base, repo)
+    if new_rev == 0 - 12 {
+        println("avn commit: out of date — fetch and retry (parent_sha mismatch?)")
+        return 1
+    }
     if new_rev < 0 {
         println("avn commit: server rejected commit")
         return 1
     }
-    println("Committed revision ${new_rev}.")
+    if string.length(new_sha) > 0 {
+        println("Committed revision ${new_rev} (sha: ${new_sha})")
+    } else {
+        println("Committed revision ${new_rev}.")
+    }
     return 0
 }
 

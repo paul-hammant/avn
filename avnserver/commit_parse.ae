@@ -37,6 +37,10 @@
 //   -10  : unknown op
 //   -11  : commit finalise failed
 //   -12  : out of date (base_rev predates HEAD and a path conflicts)
+//   -13  : parent_sha mismatch (R286 — git-style chain CAS).
+//          Either: (a) base_rev > 0 and parent_sha is missing/empty,
+//          (b) parent_sha doesn't match the rev_sha currently at HEAD,
+//          (c) base_rev == 0 but parent_sha is non-empty.
 
 import std.string
 import std.json
@@ -104,6 +108,36 @@ export commit_from_body(req: ptr, res: ptr, repo: string) -> int {
     if string.length(bbe) > 0 { json.free(root); return -3 }
     if jbase == null { json.free(root); return -3 }
     base_rev = json.get_int(jbase)
+
+    // R286 — parent_sha (mandatory git-style chain CAS).
+    //   base_rev == 0 → must be absent or empty (first commit, no prior rev)
+    //   base_rev  > 0 → must be present + match repos_rev_blob_sha(repo, base_rev)
+    //                   (= the SHA currently at HEAD)
+    // Catches: stale-WC commits where the rev number happens to match
+    // (e.g. after a hypothetical history-rewrite or re-init), and
+    // double-commit replays where the client's HEAD assumption is
+    // already stale.
+    sent_parent_sha = ""
+    jpsha, jpe = json.object_get(root, "parent_sha")
+    if string.length(jpe) == 0 {
+        if jpsha != null {
+            ps, pserr = json.get_string(jpsha)
+            if string.length(pserr) == 0 {
+                sent_parent_sha = string.copy(ps)
+            }
+        }
+    }
+    if base_rev == 0 {
+        if string.length(sent_parent_sha) > 0 {
+            json.free(root); return -13
+        }
+    } else {
+        head_sha = repos_rev_blob_sha(repo, base_rev)
+        if string.length(head_sha) == 0 { json.free(root); return -13 }
+        if string.equals(sent_parent_sha, head_sha) == 0 {
+            json.free(root); return -13
+        }
+    }
 
     jauthor, jae = json.object_get(root, "author")
     if string.length(jae) > 0 { json.free(root); return -3 }

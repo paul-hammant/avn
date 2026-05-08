@@ -75,10 +75,16 @@ main() {
     code_nosuch = string.concat(code_nosuch, "/repos/nosuch/info")
 
     // POST /commit
-    commit_post = "COMMIT_JSON=$(python3 -c '"
-    commit_post = string.concat(commit_post, "import base64, json\n")
+    // R286: parent_sha is mandatory; fetch HEAD's rev_sha from /info
+    // and weave it into the body. `export` is required so the
+    // PARENT_SHA shell variable reaches the python subprocess's env.
+    commit_post = "export PARENT_SHA=$(curl -sf "
+    commit_post = string.concat(commit_post, base)
+    commit_post = string.concat(commit_post, "/info | python3 -c 'import sys,json; print(json.load(sys.stdin)[\"head_sha\"])') && ")
+    commit_post = string.concat(commit_post, "COMMIT_JSON=$(python3 -c '")
+    commit_post = string.concat(commit_post, "import base64, json, os\n")
     commit_post = string.concat(commit_post, "content = b\"// added by HTTP client\\n\"\n")
-    commit_post = string.concat(commit_post, "body = {\"base_rev\":3,\"author\":\"http-client\",\"log\":\"via POST /commit\",\"edits\":[{\"op\":\"add-file\",\"path\":\"CHANGELOG\",\"content\":base64.b64encode(content).decode()},{\"op\":\"delete\",\"path\":\"src/main.c\"}]}\n")
+    commit_post = string.concat(commit_post, "body = {\"base_rev\":3,\"parent_sha\":os.environ[\"PARENT_SHA\"],\"author\":\"http-client\",\"log\":\"via POST /commit\",\"edits\":[{\"op\":\"add-file\",\"path\":\"CHANGELOG\",\"content\":base64.b64encode(content).decode()},{\"op\":\"delete\",\"path\":\"src/main.c\"}]}\n")
     commit_post = string.concat(commit_post, "print(json.dumps(body))') && ")
     commit_post = string.concat(commit_post, "curl -sf -X POST -H 'Content-Type: application/json' -d \"$COMMIT_JSON\" ")
     commit_post = string.concat(commit_post, base)

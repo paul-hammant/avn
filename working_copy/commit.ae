@@ -65,6 +65,10 @@ extern wc_hash_file(wc_root: string, path: string) -> string
 
 // RA commit builder (C-side opaque).
 extern remote_commit_begin(base_rev: int, author: string, logmsg: string) -> ptr
+// R286 — parent_sha setter on the commit builder, plus the head_sha
+// fetch (combined with head_rev in one /info round-trip).
+extern remote_commit_set_parent_sha(cb: ptr, parent_sha: string) -> int
+extern remote_head_sha(base_url: string, repo_name: string) -> string
 extern remote_commit_add_file(cb: ptr, path: string, content: string, len: int) -> int
 extern remote_commit_mkdir(cb: ptr, path: string) -> int
 extern remote_commit_delete(cb: ptr, path: string) -> int
@@ -169,6 +173,17 @@ export wc_commit(wc_root: string, author: string, logmsg: string) -> int {
 
     // Pass 1: build the RA commit.
     cb = remote_commit_begin(base_rev, author, logmsg)
+    // R286 — fetch HEAD's rev_sha and stamp it as parent_sha. The
+    // server validates parent_sha == repos_rev_blob_sha(repo, base_rev).
+    // For the WC's stale-base case (someone else committed on top of
+    // our base_rev), the server's existing rev-num check (-12 → 409)
+    // already catches it; this just adds belt-and-braces SHA-level CAS.
+    // First commit on empty repo (base_rev == 0): pass empty string.
+    parent_head_sha = ""
+    if base_rev > 0 {
+        parent_head_sha = remote_head_sha(base_url, repo)
+    }
+    remote_commit_set_parent_sha(cb, parent_head_sha)
     any_edits = 0
     i = 0
     while i < n {
@@ -248,7 +263,16 @@ export wc_commit(wc_root: string, author: string, logmsg: string) -> int {
         // Nothing to commit. We finish to free the builder; the server
         // produces a new rev for an empty edit list (matches HTTP-layer
         // behaviour). Tests want a meaningful sentinel, so return -2.
-        remote_commit_finish(cb, base_url, repo)
+        //
+        // R286: capture the new rev and bump wc.db's base_rev so a
+        // subsequent commit doesn't get rejected by the parent_sha
+        // CAS for sending a stale base_rev. Pre-R286 the empty-edits
+        // path discarded the new_rev silently, leaving the WC out of
+        // sync with the server's actual HEAD.
+        empty_rev = remote_commit_finish(cb, base_url, repo)
+        if empty_rev > 0 {
+            wc_db_set_info(db, "base_rev", "${empty_rev}")
+        }
         wc_nodelist_free(L)
         wc_db_close(db)
         return 0 - 2

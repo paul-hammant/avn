@@ -309,10 +309,14 @@ export rev_response_json(rev: int) -> string {
     return string.concat(out, "}")
 }
 
+// R286 — field renamed from "sha" to "rev_sha" for clarity (the
+// rev's blob SHA, used by the next commit as parent_sha in chain CAS).
+// No clients parsed the prior "sha" field — verified by grep at R286
+// time — so the rename is safe.
 export rev_sha_response_json(rev: int, sha: string) -> string {
     out = "{\"rev\":"
     out = string.concat(out, string.from_int(rev))
-    out = string.concat(out, ",\"sha\":")
+    out = string.concat(out, ",\"rev_sha\":")
     out = string.concat(out, json_escape_string(sha))
     return string.concat(out, "}")
 }
@@ -325,11 +329,16 @@ export rev_branch_response_json(rev: int, branch: string) -> string {
     return string.concat(out, "}")
 }
 
-// Prelude of /info: {"head":N,"name":"...","hash_algo":"...","default_branch":"main"
-// Stops before ,"branches":[...] so the C side can still stream the branch list.
-export info_prelude_json(head: int, name: string, hash_algo: string) -> string {
+// Prelude of /info: {"head":N,"head_sha":"…","name":"...","hash_algo":"...","default_branch":"main"
+// Stops before ,"branches":[...] so the rest of info_json.ae can still
+// stream the branch list. R286 added head_sha so clients can grab the
+// parent_sha for their next commit in a single round-trip.
+export info_prelude_json(head: int, head_sha: string,
+                         name: string, hash_algo: string) -> string {
     out = "{\"head\":"
     out = string.concat(out, string.from_int(head))
+    out = string.concat(out, ",\"head_sha\":")
+    out = string.concat(out, json_escape_string(head_sha))
     out = string.concat(out, ",\"name\":")
     out = string.concat(out, json_escape_string(name))
     out = string.concat(out, ",\"hash_algo\":")

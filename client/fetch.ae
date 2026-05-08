@@ -32,6 +32,7 @@ extern response_status(resp: ptr) -> int
 extern response_body(resp: ptr) -> string
 extern response_free(resp: ptr)
 extern remote_parse_rev_response(body: string) -> int
+extern remote_parse_rev_sha_response(body: string) -> string
 extern url_info(base: string, repo: string) -> string
 extern url_log(base: string, repo: string) -> string
 extern url_rev_info(base: string, repo: string, rev: int) -> string
@@ -188,6 +189,26 @@ export post_for_rev(url: string, body: string, expected_status: int) -> int {
     rev = remote_parse_rev_response(body_str)
     response_free(resp)
     return rev
+}
+
+// R286 — same as post_for_rev but also returns the rev_sha from the
+// response body. Used by remote_commit_finish_with_sha so the CLI /
+// programmatic caller can chain parent_sha into the next commit.
+// Returns (-1, "") on any failure (incl. -12 for HTTP 409).
+export post_for_rev_sha(url: string, body: string, expected_status: int) -> (int, string) {
+    resp = post_json(url, body, string.length(body))
+    if resp == null { return 0 - 1, "" }
+    status = response_status(resp)
+    if status != expected_status {
+        response_free(resp)
+        if status == 409 { return 0 - 12, "" }
+        return 0 - 1, ""
+    }
+    body_str = response_body(resp)
+    rev = remote_parse_rev_response(body_str)
+    sha = string.copy(remote_parse_rev_sha_response(body_str))
+    response_free(resp)
+    return rev, sha
 }
 
 main() {

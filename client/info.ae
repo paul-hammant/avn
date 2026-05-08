@@ -22,6 +22,7 @@ import std.string
 
 extern url_info(base: string, repo: string) -> string
 extern remote_parse_head_rev(body: string) -> int
+extern remote_parse_head_sha(body: string) -> string
 extern remote_parse_hash_algo(body: string) -> string
 extern get_200(url: string) -> string
 
@@ -31,6 +32,26 @@ export remote_head_rev(base_url: string, repo_name: string) -> int {
     body = get_200(url_info(base_url, repo_name))
     if string.length(body) == 0 { return 0 - 1 }
     return remote_parse_head_rev(body)
+}
+
+// R286 — returns the rev_sha at HEAD as a 40-char hex string.
+// Empty string on empty repo (head=0) or transport failure. Used by
+// stateless clients to thread parent_sha into their next commit.
+export remote_head_sha(base_url: string, repo_name: string) -> string {
+    body = get_200(url_info(base_url, repo_name))
+    if string.length(body) == 0 { return "" }
+    return string.copy(remote_parse_head_sha(body))
+}
+
+// R286 — combined head_rev + head_sha fetch. One round-trip; caller
+// gets both values back via the tuple. Stateless cmd_commit uses
+// this so we don't pay two /info GETs per commit.
+export remote_head(base_url: string, repo_name: string) -> (int, string) {
+    body = get_200(url_info(base_url, repo_name))
+    if string.length(body) == 0 { return 0 - 1, "" }
+    rv  = remote_parse_head_rev(body)
+    sha = string.copy(remote_parse_head_sha(body))
+    return rv, sha
 }
 
 // Returns the server's primary content-address algorithm, or "" on

@@ -15,12 +15,16 @@
 
 // POST /repos/{r}/commit — multi-edit atomic commit.
 // Request body JSON:
-//   { "base_rev": N, "author": "...", "log": "...",
+//   { "base_rev": N,
+//     "parent_sha": "abc…",       (R286 — required when base_rev > 0)
+//     "author": "...", "log": "...",
 //     "edits": [ {op, path, content?}, ... ],
 //     "props"?: { path: {k:v, ...}, ... },
 //     "acl"?: { path: ["+alice", "-eve"], ... },
 //     "branch"?: "..." }
-// → 200 {"rev": N+1}
+// → 200 {"rev": N+1, "rev_sha": "def…"}
+//   The new commit's rev_sha is what the next commit must send as
+//   parent_sha (chain CAS).
 //
 // JSON parse, ACL + branch-spec pre-scan, txn-build (including
 // base64 decode of add-file content), props and acl blob assembly,
@@ -37,6 +41,12 @@ extern svnserver_find_repo_path(name: string) -> string
 extern commit_from_body(req: ptr, res: ptr, repo: string) -> int
 
 extern rev_response_json(rev: int) -> string
+extern rev_sha_response_json(rev: int, sha: string) -> string
+
+// Look up the rev_sha for a given rev number — used to compose the
+// commit response (R286 chain CAS: client needs the new rev's SHA so
+// it can pass it as parent_sha on the next commit).
+extern repos_rev_blob_sha(repo: string, rev: int) -> string
 
 extern svnserver_respond_error(res: ptr, code: int, msg: string)
 extern svnserver_respond_json_ok(res: ptr, body: string)
@@ -113,8 +123,26 @@ export handler_commit(req: ptr, res: ptr) {
         svnserver_respond_error(res, 409, "out of date — fetch and retry")
         return
     }
+    if rv == -13 {
+        // R286 — parent_sha chain mismatch. Same 409 shape as -12;
+        // separate diagnostic so a client can tell the two apart in
+        // the body.
+        svnserver_respond_error(res, 409,
+            "out of date — parent_sha mismatch; fetch HEAD and retry")
+        return
+    }
 
-    svnserver_respond_json_ok(res, rev_response_json(rv))
+    // R286 — emit {"rev": N, "rev_sha": "..."} so the client can chain
+    // CAS on the next commit. rev_sha lookup is a small file read
+    // (revs/N is just 41 bytes); same cost as the validation read on
+    // entry. If the lookup fails (shouldn't, just succeeded above),
+    // fall back to the rev-only response — better than 500.
+    new_sha = repos_rev_blob_sha(repo, rv)
+    if string.length(new_sha) > 0 {
+        svnserver_respond_json_ok(res, rev_sha_response_json(rv, new_sha))
+    } else {
+        svnserver_respond_json_ok(res, rev_response_json(rv))
+    }
 }
 
 

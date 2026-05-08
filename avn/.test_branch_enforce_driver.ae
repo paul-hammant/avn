@@ -93,11 +93,15 @@ main() {
     case_d = string.concat(src_helpers, "put_branch feat README readme2")
 
     // Case E: bulk /commit POST with mixed bad path
-    case_e = "base=$(curl -s "
+    // R286: parent_sha is mandatory; fetch HEAD's rev_sha alongside
+    // the rev number from /info.
+    case_e = "info=$(curl -s "
     case_e = string.concat(case_e, base_url)
-    case_e = string.concat(case_e, "/info | grep -oE '\"head\":[0-9]+' | grep -oE '[0-9]+'); ")
+    case_e = string.concat(case_e, "/info); ")
+    case_e = string.concat(case_e, "base=$(echo \"$info\" | grep -oE '\"head\":[0-9]+' | grep -oE '[0-9]+'); ")
+    case_e = string.concat(case_e, "psha=$(echo \"$info\" | grep -oE '\"head_sha\":\"[a-f0-9]+\"' | sed 's/.*\"\\([a-f0-9]*\\)\"/\\1/'); ")
     case_e = string.concat(case_e, "b64=$(printf bar | base64 | tr -d '\\n'); ")
-    case_e = string.concat(case_e, "code=$(curl -s -o /tmp/p.out -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d \"{\\\"base_rev\\\":$base,\\\"branch\\\":\\\"readme-only\\\",\\\"author\\\":\\\"alice\\\",\\\"log\\\":\\\"m\\\",\\\"edits\\\":[{\\\"op\\\":\\\"add-file\\\",\\\"path\\\":\\\"README\\\",\\\"content\\\":\\\"$b64\\\"},{\\\"op\\\":\\\"add-file\\\",\\\"path\\\":\\\"src/x.c\\\",\\\"content\\\":\\\"$b64\\\"}]}\" ")
+    case_e = string.concat(case_e, "code=$(curl -s -o /tmp/p.out -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d \"{\\\"base_rev\\\":$base,\\\"parent_sha\\\":\\\"$psha\\\",\\\"branch\\\":\\\"readme-only\\\",\\\"author\\\":\\\"alice\\\",\\\"log\\\":\\\"m\\\",\\\"edits\\\":[{\\\"op\\\":\\\"add-file\\\",\\\"path\\\":\\\"README\\\",\\\"content\\\":\\\"$b64\\\"},{\\\"op\\\":\\\"add-file\\\",\\\"path\\\":\\\"src/x.c\\\",\\\"content\\\":\\\"$b64\\\"}]}\" ")
     case_e = string.concat(case_e, base_url)
     case_e = string.concat(case_e, "/commit); echo \"BASE=$base CODE=$code\"; head2=$(curl -s ")
     case_e = string.concat(case_e, base_url)

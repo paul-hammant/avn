@@ -42,6 +42,9 @@ extern remote_cb_merge_source_branch(cb: ptr) -> string
 extern remote_cb_merge_source_revs_packed(cb: ptr) -> string
 extern remote_cb_merge_verb(cb: ptr) -> int
 
+// R286 — parent_sha accessor for the chain CAS.
+extern remote_cb_parent_sha(cb: ptr) -> string
+
 // Round 146: writers ported from C (remote_commit_add_file etc.
 // in ra/shim.c). The struct stays C-side; setters below replace
 // the old pack_append + 5 add-op pile.
@@ -178,6 +181,11 @@ export remote_commit_build_body(cb: ptr) -> string {
     json.object_set(body, "base_rev", json.create_number(remote_cb_base_rev(cb)))
     json.object_set(body, "author", json_create_string(remote_cb_author(cb)))
     json.object_set(body, "log", json_create_string(remote_cb_logmsg(cb)))
+
+    // R286 — parent_sha. Always emitted (server validates: empty
+    // when base_rev==0, non-empty match-of-HEAD when base_rev>0).
+    psha = remote_cb_parent_sha(cb)
+    json.object_set(body, "parent_sha", json_create_string(psha))
 
     // edits: array of {op, path, [content]}. Records: "<op>\x01<path>\x01<b64>".
     edits = json_create_array()

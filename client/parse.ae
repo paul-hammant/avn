@@ -40,6 +40,18 @@ export remote_parse_head_rev(body: string) -> int {
     return rv
 }
 
+// R286 — parse {"head_sha": "..."} from /info. Returns "" if the
+// field is missing (empty repo, head=0) or the body is malformed.
+// Used by clients to thread parent_sha into their next commit.
+export remote_parse_head_sha(body: string) -> string {
+    if string.length(body) == 0 { return "" }
+    root, err = json.parse(body)
+    if string.length(err) > 0 { return "" }
+    s = get_string_field(root, "head_sha")
+    json.free(root)
+    return s
+}
+
 // Parse {"rev": N} → N. Same shape as remote_parse_head_rev but for
 // the commit/copy/branch-create response bodies. Returns -1 on any
 // failure.
@@ -53,6 +65,17 @@ export remote_parse_rev_response(body: string) -> int {
     rv = json.get_int(h)
     json.free(root)
     return rv
+}
+
+// R286 — parse {"rev_sha": "..."} from a commit/copy/branch-create
+// response. Returns "" on miss (e.g. older server's rev-only response).
+export remote_parse_rev_sha_response(body: string) -> string {
+    if string.length(body) == 0 { return "" }
+    root, err = json.parse(body)
+    if string.length(err) > 0 { return "" }
+    s = get_string_field(root, "rev_sha")
+    json.free(root)
+    return s
 }
 
 // Parse {"hash_algo": "sha1" | "sha256"} → algo name. Older
