@@ -1,0 +1,48 @@
+[2026-05-07 22:27:47] removing existing /media/paul/eeee2/avn_bench_repo
+[2026-05-07 22:27:48] run tag: nocompress
+[2026-05-07 22:27:48] creating repo at /media/paul/eeee2/avn_bench_repo
+[2026-05-07 22:27:50] AVN_NO_COMPRESS=1 (server-side zlib disabled)
+[2026-05-07 22:27:50] starting avnserver on port 9990
+[2026-05-07 22:27:52] starting 20000 commits × 102400B random text, batches of 500
+[2026-05-07 22:28:50] batch 1: 500/20000 commits, batch=57.7s, avg=115ms, repo=0MB, total=58s
+[2026-05-07 22:29:54] batch 2: 1000/20000 commits, batch=64.0s, avg=128ms, repo=0MB, total=122s
+[2026-05-07 22:30:59] batch 3: 1500/20000 commits, batch=64.9s, avg=130ms, repo=0MB, total=186s
+[2026-05-07 22:32:04] batch 4: 2000/20000 commits, batch=65.0s, avg=130ms, repo=0MB, total=252s
+[2026-05-07 22:33:07] batch 5: 2500/20000 commits, batch=63.7s, avg=127ms, repo=0MB, total=315s
+[2026-05-07 22:34:11] batch 6: 3000/20000 commits, batch=63.3s, avg=127ms, repo=1MB, total=378s
+[2026-05-07 22:35:14] batch 7: 3500/20000 commits, batch=62.8s, avg=126ms, repo=1MB, total=441s
+[2026-05-07 22:36:17] batch 8: 4000/20000 commits, batch=63.6s, avg=127ms, repo=1MB, total=505s
+[2026-05-07 22:37:20] batch 9: 4500/20000 commits, batch=62.4s, avg=125ms, repo=1MB, total=567s
+[2026-05-07 22:38:22] batch 10: 5000/20000 commits, batch=62.0s, avg=124ms, repo=1MB, total=629s
+[2026-05-07 22:39:25] batch 11: 5500/20000 commits, batch=63.4s, avg=127ms, repo=2MB, total=693s
+[2026-05-07 22:40:29] batch 12: 6000/20000 commits, batch=64.3s, avg=129ms, repo=2MB, total=757s
+[2026-05-07 22:41:33] batch 13: 6500/20000 commits, batch=63.8s, avg=128ms, repo=2MB, total=821s
+[2026-05-07 22:42:36] batch 14: 7000/20000 commits, batch=63.2s, avg=126ms, repo=2MB, total=884s
+[2026-05-07 22:43:39] batch 15: 7500/20000 commits, batch=62.9s, avg=126ms, repo=2MB, total=947s
+[2026-05-07 22:44:44] batch 16: 8000/20000 commits, batch=64.7s, avg=129ms, repo=2MB, total=1012s
+[2026-05-07 22:45:45] batch 17: 8500/20000 commits, batch=60.8s, avg=122ms, repo=3MB, total=1072s
+[2026-05-07 22:46:48] batch 18: 9000/20000 commits, batch=63.4s, avg=127ms, repo=3MB, total=1136s
+[2026-05-07 22:47:52] batch 19: 9500/20000 commits, batch=64.1s, avg=128ms, repo=3MB, total=1200s
+[2026-05-07 22:48:58] batch 20: 10000/20000 commits, batch=65.9s, avg=132ms, repo=3MB, total=1266s
+[2026-05-07 22:50:07] batch 21: 10500/20000 commits, batch=68.3s, avg=137ms, repo=3MB, total=1334s
+[2026-05-07 22:51:10] batch 22: 11000/20000 commits, batch=63.3s, avg=127ms, repo=4MB, total=1397s
+[2026-05-07 22:52:11] batch 23: 11500/20000 commits, batch=61.4s, avg=123ms, repo=4MB, total=1459s
+[2026-05-07 22:53:14] batch 24: 12000/20000 commits, batch=63.0s, avg=126ms, repo=4MB, total=1522s
+[2026-05-07 22:54:18] batch 25: 12500/20000 commits, batch=63.9s, avg=128ms, repo=4MB, total=1586s
+[2026-05-07 22:55:23] batch 26: 13000/20000 commits, batch=64.7s, avg=129ms, repo=4MB, total=1650s
+[2026-05-07 22:56:27] batch 27: 13500/20000 commits, batch=64.0s, avg=128ms, repo=4MB, total=1714s
+[2026-05-07 22:57:29] batch 28: 14000/20000 commits, batch=62.3s, avg=125ms, repo=5MB, total=1777s
+[2026-05-07 22:58:34] batch 29: 14500/20000 commits, batch=64.6s, avg=129ms, repo=5MB, total=1841s
+[2026-05-07 22:59:38] batch 30: 15000/20000 commits, batch=63.6s, avg=127ms, repo=5MB, total=1905s
+[2026-05-07 23:00:42] batch 31: 15500/20000 commits, batch=64.8s, avg=130ms, repo=5MB, total=1970s
+[2026-05-07 23:01:48] batch 32: 16000/20000 commits, batch=65.9s, avg=132ms, repo=5MB, total=2035s
+[2026-05-07 23:02:53] batch 33: 16500/20000 commits, batch=65.1s, avg=130ms, repo=6MB, total=2101s
+[2026-05-07 23:03:57] batch 34: 17000/20000 commits, batch=63.9s, avg=128ms, repo=6MB, total=2164s
+[2026-05-07 23:05:03] batch 35: 17500/20000 commits, batch=65.5s, avg=131ms, repo=6MB, total=2230s
+[2026-05-07 23:06:07] batch 36: 18000/20000 commits, batch=64.4s, avg=129ms, repo=6MB, total=2294s
+[2026-05-07 23:07:14] batch 37: 18500/20000 commits, batch=66.5s, avg=133ms, repo=6MB, total=2361s
+[2026-05-07 23:08:21] batch 38: 19000/20000 commits, batch=66.8s, avg=134ms, repo=7MB, total=2428s
+[2026-05-07 23:09:34] batch 39: 19500/20000 commits, batch=73.9s, avg=148ms, repo=7MB, total=2502s
+[2026-05-07 23:10:38] batch 40: 20000/20000 commits, batch=63.4s, avg=127ms, repo=7MB, total=2565s
+[2026-05-07 23:10:38] DONE. 20000 commits in 2566s (7.8 commits/sec mean)
+[2026-05-07 23:10:38] stopping avnserver

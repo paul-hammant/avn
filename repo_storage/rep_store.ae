@@ -36,6 +36,8 @@
 import std.string
 import std.fs
 import std.zlib
+import std.os
+import std.os (os_getenv)
 
 // C-side byte helpers, shared with working_copy/pristine.ae — same binary-
 // safe concat / slice over AetherString buffers. Defined once in
@@ -70,13 +72,25 @@ rep_encode_blob(data: string, length: int) -> string {
     body = data
     body_len = length
 
+    // Bench escape hatch (R285): AVN_NO_COMPRESS=1 in the server's
+    // env stores blobs raw regardless of size, bypassing the zlib
+    // pass entirely. Cuts CPU on the commit path at the cost of
+    // 5–15× larger reps/. Used by bench/bench_avn.py to measure the
+    // compression overhead in steady-state commit latency.
     if length > 0 {
-        zb, zl, zerr = zlib.deflate(data, length, 6)
-        if string.length(zerr) == 0 {
-            if zl + 16 < length {
-                use_zlib = 1
-                body = zb
-                body_len = zl
+        skip_zlib = 0
+        nc = os_getenv("AVN_NO_COMPRESS")
+        if string.length(nc) > 0 {
+            if string.equals(nc, "1") == 1 { skip_zlib = 1 }
+        }
+        if skip_zlib == 0 {
+            zb, zl, zerr = zlib.deflate(data, length, 6)
+            if string.length(zerr) == 0 {
+                if zl + 16 < length {
+                    use_zlib = 1
+                    body = zb
+                    body_len = zl
+                }
             }
         }
     }

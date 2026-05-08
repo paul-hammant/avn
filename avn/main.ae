@@ -1552,6 +1552,41 @@ cmd_cat(argv_start: int) {
     return 0
 }
 
+// R285 — auto-mkdir helpers for the stateless commit path.
+//
+// emit_mkdir_unique_: emit a `mkdir DIR` op into the commit body iff
+// DIR isn't already in the seen-set. Returns the updated seen-set.
+// Empty DIR is a no-op (caller side hits this for a leading slash or
+// a leaf-only path). Seen-set encoding is "\nDIR\n\nDIR2\n..." so
+// substring lookup with `\nDIR\n` doesn't false-positive on prefix
+// collisions like "ab" vs "a".
+emit_mkdir_unique_(cb: ptr, dir: string, seen: string) -> string {
+    if string.length(dir) == 0 { return seen }
+    needle = string.concat("\n", string.concat(dir, "\n"))
+    if string.index_of(seen, needle) >= 0 { return seen }
+    remote_commit_mkdir(cb, dir)
+    return string.concat(seen, needle)
+}
+
+// emit_auto_mkdirs_: walk PATH's parent prefixes root-first ("a/b/c.txt"
+// → ["a", "a/b"]) and call emit_mkdir_unique_ for each. Returns the
+// updated seen-set. Order matters: parents land in the txn before
+// the file edit so the server's tree-rebuild has the dir to write
+// into.
+emit_auto_mkdirs_(cb: ptr, path: string, seen: string) -> string {
+    n = string.length(path)
+    s = seen
+    i = 0
+    while i < n {
+        if string.char_at(path, i) == 47 {     // '/'
+            parent = string.substring(path, 0, i)
+            s = emit_mkdir_unique_(cb, parent, s)
+        }
+        i = i + 1
+    }
+    return s
+}
+
 cmd_commit(argv_start: int) {
     // Two modes:
     //   stateless:  avn commit URL --author A --log M --add-file P=C ...
@@ -1625,9 +1660,24 @@ cmd_commit(argv_start: int) {
 
     cb = remote_commit_begin(base_rev, author, logmsg)
 
+    // R285 — stateless commit auto-creates parent directories for any
+    // --add-file path. Pre-R285 the user had to interleave matching
+    // --mkdir flags themselves; missing one silently dropped the
+    // file from the txn (the server-side rebuild walks the tree
+    // top-down and skips edits whose anchor doesn't exist). git-style
+    // implicit-parents is the more ergonomic default and avoids that
+    // footgun. The WC-backed commit path already does this implicitly
+    // via the WC walker.
+    //
+    // `mkdirs_seen` is a "\n"-bracketed dedup set: looked up via
+    // `\nDIR\n` substring, written by appending the same. Cheap at
+    // typical commit-edit counts (≤ a few dozen), and avoids
+    // double-emitting mkdirs when several add-files share parents.
+
     // Scan argv for --add-file / --mkdir / --delete and add edits.
     n = aether_args_count()
     i = argv_start
+    mkdirs_seen = ""
     while i < n {
         a = aether_args_get(i)
         if string.equals(a, "--add-file") == 1 {
@@ -1638,6 +1688,7 @@ cmd_commit(argv_start: int) {
                 if eq >= 0 {
                     path = string.substring(spec, 0, eq)
                     content = string.substring(spec, eq + 1, string.length(spec))
+                    mkdirs_seen = emit_auto_mkdirs_(cb, path, mkdirs_seen)
                     remote_commit_add_file(cb, path, content, string.length(content))
                 }
             }
@@ -1646,7 +1697,7 @@ cmd_commit(argv_start: int) {
         }
         if string.equals(a, "--mkdir") == 1 {
             if i + 1 < n {
-                remote_commit_mkdir(cb, aether_args_get(i + 1))
+                mkdirs_seen = emit_mkdir_unique_(cb, aether_args_get(i + 1), mkdirs_seen)
             }
             i = i + 2
             continue
