@@ -99,20 +99,33 @@ load_rev_root_sha1_(repo: string, rev: int) -> string {
     return string.copy(v)
 }
 
-// Populate path_rev index: one row per path this rev touched. Derived
-// from a tree-diff against base_rev's root, reusing repos_paths_
-// changed (which itself diffs the new rev against its predecessor).
+// Populate path_rev index: one row per path this rev touched.
+//
+// R287 — read paths from the txn directly. The pre-R287 path called
+// repos_paths_changed which did a tree-diff (flatten + sort + merge);
+// flatten was O(N) per dir (post-R287 iter fix) but sort_by_path's
+// O(N²) insertion sort × O(N) indexed dir-blob accessors gave
+// O(N³) per commit — the dominant cost surfaced when the bench's
+// `f/` dir grew past ~50 entries.
+//
+// The txn already carries the explicit paths every edit touched —
+// that IS the path-rev signal we want. txn-based iteration is O(M)
+// where M is the txn's edit count (small; not tied to repo size).
+//
+// Subtree-delete coverage: the WC commit path (working_copy/commit.ae)
+// walks its node list and emits one delete edit per tracked child,
+// so the txn already carries every affected path. Server-direct
+// callers (seed.ae, test_repos.ae) only delete leaf files. There's
+// no implicit-children gap to backfill here.
 //
 // Falls through silently if the table doesn't exist yet (very old
 // repos), so this stays safe during gradual schema migration.
-populate_path_rev_(repo: string, branch: string, rev: int) {
-    P = repos_paths_changed(repo, rev)
-    if P == null { return 0 }
-    pn = repos_paths_count(P)
-    if pn == 0 { repos_paths_free(P); return 0 }
+populate_path_rev_(repo: string, branch: string, rev: int, txn: ptr) {
+    n_edits = txn_count(txn)
+    if n_edits == 0 { return 0 }
 
     db, oerr = sqlite.open("${repo}/rep-cache.db")
-    if string.length(oerr) > 0 { repos_paths_free(P); return 0 }
+    if string.length(oerr) > 0 { return 0 }
 
     // Schema retrofit: seeded-from-scratch repos (via seed.ae) didn't
     // go through avnadmin/create when the path_rev table was added,
@@ -125,9 +138,10 @@ populate_path_rev_(repo: string, branch: string, rev: int) {
         "INSERT OR IGNORE INTO path_rev (branch, path, rev) VALUES (?, ?, ?)")
     if string.length(perr) == 0 {
         i = 0
-        while i < pn {
+        while i < n_edits {
+            epath = txn_edit_path(txn, i)
             sqlite.bind_text(stmt, 1, branch)
-            sqlite.bind_text(stmt, 2, repos_paths_path(P, i))
+            sqlite.bind_text(stmt, 2, epath)
             sqlite.bind_int (stmt, 3, rev)
             sqlite.step(stmt, db)
             sqlite.reset(stmt)
@@ -137,7 +151,6 @@ populate_path_rev_(repo: string, branch: string, rev: int) {
     }
     sqlite.exec(db, "COMMIT")
     sqlite.close(db)
-    repos_paths_free(P)
     return 0
 }
 
@@ -303,7 +316,7 @@ finalise_on_branch_(repo: string, txn: ptr,
     // Write the 4-file pointer set (legacy + per-branch).
     if rev_pointer_write(repo, branch, next, rev_sha) != 0 { return 0 - 1 }
 
-    populate_path_rev_(repo, branch, next)
+    populate_path_rev_(repo, branch, next, txn)
 
     // Merge ledger row(s) — atomic enough: rev blob already on disk
     // (rep_write_blob is content-addressed, so re-writing is a

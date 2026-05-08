@@ -53,6 +53,13 @@ extern dir_entry_kind(body: string, i: int) -> int
 extern dir_entry_sha(body: string, i: int) -> string
 extern dir_entry_name(body: string, i: int) -> string
 extern dir_entry_line(kind: int, sha: string, name: string) -> string
+// R287 — streaming iterator for the hot rebuild loop.
+extern dir_iter_new(body: string) -> ptr
+extern dir_iter_next(it: ptr) -> int
+extern dir_iter_kind(it: ptr) -> int
+extern dir_iter_sha(it: ptr) -> string
+extern dir_iter_name(it: ptr) -> string
+extern dir_iter_free(it: ptr) -> int
 
 extern path_is_immediate_child(path: string, pfx: string) -> int
 extern path_basename_after(path: string, pfx: string) -> string
@@ -94,128 +101,144 @@ txn_find_edit_kind(txn: ptr, path: string) -> int {
     return 0
 }
 
+// R287 — all reclist_* helpers refactored to use the streaming
+// dir-blob iterator. Pre-R287 each helper called dir_count_entries
+// then dir_entry_name/kind/sha(body, i) — three O(N) scans per
+// iteration → O(N²) per call, O(N³) per rebuild. With the iterator
+// each call is one linear pass: O(N) per call, O(N²) per rebuild.
+// (The string-concat cost in append-and-rebuild is still O(N) per
+// call because the body string is re-created; total per-rebuild
+// allocation is O(N²) bytes — same shape as fs_fs's classical
+// directory rewrite cost, and the bottleneck after this fix is the
+// blob-write path, not the in-memory walk.)
+
 // Remove the line whose name field matches `name` from a reclist
 // body. Returns the new body. Keeps all other lines in place.
 reclist_remove(body: string, name: string) -> string {
-    n = dir_count_entries(body)
     out = ""
-    i = 0
-    while i < n {
-        ename = dir_entry_name(body, i)
+    it = dir_iter_new(body)
+    while dir_iter_next(it) == 1 {
+        ename = dir_iter_name(it)
         if string.equals(ename, name) == 0 {
             out = string.concat(out, dir_entry_line(
-                dir_entry_kind(body, i),
-                dir_entry_sha(body, i),
-                ename))
+                dir_iter_kind(it), dir_iter_sha(it), ename))
         }
-        i = i + 1
     }
+    dir_iter_free(it)
     return out
 }
 
 // Insert-or-replace a line in the reclist. Match by name; if present,
 // overwrite its kind+sha; if absent, append.
 reclist_add(body: string, name: string, kind: int, sha: string) -> string {
-    n = dir_count_entries(body)
     found = 0
     out = ""
-    i = 0
-    while i < n {
-        ename = dir_entry_name(body, i)
+    it = dir_iter_new(body)
+    while dir_iter_next(it) == 1 {
+        ename = dir_iter_name(it)
         if string.equals(ename, name) == 1 {
             found = 1
             out = string.concat(out, dir_entry_line(kind, sha, name))
         }
         if string.equals(ename, name) == 0 {
             out = string.concat(out, dir_entry_line(
-                dir_entry_kind(body, i),
-                dir_entry_sha(body, i),
-                ename))
+                dir_iter_kind(it), dir_iter_sha(it), ename))
         }
-        i = i + 1
     }
+    dir_iter_free(it)
     if found == 0 {
         out = string.concat(out, dir_entry_line(kind, sha, name))
     }
     return out
 }
 
+// R287 fast path: append a line WITHOUT scanning for collisions.
+// Caller must guarantee `name` doesn't already exist in `body`.
+// Used by rebuild_dir step 1 where each base-dir entry is unique
+// vs every other entry seeded so far. O(rl_length) per call vs
+// reclist_add's O(N) — and at the rebuild-loop scale that's the
+// difference between O(N²) and O(N³).
+reclist_append_unique_(body: string, name: string, kind: int, sha: string) -> string {
+    return string.concat(body, dir_entry_line(kind, sha, name))
+}
+
 // Does a dir named `name` already exist in the body? Used by the
 // mkdir branch to avoid clobbering a subdir whose sha we've just
 // computed via recursion.
 reclist_has_dir(body: string, name: string) -> int {
-    n = dir_count_entries(body)
-    i = 0
-    while i < n {
-        if dir_entry_kind(body, i) == 100 {   // 'd'
-            if string.equals(dir_entry_name(body, i), name) == 1 {
-                return 1
+    found = 0
+    it = dir_iter_new(body)
+    while dir_iter_next(it) == 1 {
+        if dir_iter_kind(it) == 100 {   // 'd'
+            if string.equals(dir_iter_name(it), name) == 1 {
+                found = 1
+                break
             }
         }
-        i = i + 1
     }
-    return 0
+    dir_iter_free(it)
+    return found
 }
 
 // Look up a dir entry's sha by name. Empty string if absent.
 reclist_dir_sha(body: string, name: string) -> string {
-    n = dir_count_entries(body)
-    i = 0
-    while i < n {
-        if dir_entry_kind(body, i) == 100 {
-            if string.equals(dir_entry_name(body, i), name) == 1 {
-                return dir_entry_sha(body, i)
+    out = ""
+    it = dir_iter_new(body)
+    while dir_iter_next(it) == 1 {
+        if dir_iter_kind(it) == 100 {
+            if string.equals(dir_iter_name(it), name) == 1 {
+                out = string.copy(dir_iter_sha(it))
+                break
             }
         }
-        i = i + 1
     }
-    return ""
+    dir_iter_free(it)
+    return out
 }
 
 // Update just the sha field of an existing entry (identified by name,
 // kind unchanged).
 reclist_update_sha(body: string, name: string, new_sha: string) -> string {
-    n = dir_count_entries(body)
     out = ""
-    i = 0
-    while i < n {
-        ename = dir_entry_name(body, i)
-        ekind = dir_entry_kind(body, i)
+    it = dir_iter_new(body)
+    while dir_iter_next(it) == 1 {
+        ename = dir_iter_name(it)
+        ekind = dir_iter_kind(it)
         if string.equals(ename, name) == 1 {
             out = string.concat(out, dir_entry_line(ekind, new_sha, ename))
         }
         if string.equals(ename, name) == 0 {
             out = string.concat(out, dir_entry_line(
-                ekind, dir_entry_sha(body, i), ename))
+                ekind, dir_iter_sha(it), ename))
         }
-        i = i + 1
     }
+    dir_iter_free(it)
     return out
 }
 
-// Sort the reclist body by name (simple insertion sort over the
-// parsed entries, then re-serialise). The reclist is typically <20
-// entries so O(N²) is fine.
+// Sort the reclist body by name. Insertion sort — O(N²) algorithmic,
+// but with iterator-based O(1) access per step (vs the pre-R287
+// O(N²) per insertion via indexed accessors → O(N⁴) total).
 reclist_sort(body: string) -> string {
+    // Bail quickly when there's at most one entry.
     n = dir_count_entries(body)
     if n <= 1 { return body }
 
-    // Insertion sort by rebuilding the body. We walk entries 0..n and
-    // insert each one at the right position into a running result.
+    // Insertion sort: walk entries linearly via iterator; insert each
+    // into a running sorted result via a second iterator pass.
     sorted = ""
-    i = 0
-    while i < n {
-        this_name = dir_entry_name(body, i)
-        this_kind = dir_entry_kind(body, i)
-        this_sha  = dir_entry_sha(body, i)
+    it = dir_iter_new(body)
+    while dir_iter_next(it) == 1 {
+        this_name = string.copy(dir_iter_name(it))
+        this_kind = dir_iter_kind(it)
+        this_sha  = string.copy(dir_iter_sha(it))
 
         // Walk sorted so far, insert in order.
-        sn = dir_count_entries(sorted)
         new_sorted = ""
         placed = 0
-        j = 0
-        while j < sn {
-            jname = dir_entry_name(sorted, j)
+        sit = dir_iter_new(sorted)
+        while dir_iter_next(sit) == 1 {
+            jname = dir_iter_name(sit)
             if placed == 0 {
                 if string.compare(this_name, jname) < 0 {
                     new_sorted = string.concat(new_sorted,
@@ -224,17 +247,16 @@ reclist_sort(body: string) -> string {
                 }
             }
             new_sorted = string.concat(new_sorted,
-                dir_entry_line(dir_entry_kind(sorted, j),
-                                      dir_entry_sha(sorted, j), jname))
-            j = j + 1
+                dir_entry_line(dir_iter_kind(sit), dir_iter_sha(sit), jname))
         }
+        dir_iter_free(sit)
         if placed == 0 {
             new_sorted = string.concat(new_sorted,
                 dir_entry_line(this_kind, this_sha, this_name))
         }
         sorted = new_sorted
-        i = i + 1
     }
+    dir_iter_free(it)
     return sorted
 }
 
@@ -251,14 +273,19 @@ export rebuild_dir(repo: string, base_dir_sha: string, prefix: string, txn: ptr)
     // actions that exactly hit full paths within this dir. An empty
     // base_body (either "blob missing" or "blob exists but is the
     // empty-dir blob") produces zero iterations — correct.
+    //
+    // R287 — uses the streaming dir iterator. The pre-R287 indexed
+    // walk called dir_entry_kind/sha/name(body, ei) for each entry,
+    // and each accessor scans from byte 0 to find line ei → O(N²)
+    // per commit, O(N³) over N commits in growing-dir benchmarks.
+    // The iterator keeps a single byte cursor; one linear pass.
     if string.length(base_dir_sha) > 0 {
         base_body = rep_read_blob(repo, base_dir_sha)
-        n_entries = dir_count_entries(base_body)
-        ei = 0
-        while ei < n_entries {
-            kind = dir_entry_kind(base_body, ei)
-            sha = dir_entry_sha(base_body, ei)
-            name = dir_entry_name(base_body, ei)
+        it = dir_iter_new(base_body)
+        while dir_iter_next(it) == 1 {
+            kind = dir_iter_kind(it)
+            sha  = string.copy(dir_iter_sha(it))
+            name = string.copy(dir_iter_name(it))
             full_path = path_join_rel(prefix, name)
 
             k_edit = txn_find_edit_kind(txn, full_path)
@@ -266,28 +293,35 @@ export rebuild_dir(repo: string, base_dir_sha: string, prefix: string, txn: ptr)
             if k_edit == EDIT_DELETE   { keep = 0 }
             if k_edit == EDIT_ADD_FILE { keep = 0 }  // step 2 will add
             if keep == 1 {
+                // R287 — fast-path append: each base-dir entry is
+                // unique (came from a sorted unique dir blob) AND `rl`
+                // has no entries with the same name yet (we're seeding
+                // it in iteration order). Skip reclist_add's O(N)
+                // collision-scan and just concat the line. This drops
+                // step 1 from O(N²) to O(N) lookups; the only
+                // remaining O(N²) is the string-concat allocation,
+                // which is unavoidable without a builder primitive.
                 if kind == 100 {                     // 'd'
                     if edits_touch_subtree(txn, full_path) == 1 {
                         new_sub = rebuild_dir(repo, sha, full_path, txn)
                         if string.length(new_sub) > 0 {
-                            rl = reclist_add(rl, name, kind, new_sub)
+                            rl = reclist_append_unique_(rl, name, kind, new_sub)
                         }
                         if string.length(new_sub) == 0 {
                             empty_sha = rep_write_blob(repo, "", 0)
-                            rl = reclist_add(rl, name, kind, empty_sha)
+                            rl = reclist_append_unique_(rl, name, kind, empty_sha)
                         }
                     }
                     if edits_touch_subtree(txn, full_path) == 0 {
-                        rl = reclist_add(rl, name, kind, sha)
+                        rl = reclist_append_unique_(rl, name, kind, sha)
                     }
                 }
                 if kind != 100 {
-                    rl = reclist_add(rl, name, kind, sha)
+                    rl = reclist_append_unique_(rl, name, kind, sha)
                 }
             }
-
-            ei = ei + 1
         }
+        dir_iter_free(it)
         rep_free(base_body)
     }
 

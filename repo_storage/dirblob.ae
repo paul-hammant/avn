@@ -32,9 +32,15 @@
 //     sha = dir_entry_sha(body, i);
 //     name = dir_entry_name(body, i);
 //   }
-// The three accessors rescan each time (O(n) per call, O(n²) total) —
-// but real directories are small and this avoids passing a cursor
-// across the FFI boundary.
+// The three accessors rescan each time (O(n) per call, O(n²) total).
+// That's fine for small directories but explodes for large ones — at
+// 20K-entry dirs the per-commit cost becomes dominant.
+//
+// R287 added a streaming iterator (dir_iter_new / _next / _kind /
+// _sha / _name / _free) for hot loops that iterate every entry in
+// order. Single linear pass = O(n). Hot callers (rebuild_dir,
+// flatten_tree) use the iterator; cold callers (one-off lookups)
+// can stay on the indexed accessors.
 
 import std.string
 
@@ -224,6 +230,102 @@ export dir_entry_line(kind: int, sha: string, name: string) -> string {
     out = string.concat(out, " ")
     out = string.concat(out, name)
     return string.concat(out, "\n")
+}
+
+// ---- streaming iterator (R287) -------------------------------------------
+//
+// Walks a dir blob in one linear pass. Hot loops (rebuild_dir,
+// flatten_tree) iterate dir entries in order; the indexed
+// dir_entry_*(body, i) APIs scan from byte 0 every call → O(n²) per
+// loop. The iterator parses one line per dir_iter_next call → O(n).
+//
+// Holds the body string by reference (caller owns it; iterator must
+// not outlive the body). last_sha / last_name are owned copies so
+// callers can hold them across subsequent next() calls without
+// worrying about re-parse churn.
+
+extern malloc(size: int) -> ptr
+extern free(p: ptr)
+
+struct DirIter {
+    body:      string    // borrowed
+    pos:       int       // next byte to scan in body
+    last_kind: int       // ASCII char (102 = 'f', 100 = 'd', 72 = 'H')
+    last_sha:  string    // owned copy
+    last_name: string    // owned copy
+}
+
+// Construct an iterator over `body`. Returns null on alloc failure.
+// `body` is borrowed — the caller must keep it alive until dir_iter_free.
+export dir_iter_new(body: string) -> ptr {
+    raw = malloc(48)
+    if raw == null { return null }
+    it = raw as *DirIter
+    it.body      = body
+    it.pos       = 0
+    it.last_kind = 0
+    it.last_sha  = string.copy("")
+    it.last_name = string.copy("")
+    return raw
+}
+
+// Advance to the next valid entry. Returns 1 if found (kind/sha/name
+// accessors now reflect that entry), 0 when exhausted.
+export dir_iter_next(it_ptr: ptr) -> int {
+    if it_ptr == null { return 0 }
+    it = it_ptr as *DirIter
+    body = it.body
+    n = string.length(body)
+    pos = it.pos
+    while pos < n {
+        // Find end of this line.
+        eol = pos
+        while eol < n {
+            if string.char_at(body, eol) == 10 { break }
+            eol = eol + 1
+        }
+        if line_is_valid(body, pos, eol) == 1 {
+            // Parse: kind at pos; one space; sha until next space; name until eol.
+            kind_byte = string.char_at(body, pos)
+            j = pos + 2
+            while j < eol {
+                if string.char_at(body, j) == 32 { break }
+                j = j + 1
+            }
+            it.last_kind = kind_byte
+            it.last_sha  = string.copy(string.substring(body, pos + 2, j))
+            it.last_name = string.copy(string.substring(body, j + 1, eol))
+            it.pos = eol + 1
+            return 1
+        }
+        pos = eol + 1
+    }
+    it.pos = n
+    return 0
+}
+
+export dir_iter_kind(it_ptr: ptr) -> int {
+    if it_ptr == null { return 0 }
+    it = it_ptr as *DirIter
+    return it.last_kind
+}
+
+export dir_iter_sha(it_ptr: ptr) -> string {
+    if it_ptr == null { return "" }
+    it = it_ptr as *DirIter
+    return it.last_sha
+}
+
+export dir_iter_name(it_ptr: ptr) -> string {
+    if it_ptr == null { return "" }
+    it = it_ptr as *DirIter
+    return it.last_name
+}
+
+export dir_iter_free(it_ptr: ptr) {
+    if it_ptr == null { return 0 }
+    free(it_ptr)
+    return 0
 }
 
 main() {

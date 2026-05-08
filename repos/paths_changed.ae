@@ -36,6 +36,15 @@ extern dir_entry_kind(body: string, i: int) -> int
 extern dir_entry_sha(body: string, i: int) -> string
 extern dir_entry_name(body: string, i: int) -> string
 extern dir_entry_line(kind: int, sha: string, name: string) -> string
+// R287 — streaming iterator for the hot flatten loop (one linear
+// pass per dir blob; pre-R287 each entry caused a full scan from
+// byte 0 → O(N²) per commit on growing-dir benchmarks).
+extern dir_iter_new(body: string) -> ptr
+extern dir_iter_next(it: ptr) -> int
+extern dir_iter_kind(it: ptr) -> int
+extern dir_iter_sha(it: ptr) -> string
+extern dir_iter_name(it: ptr) -> string
+extern dir_iter_free(it: ptr) -> int
 extern path_join_rel(prefix: string, name: string) -> string
 
 // Depth-first flatten. Each entry is "K SHA PATH\n" with PATH being
@@ -44,21 +53,18 @@ extern path_join_rel(prefix: string, name: string) -> string
 flatten_tree(repo: string, dir_sha: string, prefix: string) -> string {
     body = rep_read_blob(repo, dir_sha)
     out = ""
-    n = dir_count_entries(body)
-    i = 0
-    while i < n {
-        kind = dir_entry_kind(body, i)
-        sha = dir_entry_sha(body, i)
-        name = dir_entry_name(body, i)
-        // Snapshot sha and name before recursing (thread-local bufs).
-        sha = string.concat(sha, "")
+    it = dir_iter_new(body)
+    while dir_iter_next(it) == 1 {
+        kind = dir_iter_kind(it)
+        sha  = string.copy(dir_iter_sha(it))
+        name = string.copy(dir_iter_name(it))
         full_path = path_join_rel(prefix, name)
         out = string.concat(out, dir_entry_line(kind, sha, full_path))
         if kind == 100 {    // 'd'
             out = string.concat(out, flatten_tree(repo, sha, full_path))
         }
-        i = i + 1
     }
+    dir_iter_free(it)
     rep_free(body)
     return out
 }
