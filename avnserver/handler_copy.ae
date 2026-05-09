@@ -17,19 +17,21 @@
 // { "base_rev": N, "from_path", "to_path", "author", "log" } and
 // receives {"rev": N+1} on success.
 //
-// The JSON parse, ACL + spec checks, auto-follow-ACL, txn-build,
-// and commit-finalise stay on the C side (behind
-// svnserver_copy_from_body) — Aether doesn't have array-of-string
-// FFI for paths-acl handling, and pulling auto_follow_copy_acl up
-// would be a separate, larger port. The Aether handler owns URL
-// parse, 404-for-wrong-route, and response mapping.
+// JSON parse, ACL + spec checks, auto-follow-ACL, txn-build, and
+// commit-finalise live in copy_parse.ae's copy_from_body, which (post
+// R292, mirroring R288's commit_from_body migration) returns the
+// structured triple `(new_rev, kind, message)`. This handler maps
+// `kind` to an HTTP status via `status_for_kind` (defined in
+// commit_parse.ae) and sends `message` as the response body. Wire
+// format unchanged from the previous -N → status table.
 
 import std.http
 import std.string
 
 extern parse_repo_name_in(path: string) -> string
 extern svnserver_find_repo_path(name: string) -> string
-extern copy_from_body(req: ptr, repo: string) -> int
+extern copy_from_body(req: ptr, repo: string) -> (int, int, string)
+extern status_for_kind(kind: int) -> int
 
 extern rev_response_json(rev: int) -> string
 
@@ -56,41 +58,18 @@ export handler_copy(req: ptr, res: ptr) {
         return
     }
 
-    rv = copy_from_body(req, repo)
-    if rv == -1 {
-        svnserver_respond_error(res, 400, "empty body")
-        return
-    }
-    if rv == -2 {
-        svnserver_respond_error(res, 400, "malformed JSON")
-        return
-    }
-    if rv == -3 {
-        svnserver_respond_error(res, 400, "missing or wrong-typed field")
-        return
-    }
-    if rv == -4 {
-        svnserver_respond_error(res, 403, "forbidden")
-        return
-    }
-    if rv == -5 {
-        svnserver_respond_error(res, 403, "cross-branch copy refused")
-        return
-    }
-    if rv == -6 {
-        svnserver_respond_error(res, 404, "from_path not found at base_rev")
-        return
-    }
-    if rv == -7 {
-        svnserver_respond_error(res, 500, "copy commit failed")
-        return
-    }
-    if rv == -8 {
-        svnserver_respond_error(res, 409, "out of date — fetch and retry")
+    new_rev, kind, msg = copy_from_body(req, repo)
+    if kind != 0 {
+        // KIND_OK is 0; anything else is an error. status_for_kind
+        // maps the kind to an HTTP status (400 / 403 / 404 / 409 /
+        // 500). Message comes from copy_from_body and now identifies
+        // the offending field / path / branch-spec violation, where
+        // pre-R292 the body was a fixed generic string per kind.
+        svnserver_respond_error(res, status_for_kind(kind), msg)
         return
     }
 
-    svnserver_respond_json_ok(res, rev_response_json(rv))
+    svnserver_respond_json_ok(res, rev_response_json(new_rev))
 }
 
 

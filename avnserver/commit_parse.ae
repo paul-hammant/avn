@@ -69,12 +69,18 @@ const KIND_INVALID_INPUT  = 3
 const KIND_FORBIDDEN      = 10
 const KIND_OUT_OF_DATE    = 11
 const KIND_INTERNAL       = 12
+const KIND_NOT_FOUND      = 13   // R292 — used by handler_copy for
+                                 // "from_path missing at base_rev"
+                                 // (404). avn-side equivalent of
+                                 // std.fs.KIND_NOT_FOUND but in our
+                                 // private 10+ namespace.
 
 // Map a commit-pipeline kind to an HTTP status code. Status mapping
 // matches the pre-R288 -N → status table 1:1 — KIND_INVALID_INPUT
 // (was -1, -3, -7, -8, -9, -10) and KIND_PARSE_ERROR (was -2) both
 // map to 400; KIND_FORBIDDEN to 403; KIND_OUT_OF_DATE to 409;
-// KIND_OUT_OF_MEMORY and KIND_INTERNAL to 500.
+// KIND_OUT_OF_MEMORY and KIND_INTERNAL to 500. R292 added
+// KIND_NOT_FOUND for handler_copy's from_path-missing case (404).
 export status_for_kind(kind: int) -> int {
     if kind == KIND_PARSE_ERROR    { return 400 }
     if kind == KIND_OUT_OF_MEMORY  { return 500 }
@@ -82,6 +88,7 @@ export status_for_kind(kind: int) -> int {
     if kind == KIND_FORBIDDEN      { return 403 }
     if kind == KIND_OUT_OF_DATE    { return 409 }
     if kind == KIND_INTERNAL       { return 500 }
+    if kind == KIND_NOT_FOUND      { return 404 }
     return 500
 }
 

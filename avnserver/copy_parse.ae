@@ -18,20 +18,45 @@
 //   {"base_rev": N, "from_path": "...", "to_path": "...",
 //    "author": "...", "log": "..."}
 //
-// Return-value contract (matches the old C function):
-//   >= 0 : new_rev
-//   -1   : empty body
-//   -2   : malformed JSON
-//   -3   : missing/wrong-typed field
-//   -4   : forbidden (non-super lacks RW on from-subtree or to)
-//   -5   : cross-branch copy refused
-//   -6   : from_path missing at base_rev
-//   -7   : commit failed
-//   -8   : out of date (a path conflicts with an intervening commit)
+// Return-value contract (R292 — structured-error pattern, mirroring
+// commit_from_body's R288 migration):
+//   copy_from_body returns (new_rev, kind, message)
+//     kind == KIND_OK            : new_rev >= 0; message empty
+//     kind == KIND_PARSE_ERROR   : malformed JSON  (was old -2)
+//     kind == KIND_INVALID_INPUT : empty body OR missing/wrong-typed
+//                                  field  (was old -1, -3)
+//     kind == KIND_FORBIDDEN     : ACL denies write to from/to OR
+//                                  path falls outside branch spec
+//                                  (was old -4, -5)
+//     kind == KIND_NOT_FOUND     : from_path missing at base_rev
+//                                  (was old -6)
+//     kind == KIND_OUT_OF_DATE   : intervening commit conflicts
+//                                  (was old -8)
+//     kind == KIND_INTERNAL      : commit_finalise failed for a
+//                                  reason not classified above
+//                                  (was old -7)
+//
+// HTTP status codes are produced via status_for_kind in commit_parse.ae;
+// the wire shape is unchanged from the previous -N → status table.
 
 import std.string
 import std.json
 import std.http
+
+// KIND_* constants — these MUST stay in lock-step with the source-of-
+// truth declarations in avnserver/commit_parse.ae. handler_copy.ae
+// uses status_for_kind from commit_parse.ae for the status mapping;
+// it doesn't need the named constants. The duplication exists because
+// Aether inlines `const` values at every use site (they're not C-level
+// globals, so a cross-TU extern wouldn't work).
+const KIND_OK             = 0
+const KIND_PARSE_ERROR    = 1
+const KIND_OUT_OF_MEMORY  = 2
+const KIND_INVALID_INPUT  = 3
+const KIND_FORBIDDEN      = 10
+const KIND_OUT_OF_DATE    = 11
+const KIND_INTERNAL       = 12
+const KIND_NOT_FOUND      = 13
 
 extern svnserver_request_header(req: ptr, name: string) -> string
 extern svnserver_request_is_super(req: ptr) -> int
@@ -54,18 +79,23 @@ extern commit_finalise(repo: string, txn: ptr, branch: string,
                               author: string, log_msg: string,
                               props_sha: string, acl_sha: string) -> int
 
-export copy_from_body(req: ptr, repo: string) -> int {
+export copy_from_body(req: ptr, repo: string) -> (int, int, string) {
     body = http.request_body(req)
     body_len = http.request_body_length(req)
-    if body_len == 0 { return -1 }
+    if body_len == 0 { return -1, KIND_INVALID_INPUT, "empty body" }
 
-    root, err = json.parse(body)
-    if string.length(err) > 0 { return -2 }
+    // R289-style — parse_strict gives us "<reason> at <line>:<col>" so
+    // a 4xx response on a malformed copy body identifies WHERE the
+    // body went wrong, not just THAT it did.
+    root, jkind, jmsg = json.parse_strict(body)
+    if jkind != 0 {
+        return -1, KIND_PARSE_ERROR, string.concat("malformed JSON: ", jmsg)
+    }
 
     // base_rev — required number.
     jbr, bb_err = json.object_get(root, "base_rev")
-    if string.length(bb_err) > 0 { json.free(root); return -3 }
-    if jbr == null { json.free(root); return -3 }
+    if string.length(bb_err) > 0 { json.free(root); return -1, KIND_INVALID_INPUT, "missing or wrong-typed field: base_rev" }
+    if jbr == null { json.free(root); return -1, KIND_INVALID_INPUT, "missing field: base_rev" }
     base_rev = json.get_int(jbr)
 
     // Five required string fields. Inline the get+typecheck+copy
@@ -73,31 +103,31 @@ export copy_from_body(req: ptr, repo: string) -> int {
     // tuple-returning local helpers when called from an exported
     // function (both wrapper shims emit as `int32_t`).
     jfp, fpe = json.object_get(root, "from_path")
-    if string.length(fpe) > 0 { json.free(root); return -3 }
-    if jfp == null { json.free(root); return -3 }
+    if string.length(fpe) > 0 { json.free(root); return -1, KIND_INVALID_INPUT, "missing or wrong-typed field: from_path" }
+    if jfp == null { json.free(root); return -1, KIND_INVALID_INPUT, "missing field: from_path" }
     from_path, fpe2 = json.get_string(jfp)
-    if string.length(fpe2) > 0 { json.free(root); return -3 }
+    if string.length(fpe2) > 0 { json.free(root); return -1, KIND_INVALID_INPUT, "from_path not a string" }
     from_path = string.copy(from_path)
 
     jtp, tpe = json.object_get(root, "to_path")
-    if string.length(tpe) > 0 { json.free(root); return -3 }
-    if jtp == null { json.free(root); return -3 }
+    if string.length(tpe) > 0 { json.free(root); return -1, KIND_INVALID_INPUT, "missing or wrong-typed field: to_path" }
+    if jtp == null { json.free(root); return -1, KIND_INVALID_INPUT, "missing field: to_path" }
     to_path, tpe2 = json.get_string(jtp)
-    if string.length(tpe2) > 0 { json.free(root); return -3 }
+    if string.length(tpe2) > 0 { json.free(root); return -1, KIND_INVALID_INPUT, "to_path not a string" }
     to_path = string.copy(to_path)
 
     jau, aue = json.object_get(root, "author")
-    if string.length(aue) > 0 { json.free(root); return -3 }
-    if jau == null { json.free(root); return -3 }
+    if string.length(aue) > 0 { json.free(root); return -1, KIND_INVALID_INPUT, "missing or wrong-typed field: author" }
+    if jau == null { json.free(root); return -1, KIND_INVALID_INPUT, "missing field: author" }
     author, aue2 = json.get_string(jau)
-    if string.length(aue2) > 0 { json.free(root); return -3 }
+    if string.length(aue2) > 0 { json.free(root); return -1, KIND_INVALID_INPUT, "author not a string" }
     author = string.copy(author)
 
     jlg, lge = json.object_get(root, "log")
-    if string.length(lge) > 0 { json.free(root); return -3 }
-    if jlg == null { json.free(root); return -3 }
+    if string.length(lge) > 0 { json.free(root); return -1, KIND_INVALID_INPUT, "missing or wrong-typed field: log" }
+    if jlg == null { json.free(root); return -1, KIND_INVALID_INPUT, "missing field: log" }
     logmsg, lge2 = json.get_string(jlg)
-    if string.length(lge2) > 0 { json.free(root); return -3 }
+    if string.length(lge2) > 0 { json.free(root); return -1, KIND_INVALID_INPUT, "log not a string" }
     logmsg = string.copy(logmsg)
 
     json.free(root)
@@ -106,28 +136,28 @@ export copy_from_body(req: ptr, repo: string) -> int {
     is_super = svnserver_request_is_super(req)
     if is_super == 0 {
         if acl_subtree_rw(repo, base_rev, user, from_path) == 0 {
-            return -4
+            return -1, KIND_FORBIDDEN, "forbidden: ACL denies read on from-subtree"
         }
         if acl_allows_mode(repo, base_rev, user, to_path, 1) == 0 {
-            return -4
+            return -1, KIND_FORBIDDEN, "forbidden: ACL denies write to to_path"
         }
     }
 
     cp_branch = svnserver_request_header(req, "Svn-Branch")
     if string.length(cp_branch) == 0 { cp_branch = "main" }
     if svnserver_spec_allows(repo, cp_branch, from_path, is_super) == 0 {
-        return -5
+        return -1, KIND_FORBIDDEN, "from_path outside branch spec"
     }
     if svnserver_spec_allows(repo, cp_branch, to_path, is_super) == 0 {
-        return -5
+        return -1, KIND_FORBIDDEN, "to_path outside branch spec"
     }
 
-    kind = repos_resolve_kind(repo, base_rev, from_path)
-    if kind == 0 { return -6 }
+    rkind = repos_resolve_kind(repo, base_rev, from_path)
+    if rkind == 0 { return -1, KIND_NOT_FOUND, "from_path not found at base_rev" }
     from_sha = repos_resolve_sha(repo, base_rev, from_path)
     from_sha = string.copy(from_sha)
     from_kind_int = 0
-    if kind == 100 { from_kind_int = 1 }   // 'd'
+    if rkind == 100 { from_kind_int = 1 }   // 'd'
 
     new_acl_sha = auto_follow_copy_acl(repo, base_rev, from_path, to_path)
     // rep_write_blob returns into a thread-local buffer; the
@@ -142,9 +172,13 @@ export copy_from_body(req: ptr, repo: string) -> int {
                                      "", new_acl_sha)
     txn_free(txn)
 
-    if new_rev == 0 - 12 { return -8 }   // out of date
-    if new_rev < 0 { return -7 }
-    return new_rev
+    if new_rev == 0 - 12 {
+        return -1, KIND_OUT_OF_DATE, "out of date — fetch and retry"
+    }
+    if new_rev < 0 {
+        return -1, KIND_INTERNAL, "copy commit failed"
+    }
+    return new_rev, KIND_OK, ""
 }
 
 

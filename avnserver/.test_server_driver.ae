@@ -168,6 +168,45 @@ main() {
         "-d '{\"base_rev\":0,\"author\":\"x\",\"log\":\"y\",\"edits\":[],\"props\":{\"f\":{\"svn:mergeinfo\":\"v\"}}}' "),
         commit_url)
 
+    // ── R292 — POST /copy structured-error tests ──
+    // The seed fixture creates rev 3 with files like README, LICENSE,
+    // src/main.c. Successful /copy is exercised elsewhere; these
+    // tests pin error shapes only.
+    copy_url = string.concat(base, "/copy")
+
+    // 1) empty body
+    cp_empty_status = string.concat(string.concat(post_status, "-d '' "), copy_url)
+    cp_empty_body_  = string.concat(string.concat(post_body,   "-d '' "), copy_url)
+
+    // 2) malformed JSON
+    cp_malformed_body = string.concat(string.concat(post_body, "-d 'not valid json' "), copy_url)
+
+    // 3) missing base_rev
+    cp_miss_base_status = string.concat(string.concat(post_status,
+        "-d '{\"from_path\":\"a\",\"to_path\":\"b\",\"author\":\"x\",\"log\":\"y\"}' "), copy_url)
+    cp_miss_base_body_  = string.concat(string.concat(post_body,
+        "-d '{\"from_path\":\"a\",\"to_path\":\"b\",\"author\":\"x\",\"log\":\"y\"}' "), copy_url)
+
+    // 4) missing from_path
+    cp_miss_from_status = string.concat(string.concat(post_status,
+        "-d '{\"base_rev\":3,\"to_path\":\"b\",\"author\":\"x\",\"log\":\"y\"}' "), copy_url)
+    cp_miss_from_body_  = string.concat(string.concat(post_body,
+        "-d '{\"base_rev\":3,\"to_path\":\"b\",\"author\":\"x\",\"log\":\"y\"}' "), copy_url)
+
+    // 5) missing to_path
+    cp_miss_to_status = string.concat(string.concat(post_status,
+        "-d '{\"base_rev\":3,\"from_path\":\"a\",\"author\":\"x\",\"log\":\"y\"}' "), copy_url)
+    cp_miss_to_body_  = string.concat(string.concat(post_body,
+        "-d '{\"base_rev\":3,\"from_path\":\"a\",\"author\":\"x\",\"log\":\"y\"}' "), copy_url)
+
+    // 6) from_path missing at base_rev → 404 (the new KIND_NOT_FOUND
+    //    case R292 introduces). We rely on the seed having rev 3 but
+    //    no path called "nosuch_path_xyz" anywhere in it.
+    cp_notfound_status = string.concat(string.concat(post_status,
+        "-d '{\"base_rev\":3,\"from_path\":\"nosuch_path_xyz\",\"to_path\":\"b\",\"author\":\"x\",\"log\":\"y\"}' "), copy_url)
+    cp_notfound_body_  = string.concat(string.concat(post_body,
+        "-d '{\"base_rev\":3,\"from_path\":\"nosuch_path_xyz\",\"to_path\":\"b\",\"author\":\"x\",\"log\":\"y\"}' "), copy_url)
+
     aeocha.describe(fw, "avnserver HTTP endpoint suite") {
 
         // info
@@ -374,6 +413,54 @@ main() {
         aeocha.it("R288 svn:mergeinfo message names 'svn:mergeinfo'") callback {
             out, _, _ = sh(bad_prop_body_)
             aeocha.expect_stdout_contains(fw, out, "svn:mergeinfo", "svn:mergeinfo msg")
+        }
+
+        // ── R292 — POST /copy structured-error contract ──
+        // status assertions
+        aeocha.it("R292 copy empty body → 400") callback {
+            out, _, _ = sh(cp_empty_status)
+            aeocha.expect_stdout_contains(fw, out, "400", "400")
+        }
+        aeocha.it("R292 copy missing base_rev → 400") callback {
+            out, _, _ = sh(cp_miss_base_status)
+            aeocha.expect_stdout_contains(fw, out, "400", "400")
+        }
+        aeocha.it("R292 copy missing from_path → 400") callback {
+            out, _, _ = sh(cp_miss_from_status)
+            aeocha.expect_stdout_contains(fw, out, "400", "400")
+        }
+        aeocha.it("R292 copy missing to_path → 400") callback {
+            out, _, _ = sh(cp_miss_to_status)
+            aeocha.expect_stdout_contains(fw, out, "400", "400")
+        }
+        aeocha.it("R292 copy from_path missing at base_rev → 404") callback {
+            out, _, _ = sh(cp_notfound_status)
+            aeocha.expect_stdout_contains(fw, out, "404", "404")
+        }
+        // body-message assertions (the R292 specificity contract)
+        aeocha.it("R292 copy empty body message names 'empty body'") callback {
+            out, _, _ = sh(cp_empty_body_)
+            aeocha.expect_stdout_contains(fw, out, "empty body", "empty body msg")
+        }
+        aeocha.it("R292 copy malformed JSON message includes line:col") callback {
+            out, _, _ = sh(cp_malformed_body)
+            aeocha.expect_stdout_contains(fw, out, " at ", "line:col location present")
+        }
+        aeocha.it("R292 copy missing base_rev names 'base_rev'") callback {
+            out, _, _ = sh(cp_miss_base_body_)
+            aeocha.expect_stdout_contains(fw, out, "base_rev", "base_rev msg")
+        }
+        aeocha.it("R292 copy missing from_path names 'from_path'") callback {
+            out, _, _ = sh(cp_miss_from_body_)
+            aeocha.expect_stdout_contains(fw, out, "from_path", "from_path msg")
+        }
+        aeocha.it("R292 copy missing to_path names 'to_path'") callback {
+            out, _, _ = sh(cp_miss_to_body_)
+            aeocha.expect_stdout_contains(fw, out, "to_path", "to_path msg")
+        }
+        aeocha.it("R292 copy not-found names 'not found'") callback {
+            out, _, _ = sh(cp_notfound_body_)
+            aeocha.expect_stdout_contains(fw, out, "not found", "not found msg")
         }
     }
 
