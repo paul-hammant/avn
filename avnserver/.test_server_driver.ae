@@ -113,6 +113,61 @@ main() {
     commit_nosuch = string.concat(commit_nosuch, port)
     commit_nosuch = string.concat(commit_nosuch, "/repos/nosuch/commit")
 
+    // ── R288 structured-error contract: paired status/body checks ──
+    // Two curl variants per case — one captures HTTP status code via
+    // -w '%{http_code}' (body discarded), the other captures the body
+    // (status discarded). Each test asserts on both.
+    commit_url  = string.concat(base, "/commit")
+    post_status = "curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' "
+    post_body   = "curl -s -X POST -H 'Content-Type: application/json' "
+
+    // 1) empty body
+    empty_status = string.concat(string.concat(post_status, "-d '' "), commit_url)
+    empty_body_  = string.concat(string.concat(post_body,   "-d '' "), commit_url)
+
+    // 2) malformed JSON (status already covered above; pin body too)
+    malformed_body = string.concat(string.concat(post_body, "-d 'not valid json' "), commit_url)
+
+    // 3) missing base_rev
+    miss_base_status = string.concat(string.concat(post_status, "-d '{\"author\":\"x\",\"log\":\"y\",\"edits\":[]}' "), commit_url)
+    miss_base_body_  = string.concat(string.concat(post_body,   "-d '{\"author\":\"x\",\"log\":\"y\",\"edits\":[]}' "), commit_url)
+
+    // 4) missing author
+    miss_author_status = string.concat(string.concat(post_status, "-d '{\"base_rev\":0,\"log\":\"y\",\"edits\":[]}' "), commit_url)
+    miss_author_body_  = string.concat(string.concat(post_body,   "-d '{\"base_rev\":0,\"log\":\"y\",\"edits\":[]}' "), commit_url)
+
+    // 5) parent_sha sent for base_rev=0 (chain CAS violation)
+    bad_psha_status = string.concat(string.concat(post_status,
+        "-d '{\"base_rev\":0,\"parent_sha\":\"deadbeefdeadbeefdeadbeefdeadbeefdeadbeef\",\"author\":\"x\",\"log\":\"y\",\"edits\":[]}' "),
+        commit_url)
+    bad_psha_body_  = string.concat(string.concat(post_body,
+        "-d '{\"base_rev\":0,\"parent_sha\":\"deadbeefdeadbeefdeadbeefdeadbeefdeadbeef\",\"author\":\"x\",\"log\":\"y\",\"edits\":[]}' "),
+        commit_url)
+
+    // 6) unknown edit op
+    unknown_op_status = string.concat(string.concat(post_status,
+        "-d '{\"base_rev\":0,\"author\":\"x\",\"log\":\"y\",\"edits\":[{\"op\":\"banana\",\"path\":\"f\"}]}' "),
+        commit_url)
+    unknown_op_body_  = string.concat(string.concat(post_body,
+        "-d '{\"base_rev\":0,\"author\":\"x\",\"log\":\"y\",\"edits\":[{\"op\":\"banana\",\"path\":\"f\"}]}' "),
+        commit_url)
+
+    // 7) add-file edit missing content
+    miss_content_status = string.concat(string.concat(post_status,
+        "-d '{\"base_rev\":0,\"author\":\"x\",\"log\":\"y\",\"edits\":[{\"op\":\"add-file\",\"path\":\"f\"}]}' "),
+        commit_url)
+    miss_content_body_  = string.concat(string.concat(post_body,
+        "-d '{\"base_rev\":0,\"author\":\"x\",\"log\":\"y\",\"edits\":[{\"op\":\"add-file\",\"path\":\"f\"}]}' "),
+        commit_url)
+
+    // 8) client tries to set svn:mergeinfo (server-managed)
+    bad_prop_status = string.concat(string.concat(post_status,
+        "-d '{\"base_rev\":0,\"author\":\"x\",\"log\":\"y\",\"edits\":[],\"props\":{\"f\":{\"svn:mergeinfo\":\"v\"}}}' "),
+        commit_url)
+    bad_prop_body_  = string.concat(string.concat(post_body,
+        "-d '{\"base_rev\":0,\"author\":\"x\",\"log\":\"y\",\"edits\":[],\"props\":{\"f\":{\"svn:mergeinfo\":\"v\"}}}' "),
+        commit_url)
+
     aeocha.describe(fw, "avnserver HTTP endpoint suite") {
 
         // info
@@ -237,6 +292,81 @@ main() {
         aeocha.it("commit on missing repo → 404") callback {
             out, _, _ = sh(commit_nosuch)
             aeocha.expect_stdout_contains(fw, out, "404", "404")
+        }
+
+        // ───────────────────────────────────────────────────────
+        // R288 — structured-error contract
+        //
+        // POST /commit's internal pipeline now returns
+        // (new_rev, kind, message) instead of a single -N int code.
+        // Wire format unchanged (status codes match the pre-R288
+        // table) but the response body carries a more specific
+        // message identifying the offending field / path / op.
+        // Curl strings declared above; these tests just dispatch.
+        // ───────────────────────────────────────────────────────
+
+        // ── status assertions ──
+        aeocha.it("R288 empty body → 400") callback {
+            out, _, _ = sh(empty_status)
+            aeocha.expect_stdout_contains(fw, out, "400", "400")
+        }
+        aeocha.it("R288 missing base_rev → 400") callback {
+            out, _, _ = sh(miss_base_status)
+            aeocha.expect_stdout_contains(fw, out, "400", "400")
+        }
+        aeocha.it("R288 missing author → 400") callback {
+            out, _, _ = sh(miss_author_status)
+            aeocha.expect_stdout_contains(fw, out, "400", "400")
+        }
+        aeocha.it("R288 parent_sha sent for base_rev=0 → 409") callback {
+            out, _, _ = sh(bad_psha_status)
+            aeocha.expect_stdout_contains(fw, out, "409", "409")
+        }
+        aeocha.it("R288 unknown edit op → 400") callback {
+            out, _, _ = sh(unknown_op_status)
+            aeocha.expect_stdout_contains(fw, out, "400", "400")
+        }
+        aeocha.it("R288 add-file missing content → 400") callback {
+            out, _, _ = sh(miss_content_status)
+            aeocha.expect_stdout_contains(fw, out, "400", "400")
+        }
+        aeocha.it("R288 client svn:mergeinfo → 400") callback {
+            out, _, _ = sh(bad_prop_status)
+            aeocha.expect_stdout_contains(fw, out, "400", "400")
+        }
+
+        // ── body-message assertions (the R288 specificity contract) ──
+        aeocha.it("R288 empty body message names 'empty body'") callback {
+            out, _, _ = sh(empty_body_)
+            aeocha.expect_stdout_contains(fw, out, "empty body", "empty body msg")
+        }
+        aeocha.it("R288 malformed JSON message names 'malformed JSON'") callback {
+            out, _, _ = sh(malformed_body)
+            aeocha.expect_stdout_contains(fw, out, "malformed JSON", "malformed JSON msg")
+        }
+        aeocha.it("R288 missing base_rev message names 'base_rev'") callback {
+            out, _, _ = sh(miss_base_body_)
+            aeocha.expect_stdout_contains(fw, out, "base_rev", "base_rev msg")
+        }
+        aeocha.it("R288 missing author message names 'author'") callback {
+            out, _, _ = sh(miss_author_body_)
+            aeocha.expect_stdout_contains(fw, out, "author", "author msg")
+        }
+        aeocha.it("R288 parent_sha mismatch message names 'out of date'") callback {
+            out, _, _ = sh(bad_psha_body_)
+            aeocha.expect_stdout_contains(fw, out, "out of date", "out of date msg")
+        }
+        aeocha.it("R288 unknown op message names 'banana'") callback {
+            out, _, _ = sh(unknown_op_body_)
+            aeocha.expect_stdout_contains(fw, out, "banana", "banana op msg")
+        }
+        aeocha.it("R288 missing content message names 'content'") callback {
+            out, _, _ = sh(miss_content_body_)
+            aeocha.expect_stdout_contains(fw, out, "content", "content msg")
+        }
+        aeocha.it("R288 svn:mergeinfo message names 'svn:mergeinfo'") callback {
+            out, _, _ = sh(bad_prop_body_)
+            aeocha.expect_stdout_contains(fw, out, "svn:mergeinfo", "svn:mergeinfo msg")
         }
     }
 

@@ -23,28 +23,67 @@
 //     "branch"?: "main"
 //   }
 //
-// Return-value contract (matches the old C function):
-//   >= 0 : new_rev
-//   -1   : empty body
-//   -2   : malformed JSON
-//   -3   : missing/wrong-typed top-level field
-//   -4   : forbidden (ACL write denied)
-//   -5   : path outside branch spec
-//   -6   : oom building txn
-//   -7   : edit missing op/path
-//   -8   : add-file missing content
-//   -9   : base64 decode failed
-//   -10  : unknown op
-//   -11  : commit finalise failed
-//   -12  : out of date (base_rev predates HEAD and a path conflicts)
-//   -13  : parent_sha mismatch (R286 — git-style chain CAS).
-//          Either: (a) base_rev > 0 and parent_sha is missing/empty,
-//          (b) parent_sha doesn't match the rev_sha currently at HEAD,
-//          (c) base_rev == 0 but parent_sha is non-empty.
+// Return-value contract (R288 — structured-error pattern, mirroring
+// std.fs / std.json from aether PR #408):
+//   commit_from_body returns (new_rev, kind, message)
+//     kind == KIND_OK           : new_rev >= 0; message empty
+//     kind == KIND_PARSE_ERROR  : malformed JSON (was old -2)
+//     kind == KIND_OUT_OF_MEMORY: alloc failure during txn build / blob
+//                                 write (was old -6)
+//     kind == KIND_INVALID_INPUT: empty body, missing/wrong-typed field,
+//                                 unknown op, edit missing op/path,
+//                                 add-file missing content, base64
+//                                 decode failed (was old -1, -3, -7,
+//                                 -8, -9, -10)
+//     kind == KIND_FORBIDDEN    : ACL deny on a path, OR path falls
+//                                 outside the branch spec (was -4, -5)
+//     kind == KIND_OUT_OF_DATE  : base_rev predates HEAD with conflict,
+//                                 OR parent_sha mismatch (R286 chain
+//                                 CAS). Distinguishable by message.
+//                                 (was -12, -13)
+//     kind == KIND_INTERNAL     : commit_finalise failed for a reason
+//                                 not classified above (was -11)
+//
+// HTTP status codes are produced via status_for_kind (below); the wire
+// shape is unchanged from the previous -N → status table — the
+// client-visible status code for each error case is identical to
+// pre-R288. The migration is the SHAPE of the internal return; the
+// HTTP contract continues.
 
 import std.string
 import std.json
 import std.http
+
+// KIND_* constants for commit_from_body's structured-error returns.
+// First four match std.json's numeric values exactly so a pass-through
+// from a future json.parse_strict call wouldn't need translation. The
+// avn-specific kinds use values 10+ to leave room.
+//
+// File-local — handler_commit.ae checks `kind != 0` for the success
+// path and calls status_for_kind for the error path; it doesn't need
+// the named constants.
+const KIND_OK             = 0
+const KIND_PARSE_ERROR    = 1
+const KIND_OUT_OF_MEMORY  = 2
+const KIND_INVALID_INPUT  = 3
+const KIND_FORBIDDEN      = 10
+const KIND_OUT_OF_DATE    = 11
+const KIND_INTERNAL       = 12
+
+// Map a commit-pipeline kind to an HTTP status code. Status mapping
+// matches the pre-R288 -N → status table 1:1 — KIND_INVALID_INPUT
+// (was -1, -3, -7, -8, -9, -10) and KIND_PARSE_ERROR (was -2) both
+// map to 400; KIND_FORBIDDEN to 403; KIND_OUT_OF_DATE to 409;
+// KIND_OUT_OF_MEMORY and KIND_INTERNAL to 500.
+export status_for_kind(kind: int) -> int {
+    if kind == KIND_PARSE_ERROR    { return 400 }
+    if kind == KIND_OUT_OF_MEMORY  { return 500 }
+    if kind == KIND_INVALID_INPUT  { return 400 }
+    if kind == KIND_FORBIDDEN      { return 403 }
+    if kind == KIND_OUT_OF_DATE    { return 409 }
+    if kind == KIND_INTERNAL       { return 500 }
+    return 500
+}
 
 extern svnserver_request_header(req: ptr, name: string) -> string
 extern svnserver_request_is_super(req: ptr) -> int
@@ -94,19 +133,20 @@ extern commit_finalise(repo: string, txn: ptr, branch: string,
 // _generated.c would truncate the link argv.
 extern rep_write_blob(repo: string, data: string, length: int) -> string
 extern paths_index_sort(body: string) -> string
+extern io_write_atomic(path: string, data: string, length: int) -> int
 
-export commit_from_body(req: ptr, res: ptr, repo: string) -> int {
+export commit_from_body(req: ptr, res: ptr, repo: string) -> (int, int, string) {
     body_len = http.request_body_length(req)
-    if body_len == 0 { return -1 }
+    if body_len == 0 { return -1, KIND_INVALID_INPUT, "empty body" }
     body = http.request_body(req)
 
     root, err = json.parse(body)
-    if string.length(err) > 0 { return -2 }
+    if string.length(err) > 0 { return -1, KIND_PARSE_ERROR, "malformed JSON" }
 
     // Required top-level fields: base_rev (number), author, log, edits.
     jbase, bbe = json.object_get(root, "base_rev")
-    if string.length(bbe) > 0 { json.free(root); return -3 }
-    if jbase == null { json.free(root); return -3 }
+    if string.length(bbe) > 0 { json.free(root); return -1, KIND_INVALID_INPUT, "missing or wrong-typed field: base_rev" }
+    if jbase == null { json.free(root); return -1, KIND_INVALID_INPUT, "missing field: base_rev" }
     base_rev = json.get_int(jbase)
 
     // R286 — parent_sha (mandatory git-style chain CAS).
@@ -129,33 +169,33 @@ export commit_from_body(req: ptr, res: ptr, repo: string) -> int {
     }
     if base_rev == 0 {
         if string.length(sent_parent_sha) > 0 {
-            json.free(root); return -13
+            json.free(root); return -1, KIND_OUT_OF_DATE, "out of date — parent_sha sent for base_rev=0; first commit must have empty parent_sha"
         }
     } else {
         head_sha = repos_rev_blob_sha(repo, base_rev)
-        if string.length(head_sha) == 0 { json.free(root); return -13 }
+        if string.length(head_sha) == 0 { json.free(root); return -1, KIND_OUT_OF_DATE, "out of date — parent_sha mismatch; fetch HEAD and retry" }
         if string.equals(sent_parent_sha, head_sha) == 0 {
-            json.free(root); return -13
+            json.free(root); return -1, KIND_OUT_OF_DATE, "out of date — parent_sha mismatch; fetch HEAD and retry"
         }
     }
 
     jauthor, jae = json.object_get(root, "author")
-    if string.length(jae) > 0 { json.free(root); return -3 }
-    if jauthor == null { json.free(root); return -3 }
+    if string.length(jae) > 0 { json.free(root); return -1, KIND_INVALID_INPUT, "missing or wrong-typed field: author" }
+    if jauthor == null { json.free(root); return -1, KIND_INVALID_INPUT, "missing field: author" }
     author, ase = json.get_string(jauthor)
-    if string.length(ase) > 0 { json.free(root); return -3 }
+    if string.length(ase) > 0 { json.free(root); return -1, KIND_INVALID_INPUT, "missing or wrong-typed field: author" }
     author = string.copy(author)
 
     jlog, jle = json.object_get(root, "log")
-    if string.length(jle) > 0 { json.free(root); return -3 }
-    if jlog == null { json.free(root); return -3 }
+    if string.length(jle) > 0 { json.free(root); return -1, KIND_INVALID_INPUT, "missing or wrong-typed field: log" }
+    if jlog == null { json.free(root); return -1, KIND_INVALID_INPUT, "missing field: log" }
     logmsg, lse = json.get_string(jlog)
-    if string.length(lse) > 0 { json.free(root); return -3 }
+    if string.length(lse) > 0 { json.free(root); return -1, KIND_INVALID_INPUT, "missing or wrong-typed field: log" }
     logmsg = string.copy(logmsg)
 
     jedits, jee = json.object_get(root, "edits")
-    if string.length(jee) > 0 { json.free(root); return -3 }
-    if jedits == null { json.free(root); return -3 }
+    if string.length(jee) > 0 { json.free(root); return -1, KIND_INVALID_INPUT, "missing or wrong-typed field: edits" }
+    if jedits == null { json.free(root); return -1, KIND_INVALID_INPUT, "missing field: edits" }
 
     // commit_branch — body "branch" field wins, else Svn-Branch
     // request header, else "main".
@@ -188,12 +228,12 @@ export commit_from_body(req: ptr, res: ptr, repo: string) -> int {
                         if is_super == 0 {
                             if acl_allows_mode(repo, base_rev, user, ps, 1) == 0 {
                                 json.free(root)
-                                return -4
+                                return -1, KIND_FORBIDDEN, "forbidden: ACL denies write to ${ps}"
                             }
                         }
                         if svnserver_spec_allows(repo, commit_branch, ps, is_super) == 0 {
                             json.free(root)
-                            return -5
+                            return -1, KIND_FORBIDDEN, "path outside branch spec: ${ps}"
                         }
                     }
                 }
@@ -213,7 +253,7 @@ export commit_from_body(req: ptr, res: ptr, repo: string) -> int {
                     apath, _apv, _aperr = json.object_entry(jacl_pre, pi)
                     if acl_allows_mode(repo, base_rev, user, apath, 1) == 0 {
                         json.free(root)
-                        return -4
+                        return -1, KIND_FORBIDDEN, "forbidden: ACL denies write to ${apath}"
                     }
                     pi = pi + 1
                 }
@@ -223,30 +263,30 @@ export commit_from_body(req: ptr, res: ptr, repo: string) -> int {
 
     // Build the txn.
     txn = txn_new(base_rev)
-    if txn == null { json.free(root); return -6 }
+    if txn == null { json.free(root); return -1, KIND_OUT_OF_MEMORY, "oom building txn" }
 
     i = 0
     while i < n_edits {
         entry, _ = json.array_get(jedits, i)
-        if entry == null { txn_free(txn); json.free(root); return -7 }
+        if entry == null { txn_free(txn); json.free(root); return -1, KIND_INVALID_INPUT, "edit missing op/path" }
 
         jop, _ = json.object_get(entry, "op")
-        if jop == null { txn_free(txn); json.free(root); return -7 }
+        if jop == null { txn_free(txn); json.free(root); return -1, KIND_INVALID_INPUT, "edit missing op" }
         op, oerr = json.get_string(jop)
-        if string.length(oerr) > 0 { txn_free(txn); json.free(root); return -7 }
+        if string.length(oerr) > 0 { txn_free(txn); json.free(root); return -1, KIND_INVALID_INPUT, "edit op not a string" }
 
         jpath, _ = json.object_get(entry, "path")
-        if jpath == null { txn_free(txn); json.free(root); return -7 }
+        if jpath == null { txn_free(txn); json.free(root); return -1, KIND_INVALID_INPUT, "edit missing path" }
         epath, perr = json.get_string(jpath)
-        if string.length(perr) > 0 { txn_free(txn); json.free(root); return -7 }
+        if string.length(perr) > 0 { txn_free(txn); json.free(root); return -1, KIND_INVALID_INPUT, "edit path not a string" }
 
         if string.equals(op, "add-file") == 1 {
             jcontent, _ = json.object_get(entry, "content")
-            if jcontent == null { txn_free(txn); json.free(root); return -8 }
+            if jcontent == null { txn_free(txn); json.free(root); return -1, KIND_INVALID_INPUT, "add-file edit missing content" }
             b64, berr = json.get_string(jcontent)
-            if string.length(berr) > 0 { txn_free(txn); json.free(root); return -8 }
+            if string.length(berr) > 0 { txn_free(txn); json.free(root); return -1, KIND_INVALID_INPUT, "add-file content not a string" }
             if txn_add_b64_(txn, epath, b64) != 0 {
-                txn_free(txn); json.free(root); return -9
+                txn_free(txn); json.free(root); return -1, KIND_INVALID_INPUT, "add-file content base64 decode failed"
             }
         }
         if string.equals(op, "mkdir") == 1 {
@@ -258,7 +298,7 @@ export commit_from_body(req: ptr, res: ptr, repo: string) -> int {
         if string.equals(op, "add-file") == 0 {
             if string.equals(op, "mkdir") == 0 {
                 if string.equals(op, "delete") == 0 {
-                    txn_free(txn); json.free(root); return -10
+                    txn_free(txn); json.free(root); return -1, KIND_INVALID_INPUT, "unknown edit op: ${op}"
                 }
             }
         }
@@ -300,7 +340,7 @@ export commit_from_body(req: ptr, res: ptr, repo: string) -> int {
                         if string.equals(kname, "svn:mergeinfo") == 1 {
                             txn_free(txn)
                             json.free(root)
-                            return -3
+                            return -1, KIND_INVALID_INPUT, "client-set svn:mergeinfo not allowed; merge metadata is server-managed via the merge ledger"
                         }
                         if kval != null {
                             vstr, verr = json.get_string(kval)
@@ -437,11 +477,19 @@ export commit_from_body(req: ptr, res: ptr, repo: string) -> int {
                                      use_props_sha, use_acl_sha)
     txn_free(txn)
 
-    // Pass through -12 (out of date) so the HTTP handler can map it
-    // to 409. Any other negative result is a generic commit failure.
-    if new_rev == 0 - 12 { return -12 }
-    if new_rev < 0 { return -11 }
-    return new_rev
+    // commit_finalise still uses signed-int return codes (its
+    // migration to a structured return is a follow-up to this
+    // R288 round). -12 is out-of-date; anything else negative is a
+    // generic internal failure.
+    if new_rev == 0 - 12 {
+        return -1, KIND_OUT_OF_DATE, "out of date — fetch and retry"
+    }
+    if new_rev < 0 {
+        msg = "commit_finalise rv=${new_rev} repo=${repo} base_rev=${base_rev}\n"
+        io_write_atomic("/tmp/avn_commit_finalise_rv.log", msg, string.length(msg))
+        return -1, KIND_INTERNAL, "commit failed"
+    }
+    return new_rev, KIND_OK, ""
 }
 
 

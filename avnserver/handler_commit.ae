@@ -28,17 +28,22 @@
 //
 // JSON parse, ACL + branch-spec pre-scan, txn-build (including
 // base64 decode of add-file content), props and acl blob assembly,
-// and commit-finalise-with-acl all stay in C behind
-// svnserver_commit_from_body. That wrapper returns -1..-11 for
-// distinct failure kinds; the Aether handler maps each to an HTTP
-// response code. Aether owns URL parse + happy-path response.
+// and commit-finalise-with-acl all live in commit_parse.ae's
+// commit_from_body, which (post R288, mirroring aether PR #408's
+// std.fs / std.json pattern) returns the structured triple
+// `(new_rev, kind, message)`. This handler maps `kind` to an HTTP
+// status code via `status_for_kind` and sends `message` as the
+// response body. Wire format unchanged from the previous
+// -N → status table — the migration is the SHAPE of the internal
+// return, not the client-visible contract.
 
 import std.http
 import std.string
 
 extern parse_repo_name_in(path: string) -> string
 extern svnserver_find_repo_path(name: string) -> string
-extern commit_from_body(req: ptr, res: ptr, repo: string) -> int
+extern commit_from_body(req: ptr, res: ptr, repo: string) -> (int, int, string)
+extern status_for_kind(kind: int) -> int
 
 extern rev_response_json(rev: int) -> string
 extern rev_sha_response_json(rev: int, sha: string) -> string
@@ -71,64 +76,14 @@ export handler_commit(req: ptr, res: ptr) {
         return
     }
 
-    rv = commit_from_body(req, res, repo)
-    if rv == -1 {
-        svnserver_respond_error(res, 400, "empty body")
-        return
-    }
-    if rv == -2 {
-        svnserver_respond_error(res, 400, "malformed JSON")
-        return
-    }
-    if rv == -3 {
-        svnserver_respond_error(res, 400, "missing or wrong-typed field")
-        return
-    }
-    if rv == -4 {
-        svnserver_respond_error(res, 403, "forbidden")
-        return
-    }
-    if rv == -5 {
-        svnserver_respond_error(res, 403, "path outside branch spec")
-        return
-    }
-    if rv == -6 {
-        svnserver_respond_error(res, 500, "oom")
-        return
-    }
-    if rv == -7 {
-        svnserver_respond_error(res, 400, "edit missing op/path")
-        return
-    }
-    if rv == -8 {
-        svnserver_respond_error(res, 400, "add-file missing content")
-        return
-    }
-    if rv == -9 {
-        svnserver_respond_error(res, 400, "base64 decode failed")
-        return
-    }
-    if rv == -10 {
-        svnserver_respond_error(res, 400, "unknown op")
-        return
-    }
-    if rv == -11 {
-        svnserver_respond_error(res, 500, "commit failed")
-        return
-    }
-    if rv == -12 {
-        // Classical SVN's out-of-date condition: base_rev < HEAD and
-        // an intervening rev touched one of the txn's paths. Surface
-        // as 409 Conflict so the client can fetch + retry.
-        svnserver_respond_error(res, 409, "out of date — fetch and retry")
-        return
-    }
-    if rv == -13 {
-        // R286 — parent_sha chain mismatch. Same 409 shape as -12;
-        // separate diagnostic so a client can tell the two apart in
-        // the body.
-        svnserver_respond_error(res, 409,
-            "out of date — parent_sha mismatch; fetch HEAD and retry")
+    new_rev, kind, msg = commit_from_body(req, res, repo)
+    if kind != 0 {
+        // KIND_OK is 0; anything else is an error. status_for_kind
+        // maps the kind to an HTTP status (400 / 403 / 409 / 500).
+        // The message comes from commit_from_body and is more
+        // specific than the pre-R288 fixed strings — e.g. carries
+        // the offending field name or path.
+        svnserver_respond_error(res, status_for_kind(kind), msg)
         return
     }
 
@@ -137,11 +92,11 @@ export handler_commit(req: ptr, res: ptr) {
     // (revs/N is just 41 bytes); same cost as the validation read on
     // entry. If the lookup fails (shouldn't, just succeeded above),
     // fall back to the rev-only response — better than 500.
-    new_sha = repos_rev_blob_sha(repo, rv)
+    new_sha = repos_rev_blob_sha(repo, new_rev)
     if string.length(new_sha) > 0 {
-        svnserver_respond_json_ok(res, rev_sha_response_json(rv, new_sha))
+        svnserver_respond_json_ok(res, rev_sha_response_json(new_rev, new_sha))
     } else {
-        svnserver_respond_json_ok(res, rev_response_json(rv))
+        svnserver_respond_json_ok(res, rev_response_json(new_rev))
     }
 }
 
