@@ -13,6 +13,22 @@ main() {
         link_flag("-lssl")
         link_flag("-lcrypto")
         link_flag("-lnghttp2")
+        // R291 — opt-in hardened build (aether #396 / 408_TODO item 4).
+        // `HARDEN=1 aeb avnserver` adds gcc stack canaries + libc-call
+        // fortification + format-string-injection diagnostics. Default
+        // build path stays byte-identical; the flags only appear when
+        // the env var is set. ~3-5% runtime overhead per the aether
+        // docs — fine for a CI smoke check, not for prod-shape benches.
+        // NB: os.getenv comes via aeb's prelude (it imports std.os
+        // for its own use); a local `import std.os (os_getenv)` here
+        // would shadow that and break aeb's internal os.exec /
+        // os.system call sites.
+        if string.equals(os.getenv("HARDEN"), "1") == 1 {
+            link_flag("-fstack-protector-all")
+            link_flag("-D_FORTIFY_SOURCE=2")
+            link_flag("-Wformat")
+            link_flag("-Wformat-security")
+        }
         regen("../ffi/openssl/crypto_helpers.ae")
         regen("../util/io.ae")
         regen("../util/byte_ops.ae")
