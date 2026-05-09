@@ -111,7 +111,9 @@ extern repos_rev_blob_sha(repo: string, rev: int) -> string
 // so we call txn_add_file directly.
 extern crypto_b64_decode(b64: string) -> (string, int, string)
 
-txn_add_b64_(txn: ptr, path: string, b64: string) -> int {
+txn_add_b64_(txn: ptr, path: string, b64: string) -> int
+    requires txn != null
+{
     raw, n, err = crypto_b64_decode(b64)
     if string.length(err) > 0 { return 0 - 1 }
     return txn_add_file(txn, path, raw, n)

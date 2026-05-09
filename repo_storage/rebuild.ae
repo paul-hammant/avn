@@ -265,7 +265,9 @@ reclist_sort(body: string) -> string {
 // Recursively rebuild the dir rooted at `base_dir_sha` (possibly "")
 // after applying `txn`'s edits. Returns the new dir blob's sha (empty
 // string if nothing survived at all).
-export rebuild_dir(repo: string, base_dir_sha: string, prefix: string, txn: ptr) -> string {
+export rebuild_dir(repo: string, base_dir_sha: string, prefix: string, txn: ptr) -> string
+    requires txn != null
+{
     // reclist body starts empty; we build up "K SHA NAME\n" lines.
     rl = ""
 

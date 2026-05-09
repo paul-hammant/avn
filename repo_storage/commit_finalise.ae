@@ -93,7 +93,9 @@ extern merge_ledger_record(repo: string, rev_sha: string,
 
 // Load the root-dir sha1 for a given revision. "" on miss (caller
 // treats as failure).
-load_rev_root_sha1_(repo: string, rev: int) -> string {
+load_rev_root_sha1_(repo: string, rev: int) -> string
+    requires rev >= 0
+{
     v = repos_rev_field(repo, rev, "root")
     if string.length(v) == 0 { return "" }
     return string.copy(v)
@@ -256,7 +258,10 @@ check_txn_out_of_date_(repo: string, txn: ptr, branch: string,
 finalise_on_branch_(repo: string, txn: ptr,
                      branch: string,
                      author: string, logmsg: string,
-                     props_sha1: string, acl_sha1: string) -> int {
+                     props_sha1: string, acl_sha1: string) -> int
+    requires txn != null
+    ensures result == 0 - 12 || result == 0 - 1 || result >= 1
+{
     if string.length(branch) == 0 { branch = "main" }
 
     base_rev = txn_base_rev(txn)
@@ -352,7 +357,10 @@ finalise_on_branch_(repo: string, txn: ptr,
 // Returns the new rev number on success, -1 on failure.
 export commit_finalise(repo: string, txn: ptr, branch: string,
                        author: string, logmsg: string,
-                       props_sha1: string, acl_sha1: string) -> int {
+                       props_sha1: string, acl_sha1: string) -> int
+    requires txn != null
+    ensures result == 0 - 12 || result == 0 - 1 || result >= 1
+{
     return finalise_on_branch_(repo, txn, branch, author, logmsg,
                                 props_sha1, acl_sha1)
 }
