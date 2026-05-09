@@ -344,6 +344,13 @@ main() {
             out, _, _ = sh(malformed_body)
             aeocha.expect_stdout_contains(fw, out, "malformed JSON", "malformed JSON msg")
         }
+        // R289 — parse_strict carries line:col info in the message
+        // ("<reason> at <L>:<C>"). Pin the " at " framing so we
+        // surface a regression if std.json drops the location text.
+        aeocha.it("R289 malformed JSON message includes line:col location") callback {
+            out, _, _ = sh(malformed_body)
+            aeocha.expect_stdout_contains(fw, out, " at ", "line:col location present")
+        }
         aeocha.it("R288 missing base_rev message names 'base_rev'") callback {
             out, _, _ = sh(miss_base_body_)
             aeocha.expect_stdout_contains(fw, out, "base_rev", "base_rev msg")
