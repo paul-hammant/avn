@@ -21,12 +21,7 @@
 // comes in the next step.
 
 import std.string
-
-extern svndiff_encoder_new(source_len: int, target_len: int) -> ptr
-extern svndiff_encoder_add_op(enc: ptr, action: int, length: int, offset: int) -> int
-extern svndiff_encoder_finish(enc: ptr, new_data: @aether string, new_data_len: int) -> (string, int)
-
-extern svndiff_decode_apply(diff: @aether string, diff_len: int, source: @aether string, source_len: int) -> (string, int)
+import delta
 
 const OP_SOURCE = 0
 const OP_TARGET = 1
@@ -36,12 +31,12 @@ const OP_NEW    = 2
 // length-aware AetherString tuples — no buf carrier, no buf_free.
 run_case(label: string, source: string, target: string, enc: ptr, new_data: string) {
     ndat = string.length(new_data)
-    diff_data, diff_len = svndiff_encoder_finish(enc, new_data, ndat)
+    diff_data, diff_len = delta.svndiff_encoder_finish(enc, new_data, ndat)
     if diff_len == 0 {
         println("FAIL ${label}: encoder_finish returned empty")
         return 1
     }
-    got_str, status = svndiff_decode_apply(diff_data, diff_len, source, string.length(source))
+    got_str, status = delta.svndiff_decode_apply(diff_data, diff_len, source, string.length(source))
     if status == 0 {
         println("FAIL ${label}: decode_apply returned status 0")
         return 1
@@ -66,25 +61,25 @@ run_case(label: string, source: string, target: string, enc: ptr, new_data: stri
 
 case_identity() {
     src = "Hello, world!\n"
-    enc = svndiff_encoder_new(string.length(src), string.length(src))
-    svndiff_encoder_add_op(enc, OP_SOURCE, string.length(src), 0)
+    enc = delta.svndiff_encoder_new(string.length(src), string.length(src))
+    delta.svndiff_encoder_add_op(enc, OP_SOURCE, string.length(src), 0)
     return run_case("identity", src, src, enc, "")
 }
 
 case_pure_new() {
     src = ""
     tgt = "abc"
-    enc = svndiff_encoder_new(0, 3)
-    svndiff_encoder_add_op(enc, OP_NEW, 3, 0)
+    enc = delta.svndiff_encoder_new(0, 3)
+    delta.svndiff_encoder_add_op(enc, OP_NEW, 3, 0)
     return run_case("pure new-data", src, tgt, enc, "abc")
 }
 
 case_src_prefix_new() {
     src = "ABCDEFGH"
     tgt = "ABCDxyz"
-    enc = svndiff_encoder_new(string.length(src), string.length(tgt))
-    svndiff_encoder_add_op(enc, OP_SOURCE, 4, 0)
-    svndiff_encoder_add_op(enc, OP_NEW,    3, 0)
+    enc = delta.svndiff_encoder_new(string.length(src), string.length(tgt))
+    delta.svndiff_encoder_add_op(enc, OP_SOURCE, 4, 0)
+    delta.svndiff_encoder_add_op(enc, OP_NEW,    3, 0)
     return run_case("src prefix + new", src, tgt, enc, "xyz")
 }
 
@@ -92,9 +87,9 @@ case_target_rle() {
     // source "", target 8 'x's, built via [new 1 "x"] + [target 7 @0].
     src = ""
     tgt = "xxxxxxxx"
-    enc = svndiff_encoder_new(0, 8)
-    svndiff_encoder_add_op(enc, OP_NEW,    1, 0)
-    svndiff_encoder_add_op(enc, OP_TARGET, 7, 0)
+    enc = delta.svndiff_encoder_new(0, 8)
+    delta.svndiff_encoder_add_op(enc, OP_NEW,    1, 0)
+    delta.svndiff_encoder_add_op(enc, OP_TARGET, 7, 0)
     return run_case("target self-copy RLE", src, tgt, enc, "x")
 }
 
@@ -102,10 +97,10 @@ case_word_replace() {
     // "The quick brown fox" -> "The slow brown fox": 4 src + 4 new + 10 src.
     src = "The quick brown fox"
     tgt = "The slow brown fox"
-    enc = svndiff_encoder_new(string.length(src), string.length(tgt))
-    svndiff_encoder_add_op(enc, OP_SOURCE, 4, 0)    // "The "
-    svndiff_encoder_add_op(enc, OP_NEW,    4, 0)    // "slow"
-    svndiff_encoder_add_op(enc, OP_SOURCE, 10, 9)   // " brown fox"
+    enc = delta.svndiff_encoder_new(string.length(src), string.length(tgt))
+    delta.svndiff_encoder_add_op(enc, OP_SOURCE, 4, 0)    // "The "
+    delta.svndiff_encoder_add_op(enc, OP_NEW,    4, 0)    // "slow"
+    delta.svndiff_encoder_add_op(enc, OP_SOURCE, 10, 9)   // " brown fox"
     return run_case("word replace", src, tgt, enc, "slow")
 }
 
@@ -118,8 +113,8 @@ case_varint_length() {
         tgt = string.concat(tgt, "Z")
         i = i + 1
     }
-    enc = svndiff_encoder_new(0, 100)
-    svndiff_encoder_add_op(enc, OP_NEW, 100, 0)
+    enc = delta.svndiff_encoder_new(0, 100)
+    delta.svndiff_encoder_add_op(enc, OP_NEW, 100, 0)
     return run_case("varint length (>63)", src, tgt, enc, tgt)
 }
 

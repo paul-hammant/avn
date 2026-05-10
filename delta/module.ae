@@ -1,0 +1,490 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// permissions and limitations under the License.
+
+// delta — svndiff1 codec + xdelta source/target → ops compute.
+//
+// Phase 1b merge (methodical_extern_removal_plan.md). Unifies the
+// four pre-merge files
+//   delta/svndiff.ae         — protocol header (now subsumed)
+//   delta/svndiff_decode.ae  — vi_decode_, svndiff_decode_apply
+//   delta/svndiff_encode.ae  — emit_varint_, emit_inst_,
+//                              build_inst_section_, encode_window
+//   delta/svndiff/encoder.ae — Encoder struct + ops accumulator
+//   delta/xdelta.ae          — find_best_match_, xdelta_compute
+// into one module. The previous svndiff_encode ↔ svndiff/encoder
+// cycle (encode_window calls encoder_count; svndiff_encoder_finish
+// calls encode_window) collapses into intra-module calls.
+//
+// Unblocked by aetherc 0.141.0 — `Encoder` struct now visible to
+// imported function bodies' `as *Encoder` casts (issue documented
+// in exprt_structs.md, fixed in commit d18b064).
+//
+// Output shape (svndiff1, single-window):
+//
+//   "SVN" 0x01                                  (4-byte signature)
+//   varint sview_offset (always 0)
+//   varint sview_len    (== source_len)
+//   varint tview_len    (== target_len)
+//   varint inst_len     (size of instruction section in bytes)
+//   varint newdata_len  (size of new-data section in bytes)
+//   <inst_len bytes of instructions>
+//   <newdata_len bytes of new data>
+
+import std.string
+import std.bytes
+
+extern malloc(size: int) -> ptr
+extern free(p: ptr)
+
+// xdelta tunable: minimum match length to emit OP_SOURCE.
+const MIN_MATCH = 4
+
+// =============================================================================
+// Encoder — Encoder struct + ops accumulator
+// =============================================================================
+//
+// Each op packs as 12 bytes: [action_le32 | length_le32 | offset_le32].
+// Auto-grows via std.bytes' set semantics.
+
+struct Encoder {
+    source_len: int
+    target_len: int
+    ops: ptr     // std.bytes buffer; nops * 12 bytes packed le32
+    nops: int
+}
+
+svndiff_encoder_new(source_len: int, target_len: int) -> ptr {
+    raw = malloc(64)
+    if raw == null { return null }
+    e = raw as *Encoder
+    e.source_len = source_len
+    e.target_len = target_len
+    e.ops = bytes.new(192)   // 16 ops worth; auto-grows as needed
+    e.nops = 0
+    return raw
+}
+
+svndiff_encoder_add_op(enc: ptr, action: int, length: int,
+                       offset: int) -> int {
+    if enc == null { return 0 - 1 }
+    e = enc as *Encoder
+    base = e.nops * 12
+    bytes.set_le32(e.ops, base + 0, action)
+    bytes.set_le32(e.ops, base + 4, length)
+    bytes.set_le32(e.ops, base + 8, offset)
+    e.nops = e.nops + 1
+    return 0
+}
+
+// File-private accessors used by the window-emit walker below.
+encoder_count_(enc: ptr) -> int {
+    if enc == null { return 0 }
+    e = enc as *Encoder
+    return e.nops
+}
+
+encoder_op_action_(enc: ptr, i: int) -> int {
+    if enc == null { return 0 - 1 }
+    e = enc as *Encoder
+    if i < 0 { return 0 - 1 }
+    if i >= e.nops { return 0 - 1 }
+    return bytes.get_le32(e.ops, i * 12 + 0)
+}
+
+encoder_op_length_(enc: ptr, i: int) -> int {
+    if enc == null { return 0 }
+    e = enc as *Encoder
+    if i < 0 { return 0 }
+    if i >= e.nops { return 0 }
+    return bytes.get_le32(e.ops, i * 12 + 4)
+}
+
+encoder_op_offset_(enc: ptr, i: int) -> int {
+    if enc == null { return 0 }
+    e = enc as *Encoder
+    if i < 0 { return 0 }
+    if i >= e.nops { return 0 }
+    return bytes.get_le32(e.ops, i * 12 + 8)
+}
+
+// =============================================================================
+// Encoder — window emitter (walks ops, emits svndiff1 bytes)
+// =============================================================================
+
+// Append the varint encoding of `v` to byte buffer `b` at the current
+// logical length. Returns the new length, or -1 on failure. Varint is
+// base-128, MSB-continuation, big-endian — svndiff1's own scheme.
+emit_varint_(b: ptr, pos: int, v: int) -> int {
+    n = 1
+    t = v / 128
+    while t > 0 {
+        n = n + 1
+        t = t / 128
+    }
+    i = n - 1
+    last_byte = v - 128 * (v / 128)         // v & 0x7f
+    bytes.set(b, pos + i, last_byte)
+    while i > 0 {
+        v = v / 128
+        i = i - 1
+        group = v - 128 * (v / 128)
+        bytes.set(b, pos + i, group + 128)  // group | 0x80
+    }
+    return pos + n
+}
+
+// Write one instruction at offset `pos` in `b`. `has_offset` is 1 for
+// action 0 or 1, 0 for action 2.
+emit_inst_(b: ptr, pos: int, action: int, length: int, offset: int,
+           has_offset: int) -> int {
+    if length < 64 {
+        bytes.set(b, pos, action * 64 + length)   // (action << 6) | length
+        pos = pos + 1
+    }
+    if length >= 64 {
+        bytes.set(b, pos, action * 64)            // (action << 6) | 0
+        pos = pos + 1
+        pos = emit_varint_(b, pos, length)
+    }
+    if has_offset == 1 {
+        pos = emit_varint_(b, pos, offset)
+    }
+    return pos
+}
+
+// Build the instruction section by walking the encoder's ops list.
+// 30 bytes/op upper bound (1-byte header + two 10-byte varints).
+build_inst_section_(e: ptr) -> string {
+    n = encoder_count_(e)
+    cap = n * 30 + 16
+    inst = bytes.new(cap)
+    if inst == null { return "" }
+    pos = 0
+    i = 0
+    while i < n {
+        action = encoder_op_action_(e, i)
+        length = encoder_op_length_(e, i)
+        offset = encoder_op_offset_(e, i)
+        if action < 0 { bytes.free(inst); return "" }
+        if action > 2 { bytes.free(inst); return "" }
+        has_offset = 1
+        if action == 2 { has_offset = 0 }
+        pos = emit_inst_(inst, pos, action, length, offset, has_offset)
+        i = i + 1
+    }
+    return bytes.finish(inst, pos)
+}
+
+// Emit the full svndiff1 stream. Returns (bytes, status) where status
+// is 1 on success, 0 on failure.
+encode_window_(e: ptr, source_len: int, target_len: int,
+               new_data: string, new_data_len: int) -> (string, int) {
+    inst_section = build_inst_section_(e)
+    inst_len = string.length(inst_section)
+
+    // Worst case: signature (4) + 5 varints * 10 bytes (50) + inst
+    // section + new_data. 64-byte slack handles small edge cases
+    // without a second realloc.
+    cap = 4 + 50 + inst_len + new_data_len + 64
+    out = bytes.new(cap)
+    if out == null { return "", 0 }
+    pos = 0
+
+    // Signature: 'S' 'V' 'N' 0x01
+    bytes.set(out, pos, 83); pos = pos + 1
+    bytes.set(out, pos, 86); pos = pos + 1
+    bytes.set(out, pos, 78); pos = pos + 1
+    bytes.set(out, pos, 1);  pos = pos + 1
+
+    // Window header.
+    pos = emit_varint_(out, pos, 0)              // sview_offset
+    pos = emit_varint_(out, pos, source_len)
+    pos = emit_varint_(out, pos, target_len)
+    pos = emit_varint_(out, pos, inst_len)
+    pos = emit_varint_(out, pos, new_data_len)
+
+    if inst_len > 0 {
+        bytes.copy_from_string(out, pos, inst_section, inst_len)
+        pos = pos + inst_len
+    }
+    if new_data_len > 0 {
+        bytes.copy_from_string(out, pos, new_data, new_data_len)
+        pos = pos + new_data_len
+    }
+    return bytes.finish(out, pos), 1
+}
+
+svndiff_encoder_finish(enc: ptr, new_data: string,
+                       new_data_len: int) -> (string, int) {
+    if enc == null { return "", 0 }
+    e = enc as *Encoder
+    out, n = encode_window_(enc, e.source_len, e.target_len,
+                             new_data, new_data_len)
+    bytes.free(e.ops)
+    free(enc)
+    if n == 0 { return "", 0 }
+    return out, string.length(out)
+}
+
+svndiff_encoder_free(enc: ptr) {
+    if enc == null { return }
+    e = enc as *Encoder
+    bytes.free(e.ops)
+    free(enc)
+    return
+}
+
+// =============================================================================
+// Decoder
+// =============================================================================
+
+// Decode varint at byte offset `pos` in `buf`, bounded by `end`.
+// Returns (value, new_pos), or (-1, -1) on overrun / overflow.
+// A varint longer than 10 bytes is rejected.
+vi_decode_(buf: string, pos: int, end: int) -> {
+    v = 0
+    n = 0
+    while pos < end {
+        c = string.char_at(buf, pos)
+        pos = pos + 1
+        n = n + 1
+        if n > 10 { return 0 - 1, 0 - 1 }
+        v = v * 128
+        // c & 0x7f via division — c is in [0,255]; bottom 7 bits = c % 128
+        v = v + (c - 128 * (c / 128))
+        if c < 128 {
+            return v, pos
+        }
+    }
+    return 0 - 1, 0 - 1
+}
+
+// Decode `diff[0..diff_len]` against `source[0..source_len]`. Returns
+// (target_bytes, status). status == 1 means success — target_bytes is
+// binary-safe and may legitimately be length 0. status == 0 means any
+// error; target_bytes is "" but the caller must check status to
+// distinguish from a legitimate empty target.
+//
+// Headline reason this isn't a one-liner: action-1 (target self-copy)
+// is RLE expansion — the read at target[offset+i] sees bytes that
+// previous iterations of the same instruction just wrote at
+// target[tpos+i] when offset+i overlaps the current write window.
+// std.bytes.copy_within preserves that; immutable concat can't.
+svndiff_decode_apply(diff: string, diff_len: int,
+                     source: string, source_len: int) -> (string, int) {
+    if diff_len < 4 { return "", 0 }
+    // Signature: 'S' 'V' 'N' 0x01
+    if string.char_at(diff, 0) != 83 { return "", 0 }   // 'S'
+    if string.char_at(diff, 1) != 86 { return "", 0 }   // 'V'
+    if string.char_at(diff, 2) != 78 { return "", 0 }   // 'N'
+    if string.char_at(diff, 3) != 1  { return "", 0 }
+    p = 4
+
+    sview_offset, p = vi_decode_(diff, p, diff_len)
+    if p < 0 { return "", 0 }
+    sview_len, p = vi_decode_(diff, p, diff_len)
+    if p < 0 { return "", 0 }
+    tview_len, p = vi_decode_(diff, p, diff_len)
+    if p < 0 { return "", 0 }
+    inst_len, p = vi_decode_(diff, p, diff_len)
+    if p < 0 { return "", 0 }
+    newdata_len, p = vi_decode_(diff, p, diff_len)
+    if p < 0 { return "", 0 }
+
+    // Bounds: source view must fit in source; inst+newdata sections
+    // must fit in the remaining diff bytes.
+    if sview_offset + sview_len > source_len { return "", 0 }
+    if (diff_len - p) < inst_len + newdata_len { return "", 0 }
+
+    inst_p = p
+    inst_end = p + inst_len
+    newdata_off = p + inst_len   // absolute byte offset into diff
+
+    // Allocate target buffer with capacity for the full window.
+    target = bytes.new(tview_len + 1)
+    if target == null { return "", 0 }
+    tpos = 0
+    new_consumed = 0
+
+    while inst_p < inst_end {
+        c = string.char_at(diff, inst_p)
+        inst_p = inst_p + 1
+        action = c / 64                         // (c >> 6) & 0x3
+        if action > 2 { bytes.free(target); return "", 0 }
+
+        length = c - 64 * action                // c & 0x3f
+        if length == 0 {
+            length, inst_p = vi_decode_(diff, inst_p, inst_end)
+            if inst_p < 0 { bytes.free(target); return "", 0 }
+        }
+
+        offset = 0
+        if action != 2 {
+            offset, inst_p = vi_decode_(diff, inst_p, inst_end)
+            if inst_p < 0 { bytes.free(target); return "", 0 }
+        }
+
+        if tpos + length > tview_len { bytes.free(target); return "", 0 }
+
+        if action == 0 {
+            // source copy: target[tpos..] = source[sview_offset+offset..length]
+            if offset + length > sview_len { bytes.free(target); return "", 0 }
+            slice = string.substring(source, sview_offset + offset,
+                                      sview_offset + offset + length)
+            if bytes.copy_from_string(target, tpos, slice, length) == 0 {
+                bytes.free(target); return "", 0
+            }
+            tpos = tpos + length
+        }
+        if action == 1 {
+            // target self-copy — the RLE-overlap shape. copy_within is
+            // forward byte-by-byte, so reads pick up bytes earlier
+            // iterations just wrote.
+            if offset >= tpos { bytes.free(target); return "", 0 }
+            if bytes.copy_within(target, tpos, offset, length) == 0 {
+                bytes.free(target); return "", 0
+            }
+            tpos = tpos + length
+        }
+        if action == 2 {
+            // new-data copy from the diff stream's newdata section.
+            if new_consumed + length > newdata_len { bytes.free(target); return "", 0 }
+            slice = string.substring(diff, newdata_off + new_consumed,
+                                      newdata_off + new_consumed + length)
+            if bytes.copy_from_string(target, tpos, slice, length) == 0 {
+                bytes.free(target); return "", 0
+            }
+            new_consumed = new_consumed + length
+            tpos = tpos + length
+        }
+    }
+
+    if tpos != tview_len { bytes.free(target); return "", 0 }
+
+    return bytes.finish(target, tview_len), 1
+}
+
+// =============================================================================
+// xdelta — produce svndiff operations from (source, target)
+// =============================================================================
+
+// Walk T left-to-right; at each position scan S for the longest
+// matching prefix of length >= MIN_MATCH. Emit OP_SOURCE for matches,
+// accumulate non-matching bytes into a pending new-data run that
+// flushes as OP_NEW.
+//
+// O(N²): plain linear scan per target position, no hash table. Fine
+// for kiB-scale workloads; revisit with std.collections.map if a
+// real-size repo workload shows up. We do NOT generate OP_TARGET
+// (self-copy) ops — same correctness-without-them stance the C
+// version had.
+
+// Find the longest prefix of `target[tp..tp+max_match)` that matches
+// some position in `source`. Returns (best_len, best_sp); best_len is
+// 0 if no MIN_MATCH-or-better match exists.
+find_best_match_(source: string, source_len: int,
+                 target: string, tp: int, max_match: int) -> {
+    if max_match < MIN_MATCH { return 0, 0 - 1 }
+
+    best_len = 0
+    best_sp = 0 - 1
+
+    sp = 0
+    while sp + MIN_MATCH <= source_len {
+        // Quick reject on the first 4 bytes.
+        ok = 1
+        k = 0
+        while k < MIN_MATCH {
+            if string.char_at(source, sp + k) != string.char_at(target, tp + k) {
+                ok = 0
+                k = MIN_MATCH
+            }
+            k = k + 1
+        }
+        if ok == 1 {
+            // Extend the match. On mismatch at position `len`, stop
+            // without incrementing — matched length is exactly `len`.
+            // Snap `len` to `max_extend` so the while-condition exits
+            // cleanly without bumping past.
+            len = MIN_MATCH
+            max_extend = source_len - sp
+            if max_match < max_extend { max_extend = max_match }
+            stopped = 0
+            while len < max_extend {
+                if stopped == 0 {
+                    if string.char_at(source, sp + len) != string.char_at(target, tp + len) {
+                        stopped = 1
+                        max_extend = len
+                    }
+                    if stopped == 0 { len = len + 1 }
+                }
+            }
+            if len > best_len {
+                best_len = len
+                best_sp = sp
+            }
+        }
+        sp = sp + 1
+    }
+
+    if best_len >= MIN_MATCH { return best_len, best_sp }
+    return 0, 0 - 1
+}
+
+// Compute a delta from (source, target) and return the completed
+// svndiff envelope as (bytes, length). Returns ("", 0) on failure
+// (encoder OOM).
+xdelta_compute(source: string, source_len: int,
+               target: string, target_len: int) -> (string, int) {
+    enc = svndiff_encoder_new(source_len, target_len)
+    if enc == null { return "", 0 }
+
+    nd = bytes.new(target_len + 64)
+    if nd == null { svndiff_encoder_free(enc); return "", 0 }
+    nd_len = 0
+
+    tp = 0
+    ndrun_start = 0
+
+    while tp < target_len {
+        max_match = target_len - tp
+        mlen, sp = find_best_match_(source, source_len, target, tp, max_match)
+        if mlen >= MIN_MATCH {
+            run_len = tp - ndrun_start
+            if run_len > 0 {
+                slice = string.substring(target, ndrun_start, tp)
+                bytes.copy_from_string(nd, nd_len, slice, run_len)
+                nd_len = nd_len + run_len
+                svndiff_encoder_add_op(enc, 2, run_len, 0)
+            }
+            svndiff_encoder_add_op(enc, 0, mlen, sp)
+            tp = tp + mlen
+            ndrun_start = tp
+        }
+        if mlen < MIN_MATCH {
+            tp = tp + 1
+        }
+    }
+    run_len = target_len - ndrun_start
+    if run_len > 0 {
+        slice = string.substring(target, ndrun_start, target_len)
+        bytes.copy_from_string(nd, nd_len, slice, run_len)
+        nd_len = nd_len + run_len
+        svndiff_encoder_add_op(enc, 2, run_len, 0)
+    }
+
+    new_data = bytes.finish(nd, nd_len)
+    return svndiff_encoder_finish(enc, new_data, nd_len)
+}

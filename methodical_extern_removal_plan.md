@@ -124,29 +124,25 @@ builds; bench/tests stay green.
 Validated via `ae build` of `util/test_checksum.ae` (all sha1 checks
 pass) and per-file `ae check` on all 10 modified files.
 
-**Phase 1b status: DEFERRED.** `delta/` migration blocked by an
-**aether limitation: structs are not yet exportable from modules.**
-`aether/docs/module-system-design.md` § "Future" line 147 lists
-"Exporting structs and actors from modules" as planned future work.
-delta's encoder uses an internal `struct Encoder` that callers obtain
-via `svndiff_encoder_new() -> ptr` and pass back as `ptr`. When the
-internal accessors (`as *Encoder` casts) cross the import boundary,
-aetherc 0.140.0 reports `'Encoder' is not a struct type` at every
-cast site. Adding `Encoder` to `exports (...)` does not resolve it
-— the feature is genuinely not yet wired up.
+**Phase 1b status: DONE (Round 297).** Unblocked by aetherc 0.141.0
+which fixed exactly this — see `aether/CHANGELOG.md` 0.141.0 entry
+("Struct definitions in imported modules are now visible to that
+module's own merged function bodies"). The bug report at
+`../aether/exprt_structs.md` was filed and the fix landed within
+hours; the same `Slot`/`as *Slot` reproducer that motivated the bug
+report is the integration test in `aether/tests/integration/import_struct/`.
 
-Workarounds considered:
-- **A. Wait for the feature** — preferred. delta has zero external
-  callers (only its own tests reference it), so leaving it as
-  per-file `extern`s costs nothing today.
-- **B. Eliminate the struct** — rewrite encoder accessors to use
-  packed-byte access against an opaque `ptr` (like `bytes.set_le32`/
-  `bytes.get_le32` already used internally for the ops list). Doable
-  but invasive, and gets thrown away once the feature lands.
-- **C. File aether bug** — already-known limitation; not a bug.
-
-Action: revisit when aether ships exportable structs. If it doesn't
-arrive in 0.141 / 0.142, consider option B.
+delta migration: 4 source files (`svndiff.ae` + `svndiff_decode.ae`
++ `svndiff_encode.ae` + `xdelta.ae` + `svndiff/encoder.ae`) merged
+into `delta/module.ae`. The `Encoder` struct stays internal. Two
+test files (`test_svndiff.ae`, `test_xdelta.ae`) switched from
+`extern svndiff_*`/`extern xdelta_*` to `import delta` and prefixed
+call sites with `delta.`. Both test suites green end-to-end:
+- `test_svndiff` 6/6 cases (identity, pure new-data, src prefix+new,
+  target self-copy RLE, word replace, varint length).
+- `test_xdelta` 9/9 cases (identity, empty source, empty target,
+  one-word swap, insertion, deletion, swap, large similar 2KB+tiny
+  patch, no overlap).
 
 ### Phase 2 — `util/`
 

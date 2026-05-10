@@ -19,12 +19,7 @@
 // delta→apply and recover the original."
 
 import std.string
-
-extern xdelta_compute(source: @aether string, source_len: int,
-                            target: @aether string, target_len: int) -> (string, int)
-
-extern svndiff_decode_apply(diff: @aether string, diff_len: int,
-                                  source: @aether string, source_len: int) -> (string, int)
+import delta
 
 expect_str(label: string, got: string, want: string) {
     if string.equals(got, want) == 1 {
@@ -40,12 +35,12 @@ expect_str(label: string, got: string, want: string) {
 round_trip(label: string, source: string, target: string) {
     slen = string.length(source)
     tlen = string.length(target)
-    ddata, dlen = xdelta_compute(source, slen, target, tlen)
+    ddata, dlen = delta.xdelta_compute(source, slen, target, tlen)
     if dlen == 0 {
         println("FAIL ${label}: xdelta_compute returned empty")
         return 1
     }
-    got, status = svndiff_decode_apply(ddata, dlen, source, slen)
+    got, status = delta.svndiff_decode_apply(ddata, dlen, source, slen)
     if status == 0 {
         println("FAIL ${label}: decode_apply returned status 0")
         return 1

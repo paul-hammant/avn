@@ -12,9 +12,6 @@ main() {
         link_flag("-lz")
         link_flag("-lssl")
         link_flag("-lcrypto")
-        regen("../delta/svndiff/encoder.ae")
-        regen("../delta/svndiff_decode.ae")
-        regen("../delta/svndiff_encode.ae")
-        regen("../delta/xdelta.ae")
+        regen("../delta/module.ae")
     }
 }
