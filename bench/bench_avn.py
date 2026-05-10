@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-# Bench avnserver: 20,000 commits, 100K random text each, on /media/paul/eeee2/.
+# Bench avnserver: 5,000 commits, 100K random text each, on local SSD by
+# default. Override with --repo-dir.
 #
 # Two output files (in this script's directory, suffixed by run tag):
 #   bench-{tag}.log           wall-clock progress log
@@ -13,9 +14,9 @@
 # the rep_store uses to skip the zlib pass entirely (R285). Comparing the
 # two CSVs isolates server-side compression cost in the commit latency.
 #
-# The script wipes /media/paul/eeee2/avn_bench_repo (per run), creates a
-# fresh repo, starts avnserver on port 9990 in background, fires the
-# commits in series, records per-500-batch timings, stops the server.
+# The script wipes the repo dir (per run), creates a fresh repo, starts
+# avnserver on port 9990 in background, fires the commits in series,
+# records per-500-batch timings, stops the server.
 #
 # Designed to run unattended. No tail-following needed — check the timings
 # CSV any time to see progress.
@@ -35,12 +36,12 @@ from pathlib import Path
 # a single round-trip (no /info GET).
 SHA_RE = re.compile(r"\(sha: ([a-f0-9]{40})\)")
 
-REPO_DIR     = Path("/media/paul/eeee2/avn_bench_repo")
+DEFAULT_REPO_DIR = Path.home() / "avn_bench_repo"
 PORT         = 9990
 REPO_NAME    = "bench"
 URL          = f"http://127.0.0.1:{PORT}/{REPO_NAME}"
-TOTAL        = 20000
-BATCH_SIZE   = 500
+TOTAL        = 5000
+BATCH_SIZE   = 50
 TEXT_SIZE    = 100 * 1024
 AUTHOR       = "bench"
 
@@ -93,13 +94,21 @@ def main() -> int:
         help="Run avnserver with AVN_NO_COMPRESS=1; rep blobs stored "
              "raw (no zlib). Output files get the 'nocompress' tag.",
     )
+    parser.add_argument(
+        "--repo-dir",
+        type=Path,
+        default=DEFAULT_REPO_DIR,
+        help=f"Repo storage path (default: {DEFAULT_REPO_DIR}).",
+    )
     args = parser.parse_args()
     tag = "nocompress" if args.no_compress else "compress"
+    REPO_DIR = args.repo_dir
 
     global LOG_FILE, TIMINGS_FILE, SERVER_LOG
     LOG_FILE     = OUT_DIR / f"bench-{tag}.log"
     TIMINGS_FILE = OUT_DIR / f"bench-{tag}_timings.csv"
     SERVER_LOG   = OUT_DIR / f"bench-{tag}_server.log"
+    RSS_FILE     = OUT_DIR / f"bench-{tag}_rss.csv"
 
     for binp in (ADMIN, SERVER, AVN):
         if not binp.exists():
@@ -142,6 +151,19 @@ def main() -> int:
         srv_log.close()
         log(f"server died on startup; see {SERVER_LOG}")
         return 1
+
+    # 1Hz RSS sampler. Cheap, runs as long as the server lives.
+    # Columns: t_unix, rss_kb, vsz_kb. Exits when /proc/<pid>/status disappears.
+    poller_cmd = (
+        f"echo 't_unix,rss_kb,vsz_kb' > {RSS_FILE}; "
+        f"while [ -r /proc/{server.pid}/status ]; do "
+        f"  rss=$(awk '/^VmRSS:/ {{print $2}}' /proc/{server.pid}/status 2>/dev/null); "
+        f"  vsz=$(awk '/^VmSize:/ {{print $2}}' /proc/{server.pid}/status 2>/dev/null); "
+        f"  if [ -n \"$rss\" ]; then echo \"$(date +%s),$rss,$vsz\" >> {RSS_FILE}; fi; "
+        f"  sleep 1; "
+        f"done"
+    )
+    poller = subprocess.Popen(["/bin/bash", "-c", poller_cmd])
 
     rng = random.Random(0xA1)
     wall_start  = time.time()
@@ -214,6 +236,13 @@ def main() -> int:
             server.kill()
             server.wait()
         srv_log.close()
+        # Poller's loop-condition (/proc/<pid>/status) flips false on
+        # server exit, so it self-terminates within ~1s. Reap it.
+        try:
+            poller.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            poller.kill()
+            poller.wait()
 
     return 0
 
