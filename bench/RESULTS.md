@@ -35,22 +35,41 @@ the CPU cost wouldn't move much. **Keep compression on.**
 | final avnserver RSS                 |          3.36 GB |             3.70 GB |      +10% |
 | per-commit retention (RSS / count)  |       0.67 MB/c |          0.74 MB/c |    +0.07× |
 
-## Migration delta (R287 → R309)
+## Migration + leak-fix delta (R287 → R310)
 
-For comparison against the pre-migration R287 baseline (aetherc 0.137.0):
+| metric             | R287 nocomp | R309 nocomp | R310 nocomp | R287 comp | R309 comp | R310 comp |
+|--------------------|------------:|------------:|------------:|----------:|----------:|----------:|
+| wall time          |       385 s |       405 s |       389 s |     393 s |     422 s |     414 s |
+| per-commit         |     77.1 ms |     80.5 ms |     77.8 ms |   78.6 ms |   83.7 ms |   82.8 ms |
+| repo size on disk  |      493 MB |      494 MB |      494 MB |    375 MB |    375 MB |    375 MB |
+| final avnserver RSS|     3.30 GB |     3.36 GB | **2.76 GB** |   3.60 GB |   3.70 GB | **2.73 GB**|
+| MB-per-commit      |        0.66 |        0.67 |    **0.57** |      0.72 |      0.74 |   **0.56** |
 
-| metric                              | R287 nocompress | R309 nocompress | Δ      | R287 compress | R309 compress | Δ      |
-|-------------------------------------|----------------:|----------------:|-------:|--------------:|--------------:|-------:|
-| wall time                           |           385 s |           405 s |  +5.2% |         393 s |         422 s |  +7.4% |
-| per-commit                          |          77.1 ms|         80.5 ms |  +4.4% |       78.6 ms |       83.7 ms |  +6.5% |
-| repo size on disk                   |          493 MB |          494 MB |   ≈0%  |        375 MB |        375 MB |    0%  |
-| final avnserver RSS                 |          3.30 GB|         3.36 GB |  +1.8% |       3.60 GB |       3.70 GB |  +2.8% |
+**R287 → R309**: migration alone is performance-neutral within ~5%
+(throughput drift; disk identical; RSS within noise).
 
-Migration is **performance-neutral within ~5%**: throughput dropped
-~5% which is well inside the noise band of two cross-aetherc-version
-runs (0.137.0 → 0.143.0 + three intervening codegen fixes).
-Disk-on-disk and RSS are unchanged — the migration neither leaks
-more nor compresses worse, which is the test that matters.
+**R309 → R310**: explicit `string_free` calls on three tuple-
+destructured / non-tracked AetherStrings in the commit-handling
+hot path (`avnserver/module.ae`'s `txn_add_b64_` → `raw, err`,
+`commit_from_body` → `body, b64, berr`). Workaround for the
+[`further-bug-fix4.md`](../../aether/further-bug-fix4.md) tuple-
+destructure heap-tracker gap that survives 0.143.0.
+
+- **−18% RSS no-compress** (3.36 → 2.76 GB), **−26% RSS compress**
+  (3.70 → 2.73 GB). Per-commit retention drops to ~0.57 MB on
+  both modes (was diverging — compress used to retain more because
+  zlib allocations stacked on top of the leaked payload buffers).
+- **+4% wall-time win** on the no-compress side (less malloc
+  pressure, fewer page faults late in run); compress essentially
+  flat (zlib already dominates the steady-state cost).
+- The remaining ~0.57 MB/commit retention is from allocations
+  outside this hot path (json AST nodes that `json.free` doesn't
+  fully reclaim, intermediate strings in handlers other than
+  commit, txn-internal buffers, etc.). A continuing ratchet.
+
+Total trip from migration start: comparable wall time, **17–25%
+RSS reduction**, identical on-disk format. The migration shipped
+with a perf bonus.
 
 Per-commit time is constant across all batches in both runs (no
 algorithmic growth — verified after the heap-tracker codegen fix

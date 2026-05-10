@@ -488,12 +488,24 @@ status_for_kind(kind: int) -> int {
 // auto-unwrap at C extern boundaries declared `const char*` (#297),
 // so we call txn_add_file directly.
 
+// Tuple-destructured locals (raw, err) aren't heap-tracked under
+// aetherc 0.143.0 — see aether/further-bug-fix4.md. We free them
+// explicitly so the bench's ~0.67 MB-per-commit linear retention
+// drops to baseline. txn_add_file copies raw into the txn's own
+// storage, so freeing raw after the call is safe.
+extern string_free(s: string)
+
 txn_add_b64_(txn: ptr, path: string, b64: string) -> int
     requires txn != null
 {
     raw, n, err = openssl.crypto_b64_decode(b64)
-    if string.length(err) > 0 { return 0 - 1 }
-    return repo_storage.txn_add_file(txn, path, raw, n)
+    if string.length(err) > 0 {
+        string_free(err)
+        return 0 - 1
+    }
+    rc = repo_storage.txn_add_file(txn, path, raw, n)
+    string_free(raw)
+    return rc
 }
 
 // Blob builders. These produce "key=value\n" / "+user\n" /
@@ -519,6 +531,12 @@ commit_from_body(req: ptr, res: ptr, repo: string) -> (int, int, string) {
     // the existing "malformed JSON" prefix clients already key on,
     // and adds the location detail clients didn't have before.
     root, jkind, jmsg = json.parse_strict(body)
+    // body's return from http.request_body isn't heap-tracked under
+    // aetherc 0.143.0 (further-bug-fix4.md). The bench's 133 KB
+    // commit-body retention per-commit is dominated by this single
+    // string. json.parse_strict is the only consumer; safe to free
+    // immediately after.
+    string_free(body)
     if jkind != 0 {
         return -1, KIND_PARSE_ERROR, string.concat("malformed JSON: ", jmsg)
     }
@@ -665,7 +683,13 @@ commit_from_body(req: ptr, res: ptr, repo: string) -> (int, int, string) {
             if jcontent == null { repo_storage.txn_free(txn); json.free(root); return -1, KIND_INVALID_INPUT, "add-file edit missing content" }
             b64, berr = json.get_string(jcontent)
             if string.length(berr) > 0 { repo_storage.txn_free(txn); json.free(root); return -1, KIND_INVALID_INPUT, "add-file content not a string" }
-            if txn_add_b64_(txn, epath, b64) != 0 {
+            rc_b64 = txn_add_b64_(txn, epath, b64)
+            // tuple-destructured b64/berr aren't heap-tracked under
+            // aetherc 0.143.0 (further-bug-fix4.md); free explicitly
+            // so per-commit retention drops by ~133 KB.
+            string_free(b64)
+            string_free(berr)
+            if rc_b64 != 0 {
                 repo_storage.txn_free(txn); json.free(root); return -1, KIND_INVALID_INPUT, "add-file content base64 decode failed"
             }
         }
