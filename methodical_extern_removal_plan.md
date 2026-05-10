@@ -301,19 +301,39 @@ constellation of helper files (handlers, parsers, dispatchers in
 `avnserver/`; subcommand handlers in `avn/`; admin operations in
 `avnadmin/`).
 
-Two sub-options for each binary:
-- **Merge all `.ae` files in the binary's dir into one `module.ae`.** Largest
-  diff but cleanest end-state.
-- **Keep them as separate `.ae` files but switch from per-file linkage to a
-  single-file program entry.** Less reorganization but doesn't fully resolve
-  the extern issue.
+Sub-shape: each binary keeps its `main.ae` (binaries need `main()`,
+modules can't carry one), and the helper files merge into a sibling
+`<binary>/module.ae`. `main.ae` does `import <binary>` to access the
+helpers. aether's CWD-relative resolver finds `./<binary>/module.ae`
+fine alongside `./<binary>/main.ae` — directory can host both.
 
-Probably do the merge for symmetry with the lib directories.
+**Ordering by most-depended-on-yet-least-depending (Round 305+):**
 
-For `avnserver/`, this is the largest single dir migration (40+ files —
-every handler, parser, dispatcher). Could split into multiple rounds:
-handlers first, parsers next, infrastructure last. Or do it in one round
-and own the diff size.
+The lib-dir migrations (Phases 1-5) are done. The remaining work is
+binaries (which are leaves — nothing depends on them) and one
+in-flight holdout. None has a strong "most-depended-on" signal
+because they're all at the top of the graph. So **least-depending**
+becomes the deciding factor — pick the smallest fan-out / cleanest
+diff first to validate the binary-with-main pattern before scaling.
+
+Pick order:
+1. **`client/commit_builder.ae` (~5 min, R305 candidate).** Last
+   holdout from Phase 3. Has `struct RaCommit` (now exportable under
+   0.141.0). Sole consumers are `client/test_client.ae` and the
+   merged `client/module.ae`'s already-existing extern decls. Fold
+   into `client/module.ae`'s exports list, drop the file. Tiny diff.
+2. **`avnadmin/` (5 helper files, ~30 min).** Simplest binary
+   (admin/db ops; no HTTP; no live state). Validates the
+   binary-with-main pattern (main.ae stays separate, helpers merge
+   into `avnadmin/module.ae`).
+3. **`avn/` (1 helper file = main.ae itself, no work).** Already a
+   single file. Phase 6 may turn out to be a no-op for avn.
+4. **`avnserver/` (42 helper files, ~2 hours).** Largest single dir
+   migration. ~150+ within-avnserver externs collapse. Same shape
+   as avnadmin once that pattern is validated.
+
+Acceptance: same as previous phases — `aeb avn / avnadmin / avnserver`
+all compile-phase clean.
 
 ### Phase 7 — Cleanup
 
@@ -322,6 +342,16 @@ and own the diff size.
 - Delete now-orphaned `*_generated.c` files (gitignored anyway, cleared on
   next clean build).
 - Update `LLM.md` / `README.md` to describe the new module layout.
+
+**Caveat learned in R293-R304:** the cap-propagation sweep
+(`regen()` → `regen_with(..., "fs[,os][,net]")`) is NOT redundant
+post-Phase 6 — aeb's `_detect_caps` only scans the regen'd file's
+direct `import std.X` lines, so transitively pulling caps through
+project-local `import <mod>` still requires `regen_with` until aeb
+itself learns to follow imports. Phase 7 may *consolidate* the
+regen entries (every binary's regen list collapses to a handful of
+`regen_with("../<dir>/module.ae", "<caps>")` lines) but cannot
+eliminate them.
 
 ## Acceptance criteria — every phase
 
