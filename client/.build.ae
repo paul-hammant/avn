@@ -12,11 +12,9 @@ main() {
         link_flag("-lz")
         link_flag("-lssl")
         link_flag("-lcrypto")
-        // Phase 3 (Round 302): 12 client/*.ae files merged into module.ae.
-        // module.ae imports std.http.client → "net" cap.
-        // commit_builder.ae stays separate for now.
+        // Phase 3 (Rounds 302+305): 13 client/*.ae files merged into
+        // module.ae. module.ae imports std.http.client → "net" cap.
         regen_with("../client/module.ae", "fs,os,net")
-        regen_with("../client/commit_builder.ae", "fs,os,net")
         regen("../repo_storage/pathutil.ae")
         regen("../ffi/openssl/module.ae")
     }

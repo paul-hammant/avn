@@ -209,15 +209,8 @@ wc_checkout(base_url: string, repo_name: string,
 
 // Pristine + hashing.
 
-// RA commit builder (C-side opaque).
-extern remote_commit_begin(base_rev: int, author: string, logmsg: string) -> ptr
-// R286 — parent_sha setter on the commit builder, plus the head_sha
-// fetch (combined with head_rev in one /info round-trip).
-extern remote_commit_set_parent_sha(cb: ptr, parent_sha: string) -> int
-extern remote_commit_set_merged_from(cb: ptr, target_path: string,
-                                     source_branch: string,
-                                     source_revs_packed: string, verb: int) -> int
-extern remote_commit_finish(cb: ptr, base_url: string, repo_name: string) -> int
+// R305 — RA commit builder lives in client/module.ae now; called via
+// `client.remote_commit_*` below.
 
 // pending_merge accumulator (Round 274 / Phase 2.1).
 
@@ -302,7 +295,7 @@ wc_commit(wc_root: string, author: string, logmsg: string) -> int {
     }
 
     // Pass 1: build the RA commit.
-    cb = remote_commit_begin(base_rev, author, logmsg)
+    cb = client.remote_commit_begin(base_rev, author, logmsg)
     // R286 — fetch HEAD's rev_sha and stamp it as parent_sha. The
     // server validates parent_sha == repos_rev_blob_sha(repo, base_rev).
     // For the WC's stale-base case (someone else committed on top of
@@ -313,7 +306,7 @@ wc_commit(wc_root: string, author: string, logmsg: string) -> int {
     if base_rev > 0 {
         parent_head_sha = client.remote_head_sha(base_url, repo)
     }
-    remote_commit_set_parent_sha(cb, parent_head_sha)
+    client.remote_commit_set_parent_sha(cb, parent_head_sha)
     any_edits = 0
     i = 0
     while i < n {
@@ -386,7 +379,7 @@ wc_commit(wc_root: string, author: string, logmsg: string) -> int {
         ptgt  = string.copy(ptgt)
         psrc  = string.copy(psrc)
         prevs = string.copy(prevs)
-        remote_commit_set_merged_from(cb, ptgt, psrc, prevs, pverb)
+        client.remote_commit_set_merged_from(cb, ptgt, psrc, prevs, pverb)
     }
 
     if any_edits == 0 && pending_n == 0 {
@@ -399,7 +392,7 @@ wc_commit(wc_root: string, author: string, logmsg: string) -> int {
         // CAS for sending a stale base_rev. Pre-R286 the empty-edits
         // path discarded the new_rev silently, leaving the WC out of
         // sync with the server's actual HEAD.
-        empty_rev = remote_commit_finish(cb, base_url, repo)
+        empty_rev = client.remote_commit_finish(cb, base_url, repo)
         if empty_rev > 0 {
             wc_db_set_info(db, "base_rev", "${empty_rev}")
         }
@@ -408,7 +401,7 @@ wc_commit(wc_root: string, author: string, logmsg: string) -> int {
         return 0 - 2
     }
 
-    new_rev = remote_commit_finish(cb, base_url, repo)
+    new_rev = client.remote_commit_finish(cb, base_url, repo)
     if new_rev == 0 - 12 {
         // Server rejected with 409 — WC's base_rev predates HEAD and
         // a path conflicts with an intervening commit. Pass -4 up so

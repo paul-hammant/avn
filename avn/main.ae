@@ -126,11 +126,8 @@ wc_join_(cwd_offset: string, arg: string) -> string {
 
 
 
-extern remote_commit_begin(base_rev: int, author: string, logmsg: string) -> ptr
-extern remote_commit_finish(cb: ptr, base_url: string, repo_name: string) -> int
-// R286 — variant that also returns the new commit's rev_sha (for chain CAS).
-extern remote_commit_finish_with_sha(cb: ptr, base_url: string, repo_name: string) -> (int, string)
-extern remote_commit_set_parent_sha(cb: ptr, parent_sha: string) -> int
+// R305 — remote_commit_{begin,finish,finish_with_sha,set_parent_sha}
+// now live in client/module.ae; called via client. prefix below.
 
 extern os_getenv(name: string) -> string
 
@@ -539,15 +536,15 @@ cmd_acl(argv_start: int) {
 
 cmd_acl_set(head: int, head_sha: string, base: string, repo: string,
             path: string, argv_start: int) {
-    cb = remote_commit_begin(head, "acl-admin", "avn acl set ${path}")
-    remote_commit_set_parent_sha(cb, head_sha)
+    cb = client.remote_commit_begin(head, "acl-admin", "avn acl set ${path}")
+    client.remote_commit_set_parent_sha(cb, head_sha)
     i = argv_start + 3
     n = aether_args_count()
     while i < n {
         client.remote_commit_acl_add(cb, path, aether_args_get(i))
         i = i + 1
     }
-    new_rev = remote_commit_finish(cb, base, repo)
+    new_rev = client.remote_commit_finish(cb, base, repo)
     if new_rev < 0 {
         println("avn acl set: commit failed")
         return 1
@@ -557,10 +554,10 @@ cmd_acl_set(head: int, head_sha: string, base: string, repo: string,
 }
 
 cmd_acl_clear(head: int, head_sha: string, base: string, repo: string, path: string) {
-    cb = remote_commit_begin(head, "acl-admin", "avn acl clear ${path}")
-    remote_commit_set_parent_sha(cb, head_sha)
+    cb = client.remote_commit_begin(head, "acl-admin", "avn acl clear ${path}")
+    client.remote_commit_set_parent_sha(cb, head_sha)
     client.remote_commit_acl_add(cb, path, "+*")
-    new_rev = remote_commit_finish(cb, base, repo)
+    new_rev = client.remote_commit_finish(cb, base, repo)
     if new_rev < 0 {
         println("avn acl clear: commit failed")
         return 1
@@ -1602,8 +1599,8 @@ cmd_commit(argv_start: int) {
         head_sha = parent_override
     }
 
-    cb = remote_commit_begin(base_rev, author, logmsg)
-    remote_commit_set_parent_sha(cb, head_sha)
+    cb = client.remote_commit_begin(base_rev, author, logmsg)
+    client.remote_commit_set_parent_sha(cb, head_sha)
 
     // R285 — stateless commit auto-creates parent directories for any
     // --add-file path. Pre-R285 the user had to interleave matching
@@ -1657,7 +1654,7 @@ cmd_commit(argv_start: int) {
         i = i + 1
     }
 
-    new_rev, new_sha = remote_commit_finish_with_sha(cb, base, repo)
+    new_rev, new_sha = client.remote_commit_finish_with_sha(cb, base, repo)
     if new_rev == 0 - 12 {
         println("avn commit: out of date — fetch and retry (parent_sha mismatch?)")
         return 1

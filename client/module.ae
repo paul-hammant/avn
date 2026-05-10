@@ -16,9 +16,8 @@
 // (And the 128-decl truncation cap from 0.142.0 also matters at the
 // 124-export scale here.)
 //
-// commit_builder.ae stays separate for now (deferred from this round
-// for risk-reduction — it has struct RaCommit which 0.141.0 unblocked,
-// so it can fold in next round if needed).
+// R305: commit_builder.ae merged in (Phase 3 fully done). struct
+// RaCommit + ~20 begin/finish/accessor/setter functions live below.
 
 import std.string
 import std.config
@@ -306,31 +305,8 @@ remote_free(p: string) {
 // semantics.
 
 
-extern remote_cb_base_rev(cb: ptr) -> int
-extern remote_cb_author(cb: ptr) -> string
-extern remote_cb_logmsg(cb: ptr) -> string
-extern remote_cb_edits_packed(cb: ptr) -> string
-extern remote_cb_props_packed(cb: ptr) -> string
-extern remote_cb_acls_packed(cb: ptr) -> string
-
-// Round 274 / Phase 2.1 — merged_from accessors.
-extern remote_cb_merge_target_path(cb: ptr) -> string
-extern remote_cb_merge_source_branch(cb: ptr) -> string
-extern remote_cb_merge_source_revs_packed(cb: ptr) -> string
-extern remote_cb_merge_verb(cb: ptr) -> int
-
-// R286 — parent_sha accessor for the chain CAS.
-extern remote_cb_parent_sha(cb: ptr) -> string
-
-// Round 146: writers ported from C (remote_commit_add_file etc.
-// in ra/shim.c). The struct stays C-side; setters below replace
-// the old pack_append + 5 add-op pile.
-extern remote_cb_set_edits_packed(cb: ptr, packed: string)
-extern remote_cb_set_props_packed(cb: ptr, packed: string)
-extern remote_cb_set_acls_packed(cb: ptr, packed: string)
-extern remote_cb_n_edits(cb: ptr) -> int
-extern remote_cb_n_props(cb: ptr) -> int
-extern remote_cb_n_acls(cb: ptr) -> int
+// commit_builder accessors/setters/lifecycle are defined later in
+// this module (see "client/commit_builder.ae" section near the end).
 
 // b64-encode (unpadded; the server's base64_decode handles both
 // padded and unpadded — see std.cryptography.base64_decode in the
@@ -2354,3 +2330,223 @@ client_verify(base_url: string, repo_name: string, rev: int) -> int {
     return client_verify_full(base_url, repo_name, rev, 0)
 }
 
+
+// =============================================================================
+// client/commit_builder.ae (R305)
+// =============================================================================
+
+// Commit-builder state for libsvn_ra. struct RaCommit + ~20
+// lifecycle/accessor/setter functions. The body builder
+// (remote_commit_build_body) lives earlier in this module.
+
+extern malloc(size: int) -> ptr
+extern free(p: ptr)
+
+struct RaCommit {
+    base_rev: int
+    n_edits: int
+    n_props: int
+    n_acls: int
+    author: string
+    logmsg: string
+    edits_packed: string
+    props_packed: string
+    acls_packed: string
+    merge_target_path: string
+    merge_source_branch: string
+    merge_source_revs_packed: string
+    merge_verb: int
+    // R286 — mandatory chain CAS parent_sha; empty when base_rev == 0.
+    parent_sha: string
+}
+
+remote_commit_begin(base_rev: int, author: string, logmsg: string) -> ptr {
+    raw = malloc(168)
+    if raw == null { return null }
+    cb = raw as *RaCommit
+    cb.base_rev = base_rev
+    cb.n_edits = 0
+    cb.n_props = 0
+    cb.n_acls = 0
+    cb.author = string.copy(author)
+    cb.logmsg = string.copy(logmsg)
+    cb.edits_packed = string.copy("")
+    cb.props_packed = string.copy("")
+    cb.acls_packed = string.copy("")
+    cb.merge_target_path = string.copy("")
+    cb.merge_source_branch = string.copy("")
+    cb.merge_source_revs_packed = string.copy("")
+    cb.merge_verb = 0
+    cb.parent_sha = string.copy("")
+    return raw
+}
+
+remote_commit_set_parent_sha(cb_ptr: ptr, parent_sha: string) -> int {
+    if cb_ptr == null { return 0 - 1 }
+    cb = cb_ptr as *RaCommit
+    cb.parent_sha = string.copy(parent_sha)
+    return 0
+}
+
+remote_cb_parent_sha(cb_ptr: ptr) -> string {
+    if cb_ptr == null { return "" }
+    cb = cb_ptr as *RaCommit
+    return cb.parent_sha
+}
+
+remote_commit_set_merged_from(cb_ptr: ptr,
+                              target_path: string,
+                              source_branch: string,
+                              source_revs_packed: string,
+                              verb: int) -> int {
+    if cb_ptr == null { return 0 - 1 }
+    cb = cb_ptr as *RaCommit
+    cb.merge_target_path = string.copy(target_path)
+    cb.merge_source_branch = string.copy(source_branch)
+    cb.merge_source_revs_packed = string.copy(source_revs_packed)
+    cb.merge_verb = verb
+    return 0
+}
+
+remote_cb_merge_target_path(cb_ptr: ptr) -> string {
+    if cb_ptr == null { return "" }
+    cb = cb_ptr as *RaCommit
+    return cb.merge_target_path
+}
+remote_cb_merge_source_branch(cb_ptr: ptr) -> string {
+    if cb_ptr == null { return "" }
+    cb = cb_ptr as *RaCommit
+    return cb.merge_source_branch
+}
+remote_cb_merge_source_revs_packed(cb_ptr: ptr) -> string {
+    if cb_ptr == null { return "" }
+    cb = cb_ptr as *RaCommit
+    return cb.merge_source_revs_packed
+}
+remote_cb_merge_verb(cb_ptr: ptr) -> int {
+    if cb_ptr == null { return 0 }
+    cb = cb_ptr as *RaCommit
+    return cb.merge_verb
+}
+
+remote_commit_finish(cb_ptr: ptr, base_url: string, repo_name: string) -> int {
+    if cb_ptr == null { return 0 - 1 }
+    body_json = remote_commit_build_body(cb_ptr)
+    url = url_commit(base_url, repo_name)
+    new_rev = post_for_rev(url, body_json, 200)
+    free(cb_ptr)
+    return new_rev
+}
+
+remote_commit_finish_with_sha(cb_ptr: ptr, base_url: string,
+                              repo_name: string) -> (int, string) {
+    if cb_ptr == null { return 0 - 1, "" }
+    body_json = remote_commit_build_body(cb_ptr)
+    url = url_commit(base_url, repo_name)
+    new_rev, new_sha = post_for_rev_sha(url, body_json, 200)
+    free(cb_ptr)
+    return new_rev, new_sha
+}
+
+remote_cb_base_rev(cb_ptr: ptr) -> int {
+    if cb_ptr == null { return 0 }
+    cb = cb_ptr as *RaCommit
+    return cb.base_rev
+}
+
+remote_cb_author(cb_ptr: ptr) -> string {
+    if cb_ptr == null { return "" }
+    cb = cb_ptr as *RaCommit
+    return cb.author
+}
+
+remote_cb_logmsg(cb_ptr: ptr) -> string {
+    if cb_ptr == null { return "" }
+    cb = cb_ptr as *RaCommit
+    return cb.logmsg
+}
+
+remote_cb_edits_packed(cb_ptr: ptr) -> string {
+    if cb_ptr == null { return "" }
+    cb = cb_ptr as *RaCommit
+    return cb.edits_packed
+}
+
+remote_cb_props_packed(cb_ptr: ptr) -> string {
+    if cb_ptr == null { return "" }
+    cb = cb_ptr as *RaCommit
+    return cb.props_packed
+}
+
+remote_cb_acls_packed(cb_ptr: ptr) -> string {
+    if cb_ptr == null { return "" }
+    cb = cb_ptr as *RaCommit
+    return cb.acls_packed
+}
+
+remote_cb_n_edits(cb_ptr: ptr) -> int {
+    if cb_ptr == null { return 0 }
+    cb = cb_ptr as *RaCommit
+    return cb.n_edits
+}
+
+remote_cb_n_props(cb_ptr: ptr) -> int {
+    if cb_ptr == null { return 0 }
+    cb = cb_ptr as *RaCommit
+    return cb.n_props
+}
+
+remote_cb_n_acls(cb_ptr: ptr) -> int {
+    if cb_ptr == null { return 0 }
+    cb = cb_ptr as *RaCommit
+    return cb.n_acls
+}
+
+cb_parse_count_(s: string) -> int {
+    n = 0
+    i = 0
+    slen = string.length(s)
+    while i < slen {
+        c = string.char_at(s, i)
+        if c < 48 { return n }
+        if c > 57 { return n }
+        n = n * 10 + c - 48
+        i = i + 1
+    }
+    return n
+}
+
+cb_set_packed_(cb_ptr: ptr, slot_kind: int, str: string) {
+    if cb_ptr == null { return }
+    cb = cb_ptr as *RaCommit
+    s = string.copy(str)
+    n = cb_parse_count_(s)
+    if slot_kind == 0 {
+        cb.edits_packed = s
+        cb.n_edits = n
+    }
+    if slot_kind == 1 {
+        cb.props_packed = s
+        cb.n_props = n
+    }
+    if slot_kind == 2 {
+        cb.acls_packed = s
+        cb.n_acls = n
+    }
+    return
+}
+
+remote_cb_set_edits_packed(cb_ptr: ptr, str: string) {
+    cb_set_packed_(cb_ptr, 0, str)
+    return
+}
+
+remote_cb_set_props_packed(cb_ptr: ptr, str: string) {
+    cb_set_packed_(cb_ptr, 1, str)
+    return
+}
+
+remote_cb_set_acls_packed(cb_ptr: ptr, str: string) {
+    cb_set_packed_(cb_ptr, 2, str)
+    return
+}

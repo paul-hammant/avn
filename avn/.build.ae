@@ -20,7 +20,6 @@ main() {
             link_flag("-Wformat-security")
         }
         regen_with("../client/module.ae", "fs,os,net")
-        regen_with("../client/commit_builder.ae", "fs,os,net")
         regen_with("../util/module.ae", "fs")
         regen_with("../working_copy/module.ae", "fs,os,net")
         regen_with("../repo_storage/module.ae", "fs,os")

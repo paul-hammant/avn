@@ -33,9 +33,7 @@ extern aether_args_get(index: int) -> string
 
 
 
-extern remote_commit_begin(base_rev: int, author: string, logmsg: string) -> ptr
-extern remote_commit_set_parent_sha(cb: ptr, parent_sha: string) -> int
-extern remote_commit_finish(cb: ptr, base_url: string, repo_name: string) -> int
+// R305 — commit_builder lives in client/module.ae; called via client. prefix.
 
 // --- harness --------------------------------------------------------------
 
@@ -111,11 +109,11 @@ main() {
     // --- commit via RA -----------
     // Head is 3. Commit rev 4 adding NOTES and deleting LICENSE.
     // R286: parent_sha required — fetch HEAD's sha before commit.
-    cb = remote_commit_begin(3, "ra-client", "via RA commit")
-    remote_commit_set_parent_sha(cb, client.remote_head_sha(base, repo))
+    cb = client.remote_commit_begin(3, "ra-client", "via RA commit")
+    client.remote_commit_set_parent_sha(cb, client.remote_head_sha(base, repo))
     client.remote_commit_add_file(cb, "NOTES", "ra commit content\n", 18)
     client.remote_commit_delete(cb, "LICENSE")
-    new_rev = remote_commit_finish(cb, base, repo)
+    new_rev = client.remote_commit_finish(cb, base, repo)
     fails = fails + expect_int("commit via RA -> rev 4", new_rev, 4)
 
     // head advanced.
@@ -148,10 +146,10 @@ main() {
     client.remote_free(c)
 
     // Commit with mkdir.
-    cb = remote_commit_begin(4, "ra-client", "add dir")
-    remote_commit_set_parent_sha(cb, client.remote_head_sha(base, repo))
+    cb = client.remote_commit_begin(4, "ra-client", "add dir")
+    client.remote_commit_set_parent_sha(cb, client.remote_head_sha(base, repo))
     client.remote_commit_mkdir(cb, "newdir")
-    new_rev = remote_commit_finish(cb, base, repo)
+    new_rev = client.remote_commit_finish(cb, base, repo)
     fails = fails + expect_int("commit mkdir -> rev 5", new_rev, 5)
 
     L = client.remote_list(base, repo, 5, "")
