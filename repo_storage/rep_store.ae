@@ -39,12 +39,9 @@ import std.zlib
 import std.os
 import std.os (os_getenv)
 import ffi.openssl
+import util
 
-// C-side byte helpers, shared with working_copy/pristine.ae — same binary-
-// safe concat / slice over AetherString buffers. Defined once in
-// Binary-safe byte ops live in util/byte_ops.ae.
-extern concat(prefix: string, prefix_len: int, suf: string, suf_len: int) -> string
-extern slice(s: string, s_len: int, start: int, end: int) -> string
+// Binary-safe byte ops live in util/module.ae — Phase 2a migration.
 
 // Path builder already lives in repo_storage/reppath.ae.
 extern rep_path(repo: string, sha: string) -> string
@@ -98,14 +95,14 @@ rep_encode_blob(data: string, length: int) -> string {
 
     tag = "R"
     if use_zlib == 1 { tag = "Z" }
-    payload = concat(tag, 1, body, body_len)
+    payload = util.concat(tag, 1, body, body_len)
     payload_len = 1 + body_len
 
     header = string.concat(string.from_int(use_zlib), "\x01")
     // header is "0\x01" or "1\x01" — 2 ASCII bytes built via plain
     // string.concat, so its strlen would be safe, but we pass the
     // explicit length anyway for symmetry.
-    return concat(header, 2, payload, payload_len)
+    return util.concat(header, 2, payload, payload_len)
 }
 
 // Accessors the C caller uses on the encoded envelope.
@@ -120,7 +117,7 @@ rep_encoded_use_zlib(encoded: string) -> int {
 rep_encoded_bytes(encoded: string) -> string {
     n = string.length(encoded)
     if n < 2 { return "" }
-    return slice(encoded, n, 2, n)
+    return util.slice(encoded, n, 2, n)
 }
 
 rep_encoded_length(encoded: string) -> int {
@@ -159,7 +156,7 @@ rep_read_decoded(repo: string, sha: string, uncompressed_size: int) -> string {
 
     header = string.char_at(file, 0)
     payload_len = fsize - 1
-    payload = slice(file, fsize, 1, fsize)
+    payload = util.slice(file, fsize, 1, fsize)
 
     if header == 82 {          // 'R'
         return payload

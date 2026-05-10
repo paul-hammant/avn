@@ -33,7 +33,7 @@ main() {
         regen("../client/info.ae")
         regen("../client/fetch.ae")
         regen("../util/io.ae")
-        regen("../util/byte_ops.ae")
+        regen("../util/module.ae")
         regen("../working_copy/db_accessors.ae")
         regen("../working_copy/db_open.ae")
         regen("../working_copy/db_schema.ae")

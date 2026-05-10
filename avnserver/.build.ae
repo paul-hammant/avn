@@ -31,7 +31,7 @@ main() {
         }
         regen("../ffi/openssl/module.ae")
         regen("../util/io.ae")
-        regen("../util/byte_ops.ae")
+        regen("../util/module.ae")
         regen("../repo_storage/tree_builder.ae")
         regen("../repo_storage/txn.ae")
         regen("../util/int_vec.ae")

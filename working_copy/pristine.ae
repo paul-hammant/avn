@@ -46,6 +46,7 @@ import std.string
 import std.fs
 import std.zlib
 import std.cryptography
+import util
 
 import contrib.sqlite
 
@@ -83,10 +84,7 @@ extern io_mkdir_p(path: string) -> int
 extern io_exists(path: string) -> int
 extern io_is_regular_file(path: string) -> int
 
-// Binary-safe byte ops — see util/byte_ops.ae for impls.
-extern pack_le32(v: int) -> string
-extern concat(prefix: string, prefix_len: int, suf: string, suf_len: int) -> string
-extern slice(s: string, s_len: int, start: int, end: int) -> string
+// Binary-safe byte ops live in util/module.ae — Phase 2a migration.
 
 // ---- hashing -------------------------------------------------------------
 
@@ -151,7 +149,7 @@ export wc_pristine_put(wc_root: string, data: string, length: int) -> string {
     header_tag = "R"
     if use_zlib == 1 { header_tag = "Z" }
 
-    le = pack_le32(length)
+    le = util.pack_le32(length)
 
     body = data
     body_len = length
@@ -160,8 +158,8 @@ export wc_pristine_put(wc_root: string, data: string, length: int) -> string {
         body_len = zlen
     }
 
-    buf = concat(header_tag, 1, le, 4)
-    buf = concat(buf, 5, body, body_len)
+    buf = util.concat(header_tag, 1, le, 4)
+    buf = util.concat(buf, 5, body, body_len)
 
     total_len = 1 + 4 + body_len
     werr = fs.write_binary(path, buf, total_len)
@@ -185,7 +183,7 @@ export wc_pristine_get(wc_root: string, sha: string) -> string {
     uncompressed = unpack_le32(file, 1)
 
     payload_len = fsize - 5
-    payload = slice(file, fsize, 5, fsize)
+    payload = util.slice(file, fsize, 5, fsize)
 
     if header == 82 {          // 'R'
         if payload_len != uncompressed { return "" }

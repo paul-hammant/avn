@@ -7,9 +7,18 @@
 //
 //     http://www.apache.org/licenses/LICENSE-2.0
 
-// Binary-safe concat + slice + le32-pack over AetherString.
-// Length parameters are explicit because inputs may carry embedded
-// NULs — we must not strlen them.
+// util — binary-safe byte ops + future int_vec + io merges.
+//
+// Phase 2a (Round 294): byte_ops.ae merged in first as a foothold.
+// int_vec.ae and io.ae will follow in later sub-phases.
+// remote_tree.ae and error/error.ae stay separate until aether
+// supports exporting structs from modules (deferred per
+// methodical_extern_removal_plan.md Phase 1b note).
+//
+// Length parameters on `concat` and `slice` are explicit because
+// inputs may carry embedded NULs — we must not strlen them.
+
+exports (concat, slice, pack_le32)
 
 import std.bytes
 import std.string
@@ -17,8 +26,8 @@ import std.string
 // Concatenate two byte ranges into a new length-aware AetherString.
 // `prefix_len` / `suf_len` are explicit because both inputs may be
 // raw binary (embedded NULs); we must not strlen them.
-export concat(prefix: string, prefix_len: int,
-              suf: string, suf_len: int) -> string {
+concat(prefix: string, prefix_len: int,
+       suf: string, suf_len: int) -> string {
     if prefix_len < 0 { prefix_len = 0 }
     if suf_len < 0 { suf_len = 0 }
     total = prefix_len + suf_len
@@ -38,8 +47,8 @@ export concat(prefix: string, prefix_len: int,
 // don't have to strlen `s` (which would truncate at NUL on binary
 // content post-#297 auto-unwrap). The substring_n primitive in
 // std.string takes the same explicit-length contract.
-export slice(s: string, s_len: int,
-             start: int, end: int) -> string {
+slice(s: string, s_len: int,
+      start: int, end: int) -> string {
     if start < 0 { start = 0 }
     if end < start { end = start }
     if end > s_len { end = s_len }
@@ -52,7 +61,7 @@ export slice(s: string, s_len: int,
 // through downstream concat. We build the bytes via std.bytes
 // `set` (single-byte writes), then bytes.finish to get a length-
 // aware return — same shape as concat above.
-export pack_le32(v: int) -> string {
+pack_le32(v: int) -> string {
     buf = bytes.new(5)
     if buf == null { return "" }
     bytes.set(buf, 0, v         & 255)
@@ -62,6 +71,3 @@ export pack_le32(v: int) -> string {
     return bytes.finish(buf, 4)
 }
 
-main() {
-    println("util/byte_ops.ae is a library; not meant to run standalone")
-}
