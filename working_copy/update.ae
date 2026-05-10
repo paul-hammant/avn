@@ -34,6 +34,7 @@
 // rows rewritten first; we reuse wc_update for the heavy lift.
 
 import std.string
+import util
 
 // wc.db lifecycle + info access.
 extern wc_db_open(wc_root: string) -> ptr
@@ -52,8 +53,6 @@ extern remote_head_rev(base_url: string, repo_name: string) -> int
 // Remote-tree opaque storage primitive (C-side, update_shim.c). The
 // recursive RA walk in working_copy/update_walk.ae populates it via
 // remote_tree_add_dir / remote_tree_add_file.
-extern remote_tree_new() -> ptr
-extern remote_tree_free(rt: ptr)
 
 // Pass A / Pass B of the update apply. wc_root is now passed
 // through to walk_remote (Round 140 retired the C-side TLS
@@ -103,9 +102,9 @@ export wc_update(wc_root: string, target_rev: int) -> int {
     // 1. Pull full remote tree at target_rev. wc_root is threaded
     // explicitly so remote_tree_add can compute per-file hashes during the
     // walk.
-    rt = remote_tree_new()
+    rt = util.remote_tree_new()
     if update_walk_remote(wc_root, base_url, repo, target_rev, "", rt) != 0 {
-        remote_tree_free(rt)
+        util.remote_tree_free(rt)
         wc_db_close(db)
         return 0 - 1
     }
@@ -121,7 +120,7 @@ export wc_update(wc_root: string, target_rev: int) -> int {
     wc_db_set_info(db, "base_rev", "${target_rev}")
 
     wc_nodelist_free(L)
-    remote_tree_free(rt)
+    util.remote_tree_free(rt)
     wc_db_close(db)
     return target_rev
 }

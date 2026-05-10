@@ -33,6 +33,7 @@
 // handles.
 
 import std.string
+import util
 
 extern wc_db_open(wc_root: string) -> ptr
 extern wc_db_close(db: ptr)
@@ -46,8 +47,6 @@ extern wc_db_get_info(db: ptr, key: string) -> string
 // Opaque remote_tree storage in C (merge_shim.c). The recursive walk fills
 // it via remote_tree_add_dir / _add_file; apply passes read it via
 // the mergert_* accessors.
-extern remote_tree_new() -> ptr
-extern remote_tree_free(rt: ptr)
 
 // Walker + apply passes (Aether-side helpers). wc_root is passed
 // explicitly through the walker so add_file can hash files at
@@ -95,15 +94,15 @@ extern wc_pending_merge_record(wc_root: string,
 apply_merge_chunk_(wc_root: string, base_url: string, repo: string,
                    source_path: string, target_path: string,
                    lo: int, hi: int, reverse: int, db: ptr) -> int {
-    a = remote_tree_new()
-    b = remote_tree_new()
+    a = util.remote_tree_new()
+    b = util.remote_tree_new()
     arc = merge_walk_remote(wc_root, base_url, repo, lo, source_path, "", a)
     brc = merge_walk_remote(wc_root, base_url, repo, hi, source_path, "", b)
     if arc != 0 {
-        remote_tree_free(a); remote_tree_free(b); return 0 - 1
+        util.remote_tree_free(a); util.remote_tree_free(b); return 0 - 1
     }
     if brc != 0 {
-        remote_tree_free(a); remote_tree_free(b); return 0 - 1
+        util.remote_tree_free(a); util.remote_tree_free(b); return 0 - 1
     }
 
     if reverse == 1 {
@@ -115,8 +114,8 @@ apply_merge_chunk_(wc_root: string, base_url: string, repo: string,
     merge_apply_deletions(wc_root, target_path, a, b, db)
     merge_apply_adds_mods(wc_root, target_path, lo, hi, a, b, db)
 
-    remote_tree_free(a)
-    remote_tree_free(b)
+    util.remote_tree_free(a)
+    util.remote_tree_free(b)
     return 0
 }
 

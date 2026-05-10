@@ -34,14 +34,25 @@ exports (
     io_read_file, io_file_size,
     io_is_regular_file, io_exists, io_stat_kind,
     io_listdir, io_listdir_count, io_listdir_name, io_listdir_free,
-    io_unlink, io_remove, io_rmdir, io_rename
+    io_unlink, io_remove, io_rmdir, io_rename,
+    Rtree,
+    remote_tree_new, remote_tree_free,
+    remote_tree_add_dir, remote_tree_add_file,
+    remote_tree_count,
+    remote_tree_path_at, remote_tree_kind_at, remote_tree_sha_at,
+    remote_tree_data_at, remote_tree_data_len_at,
+    remote_tree_find_by_path
 )
 
 import std.bytes
 import std.string
 import std.intarr
+import std.list
 import std.fs
 import std.dir
+
+extern malloc(size: int) -> ptr
+extern free(p: ptr)
 
 // Concatenate two byte ranges into a new length-aware AetherString.
 // `prefix_len` / `suf_len` are explicit because both inputs may be
@@ -291,4 +302,154 @@ io_rename(from: string, to: string) -> int {
     err = fs.rename(from, to)
     if string.length(err) > 0 { return 1 }
     return 0
+}
+
+// =============================================================================
+// remote_tree — five parallel containers indexed by node position
+// =============================================================================
+//
+// Round 168 retired util/rtree/shim.c (75 lines C) using Aether 0.109's
+// *StructName return-type fix. Phase 2 (Round 299): merged into util's
+// module.ae now that aetherc 0.141.0 supports struct visibility across
+// the import boundary.
+//
+//   paths         std.list   AetherString per node
+//   kinds         int_vec    0=file 1=dir
+//   shas          std.list   40-char hex string, "" for dirs
+//   contents      std.list   AetherString per node (binary-safe)
+//   content_lens  int_vec    bytes in contents[i], 0 for dirs
+//
+// Used by the update walker (remote_tree_*) and the merge walker
+// (remote_tree_* read-only accessors).
+
+struct Rtree {
+    paths: ptr
+    kinds: ptr
+    shas: ptr
+    contents: ptr
+    content_lens: ptr
+}
+
+remote_tree_new() -> ptr {
+    raw = malloc(64)
+    if raw == null { return null }
+    rt = raw as *Rtree
+    rt.paths        = list_new()
+    rt.kinds        = int_vec_new(16)
+    rt.shas         = list_new()
+    rt.contents     = list_new()
+    rt.content_lens = int_vec_new(16)
+    return raw
+}
+
+remote_tree_free(rt_ptr: ptr) {
+    if rt_ptr == null { return }
+    rt = rt_ptr as *Rtree
+    list_free(rt.paths)
+    int_vec_free(rt.kinds)
+    list_free(rt.shas)
+    list_free(rt.contents)
+    int_vec_free(rt.content_lens)
+    free(rt_ptr)
+    return
+}
+
+// ---- public add ops ------------------------------------------
+
+remote_tree_add_dir(rt_ptr: ptr, path: string) {
+    if rt_ptr == null { return 0 }
+    rt = rt_ptr as *Rtree
+    list_add_raw(rt.paths,    string.copy(path))
+    list_add_raw(rt.shas,     string.copy(""))
+    list_add_raw(rt.contents, string.copy(""))
+
+    rt.kinds        = int_vec_add(rt.kinds, 1)
+    rt.content_lens = int_vec_add(rt.content_lens, 0)
+    return 0
+}
+
+// Round 299 split: callers now pass the precomputed sha (or "" to
+// skip). Previously took a wc_root and called wc_hash_bytes
+// internally, but that pulled wc_hash_bytes (defined in
+// working_copy/pristine.ae) into every binary that linked
+// util/module.ae — including avnserver, which has no working_copy.
+// Hash computation now lives at the wc-only callers so this module
+// stays cap-clean.
+remote_tree_add_file(rt_ptr: ptr, path: string,
+                     data: string, data_len: int,
+                     sha: string) {
+    if rt_ptr == null { return 0 }
+    if data_len < 0 { data_len = 0 }
+    rt = rt_ptr as *Rtree
+
+    list_add_raw(rt.paths,    string.copy(path))
+    list_add_raw(rt.shas,     string.copy(sha))
+    list_add_raw(rt.contents, string.copy(data))
+
+    rt.kinds        = int_vec_add(rt.kinds, 0)
+    rt.content_lens = int_vec_add(rt.content_lens, data_len)
+    return 0
+}
+
+// ---- read accessors ---------------------------------------------
+
+remote_tree_count(rt_ptr: ptr) -> int {
+    if rt_ptr == null { return 0 }
+    rt = rt_ptr as *Rtree
+    return int_vec_count(rt.kinds)
+}
+
+remote_tree_path_at(rt_ptr: ptr, i: int) -> string {
+    if rt_ptr == null { return "" }
+    rt = rt_ptr as *Rtree
+    p = list_get_raw(rt.paths, i)
+    if p == null { return "" }
+    return p
+}
+
+remote_tree_kind_at(rt_ptr: ptr, i: int) -> int {
+    if rt_ptr == null { return 0 - 1 }
+    rt = rt_ptr as *Rtree
+    n = int_vec_count(rt.kinds)
+    if i < 0 { return 0 - 1 }
+    if i >= n { return 0 - 1 }
+    return int_vec_get(rt.kinds, i)
+}
+
+remote_tree_sha_at(rt_ptr: ptr, i: int) -> string {
+    if rt_ptr == null { return "" }
+    rt = rt_ptr as *Rtree
+    p = list_get_raw(rt.shas, i)
+    if p == null { return "" }
+    return p
+}
+
+remote_tree_data_at(rt_ptr: ptr, i: int) -> string {
+    if rt_ptr == null { return "" }
+    rt = rt_ptr as *Rtree
+    p = list_get_raw(rt.contents, i)
+    if p == null { return "" }
+    return p
+}
+
+remote_tree_data_len_at(rt_ptr: ptr, i: int) -> int {
+    if rt_ptr == null { return 0 }
+    rt = rt_ptr as *Rtree
+    return int_vec_get(rt.content_lens, i)
+}
+
+remote_tree_find_by_path(rt_ptr: ptr, path: string) -> int {
+    if rt_ptr == null { return 0 - 1 }
+    rt = rt_ptr as *Rtree
+    n = int_vec_count(rt.kinds)
+    paths = rt.paths
+    i = 0
+    while i < n {
+        p = list_get_raw(paths, i)
+        if p != null {
+            if string.equals(p, path) == 1 { return i }
+        }
+        i = i + 1
+    }
+    return 0 - 1
 }
