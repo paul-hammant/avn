@@ -386,28 +386,49 @@ entries (every binary's regen list collapsed to a handful of
 `regen_with("../<dir>/module.ae", "<caps>")` lines) but did not
 eliminate them.
 
-### Bench status (R308 acceptance check)
+### Bench status (post-R309 acceptance check)
 
-The plan's third acceptance criterion (5000-commit bench) does
-**not** pass post-R308 — but the failure is **not migration-induced**.
-Root cause: the avn client (`target/avn/bin/avn`) hangs in an
-infinite loop after receiving the HTTP response from avnserver
-(strace shows successful sendto + recvfrom + close, then process
-goes R-state and never exits). Same symptom appears with
-`test_client` running against `avn-seed`'s own pre-seeded repo —
-seed reports "commit 1 failed" because `commit_txn` returns ≠ 1.
+The 5000-commit bench still doesn't pass, but the failure decomposes
+into TWO independent bugs, only one of which the migration introduced:
 
-This matches the pre-existing aetherc-0.140+ regression flagged in
-the plan's Risks section ("currently-broken bench under aetherc
-0.140.0... bench segfaults at i=1 due to the missing escape-
-through-struct-field analysis"). The symptom shifted from segfault
-to infinite loop in 0.142.0 but the underlying bug class
-(escape/codegen of struct-field writes) appears unfixed.
+**Bug 1 (migration-introduced, FIXED in R309):** four self-recursive
+wrappers in `client/module.ae:951-965` (`response_status`,
+`response_body`, `response_header`, `response_free`) silently called
+themselves due to the R302 selective-import-shadow trap. avn binary
+hung in tail-recursion after the first 200 OK. Fixed in R309 by
+deleting the wrappers (selective import already exposes the names
+directly). avn now exits cleanly with the right error on info; the
+test_client passes ~30% of cases (was 0%).
 
-aeb post-build `free(): invalid pointer` aborts also remain. They
-don't gate type-checking or `--emit=lib` codegen, but they break
-the binary-link step for avnadmin (worked around in R308 with a
-manual `gcc + module_generated.c` link).
+**Bug 2 (pre-existing, separate):** server-side `rep_write_blob`
+writes blobs whose on-disk first byte is `0x57 'W'` instead of the
+expected `0x52 'R'` or `0x5A 'Z'` envelope tag. Subsequent
+`rep_read_blob` looks up the cache row (correct), reads the file,
+checks the header byte, sees neither R nor Z, returns empty. Every
+commit then fails because `rev_root_sha1(repo, base_rev=0)` returns
+"" and `commit_txn` short-circuits to -1. Reproduced via
+`avn-seed`'s `commit 1 failed` (no HTTP layer involved) and via
+`curl -X POST .../commit` (`{"error":"commit failed"}`).
+
+The on-disk byte pattern (`57 ae 01 00 00 00 80 00 00 00 ...`) looks
+like an AetherString runtime header struct rather than the
+`util.concat`-built `"R" + body` payload. Likely shape: `bytes.finish`
+returning a string whose external content is the underlying buffer's
+header rather than the user-visible bytes — i.e., a
+codegen/escape-analysis issue in 0.142.0's bytes API, not anything
+the migration touched (rep_encode_blob / util.concat / fs.write_binary
+are all unchanged from R287).
+
+This matches the original Risks-section flag ("currently-broken bench
+under aetherc 0.140.0... missing escape-through-struct-field
+analysis"); 0.141.0 and 0.142.0 didn't fix it. Worth a separate
+upstream filing with a small `util.concat → fs.write_binary`
+reproducer if the Aether team wants to dig.
+
+aeb post-build `free(): invalid pointer` aborts remain orthogonal —
+they don't gate type-check or `--emit=lib` codegen but kill aeb
+before the avnadmin binary gets linked. R306 onward used a manual
+`gcc + module_generated.c` workaround.
 
 ## Acceptance criteria — every phase
 
