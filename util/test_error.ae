@@ -19,13 +19,7 @@
 // site passes the location explicitly. `message` is still a reserved
 // keyword, so we use `msg` for the message-text parameter.
 
-extern error_create(code: int, msg: string, cause: ptr, file: string, line: int) -> ptr
-extern error_code(err: ptr) -> int
-extern error_message(err: ptr) -> string
-extern error_cause(err: ptr) -> ptr
-extern error_file(err: ptr) -> string
-extern error_line(err: ptr) -> int
-extern error_free(err: ptr)
+import util
 
 const ERR_IO_OPEN     = 2001
 const ERR_WC_CORRUPT  = 4001
@@ -33,18 +27,18 @@ const ERR_BAD_ARG     = 1001
 const ERR_FS_CORRUPT  = 5001
 
 err_create(code: int, msg: string, file: string, line: int) {
-    return error_create(code, msg, 0, file, line)
+    return util.error_create(code, msg, 0, file, line)
 }
 
 err_wrap(cause: ptr, code: int, msg: string, file: string, line: int) {
-    return error_create(code, msg, cause, file, line)
+    return util.error_create(code, msg, cause, file, line)
 }
 
 err_has_code(err: ptr, c: int) {
     e = err
     while e != 0 {
-        if error_code(e) == c { return 1 }
-        e = error_cause(e)
+        if util.error_code(e) == c { return 1 }
+        e = util.error_cause(e)
     }
     return 0
 }
@@ -56,12 +50,12 @@ err_print_chain(err: ptr) {
     }
     e = err
     while e != 0 {
-        c = error_code(e)
-        m = error_message(e)
-        f = error_file(e)
-        l = error_line(e)
+        c = util.error_code(e)
+        m = util.error_message(e)
+        f = util.error_file(e)
+        l = util.error_line(e)
         println("avn: E${c}: ${m}  [${f}:${l}]")
-        e = error_cause(e)
+        e = util.error_cause(e)
     }
     return
 }
@@ -87,11 +81,11 @@ main() {
         exit(1)
     }
 
-    error_free(top)
+    util.error_free(top)
 
     // Null-safety: free(0) and accessors on 0 must not crash.
-    error_free(0)
-    if error_code(0) != 0 {
+    util.error_free(0)
+    if util.error_code(0) != 0 {
         println("FAIL: code(null) should be 0")
         exit(1)
     }

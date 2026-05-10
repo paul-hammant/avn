@@ -41,7 +41,10 @@ exports (
     remote_tree_count,
     remote_tree_path_at, remote_tree_kind_at, remote_tree_sha_at,
     remote_tree_data_at, remote_tree_data_len_at,
-    remote_tree_find_by_path
+    remote_tree_find_by_path,
+    SvnaeError,
+    error_create, error_code, error_message, error_cause,
+    error_file, error_line, error_free
 )
 
 import std.bytes
@@ -452,4 +455,88 @@ remote_tree_find_by_path(rt_ptr: ptr, path: string) -> int {
         i = i + 1
     }
     return 0 - 1
+}
+
+// =============================================================================
+// SvnaeError — self-referential error chain
+// =============================================================================
+//
+// Round 165 retired util/error/shim.c (73 lines C) using Aether 0.109's
+// self-referential structs via *Self pointer fields. Phase 2 (Round 300):
+// merged into util's module.ae now that aetherc 0.141.0 supports struct
+// visibility across the import boundary.
+//
+// Lifetime note: the C version strdup'd `message` at create time and
+// free'd it in the chain walker. This Aether port stores borrowed
+// strings — callers retain ownership of the message text. Every existing
+// callsite passes a literal or a value with caller-retained scope; if a
+// future caller passes a heap-allocated AetherString, they should
+// `string.copy` it first or hand off ownership via a different shape.
+
+struct SvnaeError {
+    code: int
+    msg: string
+    cause: *SvnaeError
+    file: string
+    line: int
+}
+
+// Layout: 5 fields × 8 bytes = 40 bytes; round up to 64 for alignment
+// safety on 64-bit (the canonical *Struct test uses 64).
+error_create(code: int, msg: string, cause: ptr,
+             file: string, line: int) -> ptr {
+    raw = malloc(64)
+    if raw == null { return null }
+    e = raw as *SvnaeError
+    e.code = code
+    e.msg = msg
+    e.cause = cause as *SvnaeError
+    e.file = file
+    e.line = line
+    return raw
+}
+
+error_code(err: ptr) -> int {
+    if err == null { return 0 }
+    e = err as *SvnaeError
+    return e.code
+}
+
+error_message(err: ptr) -> string {
+    if err == null { return "" }
+    e = err as *SvnaeError
+    return e.msg
+}
+
+error_cause(err: ptr) -> ptr {
+    if err == null { return null }
+    e = err as *SvnaeError
+    return e.cause
+}
+
+error_file(err: ptr) -> string {
+    if err == null { return "" }
+    e = err as *SvnaeError
+    return e.file
+}
+
+error_line(err: ptr) -> int {
+    if err == null { return 0 }
+    e = err as *SvnaeError
+    return e.line
+}
+
+// Walk the chain iteratively, freeing each link's storage. The
+// C version strdup'd messages and free'd them too — see the
+// lifetime note above for why this version only frees the
+// struct allocations.
+error_free(err: ptr) {
+    p = err
+    while p != null {
+        e = p as *SvnaeError
+        nxt = e.cause
+        free(p)
+        p = nxt
+    }
+    return
 }
