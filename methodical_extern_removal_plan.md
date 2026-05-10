@@ -329,12 +329,32 @@ Pick order:
    resolves when aetherc's CWD is the project root — aeb already
    honours this, so the pattern works under aeb but fails if anyone
    manually invokes `aetherc main.ae` from inside the binary's dir.
-3. **`avn/` (R307 candidate).** Already a single main.ae; check
-   whether anything would benefit from an avn/module.ae or if this
-   round is a no-op.
-4. **`avnserver/` (R308, 42 helper files, ~2 hours).** Largest
-   single dir migration. ~150+ within-avnserver externs collapse.
-   Same shape as avnadmin.
+3. **`avn/` (R307 — no-op).** Already a single main.ae; nothing to
+   merge.
+4. **`avnserver/` (R308 — DONE).** 40 helper files merged into
+   avnserver/module.ae (~3970 lines). main.ae and seed.ae stayed
+   separate (each has its own main()). 73 redundant within-avnserver
+   externs dropped — only 8 real C-runtime externs (aether_args_*,
+   http_server_*) remain in module.ae.
+
+   **Discovered constraint #2:** when main.ae imports the merged
+   avnserver module, transitive imports (std.string + std.config +
+   std.http + std.json + std.list + std.map + std.os + ffi.openssl +
+   util + repos + repo_storage) blow past aetherc's 4096-decl cap
+   even after 0.142.0's Issue A fix. main.ae kept its 7 link-layer
+   externs (opts_new/repo/port/superuser_token/host/no_compress/
+   serve_opts) instead of switching to `import avnserver` — same
+   "externs as link boundary" pattern Phase 4 used for the
+   repos↔repo_storage cycle. avnserver's typer pre-warning suggests
+   migrating from `export <fn>` keyword to top-of-file `exports (…)`
+   syntax; module.ae uses the new form. @c_callback decorator and
+   `builder serve` block both transferred to module.ae cleanly.
+
+   **Caveat for future Issue C bug report:** the cap exhaustion via
+   transitive-import is a separate aether bug from the original
+   Issue A — when the importer pulls a module that itself imports
+   ~10 std.* + project modules, decls union ≫ 4096 even though
+   neither module alone is near the cap.
 
 Acceptance: same as previous phases — `aeb avn / avnadmin / avnserver`
 all compile-phase clean.

@@ -13,90 +13,76 @@
 // implied. See the License for the specific language governing
 // permissions and limitations under the License.
 
-// avnserver — read-only HTTP server for avn repos.
+// avnserver — HTTP server CLI entry.
 //
 // Usage:  avnserver <repo-name> <repo-path> [port]
+//                   [--superuser-token TOKEN] [--host ADDR] [--no-compress]
 //
-// Phase 6: single-repo, HTTP (no TLS yet), GET-only. Routes mapped to
-// C handlers in avnserver/shim.c.
+// All argv parsing happens here. Once we've populated the opts map,
+// every code path goes through avnserver/embed.ae (now folded into
+// avnserver/module.ae) — the same surface programmatic / closure-DSL
+// embeds use.
+//
+// R308 — main.ae uses link-layer externs (not `import avnserver`) for
+// the embed surface because importing the merged module from main.ae
+// blows past aetherc's 4096-decl cap (transitive imports of std.*,
+// util/, repos/, repo_storage/, ffi.openssl). The functions still live
+// in avnserver/module.ae and are linked in via the .build.ae regen.
 
-import std.http
 import std.string
 
-// Argv accessors — Aether exposes these as globally callable externs.
 extern aether_args_count() -> int
 extern aether_args_get(index: int) -> string
 
-// --- repos shim externs our handler code calls back into ------------------
-
-extern svnserver_register_repo(name: string, path: string)
-extern svnserver_set_super_token(token: string)
-
-// The Aether dispatcher is exported under a stable C symbol via
-// @c_callback in dispatch.ae; we declare it here as a plain extern
-// so std.http's route registration can take its address. Round 58
-// retired the svnserver_handler_dispatch C trampoline that
-// previously wrapped this.
-extern svnserver_dispatch(req: ptr, res: ptr, user_data: ptr)
-
-// Aether stdlib externs the nice wrappers don't cover.
-extern http_server_create(port: int) -> ptr
-extern http_server_get(server: ptr, path: string, handler: ptr, user_data: ptr)
-extern http_server_post(server: ptr, path: string, handler: ptr, user_data: ptr)
-extern http_server_put(server: ptr, path: string, handler: ptr, user_data: ptr)
-extern http_server_delete(server: ptr, path: string, handler: ptr, user_data: ptr)
+// Embed surface — exported by avnserver/module.ae's embed.ae section.
+extern opts_new() -> ptr
+extern repo(opts: ptr, name: string, path: string)
+extern port(opts: ptr, n: int)
+extern superuser_token(opts: ptr, t: string)
+extern host(opts: ptr, addr: string)
+extern no_compress(opts: ptr, on: int)
+extern serve_opts(opts: ptr) -> int
 
 main() {
     argc = aether_args_count()
     if argc < 3 {
-        println("usage: avnserver <repo-name> <repo-path> [port] [--superuser-token TOKEN]")
+        println("usage: avnserver <repo-name> <repo-path> [port] [--superuser-token TOKEN] [--host ADDR] [--no-compress]")
         exit(2)
     }
-    repo_name = aether_args_get(1)
-    repo_path = aether_args_get(2)
-    port = 8080
+
+    opts = opts_new()
+    repo(opts, aether_args_get(1), aether_args_get(2))
+
+    flag_start = 3
     if argc >= 4 {
         p_str = aether_args_get(3)
-        if string.try_int(p_str) == 1 { port = string.get_int(p_str) }
+        if string.try_int(p_str) == 1 {
+            port(opts, string.get_int(p_str))
+            flag_start = 4
+        }
     }
 
-    // Optional --superuser-token flag for ACL bypass. Clients send the
-    // same value in the X-Svnae-Superuser header.
-    i = 3
+    i = flag_start
     while i < argc {
         a = aether_args_get(i)
         if string.equals(a, "--superuser-token") == 1 {
             if i + 1 < argc {
-                svnserver_set_super_token(aether_args_get(i + 1))
+                superuser_token(opts, aether_args_get(i + 1))
+                i = i + 1
             }
+        }
+        if string.equals(a, "--host") == 1 {
+            if i + 1 < argc {
+                host(opts, aether_args_get(i + 1))
+                i = i + 1
+            }
+        }
+        if string.equals(a, "--no-compress") == 1 {
+            no_compress(opts, 1)
         }
         i = i + 1
     }
 
-    svnserver_register_repo(repo_name, repo_path)
-
-    server = http_server_create(port)
-    if server == 0 {
-        println("failed to create server")
-        exit(1)
-    }
-
-    // std.http's `*` wildcard is end-of-pattern-greedy — we can't
-    // distinguish /repos/*/info from /repos/*/log at the route layer.
-    // Single catch-all route for GET, another for POST → C-side
-    // dispatcher looks at method + tail.
-    http_server_get   (server, "/repos/*", svnserver_dispatch, 0)
-    http_server_post  (server, "/repos/*", svnserver_dispatch, 0)
-    http_server_put   (server, "/repos/*", svnserver_dispatch, 0)
-    http_server_delete(server, "/repos/*", svnserver_dispatch, 0)
-
-    // http_server_start_raw calls bind_raw itself in fallback mode, so
-    // skipping the explicit server_bind here. The stdlib's `server_start`
-    // wrapper is fine — it binds then loops.
-    println("avnserver: serving repo '${repo_name}' from ${repo_path} on http://127.0.0.1:${port}")
-    err = http.server_start(server)
-    if string.length(err) != 0 {
-        println("server start failed: ${err}")
-        exit(1)
-    }
+    rc = serve_opts(opts)
+    if rc != 0 { exit(rc) }
 }

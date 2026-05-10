@@ -1,0 +1,3961 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+
+// avnserver — HTTP server library for avn repos.
+//
+// Phase 6 / Round 308 — 40 helper files merged into one module.
+// main.ae stays separate (binaries need main(), modules can't carry
+// one) and does `import avnserver` to access opts_new + serve_opts.
+// seed.ae also stays separate (it builds avn-seed, not avnserver).
+
+import std.string
+import std.config
+import std.http
+import std.json
+import std.list
+import std.map
+import std.os
+import ffi.openssl
+import util
+import repos
+import repo_storage
+
+exports (acl_decide, acl_allows_mode, acl_resolve_json, props_resolve, acl_subtree_rw, svnserver_spec_allows, svnserver_request_header, based_on_check, branch_create_from_body, status_for_kind, commit_from_body, auto_follow_copy_acl, copy_from_body, opts_new, repo, port, superuser_token, host, no_compress, serve_opts, handle_repo_rev, handler_branch_create, handler_commit, handler_copy, handler_info, handler_log, merged_list_handle, merge_runs_handle, reverse_runs_handle, handler_path_delete, handler_path_get, handler_path_put, acl_handle, blame_handle, cat_handle, hashes_handle, rev_info_handle, list_handle, paths_handle, props_handle, info_json, json_escape_string, props_blob_to_json, specs_to_json_array, rev_info_json, log_entry_json, path_change_entry_json, hashes_prelude_json, acl_response_json, secondary_entry_json, error_response_json, rev_response_json, rev_sha_response_json, rev_branch_response_json, info_prelude_json, list_entry_visible_json, list_entry_hidden_json, redact_line_visible, redact_line_hidden, blame_entry_json, list_build, log_json, paths_changed_json, blame_json, hashes_json, paths_index_lookup, paths_index_ancestor_nearest, paths_index_ancestor_shas, redacted_dir_sha, svnserver_respond_error, svnserver_respond_json_ok, svnserver_respond_binary_ok, svnserver_set_merkle_headers, load_rev_blob_field, svnserver_set_super_token, svnserver_register_repo, svnserver_find_repo_path, svnserver_request_is_super, parse_repo_name_in)
+
+
+// =============================================================================
+// avnserver/acl.ae
+// =============================================================================
+
+
+// Return 1 (allow), 0 (deny), or -1 (no rule matched).
+acl_decide(body: string, user: string, want_write: int) -> int {
+    n = string.length(body)
+    if n == 0 { return 0 - 1 }
+    ulen = string.length(user)
+    wild_allow = 0 - 1
+    wild_deny = 0 - 1
+    user_allow = 0 - 1
+    user_deny = 0 - 1
+    line_start = 0
+    i = 0
+    while i <= n {
+        at_end = 0
+        c = 0
+        if i == n { at_end = 1 } else { c = string.char_at(body, i) }
+        is_eol = 0
+        if at_end == 1 { is_eol = 1 }
+        if c == 10 { is_eol = 1 }
+        if is_eol == 1 {
+            if i > line_start {
+                sign = string.char_at(body, line_start)
+                // First char must be '+' or '-'; otherwise skip line.
+                if sign == 43 || sign == 45 {
+                    // Name segment: from line_start+1 until ':' or end.
+                    name_start = line_start + 1
+                    colon_at = 0 - 1
+                    k = name_start
+                    while k < i {
+                        if string.char_at(body, k) == 58 { colon_at = k; break }
+                        k = k + 1
+                    }
+                    name_end = i
+                    if colon_at >= 0 { name_end = colon_at }
+                    name = string.substring(body, name_start, name_end)
+                    // Parse mode suffix: default rw.
+                    has_r = 1
+                    has_w = 1
+                    if colon_at >= 0 {
+                        has_r = 0
+                        has_w = 0
+                        j = colon_at + 1
+                        while j < i {
+                            mc = string.char_at(body, j)
+                            if mc == 114 { has_r = 1 }   // 'r'
+                            if mc == 119 { has_w = 1 }   // 'w'
+                            j = j + 1
+                        }
+                    }
+                    matches_mode = has_r
+                    if want_write == 1 { matches_mode = has_w }
+                    // Classify: wildcard, user-match, or other.
+                    is_wild = 0
+                    if string.length(name) == 1 {
+                        if string.char_at(name, 0) == 42 { is_wild = 1 }   // '*'
+                    }
+                    is_user = 0
+                    if is_wild == 0 {
+                        if string.length(name) == ulen {
+                            if string.equals(name, user) == 1 { is_user = 1 }
+                        }
+                    }
+                    if is_wild == 1 {
+                        if sign == 43 {
+                            if matches_mode == 1 { wild_allow = 1 }
+                        } else {
+                            wild_deny = 1
+                        }
+                    }
+                    if is_user == 1 {
+                        if sign == 43 {
+                            if matches_mode == 1 { user_allow = 1 }
+                        } else {
+                            user_deny = 1
+                        }
+                    }
+                }
+            }
+            line_start = i + 1
+        }
+        i = i + 1
+    }
+    // Priority: user > wildcard. Deny beats allow at same level.
+    if user_deny == 1 { return 0 }
+    if user_allow == 1 { return 1 }
+    if wild_deny == 1 { return 0 }
+    if wild_allow == 1 { return 1 }
+    return 0 - 1
+}
+
+
+// =============================================================================
+// avnserver/acl_mode.ae
+// =============================================================================
+
+
+
+acl_allows_mode(repo: string, rev: int, user: string,
+                        target_path: string, want_write: int) -> int {
+    acl_root = load_rev_blob_field(repo, rev, "acl")
+    if string.length(acl_root) == 0 { return 1 }
+
+    paths_body = repo_storage.rep_read_blob(repo, acl_root)
+    if string.length(paths_body) == 0 { return 1 }
+
+    shas = paths_index_ancestor_shas(paths_body, target_path)
+    shas = string.copy(shas)   // paths_body frees below
+
+    // Walk newline-separated shas in order. First definite decision wins.
+    n = string.length(shas)
+    line_start = 0
+    i = 0
+    result = 1    // default: open
+    decided = 0
+    while i <= n {
+        at_end = 0
+        c = 0
+        if i == n { at_end = 1 } else { c = string.char_at(shas, i) }
+        is_eol = 0
+        if at_end == 1 { is_eol = 1 }
+        if c == 10 { is_eol = 1 }
+        if is_eol == 1 {
+            slen = i - line_start
+            if slen > 0 {
+                if decided == 0 {
+                    sha = string.substring(shas, line_start, i)
+                    rules = repo_storage.rep_read_blob(repo, sha)
+                    if string.length(rules) > 0 {
+                        d = acl_decide(rules, user, want_write)
+                        repo_storage.rep_free(rules)
+                        if d == 0 { result = 0; decided = 1 }
+                        if d == 1 { result = 1; decided = 1 }
+                    }
+                }
+            }
+            line_start = i + 1
+        }
+        i = i + 1
+    }
+    repo_storage.rep_free(paths_body)
+    return result
+}
+
+
+
+// =============================================================================
+// avnserver/acl_resolve.ae
+// =============================================================================
+
+
+
+// Round 57: load_rev_blob_field is the Aether-side helper from
+// rev_load.ae — round-tripping via the C shim's three
+// svnserver_load_rev_{acl_root,props_sha,root_sha} wrappers was
+// pure boilerplate.
+
+acl_resolve_json(repo: string, rev: int, target: string) -> string {
+    acl_root = load_rev_blob_field(repo, rev, "acl")
+    if string.length(acl_root) == 0 {
+        return "{\"rules\":[],\"effective_from\":\"\"}"
+    }
+    paths_body = repo_storage.rep_read_blob(repo, acl_root)
+    if string.length(paths_body) == 0 {
+        return "{\"rules\":[],\"effective_from\":\"\"}"
+    }
+
+    // Nearest ancestor is "sha\tpath". Empty means no match.
+    nearest = paths_index_ancestor_nearest(paths_body, target)
+    repo_storage.rep_free(paths_body)
+    if string.length(nearest) == 0 {
+        return "{\"rules\":[],\"effective_from\":\"\"}"
+    }
+
+    // Split on tab.
+    tab_idx = 0 - 1
+    n = string.length(nearest)
+    i = 0
+    while i < n {
+        if string.char_at(nearest, i) == 9 { tab_idx = i; break }
+        i = i + 1
+    }
+    if tab_idx < 0 {
+        return "{\"rules\":[],\"effective_from\":\"\"}"
+    }
+    eff_sha = string.substring(nearest, 0, tab_idx)
+    eff_path = string.substring(nearest, tab_idx + 1, n)
+
+    rules_body = repo_storage.rep_read_blob(repo, eff_sha)
+    body = acl_response_json(rules_body, eff_path)
+    repo_storage.rep_free(rules_body)
+    return body
+}
+
+
+// /rev/N/props/<path> lookup. Returns "<per-path-sha>\x01<json body>"
+// on success, "\x01{}" when no props for target. The C caller splits
+// on \x01, sets the Merkle header from the sha half, and emits the
+// body half.
+
+
+props_resolve(repo: string, rev: int, target: string) -> string {
+    props_sha = load_rev_blob_field(repo, rev, "props")
+    if string.length(props_sha) == 0 { return "\x01{}" }
+
+    paths_body = repo_storage.rep_read_blob(repo, props_sha)
+    if string.length(paths_body) == 0 { return "\x01{}" }
+
+    per_path_sha = paths_index_lookup(paths_body, target)
+    per_path_sha = string.copy(per_path_sha)
+    repo_storage.rep_free(paths_body)
+    if string.length(per_path_sha) == 0 { return "\x01{}" }
+
+    props_body = repo_storage.rep_read_blob(repo, per_path_sha)
+    if string.length(props_body) == 0 {
+        out = string.concat(per_path_sha, "\x01")
+        return string.concat(out, "{}")
+    }
+
+    json = props_blob_to_json(props_body)
+    repo_storage.rep_free(props_body)
+    out = string.concat(per_path_sha, "\x01")
+    return string.concat(out, json)
+}
+
+
+
+// =============================================================================
+// avnserver/acl_subtree.ae
+// =============================================================================
+
+
+
+
+acl_subtree_rw(repo: string, rev: int, user: string,
+                                path: string) -> int {
+    if acl_allows_mode(repo, rev, user, path, 0) == 0 { return 0 }
+    if acl_allows_mode(repo, rev, user, path, 1) == 0 { return 0 }
+
+    // Only dirs have descendants.
+    kind = repos.repos_resolve_kind(repo, rev, path)
+    if kind != 100 { return 1 }   // 'd' = 100
+
+    // repos_list wants "/" for the root; the C-side convention
+    // is an empty path means root in most places, but list() is the
+    // exception.
+    list_path = path
+    if string.length(path) == 0 { list_path = "/" }
+
+    L = repos.repos_list(repo, rev, list_path)
+    if L == null { return 1 }
+
+    n = repos.repos_list_count(L)
+    ok = 1
+    i = 0
+    while i < n {
+        if ok == 1 {
+            name = repos.repos_list_name(L, i)
+            name = string.copy(name)   // list's buffer reused on free
+            child = ""
+            if string.length(path) > 0 {
+                child = string.concat(string.concat(path, "/"), name)
+            }
+            if string.length(path) == 0 {
+                child = name
+            }
+            if acl_subtree_rw(repo, rev, user, child) == 0 {
+                ok = 0
+            }
+        }
+        i = i + 1
+    }
+    repos.repos_list_free(L)
+    return ok
+}
+
+
+
+// =============================================================================
+// avnserver/auth.ae
+// =============================================================================
+
+
+
+svnserver_spec_allows(repo: string, branch: string,
+                              path: string, is_super: int) -> int {
+    if is_super == 1 { return 1 }
+    if string.length(repo) == 0 { return 0 }
+    if string.length(branch) == 0 { return 0 }
+    if string.length(path) == 0 { return 0 }
+    return repo_storage.branch_spec_allows(repo, branch, path)
+}
+
+svnserver_request_header(req: ptr, name: string) -> string {
+    return http.get_header(req, name)
+}
+
+
+// =============================================================================
+// avnserver/based_on_check.ae
+// =============================================================================
+
+
+
+based_on_check(req: ptr, res: ptr, repo: string, head_rev: int,
+                      path: string, allow_missing_as_create: int) -> int {
+    based_on = svnserver_request_header(req, "Svn-Based-On")
+
+    // repos_resolve_kind returns 0 on miss, else the kind byte.
+    kind = repos.repos_resolve_kind(repo, head_rev, path)
+    exists = 0
+    cur_sha = ""
+    if kind != 0 {
+        exists = 1
+        cur_sha = string.copy(repos.repos_resolve_sha(repo, head_rev, path))
+    }
+
+    if string.length(based_on) == 0 {
+        // Omitted. Caller is asserting "create new".
+        if exists == 1 {
+            if allow_missing_as_create == 1 {
+                http.response_set_header(res, "X-Svnae-Current-Hash", cur_sha)
+                svnserver_respond_error(res, 409, "based_on missing but path exists")
+                return 0
+            }
+        }
+        if exists == 0 {
+            if allow_missing_as_create == 0 {
+                svnserver_respond_error(res, 404, "not found")
+                return 0
+            }
+        }
+        return 1
+    }
+
+    // Header present. Path must exist.
+    if exists == 0 {
+        svnserver_respond_error(res, 404, "not found")
+        return 0
+    }
+    if string.equals(based_on, cur_sha) == 0 {
+        http.response_set_header(res, "X-Svnae-Current-Hash", cur_sha)
+        svnserver_respond_error(res, 409, "based_on mismatch")
+        return 0
+    }
+    return 1
+}
+
+
+
+// =============================================================================
+// avnserver/branch_create_parse.ae
+// =============================================================================
+
+
+
+branch_create_from_body(repo: string, branch_name: string,
+                                body: string, body_len: int,
+                                user_for_author: string) -> int {
+    if body_len <= 0 { return -1 }
+    root, err = json.parse(body)
+    if string.length(err) > 0 { return -1 }
+
+    jbase, berr = json.object_get(root, "base")
+    if string.length(berr) > 0 { json.free(root); return -2 }
+    if jbase == null { json.free(root); return -2 }
+    base, serr = json.get_string(jbase)
+    if string.length(serr) > 0 { json.free(root); return -2 }
+
+    jinc, ierr = json.object_get(root, "include")
+    if string.length(ierr) > 0 { json.free(root); return -2 }
+    if jinc == null { json.free(root); return -2 }
+    if json.array_size(jinc) < 0 { json.free(root); return -2 }
+
+    n = json.array_size(jinc)
+    if n <= 0 { json.free(root); return -3 }
+
+    globs = ""
+    i = 0
+    while i < n {
+        elem, _ = json.array_get(jinc, i)
+        g, gerr = json.get_string(elem)
+        if string.length(gerr) == 0 {
+            if string.length(g) > 0 {
+                if string.length(globs) > 0 {
+                    globs = string.concat(globs, "\n")
+                }
+                globs = string.concat(globs, g)
+            }
+        }
+        i = i + 1
+    }
+    json.free(root)
+
+    author = "super"
+    if string.length(user_for_author) > 0 { author = user_for_author }
+    new_rev = repo_storage.branch_create(repo, branch_name, base, globs, author)
+    if new_rev < 0 { return -4 }
+    return new_rev
+}
+
+
+// =============================================================================
+// avnserver/commit_parse.ae
+// =============================================================================
+
+
+// KIND_* constants for commit_from_body's structured-error returns.
+// First four match std.json's numeric values exactly so a pass-through
+// from a future json.parse_strict call wouldn't need translation. The
+// avn-specific kinds use values 10+ to leave room.
+//
+// File-local — handler_commit.ae checks `kind != 0` for the success
+// path and calls status_for_kind for the error path; it doesn't need
+// the named constants.
+const KIND_OK             = 0
+const KIND_PARSE_ERROR    = 1
+const KIND_OUT_OF_MEMORY  = 2
+const KIND_INVALID_INPUT  = 3
+const KIND_FORBIDDEN      = 10
+const KIND_OUT_OF_DATE    = 11
+const KIND_INTERNAL       = 12
+const KIND_NOT_FOUND      = 13   // R292 — used by handler_copy for
+                                 // "from_path missing at base_rev"
+                                 // (404). avn-side equivalent of
+                                 // std.fs.KIND_NOT_FOUND but in our
+                                 // private 10+ namespace.
+
+// Map a commit-pipeline kind to an HTTP status code. Status mapping
+// matches the pre-R288 -N → status table 1:1 — KIND_INVALID_INPUT
+// (was -1, -3, -7, -8, -9, -10) and KIND_PARSE_ERROR (was -2) both
+// map to 400; KIND_FORBIDDEN to 403; KIND_OUT_OF_DATE to 409;
+// KIND_OUT_OF_MEMORY and KIND_INTERNAL to 500. R292 added
+// KIND_NOT_FOUND for handler_copy's from_path-missing case (404).
+status_for_kind(kind: int) -> int {
+    if kind == KIND_PARSE_ERROR    { return 400 }
+    if kind == KIND_OUT_OF_MEMORY  { return 500 }
+    if kind == KIND_INVALID_INPUT  { return 400 }
+    if kind == KIND_FORBIDDEN      { return 403 }
+    if kind == KIND_OUT_OF_DATE    { return 409 }
+    if kind == KIND_INTERNAL       { return 500 }
+    if kind == KIND_NOT_FOUND      { return 404 }
+    return 500
+}
+
+
+
+// Round 274 / Phase 2.1 — merge metadata setters.
+// Resolve rev number (sent on the wire) → rev SHA (stored in ledger).
+
+// b64-decode + txn_add_file. openssl.crypto_b64_decode returns the
+// (bytes, length, err) triple cleanly via export-tuple-return —
+// Round 159 dropped the prior TLS-pair workaround. AetherStrings
+// auto-unwrap at C extern boundaries declared `const char*` (#297),
+// so we call txn_add_file directly.
+
+txn_add_b64_(txn: ptr, path: string, b64: string) -> int
+    requires txn != null
+{
+    raw, n, err = openssl.crypto_b64_decode(b64)
+    if string.length(err) > 0 { return 0 - 1 }
+    return repo_storage.txn_add_file(txn, path, raw, n)
+}
+
+// Blob builders. These produce "key=value\n" / "+user\n" /
+// "<sha> <path>\n" bodies directly from the "\n"-joined parallel
+// strings the JSON parse loop below accumulates, then write to the
+// rep store via rep_write_blob. Used to bounce through C
+// (svnserver_build_*_joined + build_*_blob); all that round
+// trip is gone now.
+//
+// Kept as same-file helpers rather than a separate module because
+// aether.toml's extra_sources line + the gcc link command are
+// bumping up against a path-list length limit; adding another
+// _generated.c would truncate the link argv.
+
+commit_from_body(req: ptr, res: ptr, repo: string) -> (int, int, string) {
+    body_len = http.request_body_length(req)
+    if body_len == 0 { return -1, KIND_INVALID_INPUT, "empty body" }
+    body = http.request_body(req)
+
+    // R289 — std.json's structured-error parse (#392) gives us a
+    // message with line:col baked in ("<reason> at <line>:<col>").
+    // We frame it with "malformed JSON: " so the wire format keeps
+    // the existing "malformed JSON" prefix clients already key on,
+    // and adds the location detail clients didn't have before.
+    root, jkind, jmsg = json.parse_strict(body)
+    if jkind != 0 {
+        return -1, KIND_PARSE_ERROR, string.concat("malformed JSON: ", jmsg)
+    }
+
+    // Required top-level fields: base_rev (number), author, log, edits.
+    jbase, bbe = json.object_get(root, "base_rev")
+    if string.length(bbe) > 0 { json.free(root); return -1, KIND_INVALID_INPUT, "missing or wrong-typed field: base_rev" }
+    if jbase == null { json.free(root); return -1, KIND_INVALID_INPUT, "missing field: base_rev" }
+    base_rev = json.get_int(jbase)
+
+    // R286 — parent_sha (mandatory git-style chain CAS).
+    //   base_rev == 0 → must be absent or empty (first commit, no prior rev)
+    //   base_rev  > 0 → must be present + match repos.repos_rev_blob_sha(repo, base_rev)
+    //                   (= the SHA currently at HEAD)
+    // Catches: stale-WC commits where the rev number happens to match
+    // (e.g. after a hypothetical history-rewrite or re-init), and
+    // double-commit replays where the client's HEAD assumption is
+    // already stale.
+    sent_parent_sha = ""
+    jpsha, jpe = json.object_get(root, "parent_sha")
+    if string.length(jpe) == 0 {
+        if jpsha != null {
+            ps, pserr = json.get_string(jpsha)
+            if string.length(pserr) == 0 {
+                sent_parent_sha = string.copy(ps)
+            }
+        }
+    }
+    if base_rev == 0 {
+        if string.length(sent_parent_sha) > 0 {
+            json.free(root); return -1, KIND_OUT_OF_DATE, "out of date — parent_sha sent for base_rev=0; first commit must have empty parent_sha"
+        }
+    } else {
+        head_sha = repos.repos_rev_blob_sha(repo, base_rev)
+        if string.length(head_sha) == 0 { json.free(root); return -1, KIND_OUT_OF_DATE, "out of date — parent_sha mismatch; fetch HEAD and retry" }
+        if string.equals(sent_parent_sha, head_sha) == 0 {
+            json.free(root); return -1, KIND_OUT_OF_DATE, "out of date — parent_sha mismatch; fetch HEAD and retry"
+        }
+    }
+
+    jauthor, jae = json.object_get(root, "author")
+    if string.length(jae) > 0 { json.free(root); return -1, KIND_INVALID_INPUT, "missing or wrong-typed field: author" }
+    if jauthor == null { json.free(root); return -1, KIND_INVALID_INPUT, "missing field: author" }
+    author, ase = json.get_string(jauthor)
+    if string.length(ase) > 0 { json.free(root); return -1, KIND_INVALID_INPUT, "missing or wrong-typed field: author" }
+    author = string.copy(author)
+
+    jlog, jle = json.object_get(root, "log")
+    if string.length(jle) > 0 { json.free(root); return -1, KIND_INVALID_INPUT, "missing or wrong-typed field: log" }
+    if jlog == null { json.free(root); return -1, KIND_INVALID_INPUT, "missing field: log" }
+    logmsg, lse = json.get_string(jlog)
+    if string.length(lse) > 0 { json.free(root); return -1, KIND_INVALID_INPUT, "missing or wrong-typed field: log" }
+    logmsg = string.copy(logmsg)
+
+    jedits, jee = json.object_get(root, "edits")
+    if string.length(jee) > 0 { json.free(root); return -1, KIND_INVALID_INPUT, "missing or wrong-typed field: edits" }
+    if jedits == null { json.free(root); return -1, KIND_INVALID_INPUT, "missing field: edits" }
+
+    // commit_branch — body "branch" field wins, else Svn-Branch
+    // request header, else "main".
+    commit_branch = svnserver_request_header(req, "Svn-Branch")
+    if string.length(commit_branch) == 0 { commit_branch = "main" }
+    jbranch, jbre = json.object_get(root, "branch")
+    if string.length(jbre) == 0 {
+        if jbranch != null {
+            bs, bse = json.get_string(jbranch)
+            if string.length(bse) == 0 {
+                if string.length(bs) > 0 { commit_branch = string.copy(bs) }
+            }
+        }
+    }
+
+    user = svnserver_request_header(req, "X-Svnae-User")
+    is_super = svnserver_request_is_super(req)
+
+    // Pre-scan: every edit path needs ACL write + branch-spec allow.
+    n_edits = json.array_size(jedits)
+    i = 0
+    while i < n_edits {
+        entry, _ = json.array_get(jedits, i)
+        if entry != null {
+            jp, jpe = json.object_get(entry, "path")
+            if string.length(jpe) == 0 {
+                if jp != null {
+                    ps, pse = json.get_string(jp)
+                    if string.length(pse) == 0 {
+                        if is_super == 0 {
+                            if acl_allows_mode(repo, base_rev, user, ps, 1) == 0 {
+                                json.free(root)
+                                return -1, KIND_FORBIDDEN, "forbidden: ACL denies write to ${ps}"
+                            }
+                        }
+                        if svnserver_spec_allows(repo, commit_branch, ps, is_super) == 0 {
+                            json.free(root)
+                            return -1, KIND_FORBIDDEN, "path outside branch spec: ${ps}"
+                        }
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+
+    // ACL-change pre-scan for non-super: each acl-touched path needs write.
+    if is_super == 0 {
+        jacl_pre, jape = json.object_get(root, "acl")
+        if string.length(jape) == 0 {
+            if jacl_pre != null {
+                pre_n = json.object_size(jacl_pre)
+                pi = 0
+                while pi < pre_n {
+                    apath, _apv, _aperr = json.object_entry(jacl_pre, pi)
+                    if acl_allows_mode(repo, base_rev, user, apath, 1) == 0 {
+                        json.free(root)
+                        return -1, KIND_FORBIDDEN, "forbidden: ACL denies write to ${apath}"
+                    }
+                    pi = pi + 1
+                }
+            }
+        }
+    }
+
+    // Build the txn.
+    txn = repo_storage.txn_new(base_rev)
+    if txn == null { json.free(root); return -1, KIND_OUT_OF_MEMORY, "oom building txn" }
+
+    i = 0
+    while i < n_edits {
+        entry, _ = json.array_get(jedits, i)
+        if entry == null { repo_storage.txn_free(txn); json.free(root); return -1, KIND_INVALID_INPUT, "edit missing op/path" }
+
+        jop, _ = json.object_get(entry, "op")
+        if jop == null { repo_storage.txn_free(txn); json.free(root); return -1, KIND_INVALID_INPUT, "edit missing op" }
+        op, oerr = json.get_string(jop)
+        if string.length(oerr) > 0 { repo_storage.txn_free(txn); json.free(root); return -1, KIND_INVALID_INPUT, "edit op not a string" }
+
+        jpath, _ = json.object_get(entry, "path")
+        if jpath == null { repo_storage.txn_free(txn); json.free(root); return -1, KIND_INVALID_INPUT, "edit missing path" }
+        epath, perr = json.get_string(jpath)
+        if string.length(perr) > 0 { repo_storage.txn_free(txn); json.free(root); return -1, KIND_INVALID_INPUT, "edit path not a string" }
+
+        if string.equals(op, "add-file") == 1 {
+            jcontent, _ = json.object_get(entry, "content")
+            if jcontent == null { repo_storage.txn_free(txn); json.free(root); return -1, KIND_INVALID_INPUT, "add-file edit missing content" }
+            b64, berr = json.get_string(jcontent)
+            if string.length(berr) > 0 { repo_storage.txn_free(txn); json.free(root); return -1, KIND_INVALID_INPUT, "add-file content not a string" }
+            if txn_add_b64_(txn, epath, b64) != 0 {
+                repo_storage.txn_free(txn); json.free(root); return -1, KIND_INVALID_INPUT, "add-file content base64 decode failed"
+            }
+        }
+        if string.equals(op, "mkdir") == 1 {
+            repo_storage.txn_mkdir(txn, epath)
+        }
+        if string.equals(op, "delete") == 1 {
+            repo_storage.txn_delete(txn, epath)
+        }
+        if string.equals(op, "add-file") == 0 {
+            if string.equals(op, "mkdir") == 0 {
+                if string.equals(op, "delete") == 0 {
+                    repo_storage.txn_free(txn); json.free(root); return -1, KIND_INVALID_INPUT, "unknown edit op: ${op}"
+                }
+            }
+        }
+        i = i + 1
+    }
+
+    // Optional "props" object: build per-path props blobs, collect
+    // sha1s, roll up into a paths-props blob.
+    use_props_sha = ""
+    jprops, _jpe = json.object_get(root, "props")
+    if jprops != null {
+        np = json.object_size(jprops)
+        if np > 0 {
+            paths_joined = ""
+            shas_joined = ""
+            i = 0
+            while i < np {
+                this_path, pval, _ = json.object_entry(jprops, i)
+                // Snapshot the key — json.object_entry returns an owned key,
+                // but we're about to recurse into subsequent iterations.
+                this_path = string.copy(this_path)
+
+                keys_joined = ""
+                values_joined = ""
+                emitted_props = 0
+                if pval != null {
+                    nk = json.object_size(pval)
+                    ki = 0
+                    while ki < nk {
+                        kname, kval, _ = json.object_entry(pval, ki)
+                        kname = string.copy(kname)
+                        // Round 277 / Phase 3: svn:mergeinfo is
+                        // server-managed via the merge ledger; reject
+                        // any client trying to set it directly. The
+                        // CLI also guards this (defence in depth) but
+                        // the wire-level check is the authoritative
+                        // one — buggy / malicious clients can't poke
+                        // around the ledger via the prop carrier.
+                        if string.equals(kname, "svn:mergeinfo") == 1 {
+                            repo_storage.txn_free(txn)
+                            json.free(root)
+                            return -1, KIND_INVALID_INPUT, "client-set svn:mergeinfo not allowed; merge metadata is server-managed via the merge ledger"
+                        }
+                        if kval != null {
+                            vstr, verr = json.get_string(kval)
+                            if string.length(verr) == 0 {
+                                if emitted_props > 0 {
+                                    keys_joined = string.concat(keys_joined, "\n")
+                                    values_joined = string.concat(values_joined, "\n")
+                                }
+                                keys_joined = string.concat(keys_joined, kname)
+                                values_joined = string.concat(values_joined, vstr)
+                                emitted_props = emitted_props + 1
+                            }
+                        }
+                        ki = ki + 1
+                    }
+                }
+                psha = build_props_blob_joined(repo, keys_joined, values_joined)
+                psha = string.copy(psha)
+
+                if i > 0 {
+                    paths_joined = string.concat(paths_joined, "\n")
+                    shas_joined = string.concat(shas_joined, "\n")
+                }
+                paths_joined = string.concat(paths_joined, this_path)
+                shas_joined = string.concat(shas_joined, psha)
+                i = i + 1
+            }
+            use_props_sha = build_paths_props_blob_joined(repo,
+                                paths_joined, shas_joined)
+            use_props_sha = string.copy(use_props_sha)
+        }
+    }
+
+    // Optional "acl" object: same pattern but per-path value is an
+    // array of rule strings. Empty array skips the path (= remove ACL).
+    use_acl_sha = ""
+    jacl, _jaoe = json.object_get(root, "acl")
+    if jacl != null {
+        np = json.object_size(jacl)
+        if np > 0 {
+            paths_joined = ""
+            shas_joined = ""
+            emitted = 0
+            i = 0
+            while i < np {
+                this_path, pval, _ = json.object_entry(jacl, i)
+                this_path = string.copy(this_path)
+                if pval != null {
+                    nr = json.array_size(pval)
+                    if nr > 0 {
+                        rules_joined = ""
+                        rj_count = 0
+                        k = 0
+                        while k < nr {
+                            r_elem, _ = json.array_get(pval, k)
+                            if r_elem != null {
+                                rs, rer = json.get_string(r_elem)
+                                if string.length(rer) == 0 {
+                                    if rj_count > 0 {
+                                        rules_joined = string.concat(rules_joined, "\n")
+                                    }
+                                    rules_joined = string.concat(rules_joined, rs)
+                                    rj_count = rj_count + 1
+                                }
+                            }
+                            k = k + 1
+                        }
+                        asha = build_acl_blob_joined(repo, rules_joined)
+                        asha = string.copy(asha)
+                        if emitted > 0 {
+                            paths_joined = string.concat(paths_joined, "\n")
+                            shas_joined = string.concat(shas_joined, "\n")
+                        }
+                        paths_joined = string.concat(paths_joined, this_path)
+                        shas_joined = string.concat(shas_joined, asha)
+                        emitted = emitted + 1
+                    }
+                }
+                i = i + 1
+            }
+            if emitted > 0 {
+                use_acl_sha = build_paths_acl_blob_joined(repo,
+                                paths_joined, shas_joined)
+                use_acl_sha = string.copy(use_acl_sha)
+            }
+        }
+    }
+
+    // Round 274 / Phase 2.1 — merged_from. Optional commit-body
+    // object; when present, the server resolves rev numbers to
+    // rev-blob SHAs and stamps the txn so commit_finalise emits
+    // the rev blob's `merged:` field and writes the merge ledger.
+    jmf, _ = json.object_get(root, "merged_from")
+    if jmf != null {
+        jms, _ = json.object_get(jmf, "source_branch")
+        msrc = ""
+        if jms != null {
+            mss, msse = json.get_string(jms)
+            if string.length(msse) == 0 { msrc = string.copy(mss) }
+        }
+        mtgt = ""
+        jmt, _ = json.object_get(jmf, "target_path")
+        if jmt != null {
+            mts, mtse = json.get_string(jmt)
+            if string.length(mtse) == 0 { mtgt = string.copy(mts) }
+        }
+        mverb = 0
+        jmv, _ = json.object_get(jmf, "verb")
+        if jmv != null { mverb = json.get_int(jmv) }
+        if string.length(msrc) > 0 {
+            repo_storage.txn_merge_set_source(txn, mtgt, msrc, mverb)
+            jmrevs, _ = json.object_get(jmf, "source_revs")
+            if jmrevs != null {
+                rcount = json.array_size(jmrevs)
+                ri = 0
+                while ri < rcount {
+                    revj, _ = json.array_get(jmrevs, ri)
+                    if revj != null {
+                        rnum = json.get_int(revj)
+                        rsha = repos.repos_rev_blob_sha(repo, rnum)
+                        if string.length(rsha) > 0 {
+                            repo_storage.txn_merge_record_rev(txn, string.copy(rsha))
+                        }
+                    }
+                    ri = ri + 1
+                }
+            }
+        }
+    }
+
+    json.free(root)
+
+    new_rev = repo_storage.commit_finalise(repo, txn, "main", author, logmsg,
+                                     use_props_sha, use_acl_sha)
+    repo_storage.txn_free(txn)
+
+    // commit_finalise still uses signed-int return codes (its
+    // migration to a structured return is a follow-up to this
+    // R288 round). -12 is out-of-date; anything else negative is a
+    // generic internal failure.
+    if new_rev == 0 - 12 {
+        return -1, KIND_OUT_OF_DATE, "out of date — fetch and retry"
+    }
+    if new_rev < 0 {
+        msg = "commit_finalise rv=${new_rev} repo=${repo} base_rev=${base_rev}\n"
+        util.io_write_atomic("/tmp/avn_commit_finalise_rv.log", msg, string.length(msg))
+        return -1, KIND_INTERNAL, "commit failed"
+    }
+    return new_rev, KIND_OK, ""
+}
+
+
+// --- blob builders (inlined from what would be avnserver/blob_build.ae) --
+
+// Count lines in a "\n"-joined string. Trailing "\n" doesn't add a
+// phantom empty line.
+count_lines(joined: string) -> int {
+    n = string.length(joined)
+    if n == 0 { return 0 }
+    lines = 1
+    i = 0
+    while i < n {
+        if string.char_at(joined, i) == 10 {
+            if i + 1 < n { lines = lines + 1 }
+        }
+        i = i + 1
+    }
+    return lines
+}
+
+// Return the i-th line of `joined`, 0-indexed. "" when out of range.
+line_at(joined: string, i: int) -> string {
+    n = string.length(joined)
+    pos = 0
+    k = 0
+    while k < i {
+        if pos >= n { return "" }
+        ch = string.char_at(joined, pos)
+        pos = pos + 1
+        if ch == 10 { k = k + 1 }
+    }
+    start = pos
+    while pos < n {
+        if string.char_at(joined, pos) == 10 { break }
+        pos = pos + 1
+    }
+    return string.substring(joined, start, pos)
+}
+
+// Return the i-th "\x02"-separated record in `packed`. Trailing "\x02"
+// is tolerated. "" on miss.
+packed_record_at(packed: string, i: int) -> string {
+    n = string.length(packed)
+    pos = 0
+    k = 0
+    while k < i {
+        if pos >= n { return "" }
+        sep = -1
+        j = pos
+        while j < n {
+            if string.char_at(packed, j) == 2 { sep = j; break }
+            j = j + 1
+        }
+        if sep < 0 { return "" }
+        pos = sep + 1
+        k = k + 1
+    }
+    if pos >= n { return "" }
+    end = n
+    j = pos
+    while j < n {
+        if string.char_at(packed, j) == 2 { end = j; break }
+        j = j + 1
+    }
+    return string.substring(packed, pos, end)
+}
+
+// Selection sort of a "<N records separated by \x02>" packed stream,
+// sorted by the first "\x01"-delimited field of each record. O(n^2)
+// in record count; commit-time prop lists are tiny (a few keys per
+// path), so this is plenty fast and keeps the helper allocation-
+// free beyond the normalised copy.
+sort_packed_by_first_field(packed: string, n: int) -> string {
+    if n <= 1 { return packed }
+    normalised = ""
+    i = 0
+    while i < n {
+        rec = packed_record_at(packed, i)
+        normalised = string.concat(normalised, rec)
+        normalised = string.concat(normalised, "\x02")
+        i = i + 1
+    }
+    result = ""
+    taken = ""
+    k = 0
+    while k < n {
+        best = -1
+        best_key = ""
+        j = 0
+        while j < n {
+            tok = string.concat(string.concat("|", string.from_int(j)), "|")
+            if string.contains(taken, tok) == 0 {
+                rec = packed_record_at(normalised, j)
+                tab = string.index_of(rec, "\x01")
+                key = rec
+                if tab >= 0 { key = string.substring(rec, 0, tab) }
+                if best < 0 {
+                    best = j
+                    best_key = key
+                }
+                if best >= 0 {
+                    if string.compare(key, best_key) < 0 {
+                        best = j
+                        best_key = key
+                    }
+                }
+            }
+            j = j + 1
+        }
+        if best < 0 { break }
+        chosen = packed_record_at(normalised, best)
+        if k > 0 { result = string.concat(result, "\x02") }
+        result = string.concat(result, chosen)
+        taken = string.concat(taken, string.concat(string.concat("|", string.from_int(best)), "|"))
+        k = k + 1
+    }
+    return result
+}
+
+// Build "key=value\n" sorted by key, write to rep store.
+build_props_blob_joined(repo: string, keys_joined: string, values_joined: string) -> string {
+    nk = count_lines(keys_joined)
+    nv = count_lines(values_joined)
+    n = nk
+    if nv < n { n = nv }
+
+    packed = ""
+    i = 0
+    while i < n {
+        k = line_at(keys_joined, i)
+        v = line_at(values_joined, i)
+        rec = string.concat(k, "\x01")
+        rec = string.concat(rec, v)
+        if i > 0 { packed = string.concat(packed, "\x02") }
+        packed = string.concat(packed, rec)
+        i = i + 1
+    }
+
+    sorted_keys_first = sort_packed_by_first_field(packed, n)
+
+    body = ""
+    i = 0
+    while i < n {
+        rec = packed_record_at(sorted_keys_first, i)
+        tab = string.index_of(rec, "\x01")
+        if tab < 0 {
+            i = i + 1
+            continue
+        }
+        k = string.substring(rec, 0, tab)
+        v = string.substring(rec, tab + 1, string.length(rec))
+        body = string.concat(body, k)
+        body = string.concat(body, "=")
+        body = string.concat(body, v)
+        body = string.concat(body, "\n")
+        i = i + 1
+    }
+
+    return repo_storage.rep_write_blob(repo, body, string.length(body))
+}
+
+// Build "<rule>\n" in caller-supplied order, write to rep store.
+build_acl_blob_joined(repo: string, rules_joined: string) -> string {
+    n = count_lines(rules_joined)
+    body = ""
+    i = 0
+    while i < n {
+        r = line_at(rules_joined, i)
+        body = string.concat(body, r)
+        body = string.concat(body, "\n")
+        i = i + 1
+    }
+    return repo_storage.rep_write_blob(repo, body, string.length(body))
+}
+
+// Build "<sha> <path>\n" sorted by path, write to rep store. Shared
+// shape for paths-props and paths-acl; sort delegated to
+// repo_storage.paths_index_sort (repo_storage/format_line.ae).
+build_paths_index_blob(repo: string, paths_joined: string, shas_joined: string) -> string {
+    np = count_lines(paths_joined)
+    ns = count_lines(shas_joined)
+    n = np
+    if ns < n { n = ns }
+
+    body = ""
+    i = 0
+    while i < n {
+        p = line_at(paths_joined, i)
+        s = line_at(shas_joined, i)
+        body = string.concat(body, s)
+        body = string.concat(body, " ")
+        body = string.concat(body, p)
+        body = string.concat(body, "\n")
+        i = i + 1
+    }
+
+    sorted = repo_storage.paths_index_sort(body)
+    return repo_storage.rep_write_blob(repo, sorted, string.length(sorted))
+}
+
+build_paths_props_blob_joined(repo: string, paths_joined: string, shas_joined: string) -> string {
+    return build_paths_index_blob(repo, paths_joined, shas_joined)
+}
+
+build_paths_acl_blob_joined(repo: string, paths_joined: string, shas_joined: string) -> string {
+    return build_paths_index_blob(repo, paths_joined, shas_joined)
+}
+
+
+// =============================================================================
+// avnserver/copy_acl.ae
+// =============================================================================
+
+
+// Externs hoisted to the top because Aether's resolver requires
+// them to be visible before any function that references them.
+
+// Returns the augmented body. Empty input → empty output (caller keeps
+// the "inherit previous" default).
+copy_acl_follow(body: string, from_path: string, to_path: string) -> string {
+    n = string.length(body)
+    if n == 0 { return "" }
+    from_len = string.length(from_path)
+    out = ""
+    line_start = 0
+    i = 0
+    while i <= n {
+        at_end = 0
+        c = 0
+        if i == n { at_end = 1 } else { c = string.char_at(body, i) }
+        is_eol = 0
+        if at_end == 1 { is_eol = 1 }
+        if c == 10 { is_eol = 1 }
+        if is_eol == 1 {
+            if i > line_start {
+                // Find the first space: "<sha> <path>"
+                sp = line_start
+                while sp < i {
+                    if string.char_at(body, sp) == 32 { break }
+                    sp = sp + 1
+                }
+                if sp > line_start && sp < i {
+                    sha = string.substring(body, line_start, sp)
+                    this_path = string.substring(body, sp + 1, i)
+                    // Preserve the original.
+                    out = string.concat(out, sha)
+                    out = string.concat(out, " ")
+                    out = string.concat(out, this_path)
+                    out = string.concat(out, "\n")
+                    // Rebase if this_path == from_path or starts with from_path + "/".
+                    rebase = 0
+                    pl = string.length(this_path)
+                    if pl == from_len {
+                        if string.equals(this_path, from_path) == 1 { rebase = 1 }
+                    } else {
+                        if pl > from_len {
+                            if string.char_at(this_path, from_len) == 47 {
+                                if starts_with_same_bytes(this_path, from_path, from_len) == 1 {
+                                    rebase = 1
+                                }
+                            }
+                        }
+                    }
+                    if rebase == 1 {
+                        out = string.concat(out, sha)
+                        out = string.concat(out, " ")
+                        if pl == from_len {
+                            out = string.concat(out, to_path)
+                        } else {
+                            tail = string.substring(this_path, from_len + 1, pl)
+                            out = string.concat(out, to_path)
+                            out = string.concat(out, "/")
+                            out = string.concat(out, tail)
+                        }
+                        out = string.concat(out, "\n")
+                    }
+                }
+            }
+            line_start = i + 1
+        }
+        i = i + 1
+    }
+    return out
+}
+
+
+starts_with_same_bytes(hay: string, needle: string, n: int) -> int {
+    i = 0
+    while i < n {
+        if string.char_at(hay, i) != string.char_at(needle, i) { return 0 }
+        i = i + 1
+    }
+    return 1
+}
+
+// End-to-end auto-follow: read the base rev's paths-acl blob, ask
+// copy_acl_follow to produce the augmented body, sort it, write it
+// back to the rep store, return the new blob sha. Returns "" if
+// the base rev has no ACL blob (nothing to follow) or if the
+// augmentation added no entries.
+auto_follow_copy_acl(repo: string, base_rev: int,
+                             from_path: string, to_path: string) -> string {
+    acl_root = load_rev_blob_field(repo, base_rev, "acl")
+    if string.length(acl_root) == 0 { return "" }
+
+    body = repo_storage.rep_read_blob(repo, acl_root)
+    if string.length(body) == 0 { return "" }
+    augmented = copy_acl_follow(body, from_path, to_path)
+    repo_storage.rep_free(body)
+    if string.length(augmented) == 0 { return "" }
+
+    sorted = repo_storage.paths_index_sort(augmented)
+    return repo_storage.rep_write_blob(repo, sorted, string.length(sorted))
+}
+
+
+// =============================================================================
+// avnserver/copy_parse.ae
+// =============================================================================
+
+
+// KIND_* constants — these MUST stay in lock-step with the source-of-
+// truth declarations in avnserver/commit_parse.ae. handler_copy.ae
+// uses status_for_kind from commit_parse.ae for the status mapping;
+// it doesn't need the named constants. The duplication exists because
+// Aether inlines `const` values at every use site (they're not C-level
+// globals, so a cross-TU extern wouldn't work).
+const KIND_OK             = 0
+const KIND_PARSE_ERROR    = 1
+const KIND_OUT_OF_MEMORY  = 2
+const KIND_INVALID_INPUT  = 3
+const KIND_FORBIDDEN      = 10
+const KIND_OUT_OF_DATE    = 11
+const KIND_INTERNAL       = 12
+const KIND_NOT_FOUND      = 13
+
+
+
+
+
+copy_from_body(req: ptr, repo: string) -> (int, int, string) {
+    body = http.request_body(req)
+    body_len = http.request_body_length(req)
+    if body_len == 0 { return -1, KIND_INVALID_INPUT, "empty body" }
+
+    // R289-style — parse_strict gives us "<reason> at <line>:<col>" so
+    // a 4xx response on a malformed copy body identifies WHERE the
+    // body went wrong, not just THAT it did.
+    root, jkind, jmsg = json.parse_strict(body)
+    if jkind != 0 {
+        return -1, KIND_PARSE_ERROR, string.concat("malformed JSON: ", jmsg)
+    }
+
+    // base_rev — required number.
+    jbr, bb_err = json.object_get(root, "base_rev")
+    if string.length(bb_err) > 0 { json.free(root); return -1, KIND_INVALID_INPUT, "missing or wrong-typed field: base_rev" }
+    if jbr == null { json.free(root); return -1, KIND_INVALID_INPUT, "missing field: base_rev" }
+    base_rev = json.get_int(jbr)
+
+    // Five required string fields. Inline the get+typecheck+copy
+    // instead of a helper: Aether 0.84's codegen miscompiles
+    // tuple-returning local helpers when called from an exported
+    // function (both wrapper shims emit as `int32_t`).
+    jfp, fpe = json.object_get(root, "from_path")
+    if string.length(fpe) > 0 { json.free(root); return -1, KIND_INVALID_INPUT, "missing or wrong-typed field: from_path" }
+    if jfp == null { json.free(root); return -1, KIND_INVALID_INPUT, "missing field: from_path" }
+    from_path, fpe2 = json.get_string(jfp)
+    if string.length(fpe2) > 0 { json.free(root); return -1, KIND_INVALID_INPUT, "from_path not a string" }
+    from_path = string.copy(from_path)
+
+    jtp, tpe = json.object_get(root, "to_path")
+    if string.length(tpe) > 0 { json.free(root); return -1, KIND_INVALID_INPUT, "missing or wrong-typed field: to_path" }
+    if jtp == null { json.free(root); return -1, KIND_INVALID_INPUT, "missing field: to_path" }
+    to_path, tpe2 = json.get_string(jtp)
+    if string.length(tpe2) > 0 { json.free(root); return -1, KIND_INVALID_INPUT, "to_path not a string" }
+    to_path = string.copy(to_path)
+
+    jau, aue = json.object_get(root, "author")
+    if string.length(aue) > 0 { json.free(root); return -1, KIND_INVALID_INPUT, "missing or wrong-typed field: author" }
+    if jau == null { json.free(root); return -1, KIND_INVALID_INPUT, "missing field: author" }
+    author, aue2 = json.get_string(jau)
+    if string.length(aue2) > 0 { json.free(root); return -1, KIND_INVALID_INPUT, "author not a string" }
+    author = string.copy(author)
+
+    jlg, lge = json.object_get(root, "log")
+    if string.length(lge) > 0 { json.free(root); return -1, KIND_INVALID_INPUT, "missing or wrong-typed field: log" }
+    if jlg == null { json.free(root); return -1, KIND_INVALID_INPUT, "missing field: log" }
+    logmsg, lge2 = json.get_string(jlg)
+    if string.length(lge2) > 0 { json.free(root); return -1, KIND_INVALID_INPUT, "log not a string" }
+    logmsg = string.copy(logmsg)
+
+    json.free(root)
+
+    user = svnserver_request_header(req, "X-Svnae-User")
+    is_super = svnserver_request_is_super(req)
+    if is_super == 0 {
+        if acl_subtree_rw(repo, base_rev, user, from_path) == 0 {
+            return -1, KIND_FORBIDDEN, "forbidden: ACL denies read on from-subtree"
+        }
+        if acl_allows_mode(repo, base_rev, user, to_path, 1) == 0 {
+            return -1, KIND_FORBIDDEN, "forbidden: ACL denies write to to_path"
+        }
+    }
+
+    cp_branch = svnserver_request_header(req, "Svn-Branch")
+    if string.length(cp_branch) == 0 { cp_branch = "main" }
+    if svnserver_spec_allows(repo, cp_branch, from_path, is_super) == 0 {
+        return -1, KIND_FORBIDDEN, "from_path outside branch spec"
+    }
+    if svnserver_spec_allows(repo, cp_branch, to_path, is_super) == 0 {
+        return -1, KIND_FORBIDDEN, "to_path outside branch spec"
+    }
+
+    rkind = repos.repos_resolve_kind(repo, base_rev, from_path)
+    if rkind == 0 { return -1, KIND_NOT_FOUND, "from_path not found at base_rev" }
+    from_sha = repos.repos_resolve_sha(repo, base_rev, from_path)
+    from_sha = string.copy(from_sha)
+    from_kind_int = 0
+    if rkind == 100 { from_kind_int = 1 }   // 'd'
+
+    new_acl_sha = auto_follow_copy_acl(repo, base_rev, from_path, to_path)
+    // rep_write_blob returns into a thread-local buffer; the
+    // txn_copy/commit path below also calls repo_storage.rep_write_blob (for the
+    // node copy's dirblob), which will overwrite this slot. Snapshot
+    // before handing off to the txn machinery.
+    new_acl_sha = string.copy(new_acl_sha)
+
+    txn = repo_storage.txn_new(base_rev)
+    repo_storage.txn_copy(txn, to_path, from_sha, from_kind_int)
+    new_rev = repo_storage.commit_finalise(repo, txn, "main", author, logmsg,
+                                     "", new_acl_sha)
+    repo_storage.txn_free(txn)
+
+    if new_rev == 0 - 12 {
+        return -1, KIND_OUT_OF_DATE, "out of date — fetch and retry"
+    }
+    if new_rev < 0 {
+        return -1, KIND_INTERNAL, "copy commit failed"
+    }
+    return new_rev, KIND_OK, ""
+}
+
+
+
+// =============================================================================
+// avnserver/dispatch.ae
+// =============================================================================
+
+
+
+
+// @c_callback exports this Aether function under a stable C symbol
+// so std.http's route registration can take its address directly —
+// no C trampoline required. The bound name matches the Aether-side
+// name (svnserver_dispatch); the linker sees a non-static
+// external-visibility symbol.
+@c_callback("svnserver_dispatch")
+svnserver_dispatch(req: ptr, res: ptr, _user_data: ptr) {
+    path = http.request_path(req)
+    method = http.request_method(req)
+
+    // Validate the URL shape — every route is /repos/{name}/<tail>.
+    name = parse_repo_name_in(path)
+    if string.length(name) == 0 {
+        svnserver_respond_error(res, 404, "not found")
+        return
+    }
+    after_repo, _r = string.strip_prefix(path, string.concat(string.concat("/repos/", name), "/"))
+    // after_repo now starts with the sub-route (no leading slash).
+    // All downstream handlers expect a leading slash in the tail,
+    // so prepend one.
+    tail = string.concat("/", after_repo)
+
+    if string.equals(method, "POST") == 1 {
+        if string.equals(tail, "/commit") == 1 {
+            handler_commit(req, res)
+            return
+        }
+        if string.equals(tail, "/copy") == 1 {
+            handler_copy(req, res)
+            return
+        }
+        _branch_tail, br_match = string.strip_prefix(tail, "/branches/")
+        if br_match == 1 {
+            handler_branch_create(req, res)
+            return
+        }
+        svnserver_respond_error(res, 404, "unknown POST route")
+        return
+    }
+
+    if string.equals(method, "PUT") == 1 {
+        _put_tail, put_match = string.strip_prefix(tail, "/path/")
+        if put_match == 1 {
+            handler_path_put(req, res)
+            return
+        }
+        svnserver_respond_error(res, 404, "unknown PUT route")
+        return
+    }
+
+    if string.equals(method, "DELETE") == 1 {
+        _del_tail, del_match = string.strip_prefix(tail, "/path/")
+        if del_match == 1 {
+            handler_path_delete(req, res)
+            return
+        }
+        svnserver_respond_error(res, 404, "unknown DELETE route")
+        return
+    }
+
+    // GET (and anything else) — read-side routes.
+    _get_path_tail, get_path_match = string.strip_prefix(tail, "/path/")
+    if get_path_match == 1 {
+        handler_path_get(req, res)
+        return
+    }
+    if string.equals(tail, "/info") == 1 {
+        handler_info(req, res)
+        return
+    }
+    if string.equals(tail, "/log") == 1 {
+        handler_log(req, res)
+        return
+    }
+    _rev_tail, rev_match = string.strip_prefix(tail, "/rev/")
+    if rev_match == 1 {
+        handle_repo_rev(req, res)
+        return
+    }
+    merged_tail, merged_match = string.strip_prefix(tail, "/merged/")
+    if merged_match == 1 {
+        repo_path = svnserver_find_repo_path(name)
+        if string.length(repo_path) == 0 {
+            svnserver_respond_error(res, 404, "no such repo")
+            return
+        }
+        merged_list_handle(req, res, repo_path, merged_tail)
+        return
+    }
+    runs_tail, runs_match = string.strip_prefix(tail, "/merge_runs/")
+    if runs_match == 1 {
+        repo_path2 = svnserver_find_repo_path(name)
+        if string.length(repo_path2) == 0 {
+            svnserver_respond_error(res, 404, "no such repo")
+            return
+        }
+        merge_runs_handle(req, res, repo_path2, runs_tail)
+        return
+    }
+    rruns_tail, rruns_match = string.strip_prefix(tail, "/reverse_runs/")
+    if rruns_match == 1 {
+        repo_path3 = svnserver_find_repo_path(name)
+        if string.length(repo_path3) == 0 {
+            svnserver_respond_error(res, 404, "no such repo")
+            return
+        }
+        reverse_runs_handle(req, res, repo_path3, rruns_tail)
+        return
+    }
+
+    svnserver_respond_error(res, 404, "unknown sub-route")
+}
+
+
+// =============================================================================
+// avnserver/embed.ae
+// =============================================================================
+
+
+// --- argv accessors (kept here so main.ae has nothing to know) ----------
+
+extern aether_args_count() -> int
+extern aether_args_get(index: int) -> string
+
+// --- repo + dispatch shim externs (mirror main.ae) ----------------------
+
+
+// std.http extras the wrappers don't cover.
+extern http_server_create(port: int) -> ptr
+extern http_server_set_host(server: ptr, host: string)
+extern http_server_get(server: ptr, path: string, handler: ptr, user_data: ptr)
+extern http_server_post(server: ptr, path: string, handler: ptr, user_data: ptr)
+extern http_server_put(server: ptr, path: string, handler: ptr, user_data: ptr)
+extern http_server_delete(server: ptr, path: string, handler: ptr, user_data: ptr)
+
+
+// --- opts construction --------------------------------------------------
+
+opts_new() -> ptr {
+    return map.new()
+}
+
+// Setters take `_ctx: ptr` first so the closure-DSL block auto-threads
+// the implicit `_builder` map. The same setters work in the explicit
+// API by passing the opts ptr directly (the trailing-block magic is a
+// no-op when the setter is called normally).
+
+// repo(name, path) — register one named repo. Repeatable: each call
+// appends to opts["repos"] as "name\tpath".
+repo(_ctx: ptr, name: string, path: string) {
+    if map.has(_ctx, "repos") == 0 {
+        _e = map.put(_ctx, "repos", list.new())
+    }
+    repos, _ = map.get(_ctx, "repos")
+    list.add(repos, "${name}\t${path}")
+}
+
+port(_ctx: ptr, n: int) {
+    _e = map.put(_ctx, "port", string.from_int(n))
+}
+
+superuser_token(_ctx: ptr, t: string) {
+    _e = map.put(_ctx, "superuser_token", t)
+}
+
+// host(addr) — bind address (default is std.http's default,
+// typically "0.0.0.0"). Pass "127.0.0.1" to limit to loopback.
+// Named `host` rather than `bind` because the latter shadows libc's
+// bind(2) — and http_server_start needs the real one to attach a
+// listening socket. Matches the underlying http_server_set_host
+// extern.
+host(_ctx: ptr, addr: string) {
+    _e = map.put(_ctx, "host", addr)
+}
+
+// no_compress(1) sets AVN_NO_COMPRESS=1 in the server's env before
+// start, mirroring the bench escape hatch in repo_storage/rep_store.ae.
+no_compress(_ctx: ptr, on: int) {
+    if on == 1 {
+        _e = map.put(_ctx, "no_compress", "1")
+    }
+}
+
+
+// --- workhorse ----------------------------------------------------------
+
+// Read opts, register repos + super-token + env, create the http
+// server, wire routes, start. Same code path the CLI used to inline
+// in main(); now both entry points share it.
+//
+// Returns 0 on clean shutdown, non-zero on misconfiguration or start
+// failure (caller decides whether to exit() or surface the rc).
+serve_opts(opts: ptr) -> int {
+    if opts == null { return 2 }
+
+    // Repos — at least one required. Each entry is "name\tpath".
+    if map.has(opts, "repos") == 0 {
+        println("avnserver: no repo declared (call repo(opts, name, path) first)")
+        return 2
+    }
+    repos, _ = map.get(opts, "repos")
+    nrepo = list.size(repos)
+    if nrepo == 0 {
+        println("avnserver: no repo declared")
+        return 2
+    }
+
+    i = 0
+    while i < nrepo {
+        entry, _ = list.get(repos, i)
+        sep = string.index_of(entry, "\t")
+        if sep < 0 { i = i + 1; continue }
+        rname = string.substring(entry, 0, sep)
+        rpath = string.substring(entry, sep + 1, string.length(entry))
+        svnserver_register_repo(rname, rpath)
+        i = i + 1
+    }
+
+    // Super-user token — single shared token (matches existing CLI shape).
+    if map.has(opts, "superuser_token") == 1 {
+        tok, _ = map.get(opts, "superuser_token")
+        if string.length(tok) > 0 { svnserver_set_super_token(tok) }
+    }
+
+    // AVN_NO_COMPRESS is read by repo_storage/rep_store.ae via
+    // os_getenv. Set it here so embedded callers don't have to fork +
+    // export it from a parent shell.
+    if map.has(opts, "no_compress") == 1 {
+        nc, _ = map.get(opts, "no_compress")
+        if string.equals(nc, "1") == 1 { os.setenv("AVN_NO_COMPRESS", "1") }
+    }
+
+    port_n = 8080
+    if map.has(opts, "port") == 1 {
+        ps, _ = map.get(opts, "port")
+        if string.try_int(ps) == 1 { port_n = string.get_int(ps) }
+    }
+
+    server = http_server_create(port_n)
+    if server == 0 {
+        println("avnserver: failed to create server on port ${port_n}")
+        return 1
+    }
+
+    host_addr = ""
+    if map.has(opts, "host") == 1 {
+        host_addr, _ = map.get(opts, "host")
+    }
+    if string.length(host_addr) > 0 {
+        http_server_set_host(server, host_addr)
+    }
+
+    // Single catch-all per method — std.http's `*` is end-of-pattern
+    // greedy, so we can't distinguish /repos/*/info from /repos/*/log
+    // at the route layer. C-side dispatcher inspects method + tail.
+    http_server_get   (server, "/repos/*", svnserver_dispatch, 0)
+    http_server_post  (server, "/repos/*", svnserver_dispatch, 0)
+    http_server_put   (server, "/repos/*", svnserver_dispatch, 0)
+    http_server_delete(server, "/repos/*", svnserver_dispatch, 0)
+
+    banner_addr = host_addr
+    if string.length(banner_addr) == 0 { banner_addr = "127.0.0.1" }
+    println("avnserver: listening on http://${banner_addr}:${port_n} (${nrepo} repo(s))")
+
+    err = http.server_start(server)
+    if string.length(err) != 0 {
+        println("avnserver: server start failed: ${err}")
+        return 1
+    }
+    return 0
+}
+
+
+// --- closure-DSL entry --------------------------------------------------
+
+// avnserver.serve { repo(...); port(...); ... }
+//
+// The `builder` keyword tells aetherc to allocate an implicit
+// `_builder` map for the trailing block, auto-thread it as `_ctx` to
+// setters called inside, then run this body. The body just hands
+// `_builder` to the same workhorse the explicit API uses.
+builder serve(_ctx: ptr) -> int {
+    return serve_opts(_builder)
+}
+
+
+
+// =============================================================================
+// avnserver/handle_repo_rev.ae
+// =============================================================================
+
+
+
+
+// Each already-ported handler's exported entry. See corresponding
+// handler_rev_*.ae for semantics.
+
+handle_repo_rev(req: ptr, res: ptr) {
+    path = http.request_path(req)
+
+    name = parse_repo_name_in(path)
+    if string.length(name) == 0 {
+        svnserver_respond_error(res, 404, "not found")
+        return
+    }
+
+    repo = svnserver_find_repo_path(name)
+    if string.length(repo) == 0 {
+        svnserver_respond_error(res, 404, "no such repo")
+        return
+    }
+
+    // Strip "/repos/<name>/" then "rev/".
+    after_repo, _r1 = string.strip_prefix(path, string.concat(string.concat("/repos/", name), "/"))
+    after_rev, matched = string.strip_prefix(after_repo, "rev/")
+    if matched == 0 {
+        svnserver_respond_error(res, 404, "not found")
+        return
+    }
+
+    // Parse the revision number. Leading digits up to first '/' or EOS.
+    n = string.length(after_rev)
+    i = 0
+    while i < n {
+        c = string.char_at(after_rev, i)
+        if c < 48 { break }
+        if c > 57 { break }
+        i = i + 1
+    }
+    if i == 0 {
+        svnserver_respond_error(res, 400, "malformed rev")
+        return
+    }
+    rev = 0
+    k = 0
+    while k < i {
+        rev = rev * 10 + (string.char_at(after_rev, k) - 48)
+        k = k + 1
+    }
+    tail = string.substring(after_rev, i, n)
+
+    user = svnserver_request_header(req, "X-Svnae-User")
+    is_super = svnserver_request_is_super(req)
+
+    // /info
+    if string.equals(tail,"/info") == 1 {
+        rev_info_handle(req, res, repo, rev, user, is_super)
+        return
+    }
+
+    // /cat[/<path>]
+    cat_rest, matched_cat = string.strip_prefix(tail,"/cat")
+    if matched_cat == 1 {
+        if string.length(cat_rest) == 0 {
+            cat_handle(req, res, repo, rev, "", user, is_super)
+            return
+        }
+        fp, mfp = string.strip_prefix(cat_rest, "/")
+        if mfp == 1 {
+            cat_handle(req, res, repo, rev, fp, user, is_super)
+            return
+        }
+    }
+
+    // /paths (exact match)
+    if string.equals(tail,"/paths") == 1 {
+        paths_handle(req, res, repo, rev, user, is_super)
+        return
+    }
+
+    // /blame/<path>
+    blame_rest, matched_blame = string.strip_prefix(tail,"/blame/")
+    if matched_blame == 1 {
+        blame_handle(req, res, repo, rev, blame_rest, user, is_super)
+        return
+    }
+
+    // /hashes[/<path>]
+    if string.equals(tail,"/hashes") == 1 {
+        hashes_handle(req, res, repo, rev, "", user, is_super)
+        return
+    }
+    hashes_rest, matched_hashes = string.strip_prefix(tail,"/hashes/")
+    if matched_hashes == 1 {
+        hashes_handle(req, res, repo, rev, hashes_rest, user, is_super)
+        return
+    }
+
+    // /acl[/<path>]
+    if string.equals(tail,"/acl") == 1 {
+        acl_handle(req, res, repo, rev, "", user, is_super)
+        return
+    }
+    acl_rest, matched_acl = string.strip_prefix(tail,"/acl/")
+    if matched_acl == 1 {
+        acl_handle(req, res, repo, rev, acl_rest, user, is_super)
+        return
+    }
+
+    // /props[/<path>]
+    if string.equals(tail,"/props") == 1 {
+        props_handle(req, res, repo, rev, "", user, is_super)
+        return
+    }
+    props_rest, matched_props = string.strip_prefix(tail,"/props/")
+    if matched_props == 1 {
+        props_handle(req, res, repo, rev, props_rest, user, is_super)
+        return
+    }
+
+    // /list[/<path>]
+    if string.equals(tail,"/list") == 1 {
+        list_handle(req, res, repo, rev, "", user, is_super)
+        return
+    }
+    list_rest, matched_list = string.strip_prefix(tail,"/list/")
+    if matched_list == 1 {
+        list_handle(req, res, repo, rev, list_rest, user, is_super)
+        return
+    }
+
+    svnserver_respond_error(res, 404, "not found")
+}
+
+
+
+// =============================================================================
+// avnserver/handler_branch_create.ae
+// =============================================================================
+
+
+
+// branch_create_from_body lives in branch_create_parse.ae; linked
+// as both `branch_create_from_body` and `branch_create_from_body`
+// on the C side. Call the aether-prefixed one so the .c's external
+// symbol table has a single match.
+
+
+
+handler_branch_create(req: ptr, res: ptr) {
+    path = http.request_path(req)
+
+    name = parse_repo_name_in(path)
+    if string.length(name) == 0 {
+        svnserver_respond_error(res, 404, "not found")
+        return
+    }
+
+    // Tail must match "/branches/<NAME>/create". Strip the fixed
+    // prefix, then confirm+strip the fixed suffix — whatever's left
+    // is the branch name.
+    after_repo, _r1 = string.strip_prefix(path, string.concat(string.concat("/repos/", name), "/"))
+    after_br, matched = string.strip_prefix(after_repo, "branches/")
+    if matched == 0 {
+        svnserver_respond_error(res, 404, "not found")
+        return
+    }
+    if string.ends_with(after_br, "/create") == 0 {
+        svnserver_respond_error(res, 404, "not found")
+        return
+    }
+    branch_name = string.substring(after_br, 0, string.length(after_br) - 7)
+    if string.length(branch_name) == 0 {
+        svnserver_respond_error(res, 400, "missing branch name")
+        return
+    }
+
+    repo = svnserver_find_repo_path(name)
+    if string.length(repo) == 0 {
+        svnserver_respond_error(res, 404, "no such repo")
+        return
+    }
+
+    // Super-user only. Branch creation is privileged.
+    user = svnserver_request_header(req, "X-Svnae-User")
+    is_super = svnserver_request_is_super(req)
+    if is_super == 0 {
+        svnserver_respond_error(res, 403, "forbidden")
+        return
+    }
+
+    body = http.request_body(req)
+    body_len = http.request_body_length(req)
+    if body_len == 0 {
+        svnserver_respond_error(res, 400, "empty body")
+        return
+    }
+
+    rv = branch_create_from_body(repo, branch_name, body, body_len, user)
+    if rv == -1 {
+        svnserver_respond_error(res, 400, "malformed JSON")
+        return
+    }
+    if rv == -2 {
+        svnserver_respond_error(res, 400, "need base:string and include:array")
+        return
+    }
+    if rv == -3 {
+        svnserver_respond_error(res, 400, "include must be non-empty")
+        return
+    }
+    if rv == -4 {
+        svnserver_respond_error(res, 400, "branch create failed (exists, bad base, or no globs?)")
+        return
+    }
+
+    http.response_set_status(res, 201)
+    http.response_json(res, rev_branch_response_json(rv, branch_name))
+}
+
+
+
+// =============================================================================
+// avnserver/handler_commit.ae
+// =============================================================================
+
+
+
+
+// Look up the rev_sha for a given rev number — used to compose the
+// commit response (R286 chain CAS: client needs the new rev's SHA so
+// it can pass it as parent_sha on the next commit).
+
+
+handler_commit(req: ptr, res: ptr) {
+    path = http.request_path(req)
+
+    name = parse_repo_name_in(path)
+    if string.length(name) == 0 {
+        svnserver_respond_error(res, 404, "not found")
+        return
+    }
+    rest, _r1 = string.strip_prefix(path, string.concat(string.concat("/repos/", name), "/"))
+    if string.equals(rest, "commit") == 0 {
+        svnserver_respond_error(res, 404, "not found")
+        return
+    }
+
+    repo = svnserver_find_repo_path(name)
+    if string.length(repo) == 0 {
+        svnserver_respond_error(res, 404, "no such repo")
+        return
+    }
+
+    new_rev, kind, msg = commit_from_body(req, res, repo)
+    if kind != 0 {
+        // KIND_OK is 0; anything else is an error. status_for_kind
+        // maps the kind to an HTTP status (400 / 403 / 409 / 500).
+        // The message comes from commit_from_body and is more
+        // specific than the pre-R288 fixed strings — e.g. carries
+        // the offending field name or path.
+        svnserver_respond_error(res, status_for_kind(kind), msg)
+        return
+    }
+
+    // R286 — emit {"rev": N, "rev_sha": "..."} so the client can chain
+    // CAS on the next commit. rev_sha lookup is a small file read
+    // (revs/N is just 41 bytes); same cost as the validation read on
+    // entry. If the lookup fails (shouldn't, just succeeded above),
+    // fall back to the rev-only response — better than 500.
+    new_sha = repos.repos_rev_blob_sha(repo, new_rev)
+    if string.length(new_sha) > 0 {
+        svnserver_respond_json_ok(res, rev_sha_response_json(new_rev, new_sha))
+    } else {
+        svnserver_respond_json_ok(res, rev_response_json(new_rev))
+    }
+}
+
+
+
+// =============================================================================
+// avnserver/handler_copy.ae
+// =============================================================================
+
+
+
+
+
+handler_copy(req: ptr, res: ptr) {
+    path = http.request_path(req)
+
+    name = parse_repo_name_in(path)
+    if string.length(name) == 0 {
+        svnserver_respond_error(res, 404, "not found")
+        return
+    }
+    rest, _r1 = string.strip_prefix(path, string.concat(string.concat("/repos/", name), "/"))
+    if string.equals(rest, "copy") == 0 {
+        svnserver_respond_error(res, 404, "not found")
+        return
+    }
+
+    repo = svnserver_find_repo_path(name)
+    if string.length(repo) == 0 {
+        svnserver_respond_error(res, 404, "no such repo")
+        return
+    }
+
+    new_rev, kind, msg = copy_from_body(req, repo)
+    if kind != 0 {
+        // KIND_OK is 0; anything else is an error. status_for_kind
+        // maps the kind to an HTTP status (400 / 403 / 404 / 409 /
+        // 500). Message comes from copy_from_body and now identifies
+        // the offending field / path / branch-spec violation, where
+        // pre-R292 the body was a fixed generic string per kind.
+        svnserver_respond_error(res, status_for_kind(kind), msg)
+        return
+    }
+
+    svnserver_respond_json_ok(res, rev_response_json(new_rev))
+}
+
+
+
+// =============================================================================
+// avnserver/handler_info.ae
+// =============================================================================
+
+
+// Parse "/repos/NAME/info" into (name, tail) via the url_parse helper.
+// Returns the repo name on success, "" on malformed.
+
+// Look up the repo filesystem path by name (static map on the C side).
+
+
+// ACL-free route; no auth decoding needed beyond "did path parse".
+handler_info(req: ptr, res: ptr) {
+    path = http.request_path(req)
+
+    // Must be of the shape "/repos/{name}/info".
+    name = parse_repo_name_in(path)
+    if string.length(name) == 0 {
+        svnserver_respond_error(res, 404, "not found")
+        return
+    }
+    rest, _r1 = string.strip_prefix(path, string.concat(string.concat("/repos/", name), "/"))
+    if string.equals(rest, "info") == 0 {
+        svnserver_respond_error(res, 404, "not found")
+        return
+    }
+
+    repo = svnserver_find_repo_path(name)
+    if string.length(repo) == 0 {
+        svnserver_respond_error(res, 404, "no such repo")
+        return
+    }
+
+    head = repos.repos_head_rev(repo)
+    if head < 0 {
+        svnserver_respond_error(res, 500, "cannot read head")
+        return
+    }
+
+    body = info_json(repo, name, head, repos.repo_primary_hash(repo))
+    http.response_set_status(res, 200)
+    http.response_json(res, body)
+}
+
+
+// Error emitter is a C shim (svnserver_respond_error in shim.c);
+// Aether just calls through.
+
+
+// =============================================================================
+// avnserver/handler_log.ae
+// =============================================================================
+
+
+
+handler_log(req: ptr, res: ptr) {
+    path = http.request_path(req)
+    name = parse_repo_name_in(path)
+    if string.length(name) == 0 {
+        handler_log_respond_error(res, 404, "not found")
+        return
+    }
+    rest, _r1 = string.strip_prefix(path, string.concat(string.concat("/repos/", name), "/"))
+    if string.equals(rest, "log") == 0 {
+        handler_log_respond_error(res, 404, "not found")
+        return
+    }
+
+    repo = svnserver_find_repo_path(name)
+    if string.length(repo) == 0 {
+        handler_log_respond_error(res, 404, "no such repo")
+        return
+    }
+
+    lg = repos.repos_log(repo)
+    if lg == null {
+        handler_log_respond_error(res, 500, "cannot read log")
+        return
+    }
+
+    user = svnserver_request_header(req, "X-Svnae-User")
+    is_super = svnserver_request_is_super(req)
+    body = log_json(repo, lg, user, is_super)
+    repos.repos_log_free(lg)
+
+    http.response_set_status(res, 200)
+    http.response_json(res, body)
+}
+
+
+// Delegate error-response emission to the C shim wrapper
+// (svnserver_respond_error in shim.c). Unique-named local wrapper
+// so the Aether-side symbol doesn't collide with neighbouring
+// handler modules when linked into the same binary.
+
+handler_log_respond_error(res: ptr, code: int, msg: string) {
+    svnserver_respond_error(res, code, msg)
+}
+
+
+// =============================================================================
+// avnserver/handler_merge.ae
+// =============================================================================
+
+
+
+
+// Build the JSON `{"integrated":[...]}` body. `packed` is the
+// "\n"-separated SHA list returned by merge_ledger_integrated_set.
+build_integrated_json_(packed: string) -> string {
+    out = "{\"integrated\":["
+    n = string.length(packed)
+    seg_start = 0
+    first = 1
+    i = 0
+    while i <= n {
+        at_end = 0
+        if i == n { at_end = 1 }
+        if at_end == 0 {
+            c = string.char_at(packed, i)
+            if c == 10 { at_end = 1 }
+        }
+        if at_end == 1 {
+            if i > seg_start {
+                if first == 0 { out = string.concat(out, ",") }
+                out = string.concat(out, "\"")
+                out = string.concat(out, string.substring(packed, seg_start, i))
+                out = string.concat(out, "\"")
+                first = 0
+            }
+            seg_start = i + 1
+        }
+        i = i + 1
+    }
+    return string.concat(out, "]}")
+}
+
+// Split "<target>/<source>" into the two branches. Empty pieces
+// (including a trailing slash) produce ("","").
+split_pair_(rest: string) -> (string, string) {
+    n = string.length(rest)
+    sl = 0 - 1
+    i = 0
+    while i < n {
+        if string.char_at(rest, i) == 47 { sl = i; break }
+        i = i + 1
+    }
+    if sl < 0     { return "", "" }
+    if sl == 0    { return "", "" }
+    if sl == n - 1 { return "", "" }
+    target = string.substring(rest, 0, sl)
+    source = string.substring(rest, sl + 1, n)
+    return target, source
+}
+
+merged_list_handle(req: ptr, res: ptr, repo: string, sub: string) {
+    // `sub` is the path tail after "/merged/" — i.e. "target/source".
+    target, source = split_pair_(sub)
+    if string.length(target) == 0 {
+        svnserver_respond_error(res, 400, "expected /merged/<target>/<source>")
+        return
+    }
+    if string.length(source) == 0 {
+        svnserver_respond_error(res, 400, "expected /merged/<target>/<source>")
+        return
+    }
+
+    packed = repo_storage.merge_ledger_integrated_set(repo, target, source)
+    body = build_integrated_json_(packed)
+    svnserver_respond_json_ok(res, body)
+}
+
+// Find the i-th '/' offset in `s` (0-indexed); -1 if no such slash.
+slash_at_(s: string, want: int) -> int {
+    n = string.length(s)
+    seen = 0
+    i = 0
+    while i < n {
+        if string.char_at(s, i) == 47 {
+            if seen == want { return i }
+            seen = seen + 1
+        }
+        i = i + 1
+    }
+    return 0 - 1
+}
+
+// Split "<target>/<source>/<lo>/<hi>[/<as_of>]" into five
+// components. as_of is optional — defaults to 0 ("no filter").
+split_quint_(rest: string) -> (string, string, int, int, int) {
+    s1 = slash_at_(rest, 0)
+    s2 = slash_at_(rest, 1)
+    s3 = slash_at_(rest, 2)
+    s4 = slash_at_(rest, 3)
+    if s1 < 0 { return "", "", 0 - 1, 0 - 1, 0 - 1 }
+    if s2 < 0 { return "", "", 0 - 1, 0 - 1, 0 - 1 }
+    if s3 < 0 { return "", "", 0 - 1, 0 - 1, 0 - 1 }
+    n = string.length(rest)
+    end_hi = n
+    as_of = 0
+    if s4 >= 0 {
+        end_hi = s4
+        as_of_s = string.substring(rest, s4 + 1, n)
+        if string.try_int(as_of_s) == 0 {
+            return "", "", 0 - 1, 0 - 1, 0 - 1
+        }
+        as_of = string.get_int(as_of_s)
+    }
+    target = string.substring(rest, 0,      s1)
+    source = string.substring(rest, s1 + 1, s2)
+    lo_s   = string.substring(rest, s2 + 1, s3)
+    hi_s   = string.substring(rest, s3 + 1, end_hi)
+    if string.length(target) == 0 { return "", "", 0 - 1, 0 - 1, 0 - 1 }
+    if string.length(source) == 0 { return "", "", 0 - 1, 0 - 1, 0 - 1 }
+    if string.try_int(lo_s) == 0  { return "", "", 0 - 1, 0 - 1, 0 - 1 }
+    if string.try_int(hi_s) == 0  { return "", "", 0 - 1, 0 - 1, 0 - 1 }
+    return target, source, string.get_int(lo_s), string.get_int(hi_s), as_of
+}
+
+// Convert "lo:hi\nlo:hi\n..." into a JSON envelope:
+//   {"runs":[{"lo":N,"hi":M},{"lo":...},...]}
+build_runs_json_(packed: string) -> string {
+    out = "{\"runs\":["
+    n = string.length(packed)
+    line_start = 0
+    first = 1
+    i = 0
+    while i <= n {
+        at_end = 0
+        if i == n { at_end = 1 }
+        if at_end == 0 {
+            c = string.char_at(packed, i)
+            if c == 10 { at_end = 1 }
+        }
+        if at_end == 1 {
+            if i > line_start {
+                line = string.substring(packed, line_start, i)
+                colon = string.index_of(line, ":")
+                if colon > 0 {
+                    lo = string.substring(line, 0, colon)
+                    hi = string.substring(line, colon + 1, string.length(line))
+                    if first == 0 { out = string.concat(out, ",") }
+                    out = string.concat(out, "{\"lo\":")
+                    out = string.concat(out, lo)
+                    out = string.concat(out, ",\"hi\":")
+                    out = string.concat(out, hi)
+                    out = string.concat(out, "}")
+                    first = 0
+                }
+            }
+            line_start = i + 1
+        }
+        i = i + 1
+    }
+    return string.concat(out, "]}")
+}
+
+// `GET /repos/{r}/merge_runs/<target>/<source>/<lo>/<hi>[/<as_of>]`
+// — server-side eligibility computation for a sweep merge. Returns
+// the list of (lo, hi) sub-ranges in (lo..hi] that aren't yet
+// integrated as-of `as_of` (defaults to 0 = no time filter). wc_merge
+// calls this in Phase 2.3 instead of parsing svn:mergeinfo property
+// text. The as_of param matters when the WC's base_rev predates a
+// recorded merge — it gives the WC the same "merge state visible
+// at base_rev" classical SVN got from versioning the property.
+merge_runs_handle(req: ptr, res: ptr, repo: string, sub: string) {
+    target, source, lo, hi, as_of = split_quint_(sub)
+    if string.length(target) == 0 {
+        svnserver_respond_error(res, 400,
+            "expected /merge_runs/<target>/<source>/<lo>/<hi>[/<as_of>]")
+        return
+    }
+    if lo < 0 || hi < 0 {
+        svnserver_respond_error(res, 400, "lo and hi must be non-negative ints")
+        return
+    }
+    runs = repo_storage.merge_ledger_eligible_runs_for_range(repo, target, source, lo, hi, as_of)
+    body = build_runs_json_(runs)
+    svnserver_respond_json_ok(res, body)
+}
+
+// `GET /repos/{r}/reverse_runs/<target>/<source>/<lo>/<hi>[/<as_of>]`
+// — runs of revs in (lo..hi] that are reverse-eligible (R284). Used
+// by `wc_merge` when applying a reverse merge: skip revs whose latest
+// merge_event was a reverse (so `merge -c -N` twice → second is a
+// no-op). Untracked revs (no merge_event) are INCLUDED in the
+// runs — classical-SVN reverse-merge of an untracked rev still
+// applies the inverse diff.
+reverse_runs_handle(req: ptr, res: ptr, repo: string, sub: string) {
+    target, source, lo, hi, as_of = split_quint_(sub)
+    if string.length(target) == 0 {
+        svnserver_respond_error(res, 400,
+            "expected /reverse_runs/<target>/<source>/<lo>/<hi>[/<as_of>]")
+        return
+    }
+    if lo < 0 || hi < 0 {
+        svnserver_respond_error(res, 400, "lo and hi must be non-negative ints")
+        return
+    }
+    runs = repo_storage.merge_ledger_reverse_eligible_runs(repo, target, source, lo, hi, as_of)
+    body = build_runs_json_(runs)
+    svnserver_respond_json_ok(res, body)
+}
+
+
+// =============================================================================
+// avnserver/handler_path_delete.ae
+// =============================================================================
+
+
+
+
+
+
+
+handler_path_delete(req: ptr, res: ptr) {
+    path = http.request_path(req)
+
+    name = parse_repo_name_in(path)
+    if string.length(name) == 0 {
+        svnserver_respond_error(res, 404, "not found")
+        return
+    }
+    after_repo, _r1 = string.strip_prefix(path, string.concat(string.concat("/repos/", name), "/"))
+    file_path, matched = string.strip_prefix(after_repo, "path/")
+    if matched == 0 {
+        svnserver_respond_error(res, 404, "not found")
+        return
+    }
+    if string.length(file_path) == 0 {
+        svnserver_respond_error(res, 400, "empty path")
+        return
+    }
+
+    repo = svnserver_find_repo_path(name)
+    if string.length(repo) == 0 {
+        svnserver_respond_error(res, 404, "no such repo")
+        return
+    }
+
+    base_rev = repos.repos_head_rev(repo)
+    if base_rev < 0 {
+        svnserver_respond_error(res, 500, "cannot read head")
+        return
+    }
+
+    user = svnserver_request_header(req, "X-Svnae-User")
+    is_super = svnserver_request_is_super(req)
+    if is_super == 0 {
+        if acl_allows_mode(repo, base_rev, user, file_path, 1) == 0 {
+            svnserver_respond_error(res, 403, "forbidden")
+            return
+        }
+    }
+
+    branch = svnserver_request_header(req, "Svn-Branch")
+    if string.length(branch) == 0 { branch = "main" }
+    if svnserver_spec_allows(repo, branch, file_path, is_super) == 0 {
+        svnserver_respond_error(res, 403, "path outside branch spec")
+        return
+    }
+
+    // DELETE requires the path to exist. 4th arg 0 tells
+    // based_on_check to 404 if the path is missing.
+    if based_on_check(req, res, repo, base_rev, file_path, 0) == 0 {
+        return
+    }
+
+    txn = repo_storage.txn_new(base_rev)
+    if txn == null {
+        svnserver_respond_error(res, 500, "oom")
+        return
+    }
+    repo_storage.txn_delete(txn, file_path)
+
+    hdr_author = svnserver_request_header(req, "Svn-Author")
+    if string.length(hdr_author) == 0 {
+        if string.length(user) > 0 {
+            hdr_author = user
+        }
+        if string.length(hdr_author) == 0 {
+            hdr_author = "anonymous"
+        }
+    }
+    hdr_log = svnserver_request_header(req, "Svn-Log")
+    if string.length(hdr_log) == 0 {
+        hdr_log = string.concat("DELETE /", file_path)
+    }
+
+    new_rev = repo_storage.commit_finalise(repo, txn, "main", hdr_author, hdr_log, "", "")
+    repo_storage.txn_free(txn)
+    if new_rev == 0 - 12 {
+        svnserver_respond_error(res, 409, "out of date — fetch and retry")
+        return
+    }
+    if new_rev < 0 {
+        svnserver_respond_error(res, 500, "commit failed")
+        return
+    }
+
+    svnserver_respond_json_ok(res, rev_response_json(new_rev))
+}
+
+
+
+// =============================================================================
+// avnserver/handler_path_get.ae
+// =============================================================================
+
+
+
+
+
+handler_path_get(req: ptr, res: ptr) {
+    path = http.request_path(req)
+
+    name = parse_repo_name_in(path)
+    if string.length(name) == 0 {
+        svnserver_respond_error(res, 404, "not found")
+        return
+    }
+
+    // Strip "/repos/<name>/" then "path/" via stdlib helpers; the
+    // leftover is the file path. Empty leftover == root, which we
+    // reject as a route match.
+    after_repo, _r1 = string.strip_prefix(path, string.concat(string.concat("/repos/", name), "/"))
+    file_path, matched = string.strip_prefix(after_repo, "path/")
+    if matched == 0 {
+        svnserver_respond_error(res, 404, "not found")
+        return
+    }
+    if string.length(file_path) == 0 {
+        svnserver_respond_error(res, 404, "not found")
+        return
+    }
+
+    repo = svnserver_find_repo_path(name)
+    if string.length(repo) == 0 {
+        svnserver_respond_error(res, 404, "no such repo")
+        return
+    }
+
+    rev = repos.repos_head_rev(repo)
+    if rev < 0 {
+        svnserver_respond_error(res, 500, "cannot read head")
+        return
+    }
+
+    user = svnserver_request_header(req, "X-Svnae-User")
+    is_super = svnserver_request_is_super(req)
+    if is_super == 0 {
+        if acl_allows_mode(repo, rev, user, file_path, 0) == 0 {
+            svnserver_respond_error(res, 404, "not found")
+            return
+        }
+    }
+
+    data = repos.repos_cat(repo, rev, file_path)
+    if string.length(data) == 0 {
+        svnserver_respond_error(res, 404, "not found")
+        return
+    }
+
+    // Merkle headers. Fetch kind+sha independently; both must exist
+    // to set the header (mirrors the original C guard).
+    kind = repos.repos_resolve_kind(repo, rev, file_path)
+    sha = repos.repos_resolve_sha(repo, rev, file_path)
+    if kind != 0 {
+        if string.length(sha) > 0 {
+            algo = repos.repo_primary_hash(repo)
+            kind_str = "file"
+            if kind == 100 { kind_str = "dir" }
+            svnserver_set_merkle_headers(res, algo, kind_str, sha)
+        }
+    }
+
+    svnserver_respond_binary_ok(res, data, string.length(data),
+                                "application/octet-stream")
+    repo_storage.rep_free(data)
+}
+
+
+
+// =============================================================================
+// avnserver/handler_path_put.ae
+// =============================================================================
+
+
+
+
+
+
+
+handler_path_put(req: ptr, res: ptr) {
+    path = http.request_path(req)
+
+    name = parse_repo_name_in(path)
+    if string.length(name) == 0 {
+        svnserver_respond_error(res, 404, "not found")
+        return
+    }
+    after_repo, _r1 = string.strip_prefix(path, string.concat(string.concat("/repos/", name), "/"))
+    file_path, matched = string.strip_prefix(after_repo, "path/")
+    if matched == 0 {
+        svnserver_respond_error(res, 404, "not found")
+        return
+    }
+    if string.length(file_path) == 0 {
+        svnserver_respond_error(res, 400, "empty path")
+        return
+    }
+
+    repo = svnserver_find_repo_path(name)
+    if string.length(repo) == 0 {
+        svnserver_respond_error(res, 404, "no such repo")
+        return
+    }
+
+    base_rev = repos.repos_head_rev(repo)
+    if base_rev < 0 {
+        svnserver_respond_error(res, 500, "cannot read head")
+        return
+    }
+
+    user = svnserver_request_header(req, "X-Svnae-User")
+    is_super = svnserver_request_is_super(req)
+    if is_super == 0 {
+        if acl_allows_mode(repo, base_rev, user, file_path, 1) == 0 {
+            svnserver_respond_error(res, 403, "forbidden")
+            return
+        }
+    }
+
+    branch = svnserver_request_header(req, "Svn-Branch")
+    if string.length(branch) == 0 { branch = "main" }
+    if svnserver_spec_allows(repo, branch, file_path, is_super) == 0 {
+        svnserver_respond_error(res, 403, "path outside branch spec")
+        return
+    }
+
+    // Concurrency check; allow "missing" == "create new" by passing 1.
+    // based_on_check emits its own 4xx on failure.
+    if based_on_check(req, res, repo, base_rev, file_path, 1) == 0 {
+        return
+    }
+
+    txn = repo_storage.txn_new(base_rev)
+    if txn == null {
+        svnserver_respond_error(res, 500, "oom")
+        return
+    }
+    repo_storage.txn_add_file(txn, file_path,
+                       http.request_body(req),
+                       http.request_body_length(req))
+
+    hdr_author = svnserver_request_header(req, "Svn-Author")
+    if string.length(hdr_author) == 0 {
+        if string.length(user) > 0 {
+            hdr_author = user
+        }
+        if string.length(hdr_author) == 0 {
+            hdr_author = "anonymous"
+        }
+    }
+    hdr_log = svnserver_request_header(req, "Svn-Log")
+    if string.length(hdr_log) == 0 {
+        hdr_log = string.concat("PUT /", file_path)
+    }
+
+    new_rev = repo_storage.commit_finalise(repo, txn, "main", hdr_author, hdr_log, "", "")
+    repo_storage.txn_free(txn)
+    if new_rev == 0 - 12 {
+        svnserver_respond_error(res, 409, "out of date — fetch and retry")
+        return
+    }
+    if new_rev < 0 {
+        svnserver_respond_error(res, 500, "commit failed")
+        return
+    }
+
+    new_sha = repos.repos_resolve_sha(repo, new_rev, file_path)
+    http.response_set_status(res, 201)
+    http.response_json(res, rev_sha_response_json(new_rev, new_sha))
+}
+
+
+
+// =============================================================================
+// avnserver/handler_rev_acl.ae
+// =============================================================================
+
+
+
+acl_handle(req: ptr, res: ptr, repo: string, rev: int,
+                  target: string, user: string, is_super: int) {
+    if is_super == 0 {
+        svnserver_respond_error(res, 404, "not found")
+        return
+    }
+    body = acl_resolve_json(repo, rev, target)
+    if string.length(body) == 0 {
+        svnserver_respond_json_ok(res, "{\"rules\":[],\"effective_from\":\"\"}")
+        return
+    }
+    svnserver_respond_json_ok(res, body)
+}
+
+
+
+// =============================================================================
+// avnserver/handler_rev_blame.ae
+// =============================================================================
+
+
+
+
+blame_handle(req: ptr, res: ptr, repo: string, rev: int,
+                    target: string, user: string, is_super: int) {
+    if is_super == 0 {
+        if acl_allows_mode(repo, rev, user, target, 0) == 0 {
+            svnserver_respond_error(res, 404, "not found")
+            return
+        }
+    }
+
+    b = repos.repos_blame(repo, rev, target)
+    if b == null {
+        svnserver_respond_error(res, 404, "not found")
+        return
+    }
+
+    body = blame_json(b)
+    repos.blame_free(b)
+
+    if string.length(body) == 0 {
+        svnserver_respond_json_ok(res, "{\"lines\":[]}")
+        return
+    }
+    svnserver_respond_json_ok(res, body)
+}
+
+
+
+// =============================================================================
+// avnserver/handler_rev_cat.ae
+// =============================================================================
+
+
+
+// Returns 0 on success, non-zero on an error that was already
+// emitted. The C handler just returns after us.
+cat_handle(req: ptr, res: ptr, repo: string, rev: int,
+                  file_path: string, user: string, is_super: int) -> int {
+    if string.length(file_path) == 0 {
+        svnserver_respond_error(res, 400, "cat requires a path")
+        return 1
+    }
+
+    if is_super == 0 {
+        if acl_allows_mode(repo, rev, user, file_path, 0) == 0 {
+            svnserver_respond_error(res, 404, "not found")
+            return 1
+        }
+    }
+
+    data = repos.repos_cat(repo, rev, file_path)
+    if string.length(data) == 0 {
+        // repos_cat returns NULL (wrapped as "") on miss.
+        svnserver_respond_error(res, 404, "not found")
+        return 1
+    }
+
+    // Merkle headers. Fetching kind+sha does its own work; both
+    // need to be non-empty to set the headers.
+    kind = repos.repos_resolve_kind(repo, rev, file_path)
+    sha = repos.repos_resolve_sha(repo, rev, file_path)
+    if kind != 0 {
+        if string.length(sha) > 0 {
+            algo = repos.repo_primary_hash(repo)
+            kind_str = "file"
+            if kind == 100 { kind_str = "dir" }
+            svnserver_set_merkle_headers(res, algo, kind_str, sha)
+        }
+    }
+
+    svnserver_respond_binary_ok(res, data, string.length(data),
+                                "application/octet-stream")
+    repo_storage.rep_free(data)
+    return 0
+}
+
+
+
+// =============================================================================
+// avnserver/handler_rev_hashes.ae
+// =============================================================================
+
+
+
+// Round 136: secondary-pairs builder ported from C to Aether. The
+// underlying primitives (format_secondary_count / _hash and
+// rep_cache_sec_lookup) are all Aether-native already; the C
+// trampoline only existed because the prior shape required a
+// fixed-size char[4][32] array to land back on the C side.
+
+
+
+// Build "<algo> <hash>\n"-joined pairs for each secondary digest the
+// repo has for `node_sha`. Returns "" if the repo has no secondaries
+// or none have a stored digest for this node.
+build_secondary_pairs_(repo: string, node_sha: string) -> string {
+    line = repos.repos_format_line(repo)
+    if string.length(line) == 0 { return "" }
+    n = repo_storage.format_secondary_count(line)
+    if n == 0 { return "" }
+    pairs = ""
+    i = 0
+    while i < n {
+        algo = repo_storage.format_secondary_hash(line, i)
+        sec_hex = repo_storage.rep_cache_sec_lookup(repo, node_sha, algo)
+        if string.length(sec_hex) > 0 {
+            pairs = string.concat(pairs, algo)
+            pairs = string.concat(pairs, " ")
+            pairs = string.concat(pairs, sec_hex)
+            pairs = string.concat(pairs, "\n")
+        }
+        i = i + 1
+    }
+    return pairs
+}
+
+hashes_handle(req: ptr, res: ptr, repo: string, rev: int,
+                     target: string, user: string, is_super: int) {
+    if is_super == 0 {
+        if acl_allows_mode(repo, rev, user, target, 0) == 0 {
+            svnserver_respond_error(res, 404, "not found")
+            return
+        }
+    }
+
+    // Any kind (file or dir) is valid — we report primary + secondaries
+    // of the node's content-sha. Just need existence.
+    kind = repos.repos_resolve_kind(repo, rev, target)
+    if kind == 0 {
+        svnserver_respond_error(res, 404, "not found")
+        return
+    }
+    node_sha = repos.repos_resolve_sha(repo, rev, target)
+    node_sha = string.copy(node_sha)          // TLS snapshot
+
+    algo = repos.repo_primary_hash(repo)
+    pairs = build_secondary_pairs_(repo, node_sha)
+    body = hashes_json(algo, node_sha, pairs)
+
+    svnserver_respond_json_ok(res, body)
+}
+
+
+
+// =============================================================================
+// avnserver/handler_rev_info.ae
+// =============================================================================
+
+
+
+
+// Returns "{...json...}" on success, "" if the rev is missing.
+// Named `_full` to distinguish from the field-emit-only helper
+// rev_info_json in avnserver/json.ae (which just builds
+// the inner {rev, author, ...} object from already-known fields).
+rev_info_json_full(repo: string, rev: int, user: string, is_super: int) -> string {
+    info = repos.repos_info_rev(repo, rev)
+    if info == null { return "" }
+
+    root_sha = load_rev_blob_field(repo, rev, "root")
+    reported_root = root_sha
+    if is_super == 0 {
+        if string.length(root_sha) > 0 {
+            redact = redacted_dir_sha(repo, rev, user, root_sha, "")
+            if string.length(redact) > 0 {
+                reported_root = redact
+            }
+        }
+    }
+
+    body = rev_info_json(repos.repos_info_rev_num(info),
+                                repos.repos_info_author(info),
+                                repos.repos_info_date(info),
+                                repos.repos_info_msg(info),
+                                reported_root)
+    repos.repos_info_free(info)
+    return body
+}
+
+// Full handler including transport: 404 on missing rev, JSON emit
+// otherwise. Keeps the 404-check on the Aether side so the C branch
+// is a single extern call.
+rev_info_handle(req: ptr, res: ptr, repo: string, rev: int,
+                       user: string, is_super: int) {
+    body = rev_info_json_full(repo, rev, user, is_super)
+    if string.length(body) == 0 {
+        svnserver_respond_error(res, 404, "no such rev")
+        return
+    }
+    svnserver_respond_json_ok(res, body)
+}
+
+
+
+// =============================================================================
+// avnserver/handler_rev_list.ae
+// =============================================================================
+
+
+
+
+
+list_handle(req: ptr, res: ptr, repo: string, rev: int,
+                   dir_path: string, user: string, is_super: int) {
+    // ACL.
+    if is_super == 0 {
+        if acl_allows_mode(repo, rev, user, dir_path, 0) == 0 {
+            svnserver_respond_error(res, 404, "not a directory")
+            return
+        }
+    }
+
+    // Resolve.
+    kind = repos.repos_resolve_kind(repo, rev, dir_path)
+    if kind != 100 {     // 'd'
+        svnserver_respond_error(res, 404, "not a directory")
+        return
+    }
+    dir_sha = repos.repos_resolve_sha(repo, rev, dir_path)
+    dir_sha = string.copy(dir_sha)         // TLS snapshot
+
+    // Empty body is legitimate — empty dirs have a 0-byte blob and
+    // rep_read_blob returns "" (indistinguishable from "missing" via
+    // string.length, but resolve_kind already told us it exists).
+    // list_build handles 0 entries correctly.
+    dir_body = repo_storage.rep_read_blob(repo, dir_sha)
+    packed = list_build(repo, rev, user, is_super, dir_body, dir_path)
+    repo_storage.rep_free(dir_body)
+
+    // Find \x01 separator. packed = "<body>\x01<redact>".
+    n = string.length(packed)
+    sep = 0 - 1
+    i = 0
+    while i < n {
+        if string.char_at(packed, i) == 1 { sep = i; break }
+        i = i + 1
+    }
+
+    algo = repos.repo_primary_hash(repo)
+    if is_super == 1 {
+        svnserver_set_merkle_headers(res, algo, "dir", dir_sha)
+    }
+    if is_super == 0 {
+        if sep >= 0 {
+            redact = string.substring(packed, sep + 1, n)
+            rehash = openssl.crypto_hash_hex(algo, redact, string.length(redact))
+            svnserver_set_merkle_headers(res, algo, "dir", rehash)
+        }
+    }
+
+    if sep >= 0 {
+        body = string.substring(packed, 0, sep)
+        svnserver_respond_json_ok(res, body)
+    }
+    if sep < 0 {
+        svnserver_respond_json_ok(res, "{\"entries\":[]}")
+    }
+}
+
+
+
+// =============================================================================
+// avnserver/handler_rev_paths.ae
+// =============================================================================
+
+
+// /rev/N/paths handler body. Fetches the changed-paths list for the
+// rev, lets paths_changed_json (avnserver/json.ae build
+// siblings) emit the ACL-filtered JSON, frees the list, and responds.
+//
+// Thin by design: the per-entry ACL filter lives inside
+// paths_changed_json — the handler just wires transport.
+
+
+
+paths_handle(req: ptr, res: ptr, repo: string, rev: int,
+                    user: string, is_super: int) {
+    paths = repos.repos_paths_changed(repo, rev)
+    if paths == null {
+        svnserver_respond_error(res, 404, "no such rev")
+        return
+    }
+    body = paths_changed_json(repo, rev, paths, user, is_super)
+    repos.repos_paths_free(paths)
+    svnserver_respond_json_ok(res, body)
+}
+
+
+
+// =============================================================================
+// avnserver/handler_rev_props.ae
+// =============================================================================
+
+
+
+
+props_handle(req: ptr, res: ptr, repo: string, rev: int,
+                    target: string, user: string, is_super: int) {
+    if is_super == 0 {
+        if acl_allows_mode(repo, rev, user, target, 0) == 0 {
+            svnserver_respond_json_ok(res, "{}")
+            return
+        }
+    }
+
+    packed = props_resolve(repo, rev, target)
+    n = string.length(packed)
+
+    sep = 0 - 1
+    i = 0
+    while i < n {
+        if string.char_at(packed, i) == 1 { sep = i; break }
+        i = i + 1
+    }
+
+    if sep > 0 {
+        sha = string.substring(packed, 0, sep)
+        algo = repos.repo_primary_hash(repo)
+        svnserver_set_merkle_headers(res, algo, "props", sha)
+    }
+
+    if sep >= 0 {
+        body = string.substring(packed, sep + 1, n)
+        svnserver_respond_json_ok(res, body)
+        return
+    }
+    svnserver_respond_json_ok(res, "{}")
+}
+
+
+
+// =============================================================================
+// avnserver/info_json.ae
+// =============================================================================
+
+
+
+// R286 — clients need HEAD's rev_sha so they can parent_sha-chain
+// their next commit. Empty repo (head=0) → empty sha string.
+
+
+info_json(repo: string, name: string, head: int, hash_algo: string) -> string {
+    branches_dir = repo_storage.path_join_rel(repo, "branches")
+    head_sha = ""
+    if head > 0 { head_sha = repos.repos_rev_blob_sha(repo, head) }
+    out = info_prelude_json(head, head_sha, name, hash_algo)
+
+    // --- branches array -------------------------------------------------
+    out = string.concat(out, ",\"branches\":[")
+    out = string.concat(out, json_escape_string("main"))
+
+    d = util.io_listdir(branches_dir)
+    if d != null {
+        n = util.io_listdir_count(d)
+        i = 0
+        while i < n {
+            nm = util.io_listdir_name(d, i)
+            if string.equals(nm, "main") == 0 {
+                out = string.concat(out, ",")
+                out = string.concat(out, json_escape_string(nm))
+            }
+            i = i + 1
+        }
+        util.io_listdir_free(d)
+    }
+    out = string.concat(out, "]")
+
+    // --- specs object ---------------------------------------------------
+    out = string.concat(out, ",\"specs\":{")
+    first = 1
+    d2 = util.io_listdir(branches_dir)
+    if d2 != null {
+        n = util.io_listdir_count(d2)
+        i = 0
+        while i < n {
+            nm = util.io_listdir_name(d2, i)
+            // Snapshot — path_join_rel allocs, but
+            // io_listdir_name returns into the list's buffer.
+            nm = string.copy(nm)
+            spec_path = repo_storage.path_join_rel(branches_dir, nm)
+            spec_path = repo_storage.path_join_rel(spec_path, "spec")
+
+            if first == 0 { out = string.concat(out, ",") }
+            first = 0
+            out = string.concat(out, json_escape_string(nm))
+            out = string.concat(out, ":")
+
+            spec_sz = util.io_file_size(spec_path)
+            emitted = 0
+            if spec_sz > 0 {
+                if spec_sz < 65536 {
+                    spec_buf = util.io_read_file(spec_path)
+                    if string.length(spec_buf) > 0 {
+                        out = string.concat(out, specs_to_json_array(spec_buf))
+                        emitted = 1
+                    }
+                }
+            }
+            if emitted == 0 {
+                out = string.concat(out, "[]")
+            }
+            i = i + 1
+        }
+        util.io_listdir_free(d2)
+    }
+    // If main wasn't already listed (no on-disk dir), emit [] for it.
+    main_spec = repo_storage.path_join_rel(branches_dir, "main")
+    if util.io_exists(main_spec) == 0 {
+        if first == 0 { out = string.concat(out, ",") }
+        out = string.concat(out, "\"main\":[]")
+    }
+    out = string.concat(out, "}")
+    out = string.concat(out, "}")
+    return out
+}
+
+
+
+// =============================================================================
+// avnserver/json.ae
+// =============================================================================
+
+
+// Return the JSON-escaped form of `v` including surrounding double
+// quotes. Handles the six short-form escapes and \u00XX for any other
+// control byte < 0x20.
+
+// Public wrappers — exported to C as json_escape_string / json_int_to_dec.
+json_escape_string(v: string) -> string {
+    out = "\""
+    n = string.length(v)
+    run_start = 0
+    i = 0
+    while i < n {
+        c = string.char_at(v, i)
+        needs_escape = 0
+        if c == 34 { needs_escape = 1 }   // "
+        if c == 92 { needs_escape = 1 }   // \
+        if c < 32  { needs_escape = 1 }   // control bytes
+        if needs_escape == 1 {
+            if i > run_start {
+                out = string.concat(out, string.substring(v, run_start, i))
+            }
+            out = string.concat(out, escape_byte(c))
+            run_start = i + 1
+        }
+        i = i + 1
+    }
+    if run_start < n {
+        out = string.concat(out, string.substring(v, run_start, n))
+    }
+    out = string.concat(out, "\"")
+    return out
+}
+
+json_int_to_dec(v: int) -> string {
+    return string.from_int(v)
+}
+
+// --- internal helpers -----------------------------------------------------
+
+escape_byte(c: int) -> string {
+    if c == 34 { return "\\\"" }
+    if c == 92 { return "\\\\" }
+    if c == 10 { return "\\n" }
+    if c == 13 { return "\\r" }
+    if c == 9  { return "\\t" }
+    if c == 8  { return "\\b" }
+    if c == 12 { return "\\f" }
+    // Any other control byte: \u00XX (4 hex digits total; the high
+    // two are always "00" for c < 32).
+    hi = c / 16
+    lo = c - hi * 16
+    out = "\\u00"
+    out = string.concat(out, hex_char(hi))
+    out = string.concat(out, hex_char(lo))
+    return out
+}
+
+digit_char(d: int) -> string {
+    if d == 0 { return "0" }
+    if d == 1 { return "1" }
+    if d == 2 { return "2" }
+    if d == 3 { return "3" }
+    if d == 4 { return "4" }
+    if d == 5 { return "5" }
+    if d == 6 { return "6" }
+    if d == 7 { return "7" }
+    if d == 8 { return "8" }
+    if d == 9 { return "9" }
+    return "?"
+}
+
+hex_char(d: int) -> string {
+    if d < 10 { return digit_char(d) }
+    if d == 10 { return "a" }
+    if d == 11 { return "b" }
+    if d == 12 { return "c" }
+    if d == 13 { return "d" }
+    if d == 14 { return "e" }
+    if d == 15 { return "f" }
+    return "?"
+}
+
+// --- props blob → JSON object --------------------------------------------
+//
+// Per-path props blobs are line-oriented "key=value\n". Emit them as a
+// JSON object body {"k":"v", ...}. Used by GET /rev/N/props.
+//
+// Lines without an '=' are skipped. Keys longer than 255 bytes are
+// emitted as "" (matching the C fallback).
+
+props_blob_to_json(body: string) -> string {
+    out = "{"
+    n = string.length(body)
+    first = 1
+    line_start = 0
+    i = 0
+    while i <= n {
+        at_end = 0
+        c = 0
+        if i == n { at_end = 1 } else { c = string.char_at(body, i) }
+        is_eol = 0
+        if at_end == 1 { is_eol = 1 }
+        if c == 10 { is_eol = 1 }
+        if is_eol == 1 {
+            // body[line_start..i) is one line; split on first '='.
+            eq = line_start
+            found_eq = 0
+            while eq < i {
+                if string.char_at(body, eq) == 61 { found_eq = 1; break }
+                eq = eq + 1
+            }
+            if found_eq == 1 {
+                if first == 0 { out = string.concat(out, ",") }
+                first = 0
+                key = string.substring(body, line_start, eq)
+                val = string.substring(body, eq + 1, i)
+                if string.length(key) >= 256 {
+                    out = string.concat(out, "\"\"")
+                } else {
+                    out = string.concat(out, json_escape_string(key))
+                }
+                out = string.concat(out, ":")
+                out = string.concat(out, json_escape_string(val))
+            }
+            line_start = i + 1
+        }
+        i = i + 1
+    }
+    out = string.concat(out, "}")
+    return out
+}
+
+// --- spec-file body → JSON array ----------------------------------------
+//
+// A branch spec file holds one include-glob per line. /info's specs map
+// emits each branch's spec as a JSON array: ["glob1", "glob2", ...].
+// Lines that are empty after trimming trailing whitespace are dropped.
+
+specs_to_json_array(body: string) -> string {
+    out = "["
+    n = string.length(body)
+    any = 0
+    line_start = 0
+    i = 0
+    while i <= n {
+        at_end = 0
+        c = 0
+        if i == n { at_end = 1 } else { c = string.char_at(body, i) }
+        is_eol = 0
+        if at_end == 1 { is_eol = 1 }
+        if c == 10 { is_eol = 1 }
+        if is_eol == 1 {
+            // Trim trailing whitespace (\r, space).
+            end = i
+            while end > line_start {
+                t = string.char_at(body, end - 1)
+                if t != 13 && t != 32 && t != 9 { break }
+                end = end - 1
+            }
+            if end > line_start {
+                if any == 1 { out = string.concat(out, ",") }
+                any = 1
+                glob = string.substring(body, line_start, end)
+                out = string.concat(out, json_escape_string(glob))
+            }
+            line_start = i + 1
+        }
+        i = i + 1
+    }
+    out = string.concat(out, "]")
+    return out
+}
+
+// --- per-entry record formatters ----------------------------------------
+//
+// Thin wrappers that assemble a single JSON object from the fields the
+// caller already has as C strings. Each was a 4-6 line sb_puts/sb_putjson_*
+// run at the svnserver emit site.
+
+// Full {"rev":N,"author":"...","date":"...","msg":"...","root":"..."} object.
+// Used by /rev/N/info (emits as-is including the trailing }).
+rev_info_json(rev: int, author: string, date: string, msg: string, root: string) -> string {
+    out = "{\"rev\":"
+    out = string.concat(out, string.from_int(rev))
+    out = string.concat(out, ",\"author\":")
+    out = string.concat(out, json_escape_string(author))
+    out = string.concat(out, ",\"date\":")
+    out = string.concat(out, json_escape_string(date))
+    out = string.concat(out, ",\"msg\":")
+    out = string.concat(out, json_escape_string(msg))
+    out = string.concat(out, ",\"root\":")
+    out = string.concat(out, json_escape_string(root))
+    out = string.concat(out, "}")
+    return out
+}
+
+// {"rev":N,"author":"...","date":"...","msg":"..."}
+log_entry_json(rev: int, author: string, date: string, msg: string) -> string {
+    out = "{\"rev\":"
+    out = string.concat(out, string.from_int(rev))
+    out = string.concat(out, ",\"author\":")
+    out = string.concat(out, json_escape_string(author))
+    out = string.concat(out, ",\"date\":")
+    out = string.concat(out, json_escape_string(date))
+    out = string.concat(out, ",\"msg\":")
+    out = string.concat(out, json_escape_string(msg))
+    out = string.concat(out, "}")
+    return out
+}
+
+// {"action":"A","path":"..."}
+path_change_entry_json(action: string, path: string) -> string {
+    out = "{\"action\":"
+    out = string.concat(out, json_escape_string(action))
+    out = string.concat(out, ",\"path\":")
+    out = string.concat(out, json_escape_string(path))
+    out = string.concat(out, "}")
+    return out
+}
+
+// {"primary":{"algo":"sha1","hash":"..."},"secondaries":[
+// — everything up to the opening of the secondaries array.
+hashes_prelude_json(algo: string, primary_hash: string) -> string {
+    out = "{\"primary\":{\"algo\":"
+    out = string.concat(out, json_escape_string(algo))
+    out = string.concat(out, ",\"hash\":")
+    out = string.concat(out, json_escape_string(primary_hash))
+    out = string.concat(out, "},\"secondaries\":[")
+    return out
+}
+
+// ACL response body: {"rules":[...lines from `rules_body`...],"effective_from":"..."}
+// rules_body is the raw ACL blob content (one rule per line, empty body = no rules).
+acl_response_json(rules_body: string, effective_from: string) -> string {
+    out = "{\"rules\":["
+    n = string.length(rules_body)
+    first = 1
+    line_start = 0
+    i = 0
+    while i <= n {
+        at_end = 0
+        c = 0
+        if i == n { at_end = 1 } else { c = string.char_at(rules_body, i) }
+        is_eol = 0
+        if at_end == 1 { is_eol = 1 }
+        if c == 10 { is_eol = 1 }
+        if is_eol == 1 {
+            if i > line_start {
+                rule = string.substring(rules_body, line_start, i)
+                if first == 0 { out = string.concat(out, ",") }
+                first = 0
+                out = string.concat(out, json_escape_string(rule))
+            }
+            line_start = i + 1
+        }
+        i = i + 1
+    }
+    out = string.concat(out, "],\"effective_from\":")
+    out = string.concat(out, json_escape_string(effective_from))
+    out = string.concat(out, "}")
+    return out
+}
+
+// Single secondary entry: {"algo":"...","hash":"..."}
+secondary_entry_json(algo: string, hash: string) -> string {
+    out = "{\"algo\":"
+    out = string.concat(out, json_escape_string(algo))
+    out = string.concat(out, ",\"hash\":")
+    out = string.concat(out, json_escape_string(hash))
+    out = string.concat(out, "}")
+    return out
+}
+
+// Tiny response builders for mutation endpoints.
+error_response_json(msg: string) -> string {
+    out = "{\"error\":"
+    out = string.concat(out, json_escape_string(msg))
+    return string.concat(out, "}")
+}
+
+rev_response_json(rev: int) -> string {
+    out = "{\"rev\":"
+    out = string.concat(out, string.from_int(rev))
+    return string.concat(out, "}")
+}
+
+// R286 — field renamed from "sha" to "rev_sha" for clarity (the
+// rev's blob SHA, used by the next commit as parent_sha in chain CAS).
+// No clients parsed the prior "sha" field — verified by grep at R286
+// time — so the rename is safe.
+rev_sha_response_json(rev: int, sha: string) -> string {
+    out = "{\"rev\":"
+    out = string.concat(out, string.from_int(rev))
+    out = string.concat(out, ",\"rev_sha\":")
+    out = string.concat(out, json_escape_string(sha))
+    return string.concat(out, "}")
+}
+
+rev_branch_response_json(rev: int, branch: string) -> string {
+    out = "{\"rev\":"
+    out = string.concat(out, string.from_int(rev))
+    out = string.concat(out, ",\"branch\":")
+    out = string.concat(out, json_escape_string(branch))
+    return string.concat(out, "}")
+}
+
+// Prelude of /info: {"head":N,"head_sha":"…","name":"...","hash_algo":"...","default_branch":"main"
+// Stops before ,"branches":[...] so the rest of info_json.ae can still
+// stream the branch list. R286 added head_sha so clients can grab the
+// parent_sha for their next commit in a single round-trip.
+info_prelude_json(head: int, head_sha: string,
+                         name: string, hash_algo: string) -> string {
+    out = "{\"head\":"
+    out = string.concat(out, string.from_int(head))
+    out = string.concat(out, ",\"head_sha\":")
+    out = string.concat(out, json_escape_string(head_sha))
+    out = string.concat(out, ",\"name\":")
+    out = string.concat(out, json_escape_string(name))
+    out = string.concat(out, ",\"hash_algo\":")
+    out = string.concat(out, json_escape_string(hash_algo))
+    out = string.concat(out, ",\"default_branch\":\"main\"")
+    return out
+}
+
+// Dir list entries, both shapes. {"name":"...","kind":"file"|"dir"} for
+// visible children; {"kind":"hidden","sha":"..."} for denied.
+list_entry_visible_json(name: string, kind_c: int) -> string {
+    out = "{\"name\":"
+    out = string.concat(out, json_escape_string(name))
+    out = string.concat(out, ",\"kind\":")
+    if kind_c == 100 {   // 'd'
+        out = string.concat(out, "\"dir\"")
+    } else {
+        out = string.concat(out, "\"file\"")
+    }
+    return string.concat(out, "}")
+}
+
+list_entry_hidden_json(sha: string) -> string {
+    out = "{\"kind\":\"hidden\",\"sha\":"
+    out = string.concat(out, json_escape_string(sha))
+    return string.concat(out, "}")
+}
+
+// Redacted dir-blob lines: "<kind> <sha> <name>\n" or "H <sha>\n".
+redact_line_visible(kind_c: int, sha: string, name: string) -> string {
+    out = ""
+    if kind_c == 100 {
+        out = "d "
+    } else {
+        out = "f "
+    }
+    out = string.concat(out, sha)
+    out = string.concat(out, " ")
+    out = string.concat(out, name)
+    return string.concat(out, "\n")
+}
+
+redact_line_hidden(sha: string) -> string {
+    out = "H "
+    out = string.concat(out, sha)
+    return string.concat(out, "\n")
+}
+
+// {"rev":N,"author":"...","text":"..."}
+blame_entry_json(rev: int, author: string, text: string) -> string {
+    out = "{\"rev\":"
+    out = string.concat(out, string.from_int(rev))
+    out = string.concat(out, ",\"author\":")
+    out = string.concat(out, json_escape_string(author))
+    out = string.concat(out, ",\"text\":")
+    out = string.concat(out, json_escape_string(text))
+    out = string.concat(out, "}")
+    return out
+}
+
+
+// =============================================================================
+// avnserver/list_json.ae
+// =============================================================================
+
+
+
+
+// TLS-backed pair via a pack encoding. We concat body + "\x01" +
+// redact and parse back on the C side. \x01 is a single control byte
+// unlikely to appear in JSON or the K SHA NAME\n format.
+list_build(repo: string, rev: int, user: string, is_super: int,
+                  dir_body: string, dir_path: string) -> string {
+    body = "{\"entries\":["
+    redact = ""
+    any = 0
+    n = repo_storage.dir_count_entries(dir_body)
+    i = 0
+    while i < n {
+        kind = repo_storage.dir_entry_kind(dir_body, i)
+        sha = repo_storage.dir_entry_sha(dir_body, i)
+        name = repo_storage.dir_entry_name(dir_body, i)
+        // Snapshot — we're going to concat and reuse across loop.
+        sha = string.copy(sha)
+        name = string.copy(name)
+        child_path = repo_storage.path_join_rel(dir_path, name)
+
+        allowed = is_super
+        if allowed == 0 {
+            allowed = acl_allows_mode(repo, rev, user, child_path, 0)
+        }
+
+        if any == 1 { body = string.concat(body, ",") }
+        any = 1
+        if allowed == 1 {
+            body = string.concat(body, list_entry_visible_json(name, kind))
+            redact = string.concat(redact, redact_line_visible(kind, sha, name))
+        }
+        if allowed == 0 {
+            body = string.concat(body, list_entry_hidden_json(sha))
+            redact = string.concat(redact, redact_line_hidden(sha))
+        }
+        i = i + 1
+    }
+    body = string.concat(body, "]}")
+    // Pack: body + \x01 + redact.
+    out = string.concat(body, "\x01")
+    return string.concat(out, redact)
+}
+
+
+
+// =============================================================================
+// avnserver/log_json.ae
+// =============================================================================
+
+
+// Log-list accessors from the C side.
+
+// Paths-changed list (C-owned).
+
+// ACL decider (C-side).
+
+// JSON entry builder already in Aether.
+
+log_json(repo: string, lg: ptr, user: string, is_super: int) -> string {
+    out = "{\"entries\":["
+    n = repos.repos_log_count(lg)
+    any = 0
+    i = 0
+    while i < n {
+        rev = repos.repos_log_rev(lg, i)
+
+        // Visibility: super shows everything. Non-super sees a rev iff
+        // at least one of its touched paths is ACL-visible. r0 has no
+        // paths so is always visible.
+        visible = 1
+        if is_super == 0 {
+            if rev > 0 {
+                visible = 0
+                paths = repos.repos_paths_changed(repo, rev)
+                if paths != null {
+                    pn = repos.repos_paths_count(paths)
+                    j = 0
+                    while j < pn {
+                        path = repos.repos_paths_path(paths, j)
+                        if acl_allows_mode(repo, rev, user, path, 0) == 1 {
+                            visible = 1
+                            break
+                        }
+                        j = j + 1
+                    }
+                    repos.repos_paths_free(paths)
+                }
+            }
+        }
+
+        if visible == 1 {
+            if any == 1 { out = string.concat(out, ",") }
+            any = 1
+            out = string.concat(out, log_entry_json(rev,
+                repos.repos_log_author(lg, i),
+                repos.repos_log_date(lg, i),
+                repos.repos_log_msg(lg, i)))
+        }
+        i = i + 1
+    }
+    return string.concat(out, "]}")
+}
+
+
+// /rev/N/paths response body. ACL-filter the list of (action, path)
+// entries; super-user sees everything.
+
+paths_changed_json(repo: string, rev: int, paths: ptr,
+                          user: string, is_super: int) -> string {
+    out = "{\"entries\":["
+    n = repos.repos_paths_count(paths)
+    any = 0
+    i = 0
+    while i < n {
+        path = repos.repos_paths_path(paths, i)
+        visible = 1
+        if is_super == 0 {
+            if acl_allows_mode(repo, rev, user, path, 0) == 0 {
+                visible = 0
+            }
+        }
+        if visible == 1 {
+            if any == 1 { out = string.concat(out, ",") }
+            any = 1
+            action = repos.repos_paths_action(paths, i)
+            out = string.concat(out, path_change_entry_json(action, path))
+        }
+        i = i + 1
+    }
+    return string.concat(out, "]}")
+}
+
+
+// /rev/N/blame/<path> response body. Straight iteration, no filter —
+// ACL already checked at the path level by the caller.
+
+blame_json(blame: ptr) -> string {
+    out = "{\"lines\":["
+    n = repos.blame_count(blame)
+    i = 0
+    while i < n {
+        if i > 0 { out = string.concat(out, ",") }
+        out = string.concat(out, blame_entry_json(
+            repos.blame_rev(blame, i),
+            repos.blame_author(blame, i),
+            repos.blame_text(blame, i)))
+        i = i + 1
+    }
+    return string.concat(out, "]}")
+}
+
+
+// /rev/N/hashes response body. Assembles the prelude from
+// (primary algo, primary sha) plus the secondary entries by walking
+// a newline-separated "algo1 sha1\nalgo2 sha2\n..." string the C
+// side collected.
+
+hashes_json(algo: string, primary_sha: string, secondary_pairs: string) -> string {
+    out = hashes_prelude_json(algo, primary_sha)
+    n = string.length(secondary_pairs)
+    any = 0
+    line_start = 0
+    i = 0
+    while i <= n {
+        at_end = 0
+        c = 0
+        if i == n { at_end = 1 } else { c = string.char_at(secondary_pairs, i) }
+        if at_end == 1 || c == 10 {
+            // Parse "algo sha" from [line_start..i).
+            sp = line_start
+            while sp < i {
+                if string.char_at(secondary_pairs, sp) == 32 { break }
+                sp = sp + 1
+            }
+            if sp > line_start {
+                if sp < i {
+                    sec_algo = string.substring(secondary_pairs, line_start, sp)
+                    sec_sha = string.substring(secondary_pairs, sp + 1, i)
+                    if any == 1 { out = string.concat(out, ",") }
+                    any = 1
+                    out = string.concat(out, secondary_entry_json(sec_algo, sec_sha))
+                }
+            }
+            line_start = i + 1
+        }
+        i = i + 1
+    }
+    return string.concat(out, "]}")
+}
+
+
+
+// =============================================================================
+// avnserver/paths_index.ae
+// =============================================================================
+
+
+// Return the sha-hex for `path` in the paths-index `body`. "" if absent.
+// Empty `path` matches the rare "<sha> \n" entry shape (root-as-empty-name);
+// our ACL storage uses this for the root-level rule.
+paths_index_lookup(body: string, path: string) -> string {
+    n = string.length(body)
+    plen = string.length(path)
+    if n == 0 { return "" }
+    if plen == 0 {
+        // empty-path entry: match "<sha> \n" where path section is empty.
+        line_start = 0
+        i = 0
+        while i <= n {
+            at_end = 0
+            c = 0
+            if i == n { at_end = 1 } else { c = string.char_at(body, i) }
+            is_eol = 0
+            if at_end == 1 { is_eol = 1 }
+            if c == 10 { is_eol = 1 }
+            if is_eol == 1 {
+                if i > line_start {
+                    sp = line_start
+                    while sp < i {
+                        if string.char_at(body, sp) == 32 { break }
+                        sp = sp + 1
+                    }
+                    if sp > line_start && sp == i - 1 {
+                        return string.substring(body, line_start, sp)
+                    }
+                }
+                line_start = i + 1
+            }
+            i = i + 1
+        }
+        return ""
+    }
+    line_start = 0
+    i = 0
+    while i <= n {
+        at_end = 0
+        c = 0
+        if i == n { at_end = 1 } else { c = string.char_at(body, i) }
+        is_eol = 0
+        if at_end == 1 { is_eol = 1 }
+        if c == 10 { is_eol = 1 }
+        if is_eol == 1 {
+            // Line is body[line_start..i). Split on first ' '.
+            sp = line_start
+            while sp < i {
+                if string.char_at(body, sp) == 32 { break }
+                sp = sp + 1
+            }
+            if sp > line_start && sp < i {
+                sha_len = sp - line_start
+                name_off = sp + 1
+                name_len = i - name_off
+                if name_len == plen {
+                    is_match = 1
+                    j = 0
+                    while j < plen {
+                        if string.char_at(body, name_off + j) != string.char_at(path, j) {
+                            is_match = 0
+                            break
+                        }
+                        j = j + 1
+                    }
+                    if is_match == 1 {
+                        return string.substring(body, line_start, line_start + sha_len)
+                    }
+                }
+            }
+            line_start = i + 1
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// Find the nearest ancestor match and return "sha\tprefix". Empty
+// string if nothing matches. Used by /acl to report effective_from.
+paths_index_ancestor_nearest(body: string, target: string) -> string {
+    path = target
+    while 1 == 1 {
+        sha = paths_index_lookup(body, path)
+        if string.length(sha) > 0 {
+            out = string.concat(sha, "\t")
+            return string.concat(out, path)
+        }
+        n = string.length(path)
+        if n == 0 { return "" }
+        cut = 0 - 1
+        i = n - 1
+        while i >= 0 {
+            if string.char_at(path, i) == 47 { cut = i; break }
+            i = i - 1
+        }
+        if cut < 0 {
+            path = ""
+        } else {
+            path = string.substring(path, 0, cut)
+        }
+    }
+    return ""
+}
+
+// For each ancestor of `target` (including target itself, then its
+// parent, grandparent, …, "") look up the acl_sha in `body` and emit
+// "<sha>\n" lines for the hits (deepest first). The caller uses these
+// to walk the ACL chain from most-specific to most-general.
+//
+// Callers that want the matching prefix for reporting can use
+// paths_index_lookup directly after; this helper keeps the return
+// shape simple (just the shas, in priority order).
+paths_index_ancestor_shas(body: string, target: string) -> string {
+    out = ""
+    // Work on a mutable-via-substring path string.
+    path = target
+    while 1 == 1 {
+        sha = paths_index_lookup(body, path)
+        if string.length(sha) > 0 {
+            out = string.concat(out, sha)
+            out = string.concat(out, "\n")
+        }
+        // Strip last '/'-separated segment.
+        n = string.length(path)
+        if n == 0 { break }
+        cut = 0 - 1
+        i = n - 1
+        while i >= 0 {
+            if string.char_at(path, i) == 47 { cut = i; break }
+            i = i - 1
+        }
+        if cut < 0 {
+            path = ""
+        } else {
+            path = string.substring(path, 0, cut)
+        }
+    }
+    return out
+}
+
+
+// =============================================================================
+// avnserver/redact.ae
+// =============================================================================
+
+
+
+
+// C-side ACL decision + Aether-side hash. Round 134 retired
+// svnserver_hash_hex (TLS-buf detour); this file now resolves the
+// repo's primary algo and calls the canonical crypto_hash_hex.
+
+// Recursive entry. Returns the hex digest of the redacted dir body,
+// or "" on failure.
+redacted_dir_sha(repo: string, rev: int, user: string,
+                        dir_sha: string, prefix: string) -> string {
+    body = repo_storage.rep_read_blob(repo, dir_sha)
+    redact = ""
+    n = repo_storage.dir_count_entries(body)
+    i = 0
+    while i < n {
+        kind = repo_storage.dir_entry_kind(body, i)
+        sha = repo_storage.dir_entry_sha(body, i)
+        name = repo_storage.dir_entry_name(body, i)
+        // Snapshot — recursion calls rep_read_blob which may
+        // reuse shared buffers.
+        sha = string.copy(sha)
+        name = string.copy(name)
+        child_path = repo_storage.path_join_rel(prefix, name)
+
+        allowed = acl_allows_mode(repo, rev, user, child_path, 0)
+        if allowed == 1 {
+            if kind == 100 {          // 'd'
+                sub = redacted_dir_sha(repo, rev, user, sha, child_path)
+                if string.length(sub) > 0 {
+                    redact = string.concat(redact,
+                        repo_storage.dir_entry_line(kind, sub, name))
+                }
+            }
+            if kind != 100 {
+                redact = string.concat(redact,
+                    repo_storage.dir_entry_line(kind, sha, name))
+            }
+        }
+        if allowed == 0 {
+            // Hidden — "H <sha>\n" instead of the entry's normal form.
+            redact = string.concat(redact, "H ")
+            redact = string.concat(redact, sha)
+            redact = string.concat(redact, "\n")
+        }
+        i = i + 1
+    }
+    repo_storage.rep_free(body)
+    algo = repos.repo_primary_hash(repo)
+    return openssl.crypto_hash_hex(algo, redact, string.length(redact))
+}
+
+
+
+// =============================================================================
+// avnserver/respond.ae
+// =============================================================================
+
+
+
+svnserver_respond_error(res: ptr, code: int, msg: string) {
+    http.response_set_status(res, code)
+    http.response_json(res, error_response_json(msg))
+}
+
+svnserver_respond_json_ok(res: ptr, body: string) {
+    http.response_set_status(res, 200)
+    http.response_json(res, body)
+}
+
+// Binary-body response. Length is explicit — the body may carry
+// embedded NULs (binary file content from avn cat etc.) and the
+// length-aware setter preserves them end-to-end.
+svnserver_respond_binary_ok(res: ptr, data: string, length: int,
+                                    content_type: string) {
+    http.response_set_status(res, 200)
+    http.response_set_header(res, "Content-Type", content_type)
+    http.response_set_body_n(res, data, length)
+    http.response_set_header(res, "Content-Length", "${length}")
+}
+
+// Set Merkle verification headers on file/dir responses. Each header
+// is only emitted when the corresponding value is non-empty (the
+// dir-blob path has no kind/sha at the entry-list level).
+svnserver_set_merkle_headers(res: ptr, algo: string, kind: string, sha: string) {
+    if string.length(algo) > 0 { http.response_set_header(res, "X-Svnae-Hash-Algo", algo) }
+    if string.length(kind) > 0 { http.response_set_header(res, "X-Svnae-Node-Kind", kind) }
+    if string.length(sha)  > 0 { http.response_set_header(res, "X-Svnae-Node-Hash", sha)  }
+}
+
+
+// =============================================================================
+// avnserver/rev_load.ae
+// =============================================================================
+
+
+
+// Zero-pad `n` to six digits, matching $repo/revs/NNNNNN.
+pad6(n: int) -> string {
+    s = string.from_int(n)
+    slen = string.length(s)
+    if slen >= 6 { return s }
+    return string.concat(string.substring("000000", 0, 6 - slen), s)
+}
+
+rev_file_path(repo: string, rev: int) -> string {
+    return string.concat(string.concat(repo, "/revs/"), pad6(rev))
+}
+
+// Strip trailing \n and \r from a short text pointer payload.
+// Pointer files are single-line; readers have been generous with
+// trailing newlines. 10 = '\n', 13 = '\r'.
+rtrim_ws(s: string) -> string {
+    n = string.length(s)
+    keep_going = 1
+    while keep_going == 1 {
+        if n == 0 { keep_going = 0 }
+        if keep_going == 1 {
+            c = string.char_at(s, n - 1)
+            if c == 10 { n = n - 1 }
+            if c != 10 {
+                if c == 13 { n = n - 1 }
+                if c != 13 { keep_going = 0 }
+            }
+        }
+    }
+    return string.substring(s, 0, n)
+}
+
+load_rev_blob_field(repo: string, rev: int, key: string) -> string {
+    path = rev_file_path(repo, rev)
+    if util.io_file_size(path) < 0 { return "" }
+    src = util.io_read_file(path)
+    sha = rtrim_ws(src)
+    if string.length(sha) == 0 { return "" }
+
+    body = repo_storage.rep_read_blob(repo, sha)
+    if string.length(body) == 0 { return "" }
+    v = repos.blobfield_get(body, key)
+    v = string.copy(v)         // copy before freeing body
+    repo_storage.rep_free(body)
+    return v
+}
+
+
+// =============================================================================
+// avnserver/state.ae
+// =============================================================================
+
+
+const KEY_SUPER_TOKEN = "svnserver.super_token"
+const KEY_REPO_NAME   = "svnserver.repo_name"
+const KEY_REPO_PATH   = "svnserver.repo_path"
+
+svnserver_set_super_token(token: string) {
+    if string.length(token) == 0 { return }
+    config.put(KEY_SUPER_TOKEN, token)
+    return
+}
+
+svnserver_register_repo(name: string, path: string) {
+    config.put(KEY_REPO_NAME, name)
+    config.put(KEY_REPO_PATH, path)
+    return
+}
+
+// Returns "" for missing — Aether-style absent-is-empty.
+svnserver_find_repo_path(name: string) -> string {
+    registered_name = config.get(KEY_REPO_NAME)
+    if string.length(registered_name) == 0 { return "" }
+    if string.equals(registered_name, name) == 0 { return "" }
+    return config.get(KEY_REPO_PATH)
+}
+
+// 1 if this request carries a valid X-Svnae-Superuser token, 0 otherwise.
+svnserver_request_is_super(req: ptr) -> int {
+    expected = config.get(KEY_SUPER_TOKEN)
+    if string.length(expected) == 0 { return 0 }
+    hdr = http.get_header(req, "X-Svnae-Superuser")
+    if string.length(hdr) == 0 { return 0 }
+    if string.equals(hdr, expected) == 1 { return 1 }
+    return 0
+}
+
+
+// =============================================================================
+// avnserver/url_parse.ae
+// =============================================================================
+
+
+// Shared: returns the length of the leading "/rev/<digits>" run on
+// success, or -1 if the tail is malformed. Internal — both exports
+// derive their answer from it.
+rev_prefix_len(tail: string) -> int {
+    n = string.length(tail)
+    // Need at least "/rev/" (5) + one digit.
+    if n < 6 { return -1 }
+    if string.char_at(tail, 0) != 47 { return -1 }   // '/'
+    if string.char_at(tail, 1) != 114 { return -1 }  // 'r'
+    if string.char_at(tail, 2) != 101 { return -1 }  // 'e'
+    if string.char_at(tail, 3) != 118 { return -1 }  // 'v'
+    if string.char_at(tail, 4) != 47 { return -1 }   // '/'
+    i = 5
+    // At least one digit required.
+    c = string.char_at(tail, i)
+    if c < 48 { return -1 }
+    if c > 57 { return -1 }
+    while i < n {
+        c = string.char_at(tail, i)
+        if c < 48 { return i }
+        if c > 57 { return i }
+        i = i + 1
+    }
+    return i
+}
+
+// Parse the rev number from "/rev/N...". -1 on malformed.
+parse_rev_prefix(tail: string) -> int {
+    end = rev_prefix_len(tail)
+    if end < 0 { return -1 }
+    // Accumulate digits from index 5 to end-1.
+    v = 0
+    i = 5
+    while i < end {
+        v = v * 10 + (string.char_at(tail, i) - 48)
+        i = i + 1
+    }
+    return v
+}
+
+// Index of first char after the "/rev/N" run. -1 on malformed.
+// Callers use tail + this to get the remainder string.
+parse_rev_prefix_end(tail: string) -> int {
+    return rev_prefix_len(tail)
+}
+
+// Parse the {name} from a "/repos/{name}/..." path. Returns the name
+// substring, or "" if the path doesn't have the expected prefix or
+// the name slot is empty. The caller typically checks the remainder
+// by length or exact substring compare.
+parse_repo_name_in(path: string) -> string {
+    n = string.length(path)
+    // "/repos/" is 7 bytes.
+    if n < 8 { return "" }
+    if string.char_at(path, 0) != 47 { return "" }   // '/'
+    if string.char_at(path, 1) != 114 { return "" }  // 'r'
+    if string.char_at(path, 2) != 101 { return "" }  // 'e'
+    if string.char_at(path, 3) != 112 { return "" }  // 'p'
+    if string.char_at(path, 4) != 111 { return "" }  // 'o'
+    if string.char_at(path, 5) != 115 { return "" }  // 's'
+    if string.char_at(path, 6) != 47 { return "" }   // '/'
+    // Scan for the next '/' or end-of-string.
+    i = 7
+    while i < n {
+        if string.char_at(path, i) == 47 { break }
+        i = i + 1
+    }
+    if i == 7 { return "" }   // empty name
+    return string.substring(path, 7, i)
+}
+
