@@ -55,6 +55,28 @@ import util
 
 // ---- log handle ----------------------------------------------
 
+
+// repos↔repo_storage cycle: cross-references stay as externs.
+extern dir_count_entries(body: string) -> int
+extern dir_entry_kind(body: string, i: int) -> int
+extern dir_entry_line(kind: int, sha: string, name: string) -> string
+extern dir_entry_name(body: string, i: int) -> string
+extern dir_entry_sha(body: string, i: int) -> string
+extern dir_find_kind(body: string, name: string) -> int
+extern dir_find_sha(body: string, name: string) -> string
+extern dir_iter_free(it_ptr: ptr)
+extern dir_iter_kind(it_ptr: ptr) -> int
+extern dir_iter_name(it_ptr: ptr) -> string
+extern dir_iter_new(body: string) -> ptr
+extern dir_iter_next(it_ptr: ptr) -> int
+extern dir_iter_sha(it_ptr: ptr) -> string
+extern format_primary_hash(line: string) -> string
+extern format_secondary_count(line: string) -> int
+extern format_secondary_hash(line: string, target: int) -> string
+extern path_join_rel(prefix: string, name: string) -> string
+extern rep_free(p: string)
+extern rep_read_blob(repo: string, sha1_hex: string) -> string
+
 repos_log(repo: string) -> ptr {
     p = repos_log_packed(repo)
     if string.length(p) == 0 { return null }
@@ -882,7 +904,6 @@ extern dir_iter_next(it: ptr) -> int
 extern dir_iter_kind(it: ptr) -> int
 extern dir_iter_sha(it: ptr) -> string
 extern dir_iter_name(it: ptr) -> string
-extern dir_iter_free(it: ptr) -> int
 extern path_join_rel(prefix: string, name: string) -> string
 
 // Depth-first flatten. Each entry is "K SHA PATH\n" with PATH being

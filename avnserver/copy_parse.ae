@@ -43,6 +43,7 @@ import std.string
 import std.json
 import std.http
 import repos
+import repo_storage
 
 // KIND_* constants — these MUST stay in lock-step with the source-of-
 // truth declarations in avnserver/commit_parse.ae. handler_copy.ae
@@ -71,12 +72,6 @@ extern svnserver_spec_allows(repo: string, branch: string,
 extern auto_follow_copy_acl(repo: string, base_rev: int,
                              from_path: string, to_path: string) -> string
 
-extern txn_new(base_rev: int) -> ptr
-extern txn_copy(t: ptr, path: string, from_sha1: string, from_kind: int) -> int
-extern txn_free(t: ptr)
-extern commit_finalise(repo: string, txn: ptr, branch: string,
-                              author: string, log_msg: string,
-                              props_sha: string, acl_sha: string) -> int
 
 export copy_from_body(req: ptr, repo: string) -> (int, int, string) {
     body = http.request_body(req)
@@ -160,16 +155,16 @@ export copy_from_body(req: ptr, repo: string) -> (int, int, string) {
 
     new_acl_sha = auto_follow_copy_acl(repo, base_rev, from_path, to_path)
     // rep_write_blob returns into a thread-local buffer; the
-    // txn_copy/commit path below also calls rep_write_blob (for the
+    // txn_copy/commit path below also calls repo_storage.rep_write_blob (for the
     // node copy's dirblob), which will overwrite this slot. Snapshot
     // before handing off to the txn machinery.
     new_acl_sha = string.copy(new_acl_sha)
 
-    txn = txn_new(base_rev)
-    txn_copy(txn, to_path, from_sha, from_kind_int)
-    new_rev = commit_finalise(repo, txn, "main", author, logmsg,
+    txn = repo_storage.txn_new(base_rev)
+    repo_storage.txn_copy(txn, to_path, from_sha, from_kind_int)
+    new_rev = repo_storage.commit_finalise(repo, txn, "main", author, logmsg,
                                      "", new_acl_sha)
-    txn_free(txn)
+    repo_storage.txn_free(txn)
 
     if new_rev == 0 - 12 {
         return -1, KIND_OUT_OF_DATE, "out of date — fetch and retry"

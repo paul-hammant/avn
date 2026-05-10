@@ -34,6 +34,7 @@ import std.http.client (request, request_free,
                         response_body, response_free,
                         response_header, response_status,
                         send_request, set_body, set_header, set_timeout)
+import repo_storage
 
 
 // =============================================================================
@@ -1966,7 +1967,6 @@ rev_prefix(base: string, repo: string, rev: int) -> string {
 
 // Path joiner: append `name` to `prefix` with a `/`, dropping the
 // separator when prefix is empty (so root-relative paths stay clean).
-extern path_join_rel(prefix: string, name: string) -> string
 
 // List parser already lives in client/parse.ae + client/packed.ae.
 
@@ -2128,7 +2128,7 @@ verify_dir(base: string, repo: string, rev: int, algo: string, rel: string) -> s
         if aborted == 0 {
             name = list_get_raw(names, i)
             kind_c = intarr_get_unchecked(kinds, i)
-            child_rel = path_join_rel(rel, name)
+            child_rel = repo_storage.path_join_rel(rel, name)
             child_sha = ""
             if kind_c == 100 {
                 child_sha = verify_dir(base, repo, rev, algo, child_rel)
@@ -2208,7 +2208,7 @@ verify_secondaries_in_dir(base: string, repo: string, rev: int,
         name = packed_list_name(packed_owned, i)
         kd   = packed_list_kind(packed_owned, i)
         name_owned = string.copy(name)
-        child_rel = path_join_rel(rel, name_owned)
+        child_rel = repo_storage.path_join_rel(rel, name_owned)
 
         if string.equals(kd, "dir") == 1 {
             rc = verify_secondaries_in_dir(base, repo, rev, child_rel, counter)

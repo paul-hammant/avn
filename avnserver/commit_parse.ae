@@ -56,6 +56,7 @@ import std.http
 import ffi.openssl
 import util
 import repos
+import repo_storage
 
 // KIND_* constants for commit_from_body's structured-error returns.
 // First four match std.json's numeric values exactly so a pass-through
@@ -102,15 +103,7 @@ extern acl_allows_mode(repo: string, rev: int, user: string, target_path: string
 extern svnserver_spec_allows(repo: string, branch: string,
                               path: string, is_super: int) -> int
 
-extern txn_new(base_rev: int) -> ptr
-extern txn_mkdir(t: ptr, path: string) -> int
-extern txn_delete(t: ptr, path: string) -> int
-extern txn_add_file(t: ptr, path: string, content: string, len: int) -> int
-extern txn_free(t: ptr)
 // Round 274 / Phase 2.1 — merge metadata setters.
-extern txn_merge_set_source(t: ptr, target_path: string,
-                            source_branch: string, verb: int) -> int
-extern txn_merge_record_rev(t: ptr, source_sha: string) -> int
 // Resolve rev number (sent on the wire) → rev SHA (stored in ledger).
 
 // b64-decode + txn_add_file. openssl.crypto_b64_decode returns the
@@ -124,11 +117,8 @@ txn_add_b64_(txn: ptr, path: string, b64: string) -> int
 {
     raw, n, err = openssl.crypto_b64_decode(b64)
     if string.length(err) > 0 { return 0 - 1 }
-    return txn_add_file(txn, path, raw, n)
+    return repo_storage.txn_add_file(txn, path, raw, n)
 }
-extern commit_finalise(repo: string, txn: ptr, branch: string,
-                              author: string, log_msg: string,
-                              props_sha: string, acl_sha: string) -> int
 
 // Blob builders. These produce "key=value\n" / "+user\n" /
 // "<sha> <path>\n" bodies directly from the "\n"-joined parallel
@@ -141,8 +131,6 @@ extern commit_finalise(repo: string, txn: ptr, branch: string,
 // aether.toml's extra_sources line + the gcc link command are
 // bumping up against a path-list length limit; adding another
 // _generated.c would truncate the link argv.
-extern rep_write_blob(repo: string, data: string, length: int) -> string
-extern paths_index_sort(body: string) -> string
 
 export commit_from_body(req: ptr, res: ptr, repo: string) -> (int, int, string) {
     body_len = http.request_body_length(req)
@@ -278,43 +266,43 @@ export commit_from_body(req: ptr, res: ptr, repo: string) -> (int, int, string) 
     }
 
     // Build the txn.
-    txn = txn_new(base_rev)
+    txn = repo_storage.txn_new(base_rev)
     if txn == null { json.free(root); return -1, KIND_OUT_OF_MEMORY, "oom building txn" }
 
     i = 0
     while i < n_edits {
         entry, _ = json.array_get(jedits, i)
-        if entry == null { txn_free(txn); json.free(root); return -1, KIND_INVALID_INPUT, "edit missing op/path" }
+        if entry == null { repo_storage.txn_free(txn); json.free(root); return -1, KIND_INVALID_INPUT, "edit missing op/path" }
 
         jop, _ = json.object_get(entry, "op")
-        if jop == null { txn_free(txn); json.free(root); return -1, KIND_INVALID_INPUT, "edit missing op" }
+        if jop == null { repo_storage.txn_free(txn); json.free(root); return -1, KIND_INVALID_INPUT, "edit missing op" }
         op, oerr = json.get_string(jop)
-        if string.length(oerr) > 0 { txn_free(txn); json.free(root); return -1, KIND_INVALID_INPUT, "edit op not a string" }
+        if string.length(oerr) > 0 { repo_storage.txn_free(txn); json.free(root); return -1, KIND_INVALID_INPUT, "edit op not a string" }
 
         jpath, _ = json.object_get(entry, "path")
-        if jpath == null { txn_free(txn); json.free(root); return -1, KIND_INVALID_INPUT, "edit missing path" }
+        if jpath == null { repo_storage.txn_free(txn); json.free(root); return -1, KIND_INVALID_INPUT, "edit missing path" }
         epath, perr = json.get_string(jpath)
-        if string.length(perr) > 0 { txn_free(txn); json.free(root); return -1, KIND_INVALID_INPUT, "edit path not a string" }
+        if string.length(perr) > 0 { repo_storage.txn_free(txn); json.free(root); return -1, KIND_INVALID_INPUT, "edit path not a string" }
 
         if string.equals(op, "add-file") == 1 {
             jcontent, _ = json.object_get(entry, "content")
-            if jcontent == null { txn_free(txn); json.free(root); return -1, KIND_INVALID_INPUT, "add-file edit missing content" }
+            if jcontent == null { repo_storage.txn_free(txn); json.free(root); return -1, KIND_INVALID_INPUT, "add-file edit missing content" }
             b64, berr = json.get_string(jcontent)
-            if string.length(berr) > 0 { txn_free(txn); json.free(root); return -1, KIND_INVALID_INPUT, "add-file content not a string" }
+            if string.length(berr) > 0 { repo_storage.txn_free(txn); json.free(root); return -1, KIND_INVALID_INPUT, "add-file content not a string" }
             if txn_add_b64_(txn, epath, b64) != 0 {
-                txn_free(txn); json.free(root); return -1, KIND_INVALID_INPUT, "add-file content base64 decode failed"
+                repo_storage.txn_free(txn); json.free(root); return -1, KIND_INVALID_INPUT, "add-file content base64 decode failed"
             }
         }
         if string.equals(op, "mkdir") == 1 {
-            txn_mkdir(txn, epath)
+            repo_storage.txn_mkdir(txn, epath)
         }
         if string.equals(op, "delete") == 1 {
-            txn_delete(txn, epath)
+            repo_storage.txn_delete(txn, epath)
         }
         if string.equals(op, "add-file") == 0 {
             if string.equals(op, "mkdir") == 0 {
                 if string.equals(op, "delete") == 0 {
-                    txn_free(txn); json.free(root); return -1, KIND_INVALID_INPUT, "unknown edit op: ${op}"
+                    repo_storage.txn_free(txn); json.free(root); return -1, KIND_INVALID_INPUT, "unknown edit op: ${op}"
                 }
             }
         }
@@ -354,7 +342,7 @@ export commit_from_body(req: ptr, res: ptr, repo: string) -> (int, int, string) 
                         // one — buggy / malicious clients can't poke
                         // around the ledger via the prop carrier.
                         if string.equals(kname, "svn:mergeinfo") == 1 {
-                            txn_free(txn)
+                            repo_storage.txn_free(txn)
                             json.free(root)
                             return -1, KIND_INVALID_INPUT, "client-set svn:mergeinfo not allowed; merge metadata is server-managed via the merge ledger"
                         }
@@ -467,7 +455,7 @@ export commit_from_body(req: ptr, res: ptr, repo: string) -> (int, int, string) 
         jmv, _ = json.object_get(jmf, "verb")
         if jmv != null { mverb = json.get_int(jmv) }
         if string.length(msrc) > 0 {
-            txn_merge_set_source(txn, mtgt, msrc, mverb)
+            repo_storage.txn_merge_set_source(txn, mtgt, msrc, mverb)
             jmrevs, _ = json.object_get(jmf, "source_revs")
             if jmrevs != null {
                 rcount = json.array_size(jmrevs)
@@ -478,7 +466,7 @@ export commit_from_body(req: ptr, res: ptr, repo: string) -> (int, int, string) 
                         rnum = json.get_int(revj)
                         rsha = repos.repos_rev_blob_sha(repo, rnum)
                         if string.length(rsha) > 0 {
-                            txn_merge_record_rev(txn, string.copy(rsha))
+                            repo_storage.txn_merge_record_rev(txn, string.copy(rsha))
                         }
                     }
                     ri = ri + 1
@@ -489,9 +477,9 @@ export commit_from_body(req: ptr, res: ptr, repo: string) -> (int, int, string) 
 
     json.free(root)
 
-    new_rev = commit_finalise(repo, txn, "main", author, logmsg,
+    new_rev = repo_storage.commit_finalise(repo, txn, "main", author, logmsg,
                                      use_props_sha, use_acl_sha)
-    txn_free(txn)
+    repo_storage.txn_free(txn)
 
     // commit_finalise still uses signed-int return codes (its
     // migration to a structured return is a follow-up to this
@@ -665,7 +653,7 @@ build_props_blob_joined(repo: string, keys_joined: string, values_joined: string
         i = i + 1
     }
 
-    return rep_write_blob(repo, body, string.length(body))
+    return repo_storage.rep_write_blob(repo, body, string.length(body))
 }
 
 // Build "<rule>\n" in caller-supplied order, write to rep store.
@@ -679,12 +667,12 @@ build_acl_blob_joined(repo: string, rules_joined: string) -> string {
         body = string.concat(body, "\n")
         i = i + 1
     }
-    return rep_write_blob(repo, body, string.length(body))
+    return repo_storage.rep_write_blob(repo, body, string.length(body))
 }
 
 // Build "<sha> <path>\n" sorted by path, write to rep store. Shared
 // shape for paths-props and paths-acl; sort delegated to
-// paths_index_sort (repo_storage/format_line.ae).
+// repo_storage.paths_index_sort (repo_storage/format_line.ae).
 build_paths_index_blob(repo: string, paths_joined: string, shas_joined: string) -> string {
     np = count_lines(paths_joined)
     ns = count_lines(shas_joined)
@@ -703,8 +691,8 @@ build_paths_index_blob(repo: string, paths_joined: string, shas_joined: string) 
         i = i + 1
     }
 
-    sorted = paths_index_sort(body)
-    return rep_write_blob(repo, sorted, string.length(sorted))
+    sorted = repo_storage.paths_index_sort(body)
+    return repo_storage.rep_write_blob(repo, sorted, string.length(sorted))
 }
 
 build_paths_props_blob_joined(repo: string, paths_joined: string, shas_joined: string) -> string {

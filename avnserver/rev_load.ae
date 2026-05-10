@@ -28,9 +28,8 @@
 import std.string
 import util
 import repos
+import repo_storage
 
-extern rep_read_blob(repo: string, sha: string) -> string
-extern rep_free(body: string)
 
 // Zero-pad `n` to six digits, matching $repo/revs/NNNNNN.
 pad6(n: int) -> string {
@@ -71,11 +70,11 @@ export load_rev_blob_field(repo: string, rev: int, key: string) -> string {
     sha = rtrim_ws(src)
     if string.length(sha) == 0 { return "" }
 
-    body = rep_read_blob(repo, sha)
+    body = repo_storage.rep_read_blob(repo, sha)
     if string.length(body) == 0 { return "" }
     v = repos.blobfield_get(body, key)
     v = string.copy(v)         // copy before freeing body
-    rep_free(body)
+    repo_storage.rep_free(body)
     return v
 }
 

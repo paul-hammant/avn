@@ -27,12 +27,8 @@
 // list_body() + list_redact(), and then frees with list_release().
 
 import std.string
+import repo_storage
 
-extern dir_count_entries(body: string) -> int
-extern dir_entry_kind(body: string, i: int) -> int
-extern dir_entry_sha(body: string, i: int) -> string
-extern dir_entry_name(body: string, i: int) -> string
-extern path_join_rel(prefix: string, name: string) -> string
 extern list_entry_visible_json(name: string, kind: int) -> string
 extern list_entry_hidden_json(sha: string) -> string
 extern redact_line_visible(kind: int, sha: string, name: string) -> string
@@ -48,16 +44,16 @@ export list_build(repo: string, rev: int, user: string, is_super: int,
     body = "{\"entries\":["
     redact = ""
     any = 0
-    n = dir_count_entries(dir_body)
+    n = repo_storage.dir_count_entries(dir_body)
     i = 0
     while i < n {
-        kind = dir_entry_kind(dir_body, i)
-        sha = dir_entry_sha(dir_body, i)
-        name = dir_entry_name(dir_body, i)
+        kind = repo_storage.dir_entry_kind(dir_body, i)
+        sha = repo_storage.dir_entry_sha(dir_body, i)
+        name = repo_storage.dir_entry_name(dir_body, i)
         // Snapshot — we're going to concat and reuse across loop.
         sha = string.copy(sha)
         name = string.copy(name)
-        child_path = path_join_rel(dir_path, name)
+        child_path = repo_storage.path_join_rel(dir_path, name)
 
         allowed = is_super
         if allowed == 0 {

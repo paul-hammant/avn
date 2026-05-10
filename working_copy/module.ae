@@ -30,6 +30,7 @@ import std.string
 import std.zlib
 import util
 import client
+import repo_storage
 
 
 // =============================================================================
@@ -60,7 +61,6 @@ import client
 // WC propset (per-path key=value persist).
 
 // IO helpers from subr/io.ae and fs_fs/pathutil.ae.
-extern path_join_rel(prefix: string, name: string) -> string
 
 // Ingest every prop attached to (rev, rel) onto the working copy at dest.
 ingest_props_(base_url: string, repo: string, rev: int,
@@ -96,9 +96,9 @@ walk_(base_url: string, repo: string, rev: int,
         name = string.copy(name)
         kind = string.copy(kind)
 
-        rel_borrowed  = path_join_rel(prefix, name)
+        rel_borrowed  = repo_storage.path_join_rel(prefix, name)
         rel  = string.copy(rel_borrowed)
-        disk_borrowed = path_join_rel(dest, rel)
+        disk_borrowed = repo_storage.path_join_rel(dest, rel)
         disk = string.copy(disk_borrowed)
 
         if string.equals(kind, "dir") == 1 {
@@ -1650,7 +1650,6 @@ merge3_apply(wc_path: string,
 // --- pristine + merge3 ---------------------------------------------------
 
 // --- io helpers ----------------------------------------------------------
-extern path_join_rel(prefix: string, name: string) -> string
 
 // --- stderr trace --------------------------------------------------------
 // Round 180: switched to std.io.stderr_write (Aether 0.110).
@@ -1662,7 +1661,7 @@ merge_stderr_(s: string) {
 // Map a source-relative path `p` into the WC under `target_path` (may
 // be empty, meaning apply at WC root).
 map_wc_rel(target_path: string, p: string) -> string {
-    return path_join_rel(target_path, p)
+    return repo_storage.path_join_rel(target_path, p)
 }
 
 // =========================================================================
@@ -1678,7 +1677,7 @@ merge_apply_deletions(wc_root: string, target_path: string,
         remote_kind = util.remote_tree_kind_at(a_rt, i)
         if util.remote_tree_find_by_path(b_rt, remote_path) < 0 {
             wc_rel = map_wc_rel(target_path, remote_path)
-            disk = path_join_rel(wc_root, wc_rel)
+            disk = repo_storage.path_join_rel(wc_root, wc_rel)
             if wc_db_node_exists(db, wc_rel) == 1 {
                 n = wc_db_get_node(db, wc_rel)
                 if string.length(wc_node_base_sha1(n)) >= 0 {
@@ -1716,7 +1715,7 @@ merge_apply_adds_mods(wc_root: string, target_path: string,
         rb_len  = util.remote_tree_data_len_at(b_rt, i)
 
         wc_rel = map_wc_rel(target_path, rb_path)
-        disk = path_join_rel(wc_root, wc_rel)
+        disk = repo_storage.path_join_rel(wc_root, wc_rel)
 
         if rb_kind == 1 {
             // Dir.
@@ -1809,7 +1808,6 @@ merge_apply_adds_mods(wc_root: string, target_path: string,
 
 
 
-extern path_join_rel(prefix: string, name: string) -> string
 
 
 // Round 140: wc_root threaded through explicitly so add_file can
@@ -1818,7 +1816,7 @@ merge_walk_remote(wc_root: string,
                           base_url: string, repo: string, rev: int,
                           source_path: string, sub_prefix: string,
                           rt: ptr) -> int {
-    full = path_join_rel(source_path, sub_prefix)
+    full = repo_storage.path_join_rel(source_path, sub_prefix)
     full = string.copy(full)
 
     L = client.remote_list(base_url, repo, rev, full)
@@ -1833,7 +1831,7 @@ merge_walk_remote(wc_root: string,
             name = string.copy(name)
             kind = client.remote_list_kind(L, i)
             kind = string.copy(kind)
-            rel = path_join_rel(sub_prefix, name)
+            rel = repo_storage.path_join_rel(sub_prefix, name)
             rel = string.copy(rel)
 
             if string.equals(kind, "dir") == 1 {
@@ -1844,7 +1842,7 @@ merge_walk_remote(wc_root: string,
                 }
             }
             if string.equals(kind, "dir") == 0 {
-                remote_full = path_join_rel(full, name)
+                remote_full = repo_storage.path_join_rel(full, name)
                 remote_full = string.copy(remote_full)
                 data = client.remote_cat(base_url, repo, rev, remote_full)
                 if string.length(data) == 0 {
@@ -3158,7 +3156,6 @@ extern map_free(map: ptr)
 // working_copy/status_packed.ae.
 
 // IO helpers.
-extern path_join_rel(prefix: string, name: string) -> string
 
 // svn:ignore handling.
 
@@ -3241,7 +3238,7 @@ sort_body_(body: string) -> string {
 // caller to fold into its own running accumulator.
 walk_unversioned_(wc_root: string, rel: string, tracked: ptr) -> string {
     out = ""
-    dir_path_borrowed = path_join_rel(wc_root, rel)
+    dir_path_borrowed = repo_storage.path_join_rel(wc_root, rel)
     dir_path = string.copy(dir_path_borrowed)
 
     // Fetch svn:ignore for this directory. propget returns "" both on
@@ -3266,9 +3263,9 @@ walk_unversioned_(wc_root: string, rel: string, tracked: ptr) -> string {
             if is_sidecar_name(name) == 1 { skip = 1 }
         }
         if skip == 0 {
-            child_rel_borrowed = path_join_rel(rel, name)
+            child_rel_borrowed = repo_storage.path_join_rel(rel, name)
             child_rel = string.copy(child_rel_borrowed)
-            child_fs_borrowed = path_join_rel(wc_root, child_rel)
+            child_fs_borrowed = repo_storage.path_join_rel(wc_root, child_rel)
             child_fs = string.copy(child_fs_borrowed)
             kind = util.io_stat_kind(child_fs)   // 1=file 2=dir, 0=missing
             if kind != 0 {
@@ -3608,7 +3605,6 @@ wc_switch(wc_root: string,
 // --- pristine + hash FFI --------------------------------------------------
 
 // --- io helpers + merge3 entry -------------------------------------------
-extern path_join_rel(prefix: string, name: string) -> string
 
 
 
@@ -3655,7 +3651,7 @@ update_apply_pass_a(wc_root: string, base_url: string, repo: string,
             r_idx = util.remote_tree_find_by_path(rt, rel)
             if r_idx < 0 {
                 // Remote removed it. Delete locally.
-                disk = path_join_rel(wc_root, rel)
+                disk = repo_storage.path_join_rel(wc_root, rel)
                 if kind == 0 { util.io_unlink(disk) }
                 if kind == 1 { util.io_rmdir(disk) }
                 wc_db_delete_node(db, rel)
@@ -3682,7 +3678,7 @@ update_apply_pass_a(wc_root: string, base_url: string, repo: string,
                         }
                         if string.equals(r_sha, base_sha) == 0 {
                             // Remote changed. Clean or conflict?
-                            disk = path_join_rel(wc_root, rel)
+                            disk = repo_storage.path_join_rel(wc_root, rel)
                             disk_sha = wc_hash_file(wc_root, disk)
                             local_clean = 0
                             if string.length(disk_sha) > 0 {
@@ -3777,7 +3773,7 @@ update_apply_pass_b(wc_root: string, base_url: string, repo: string,
             r_sha  = util.remote_tree_sha_at(rt, i)
             r_data = util.remote_tree_data_at(rt, i)
             r_len  = util.remote_tree_data_len_at(rt, i)
-            disk   = path_join_rel(wc_root, rpath)
+            disk   = repo_storage.path_join_rel(wc_root, rpath)
 
             ok = 0
             if r_kind == 1 {
@@ -3886,7 +3882,6 @@ ingest_props(base_url: string, repo: string, rev: int,
 
 
 
-extern path_join_rel(prefix: string, name: string) -> string
 
 
 // Returns 0 on success, -1 on any list/cat failure. wc_root is
@@ -3907,7 +3902,7 @@ update_walk_remote(wc_root: string,
             name = string.copy(name)
             kind = client.remote_list_kind(L, i)
             kind = string.copy(kind)
-            rel = path_join_rel(prefix, name)
+            rel = repo_storage.path_join_rel(prefix, name)
             rel = string.copy(rel)
 
             if string.equals(kind, "dir") == 1 {

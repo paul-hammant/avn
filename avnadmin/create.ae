@@ -32,16 +32,14 @@ import std.string
 import std.os
 import ffi.openssl
 import util
+import repo_storage
 
 
 extern algos_count(spec: string) -> int
 extern algos_token(spec: string, i: int) -> string
 
 extern admin_db_init_schema(repo: string) -> string
-extern merge_ledger_init_schema(repo: string) -> string
 
-extern rep_write_blob(repo: string, data: string, len: int) -> string
-extern rev_blob_body(root: string, branch: string, props: string, acl: string, prev: int, merged: string, author: string, date: string, log: string) -> string
 
 // Lay down the empty disk layout: dirs, format file, rep-cache schema.
 // No rev 0, no head — shared by `create` (which seeds rev 0 below)
@@ -80,7 +78,7 @@ create_bare_(repo: string, algos_spec: string) -> int {
     // tables are CREATE IF NOT EXISTS, so this also retrofits onto
     // older repos via merge_ledger.ae's lazy open path; doing it
     // proactively at create-time keeps fresh repos in a clean state.
-    mle = merge_ledger_init_schema(repo)
+    mle = repo_storage.merge_ledger_init_schema(repo)
     if string.length(mle) > 0 { return 0 - 1 }
     return 0
 }
@@ -108,14 +106,14 @@ write_main_branch_layout_(repo: string) -> int {
 
 // Seed rev 0: empty root dir + rev-blob pointing at it.
 seed_rev0_(repo: string) -> int {
-    empty_sha = rep_write_blob(repo, "", 0)
+    empty_sha = repo_storage.rep_write_blob(repo, "", 0)
     if string.length(empty_sha) == 0 { return 0 - 1 }
     empty_sha = string.copy(empty_sha)
 
-    rev0 = rev_blob_body(empty_sha, "main", "", "", 0, "",
+    rev0 = repo_storage.rev_blob_body(empty_sha, "main", "", "", 0, "",
                                  "(init)", os.now_utc_iso8601(),
                                  "initial empty revision")
-    rev0_sha = rep_write_blob(repo, rev0, string.length(rev0))
+    rev0_sha = repo_storage.rep_write_blob(repo, rev0, string.length(rev0))
     if string.length(rev0_sha) == 0 { return 0 - 1 }
     rev0_sha = string.copy(rev0_sha)
 

@@ -29,23 +29,14 @@ import std.string
 extern aether_args_count() -> int
 extern aether_args_get(index: int) -> string
 
-extern rep_write_blob(repo: string, data: string, len: int) -> string
-extern rep_read_blob(repo: string, sha1_hex: string) -> string
-extern rep_free(p: string)
 
-extern txn_new(base_rev: int) -> ptr
-extern txn_base_rev(t: ptr) -> int
-extern txn_add_file(t: ptr, path: string, content: string, len: int) -> int
-extern txn_mkdir(t: ptr, path: string) -> int
-extern txn_delete(t: ptr, path: string) -> int
-extern txn_free(t: ptr)
-extern rebuild_dir(repo: string, base_dir_sha: string, prefix: string, t: ptr) -> string
 
 extern dir_exists(path: string) -> int
 
 
 import contrib.sqlite
 import util
+import repo_storage
 
 fsfs_init(path: string) {
     if dir_exists(path) == 1 { return 1 }
@@ -63,10 +54,10 @@ fsfs_init(path: string) {
         "CREATE TABLE rep_cache (hash TEXT PRIMARY KEY, rel_path TEXT NOT NULL, uncompressed_size INT NOT NULL, storage INT NOT NULL)")
     sqlite.close(db)
     if string.length(err) > 0 { return 4 }
-    empty_sha = rep_write_blob(path, "", 0)
+    empty_sha = repo_storage.rep_write_blob(path, "", 0)
     empty_copy = string.concat("", empty_sha)
     rev0 = "root: ${empty_copy}\nprev: 0\nauthor: (init)\ndate: ${os.now_utc_iso8601()}\nlog: initial empty revision\n"
-    rev0_sha = rep_write_blob(path, rev0, string.length(rev0))
+    rev0_sha = repo_storage.rep_write_blob(path, rev0, string.length(rev0))
     rev0_copy = string.concat("", rev0_sha)
     rc = util.io_write_atomic("${path}/revs/000000", "${rev0_copy}\n", string.length(rev0_copy) + 1)
     if rc != 0 { return rc }
@@ -116,10 +107,10 @@ rev_root_sha1(repo: string, rev: int) {
     raw = util.io_read_file(rev_file_path(repo, rev))
     if string.length(raw) == 0 { return "" }
     rev_blob_sha1 = string.trim(raw)
-    rev_body = rep_read_blob(repo, rev_blob_sha1)
+    rev_body = repo_storage.rep_read_blob(repo, rev_blob_sha1)
     root = parse_line_value(rev_body, "root")
     root_copy = string.concat("", root)
-    rep_free(rev_body)
+    repo_storage.rep_free(rev_body)
     return root_copy
 }
 
@@ -132,16 +123,16 @@ fsfs_head_rev(repo: string) {
 }
 
 commit_txn(repo: string, txn: ptr, author: string, logmsg: string) {
-    base_rev = txn_base_rev(txn)
+    base_rev = repo_storage.txn_base_rev(txn)
     base_root = rev_root_sha1(repo, base_rev)
     if string.length(base_root) == 0 { return -1 }
-    new_root = rebuild_dir(repo, base_root, "", txn)
+    new_root = repo_storage.rebuild_dir(repo, base_root, "", txn)
     if string.length(new_root) == 0 { return -1 }
     new_root = string.copy(new_root)
     prev = fsfs_head_rev(repo)
     next = prev + 1
     rev_body = "root: ${new_root}\nprev: ${prev}\nauthor: ${author}\ndate: ${os.now_utc_iso8601()}\nlog: ${logmsg}\n"
-    rev_sha_raw = rep_write_blob(repo, rev_body, string.length(rev_body))
+    rev_sha_raw = repo_storage.rep_write_blob(repo, rev_body, string.length(rev_body))
     rev_sha = string.concat("", rev_sha_raw)
     ptr_body = "${rev_sha}\n"
     rc = util.io_write_atomic(rev_file_path(repo, next), ptr_body, string.length(ptr_body))
@@ -161,29 +152,29 @@ main() {
     rc = fsfs_init(repo)
     if rc != 0 { println("init failed: ${rc}"); exit(1) }
 
-    txn = txn_new(0)
-    txn_mkdir(txn, "src")
-    txn_add_file(txn, "README",     "Hello\n",                     6)
-    txn_add_file(txn, "src/main.c", "int main() { return 0; }\n", 25)
-    txn_add_file(txn, "LICENSE",    "Apache-2.0\n",               11)
+    txn = repo_storage.txn_new(0)
+    repo_storage.txn_mkdir(txn, "src")
+    repo_storage.txn_add_file(txn, "README",     "Hello\n",                     6)
+    repo_storage.txn_add_file(txn, "src/main.c", "int main() { return 0; }\n", 25)
+    repo_storage.txn_add_file(txn, "LICENSE",    "Apache-2.0\n",               11)
     if commit_txn(repo, txn, "alice", "first commit") != 1 {
         println("commit 1 failed"); exit(1)
     }
-    txn_free(txn)
+    repo_storage.txn_free(txn)
 
-    txn = txn_new(1)
-    txn_add_file(txn, "src/main.c", "int main() { return 42; }\n", 26)
+    txn = repo_storage.txn_new(1)
+    repo_storage.txn_add_file(txn, "src/main.c", "int main() { return 42; }\n", 26)
     if commit_txn(repo, txn, "bob", "answer to everything") != 2 {
         println("commit 2 failed"); exit(1)
     }
-    txn_free(txn)
+    repo_storage.txn_free(txn)
 
-    txn = txn_new(2)
-    txn_delete(txn, "LICENSE")
+    txn = repo_storage.txn_new(2)
+    repo_storage.txn_delete(txn, "LICENSE")
     if commit_txn(repo, txn, "alice", "drop license") != 3 {
         println("commit 3 failed"); exit(1)
     }
-    txn_free(txn)
+    repo_storage.txn_free(txn)
 
     println("seeded ${repo} with 3 revisions")
 }

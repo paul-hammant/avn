@@ -17,24 +17,12 @@
 
 import std.http
 import std.string
+import repo_storage
 
 extern svnserver_respond_error(res: ptr, code: int, msg: string)
 extern svnserver_respond_json_ok(res: ptr, body: string)
 extern svnserver_find_repo_path(name: string) -> string
 
-extern merge_ledger_integrated_set(repo: string,
-                                   target_branch: string,
-                                   source_branch: string) -> string
-extern merge_ledger_eligible_runs_for_range(repo: string,
-                                            target_branch: string,
-                                            source_branch: string,
-                                            lo: int, hi: int,
-                                            as_of_rev: int) -> string
-extern merge_ledger_reverse_eligible_runs(repo: string,
-                                          target_branch: string,
-                                          source_branch: string,
-                                          lo: int, hi: int,
-                                          as_of_rev: int) -> string
 
 // Build the JSON `{"integrated":[...]}` body. `packed` is the
 // "\n"-separated SHA list returned by merge_ledger_integrated_set.
@@ -96,7 +84,7 @@ export merged_list_handle(req: ptr, res: ptr, repo: string, sub: string) {
         return
     }
 
-    packed = merge_ledger_integrated_set(repo, target, source)
+    packed = repo_storage.merge_ledger_integrated_set(repo, target, source)
     body = build_integrated_json_(packed)
     svnserver_respond_json_ok(res, body)
 }
@@ -205,7 +193,7 @@ export merge_runs_handle(req: ptr, res: ptr, repo: string, sub: string) {
         svnserver_respond_error(res, 400, "lo and hi must be non-negative ints")
         return
     }
-    runs = merge_ledger_eligible_runs_for_range(repo, target, source, lo, hi, as_of)
+    runs = repo_storage.merge_ledger_eligible_runs_for_range(repo, target, source, lo, hi, as_of)
     body = build_runs_json_(runs)
     svnserver_respond_json_ok(res, body)
 }
@@ -228,7 +216,7 @@ export reverse_runs_handle(req: ptr, res: ptr, repo: string, sub: string) {
         svnserver_respond_error(res, 400, "lo and hi must be non-negative ints")
         return
     }
-    runs = merge_ledger_reverse_eligible_runs(repo, target, source, lo, hi, as_of)
+    runs = repo_storage.merge_ledger_reverse_eligible_runs(repo, target, source, lo, hi, as_of)
     body = build_runs_json_(runs)
     svnserver_respond_json_ok(res, body)
 }

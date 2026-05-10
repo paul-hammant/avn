@@ -20,8 +20,8 @@
 
 import std.string
 import std.http
+import repo_storage
 
-extern branch_spec_allows(repo: string, branch: string, path: string) -> int
 
 export svnserver_spec_allows(repo: string, branch: string,
                               path: string, is_super: int) -> int {
@@ -29,7 +29,7 @@ export svnserver_spec_allows(repo: string, branch: string,
     if string.length(repo) == 0 { return 0 }
     if string.length(branch) == 0 { return 0 }
     if string.length(path) == 0 { return 0 }
-    return branch_spec_allows(repo, branch, path)
+    return repo_storage.branch_spec_allows(repo, branch, path)
 }
 
 export svnserver_request_header(req: ptr, name: string) -> string {

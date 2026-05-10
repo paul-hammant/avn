@@ -65,17 +65,11 @@ extern dir_exists(path: string) -> int
 // --- externs from fs_fs/shim.c ---------------------------------------------
 
 
-extern fsfs_tree_builder_new() -> ptr
-extern fsfs_tree_builder_add(tb: ptr, path: string, kind: int, content: string, content_len: int) -> int
-extern fsfs_tree_builder_count(tb: ptr) -> int
-extern fsfs_tree_builder_path(tb: ptr, i: int) -> string
-extern fsfs_tree_builder_kind(tb: ptr, i: int) -> int
-extern fsfs_tree_builder_content_data(tb: ptr, i: int) -> string
-extern fsfs_tree_builder_free(tb: ptr)
 
 
 import contrib.sqlite
 import util
+import repo_storage
 
 const SQLITE_ROW  = 100
 const SQLITE_DONE = 101
@@ -99,7 +93,7 @@ ensure_fanout_dirs(repo: string, sha1: string) {
     return 0
 }
 
-rep_cache_has(repo: string, sha1: string) {
+repo_storage.rep_cache_has(repo: string, sha1: string) {
     db, oerr = sqlite.open("${repo}/rep-cache.db")
     if string.length(oerr) > 0 { return 0 }
     stmt, perr = sqlite.prepare(db, "SELECT 1 FROM rep_cache WHERE hash = ?")
@@ -139,7 +133,7 @@ rep_cache_lookup_uncompressed_size(repo: string, sha1: string) {
     return v
 }
 
-rep_cache_insert(repo: string, sha1: string, rel_path: string,
+repo_storage.rep_cache_insert(repo: string, sha1: string, rel_path: string,
                  uncompressed_size: int, storage: int) {
     db, oerr = sqlite.open("${repo}/rep-cache.db")
     if string.length(oerr) > 0 { return 1 }
@@ -166,7 +160,7 @@ write_blob_text(repo: string, data: string) {
     n = string.length(data)
     sha1_copy = openssl.crypto_hash_hex("sha1", data, n)
 
-    if rep_cache_has(repo, sha1_copy) == 1 { return sha1_copy }
+    if repo_storage.rep_cache_has(repo, sha1_copy) == 1 { return sha1_copy }
 
     storage = STORAGE_RAW
     comp, clen, cerr = zlib.deflate(data, n, 6)
@@ -196,7 +190,7 @@ write_blob_text(repo: string, data: string) {
     rc = util.io_rename(tmp, full)
     if rc != 0 { util.io_remove(tmp); return "" }
 
-    rc = rep_cache_insert(repo, sha1_copy, rel, n, storage)
+    rc = repo_storage.rep_cache_insert(repo, sha1_copy, rel, n, storage)
     if rc != 0 { return "" }
     return sha1_copy
 }
@@ -328,7 +322,7 @@ fsfs_load_root_dir(repo: string, rev: int) {
 //
 // Rather than multi-return, we expose two functions that re-parse. OK
 // because dirs are tiny.
-dir_entry_kind(dir_body: string, name: string) {
+repo_storage.dir_entry_kind(dir_body: string, name: string) {
     n = string.length(dir_body)
     i = 0
     while i < n {
@@ -404,13 +398,13 @@ fsfs_read_file_at(repo: string, rev: int, path: string) {
 
         if at_end == 1 {
             // Expect a file entry.
-            kind = dir_entry_kind(dir_body, seg)
+            kind = repo_storage.dir_entry_kind(dir_body, seg)
             if string.equals(kind, "f") == 0 { return "" }
             sha1 = dir_entry_sha1(dir_body, seg)
             return read_blob(repo, sha1)
         }
         // Expect a directory entry; recurse.
-        kind = dir_entry_kind(dir_body, seg)
+        kind = repo_storage.dir_entry_kind(dir_body, seg)
         if string.equals(kind, "d") == 0 { return "" }
         sub_sha1 = dir_entry_sha1(dir_body, seg)
         dir_body = read_blob(repo, sub_sha1)
@@ -436,7 +430,7 @@ fsfs_read_file_at(repo: string, rev: int, path: string) {
 fsfs_commit_flat(repo: string, tb: ptr, author: string, logmsg: string) {
     // Step 1: write each file blob. Accumulate dir entries as "f <sha1> <name>\n"
     // strings, sorted by name via a simple selection loop.
-    count = fsfs_tree_builder_count(tb)
+    count = repo_storage.fsfs_tree_builder_count(tb)
 
     // Sort indices by path. In-place bubble sort over a local int list
     // would be nice; Aether doesn't give us dynamic int arrays. Use a
@@ -453,14 +447,14 @@ fsfs_commit_flat(repo: string, tb: ptr, author: string, logmsg: string) {
     names_txt = ""
     i = 0
     while i < count {
-        path = fsfs_tree_builder_path(tb, i)
-        kind = fsfs_tree_builder_kind(tb, i)
+        path = repo_storage.fsfs_tree_builder_path(tb, i)
+        kind = repo_storage.fsfs_tree_builder_kind(tb, i)
         if kind != 0 {
             // For Phase 3.2 we only commit files.
             i = i + 1
             continue
         }
-        bdata = fsfs_tree_builder_content_data(tb, i)
+        bdata = repo_storage.fsfs_tree_builder_content_data(tb, i)
         // write_blob_text: since we know content may be arbitrary bytes,
         // we should have a binary-safe variant. For tests we use text,
         // so this is fine.
@@ -623,12 +617,12 @@ main() {
     fails = fails + expect_int("head after init", fsfs_head_rev(repo), 0)
 
     // 2. commit rev 1 with a few files.
-    tb = fsfs_tree_builder_new()
-    fsfs_tree_builder_add(tb, "README",  0, "Hello from Aether avn!\n", 23)
-    fsfs_tree_builder_add(tb, "main.c",  0, "int main(void) { return 0; }\n", 29)
-    fsfs_tree_builder_add(tb, "notes.txt", 0, "quick brown fox\n", 16)
+    tb = repo_storage.fsfs_tree_builder_new()
+    repo_storage.fsfs_tree_builder_add(tb, "README",  0, "Hello from Aether avn!\n", 23)
+    repo_storage.fsfs_tree_builder_add(tb, "main.c",  0, "int main(void) { return 0; }\n", 29)
+    repo_storage.fsfs_tree_builder_add(tb, "notes.txt", 0, "quick brown fox\n", 16)
     new_rev = fsfs_commit_flat(repo, tb, "paul", "initial commit")
-    fsfs_tree_builder_free(tb)
+    repo_storage.fsfs_tree_builder_free(tb)
     fails = fails + expect_int("commit rev 1", new_rev, 1)
     fails = fails + expect_int("head after commit 1", fsfs_head_rev(repo), 1)
 
@@ -648,12 +642,12 @@ main() {
     //    rep-shared (same sha1, no new .rep file written for them).
     before_count = count_rep_files(repo)
 
-    tb = fsfs_tree_builder_new()
-    fsfs_tree_builder_add(tb, "README",  0, "Hello from Aether avn!\n", 23)
-    fsfs_tree_builder_add(tb, "main.c",  0, "int main(void) { return 0; }\n", 29)
-    fsfs_tree_builder_add(tb, "notes.txt", 0, "the updated note\n", 17)
+    tb = repo_storage.fsfs_tree_builder_new()
+    repo_storage.fsfs_tree_builder_add(tb, "README",  0, "Hello from Aether avn!\n", 23)
+    repo_storage.fsfs_tree_builder_add(tb, "main.c",  0, "int main(void) { return 0; }\n", 29)
+    repo_storage.fsfs_tree_builder_add(tb, "notes.txt", 0, "the updated note\n", 17)
     new_rev = fsfs_commit_flat(repo, tb, "paul", "update notes")
-    fsfs_tree_builder_free(tb)
+    repo_storage.fsfs_tree_builder_free(tb)
     fails = fails + expect_int("commit rev 2", new_rev, 2)
 
     after_count = count_rep_files(repo)

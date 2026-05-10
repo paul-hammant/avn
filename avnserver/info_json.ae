@@ -32,6 +32,7 @@
 import std.string
 import util
 import repos
+import repo_storage
 
 extern info_prelude_json(head: int, head_sha: string,
                          name: string, hash_algo: string) -> string
@@ -41,10 +42,9 @@ extern json_escape_string(s: string) -> string
 // R286 — clients need HEAD's rev_sha so they can parent_sha-chain
 // their next commit. Empty repo (head=0) → empty sha string.
 
-extern path_join_rel(prefix: string, name: string) -> string
 
 export info_json(repo: string, name: string, head: int, hash_algo: string) -> string {
-    branches_dir = path_join_rel(repo, "branches")
+    branches_dir = repo_storage.path_join_rel(repo, "branches")
     head_sha = ""
     if head > 0 { head_sha = repos.repos_rev_blob_sha(repo, head) }
     out = info_prelude_json(head, head_sha, name, hash_algo)
@@ -81,8 +81,8 @@ export info_json(repo: string, name: string, head: int, hash_algo: string) -> st
             // Snapshot — path_join_rel allocs, but
             // io_listdir_name returns into the list's buffer.
             nm = string.copy(nm)
-            spec_path = path_join_rel(branches_dir, nm)
-            spec_path = path_join_rel(spec_path, "spec")
+            spec_path = repo_storage.path_join_rel(branches_dir, nm)
+            spec_path = repo_storage.path_join_rel(spec_path, "spec")
 
             if first == 0 { out = string.concat(out, ",") }
             first = 0
@@ -108,7 +108,7 @@ export info_json(repo: string, name: string, head: int, hash_algo: string) -> st
         util.io_listdir_free(d2)
     }
     // If main wasn't already listed (no on-disk dir), emit [] for it.
-    main_spec = path_join_rel(branches_dir, "main")
+    main_spec = repo_storage.path_join_rel(branches_dir, "main")
     if util.io_exists(main_spec) == 0 {
         if first == 0 { out = string.concat(out, ",") }
         out = string.concat(out, "\"main\":[]")

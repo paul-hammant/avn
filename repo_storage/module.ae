@@ -1,0 +1,3425 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+
+// repo_storage — on-disk repository storage layer (rep store + revs + dirblobs).
+//
+// Phase 4b merge (Round 304). Pairs with Phase 4a (repos/) — together
+// they untangle the repos↔repo_storage cycle by leaving the
+// cross-references as  forward-decls. Three internal struct
+// types stay private to this module (Dirblob, Txn, TreeBuilder) —
+// 0.141.0's struct-merge fix lets them survive cross-import expansion.
+
+import contrib.sqlite
+import ffi.openssl
+import std.fs
+import std.intarr
+import std.list
+import std.os
+import std.os (os_getenv)
+import std.string
+import std.zlib
+import util
+
+
+// =============================================================================
+// repo_storage/branch_spec.ae
+// =============================================================================
+
+// Check whether `path` falls within branch `branch`'s include spec.
+//
+// The spec file at $repo/branches/<branch>/spec is a newline-
+// separated glob list. Empty file or missing file both mean "allow
+// everything" (compatible with legacy main-only seeded repos).
+//
+// Returns 1 = allowed, 0 = denied, -1 on bad args. (The old C
+// wrapper also distinguished I/O error but in practice every caller
+// treats -1 as deny; we simplify.)
+
+
+
+
+// repos↔repo_storage cycle: cross-references stay as externs.
+extern repo_primary_hash(repo: string) -> string
+extern repo_secondary_hashes_joined(repo: string) -> string
+extern repos_head_rev(repo: string) -> int
+extern repos_inherit_rev_field(repo: string, rev: int, field: string, fallback: string) -> string
+extern repos_rev_blob_sha(repo: string, rev: int) -> string
+extern repos_rev_field(repo: string, rev: int, field: string) -> string
+
+branch_spec_allows(repo: string, branch: string, path: string) -> int {
+    if string.length(branch) == 0 { return 1 }
+    if string.length(path) == 0 { return 1 }
+
+    spec_path = string.concat(string.concat(string.concat(repo, "/branches/"), branch), "/spec")
+    sz = util.io_file_size(spec_path)
+    if sz < 0 { return 1 }      // no spec → main-like allow-all
+    if sz == 0 { return 1 }      // empty spec → allow-all
+
+    buf = util.io_read_file(spec_path)
+    return spec_matches_any(path, buf)
+}
+
+// ---- branch head resolution -------------------------------------------
+//
+// Find the current rev of `base` branch, for branch_create's
+// "fork a new branch off <base>" step. Phase 8.1 introduced the
+// per-branch $repo/branches/<base>/head file; legacy repos seeded
+// before 8.1 still have $repo/head only and need a fallback.
+//
+// The fallback is only safe when `base == "main"` AND no other
+// branches exist — otherwise the legacy head file is the max rev
+// across all branches, not main's head specifically. On the
+// fallback path we also materialize $repo/branches/main/head so
+// subsequent branch-creates find the per-branch file even after
+// another branch bumps the legacy head.
+//
+// Returns the base rev on success, -1 on miss / malformed input.
+//
+// Ported from commit_shim.c's branch_create block.
+
+
+// Parse "rev=N" style per-branch head line. -1 on malformed input.
+parse_head_line(s: string) -> int {
+    n = string.length(s)
+    eq = string.index_of(s, "=")
+    if eq < 0 { return -1 }
+    i = eq + 1
+    val = 0
+    any = 0
+    while i < n {
+        ch = string.char_at(s, i)
+        if ch == 10 { break }           // '\n'
+        if ch < 48 { break }            // non-digit
+        if ch > 57 { break }
+        val = val * 10 + (ch - 48)
+        any = 1
+        i = i + 1
+    }
+    if any == 0 { return -1 }
+    return val
+}
+
+branch_head_rev(repo: string, base: string) -> int {
+    // Preferred path: $repo/branches/<base>/head, "rev=N".
+    base_head_path = string.concat(string.concat(string.concat(repo, "/branches/"), base), "/head")
+    sz = util.io_file_size(base_head_path)
+    if sz >= 0 {
+        head_line = util.io_read_file(base_head_path)
+        rev = parse_head_line(head_line)
+        if rev >= 0 { return rev }
+    }
+
+    // Legacy fallback: only if base == "main" AND there are no
+    // other branches (so the legacy $repo/head is still main's
+    // head rather than the cross-branch max).
+    if string.equals(base, "main") == 0 { return -1 }
+
+    branches_root = string.concat(repo, "/branches")
+    bd = util.io_listdir(branches_root)
+    other_branches = 0
+    if bd != null {
+        n_br = util.io_listdir_count(bd)
+        i = 0
+        while i < n_br {
+            nm = util.io_listdir_name(bd, i)
+            if string.equals(nm, "main") == 1 {
+                i = i + 1
+                continue
+            }
+            other_branches = 1
+            break
+        }
+        util.io_listdir_free(bd)
+    }
+    if other_branches == 1 { return -1 }
+
+    legacy = string.concat(repo, "/head")
+    if util.io_file_size(legacy) < 0 { return -1 }
+    legacy_content = util.io_read_file(legacy)
+    // Legacy head is a plain "<N>\n" (no "rev=" prefix). Parse
+    // the leading integer.
+    ln = string.length(legacy_content)
+    val = 0
+    any = 0
+    i = 0
+    while i < ln {
+        ch = string.char_at(legacy_content, i)
+        if ch < 48 { break }
+        if ch > 57 { break }
+        val = val * 10 + (ch - 48)
+        any = 1
+        i = i + 1
+    }
+    if any == 0 { return -1 }
+    base_rev = val
+
+    // Materialize $repo/branches/main/head so future lookups
+    // don't hit this fallback again (another branch commit would
+    // bump the legacy head above main's).
+    main_dir = string.concat(repo, "/branches/main")
+    util.io_mkdir_p(main_dir)
+    main_head = string.concat(main_dir, "/head")
+    body = string.concat(string.concat("rev=", string.from_int(base_rev)), "\n")
+    util.io_write_atomic(main_head, body, string.length(body))
+
+    return base_rev
+}
+
+// ---- rev pointer + head file set --------------------------------------
+//
+// Every commit or branch-create writes four small files:
+//
+//   $repo/revs/NNNNNN                               (legacy rev pointer)
+//   $repo/branches/<branch>/revs/aa/bb/NNNNNN       (per-branch pointer
+//                                                    with two-level fanout)
+//   $repo/head                                      (legacy: "<N>\n")
+//   $repo/branches/<branch>/head                    (per-branch: "rev=<N>\n")
+//
+// Both commit_finalise and branch_create in
+// fs_fs/commit_shim.c had essentially the same block inlined — with a
+// real latent bug in branch_create's copy: it hard-coded the
+// per-branch pointer's aa/bb directory to "00/00" instead of deriving
+// from `next_rev`, so a branch-create at rev >= 256 would write to the
+// wrong fanout directory. Porting the file-writing here fixes the bug
+// and collapses both call sites to one extern.
+//
+// `rev_sha` is the content-addressed sha of the rev blob (what
+// rep_write_blob returned). Returns "" on success, a short
+// error string on failure.
+
+// Format: always emit 6-digit, zero-padded.
+branch_pad6(n: int) -> string {
+    s = string.from_int(n)
+    pad = ""
+    need = 6 - string.length(s)
+    i = 0
+    while i < need {
+        pad = string.concat(pad, "0")
+        i = i + 1
+    }
+    return string.concat(pad, s)
+}
+
+// Format: 2-digit, zero-padded, lowercase hex.
+branch_pad2hex(n: int) -> string {
+    digits = "0123456789abcdef"
+    high = (n >> 4) & 15
+    low  = n & 15
+    h = string.substring(digits, high, high + 1)
+    l = string.substring(digits, low,  low + 1)
+    return string.concat(h, l)
+}
+
+// Returns 0 on success, -1 on any write/mkdir failure. The err-message
+// shape would be nicer but crossing the FFI with an empty AetherString
+// from C requires an unwrap helper we can't rely on in every caller;
+// -1 on failure is enough — the caller aborts the commit anyway.
+rev_pointer_write(repo: string, branch: string, next_rev: int,
+                              rev_sha: string) -> int {
+    if string.length(repo) == 0 { return -1 }
+    if string.length(branch) == 0 { return -1 }
+    if string.length(rev_sha) == 0 { return -1 }
+
+    // Pointer body: "<sha>\n". Written to both the per-branch and the
+    // legacy rev-pointer files.
+    ptr_body = string.concat(rev_sha, "\n")
+    ptr_len = string.length(ptr_body)
+
+    nn = branch_pad6(next_rev)
+
+    // Legacy $repo/revs/NNNNNN. Parent dir already exists — avnadmin
+    // create / seed ensure $repo/revs/ is present before the first
+    // commit writes into it.
+    legacy_ptr = string.concat(string.concat(repo, "/revs/"), nn)
+    if util.io_write_atomic(legacy_ptr, ptr_body, ptr_len) != 0 { return -1 }
+
+    // Per-branch $repo/branches/<branch>/revs/aa/bb/NNNNNN with
+    // two-level fanout. aa = (rev >> 16) & 0xff, bb = (rev >> 8) & 0xff.
+    aa = (next_rev >> 16) & 255
+    bb = (next_rev >> 8) & 255
+    branch_revs_dir = string.concat(string.concat(string.concat(string.concat(
+        repo, "/branches/"), branch), "/revs/"),
+        string.concat(string.concat(branch_pad2hex(aa), "/"), branch_pad2hex(bb)))
+    if util.io_mkdir_p(branch_revs_dir) != 0 { return -1 }
+    branch_ptr = string.concat(string.concat(branch_revs_dir, "/"), nn)
+    if util.io_write_atomic(branch_ptr, ptr_body, ptr_len) != 0 { return -1 }
+
+    // Legacy $repo/head: "<N>\n". Moves to the cross-branch max, which
+    // is always `next_rev` since rev numbers are monotonic repo-wide.
+    legacy_head_path = string.concat(repo, "/head")
+    legacy_head_body = string.concat(string.from_int(next_rev), "\n")
+    if util.io_write_atomic(legacy_head_path, legacy_head_body,
+                               string.length(legacy_head_body)) != 0 { return -1 }
+
+    // Per-branch $repo/branches/<branch>/head: "rev=<N>\n". Room for
+    // additional fields (tree-sha / spec-sha caching) in 8.2 without
+    // another format change.
+    br_head_path = string.concat(string.concat(string.concat(
+        repo, "/branches/"), branch), "/head")
+    br_head_body = string.concat(string.concat(
+        "rev=", string.from_int(next_rev)), "\n")
+    if util.io_write_atomic(br_head_path, br_head_body,
+                               string.length(br_head_body)) != 0 { return -1 }
+
+    return 0
+}
+
+
+// =============================================================================
+// repo_storage/commit_finalise.ae
+// =============================================================================
+
+// Round 64 (Gordian knot): port the orchestration of commit finalise
+// and branch create out of repo_storage/commit_shim.c. The recursive
+// tree-rebuild lives in repo_storage/rebuild.ae (called as
+// rebuild_dir); everything around it — load base root sha,
+// inherit props/acl, write rev blob, the 4-file pointer set,
+// path_rev index population — is pure orchestration here.
+//
+// Net retired from commit_shim.c: roughly 250 lines including the
+// 55-line inline sqlite3 path_rev block (lines 211-265 pre-Round 64).
+// The path_rev INSERT loop now goes through contrib.sqlite alongside
+// every other rep-cache.db op in the codebase.
+
+
+const SQLITE_DONE = 101
+
+// ---- C-side helpers we depend on -----------------------------------
+
+// Recursive tree rebuild stays in C (txn_shim.c) — bulk content walk.
+
+// Repository primitives.
+
+// Aether-side helpers (already exported as aether_* aliases).
+
+// paths_changed handle from repos/shim.c — opaque ptr + count + path
+// accessor. Used to enumerate paths-changed-by-rev for the path_rev
+// secondary index.
+
+// txn introspection — needed for the out-of-date check below.
+
+// Merge metadata on the txn (Round 272 / Phase 1.3). Used to emit
+// the `merged:` field on the rev blob and to populate the
+// merge ledger.
+
+// rev-blob `merged:` field encoder.
+
+// merge ledger writer.
+
+// ---- private helpers ------------------------------------------------
+
+// Load the root-dir sha1 for a given revision. "" on miss (caller
+// treats as failure).
+load_rev_root_sha1_(repo: string, rev: int) -> string
+    requires rev >= 0
+{
+    v = repos_rev_field(repo, rev, "root")
+    if string.length(v) == 0 { return "" }
+    return string.copy(v)
+}
+
+// Populate path_rev index: one row per path this rev touched.
+//
+// R287 — read paths from the txn directly. The pre-R287 path called
+// repos_paths_changed which did a tree-diff (flatten + sort + merge);
+// flatten was O(N) per dir (post-R287 iter fix) but sort_by_path's
+// O(N²) insertion sort × O(N) indexed dir-blob accessors gave
+// O(N³) per commit — the dominant cost surfaced when the bench's
+// `f/` dir grew past ~50 entries.
+//
+// The txn already carries the explicit paths every edit touched —
+// that IS the path-rev signal we want. txn-based iteration is O(M)
+// where M is the txn's edit count (small; not tied to repo size).
+//
+// Subtree-delete coverage: the WC commit path (working_copy/commit.ae)
+// walks its node list and emits one delete edit per tracked child,
+// so the txn already carries every affected path. Server-direct
+// callers (seed.ae, test_repos.ae) only delete leaf files. There's
+// no implicit-children gap to backfill here.
+//
+// Falls through silently if the table doesn't exist yet (very old
+// repos), so this stays safe during gradual schema migration.
+populate_path_rev_(repo: string, branch: string, rev: int, txn: ptr) {
+    n_edits = txn_count(txn)
+    if n_edits == 0 { return 0 }
+
+    db, oerr = sqlite.open("${repo}/rep-cache.db")
+    if string.length(oerr) > 0 { return 0 }
+
+    // Schema retrofit: seeded-from-scratch repos (via seed.ae) didn't
+    // go through avnadmin/create when the path_rev table was added,
+    // so create-if-missing here. Idempotent.
+    sqlite.exec(db,
+        "CREATE TABLE IF NOT EXISTS path_rev (  branch TEXT NOT NULL,  path   TEXT NOT NULL,  rev    INTEGER NOT NULL,  PRIMARY KEY (branch, path, rev));CREATE INDEX IF NOT EXISTS path_rev_lookup ON path_rev (branch, path);")
+
+    sqlite.exec(db, "BEGIN")
+    stmt, perr = sqlite.prepare(db,
+        "INSERT OR IGNORE INTO path_rev (branch, path, rev) VALUES (?, ?, ?)")
+    if string.length(perr) == 0 {
+        i = 0
+        while i < n_edits {
+            epath = txn_edit_path(txn, i)
+            sqlite.bind_text(stmt, 1, branch)
+            sqlite.bind_text(stmt, 2, epath)
+            sqlite.bind_int (stmt, 3, rev)
+            sqlite.step(stmt, db)
+            sqlite.reset(stmt)
+            i = i + 1
+        }
+        sqlite.finalize(stmt)
+    }
+    sqlite.exec(db, "COMMIT")
+    sqlite.close(db)
+    return 0
+}
+
+// Write the branch spec file ($repo/branches/<name>/spec). Ensures a
+// trailing newline regardless of whether `globs_joined` already ends
+// in one. Returns 0 on success, -1 on failure.
+write_spec_file_(spec_path: string, globs_joined: string) -> int {
+    glen = string.length(globs_joined)
+    if glen == 0 {
+        if util.io_write_atomic(spec_path, "", 0) != 0 { return 0 - 1 }
+        return 0
+    }
+    last = string.char_at(globs_joined, glen - 1)
+    if last == 10 {   // '\n'
+        if util.io_write_atomic(spec_path, globs_joined, glen) != 0 { return 0 - 1 }
+        return 0
+    }
+    with_nl = string.concat(globs_joined, "\n")
+    if util.io_write_atomic(spec_path, with_nl, glen + 1) != 0 { return 0 - 1 }
+    return 0
+}
+
+// Count non-empty newline-separated segments. Used to size the
+// branch-create log message.
+count_globs_(globs_joined: string) -> int {
+    n = 0
+    glen = string.length(globs_joined)
+    i = 0
+    seg = 0
+    while i < glen {
+        c = string.char_at(globs_joined, i)
+        if c == 10 {
+            if seg > 0 { n = n + 1 }
+            seg = 0
+        } else {
+            seg = seg + 1
+        }
+        i = i + 1
+    }
+    if seg > 0 { n = n + 1 }
+    return n
+}
+
+// Out-of-date detector. Returns 1 if any path the txn touches was
+// modified on `branch` in the half-open range (base_rev..head_rev],
+// 0 if not, 0 also on infrastructure failure (fail-open is the
+// classical SVN choice — the alternative is locking up commits when
+// path_rev hasn't been populated yet for very old repos).
+//
+// Uses the path_rev secondary index (one row per (branch, path, rev)
+// — see populate_path_rev_ below) so a stale-WC commit costs one
+// indexed lookup per txn edit, not a full rev-blob walk.
+check_txn_out_of_date_(repo: string, txn: ptr, branch: string,
+                       base_rev: int, head_rev: int) -> int {
+    if base_rev >= head_rev { return 0 }
+    n = txn_count(txn)
+    if n == 0 { return 0 }
+
+    db, oerr = sqlite.open("${repo}/rep-cache.db")
+    if string.length(oerr) > 0 { return 0 }
+
+    stmt, perr = sqlite.prepare(db,
+        "SELECT 1 FROM path_rev WHERE branch = ? AND path = ? AND rev > ? AND rev <= ? LIMIT 1")
+    if string.length(perr) > 0 {
+        // path_rev table missing on a very old repo — schema retrofit
+        // happens on the first populate_path_rev_ call, so bail out
+        // permissively until then.
+        sqlite.close(db)
+        return 0
+    }
+
+    found = 0
+    i = 0
+    while i < n {
+        if found == 1 { break }
+        path = txn_edit_path(txn, i)
+        sqlite.bind_text(stmt, 1, branch)
+        sqlite.bind_text(stmt, 2, path)
+        sqlite.bind_int (stmt, 3, base_rev)
+        sqlite.bind_int (stmt, 4, head_rev)
+        rc, _ = sqlite.step(stmt, db)
+        if rc == 100 { found = 1 }   // SQLITE_ROW
+        sqlite.reset(stmt)
+        i = i + 1
+    }
+    sqlite.finalize(stmt)
+    sqlite.close(db)
+    return found
+}
+
+// ---- public entry points -------------------------------------------
+
+// Branch-aware commit finalise core. Private impl so the legacy
+// wrappers below can forward to it without an export-to-export call
+// (Aether requires forward references resolve in declaration order).
+//
+// Returns:
+//   N >= 0  the new revision number on success
+//   -1      generic failure (txn invalid, base_root missing, write fail)
+//   -12     out of date: at least one txn path was modified on this
+//           branch between base_rev and HEAD. Caller (HTTP handler /
+//           avn cli) should surface this distinct from generic failure.
+finalise_on_branch_(repo: string, txn: ptr,
+                     branch: string,
+                     author: string, logmsg: string,
+                     props_sha1: string, acl_sha1: string) -> int
+    requires txn != null
+    ensures result == 0 - 12 || result == 0 - 1 || result >= 1
+{
+    if string.length(branch) == 0 { branch = "main" }
+
+    base_rev = txn_base_rev(txn)
+    if base_rev < 0 { return 0 - 1 }
+
+    prev = repos_head_rev(repo)
+    if prev < 0 { return 0 - 1 }
+    next = prev + 1
+
+    // Out-of-date check. Classical SVN refuses any commit whose
+    // base_rev predates HEAD AND touches a path another commit
+    // already modified. Without this, a stale WC silently
+    // overwrites HEAD (MB-A); a server-side `avn cp URL@PASTREV`
+    // silently drops siblings (MB-B).
+    if base_rev < prev {
+        if check_txn_out_of_date_(repo, txn, branch, base_rev, prev) == 1 {
+            return 0 - 12
+        }
+    }
+
+    // Rebuild the new tree on top of HEAD's tree, not base_rev's.
+    // Anchoring on base_rev was the load-bearing bug for both MB-A
+    // and MB-B: any sibling top-level dir created between base_rev
+    // and HEAD was absent from the resulting tree. Once the
+    // out-of-date check above rules out path conflicts, applying
+    // the txn's edits on top of HEAD is safe.
+    base_root = load_rev_root_sha1_(repo, prev)
+    if string.length(base_root) == 0 { return 0 - 1 }
+
+    new_root = rebuild_dir(repo, base_root, "", txn)
+    if string.length(new_root) == 0 { return 0 - 1 }
+    new_root = string.copy(new_root)
+
+    // Inherit props / acl from the previous rev when caller passes "".
+    ps = repos_inherit_rev_field(repo, prev, "props", props_sha1)
+    as_ = repos_inherit_rev_field(repo, prev, "acl", acl_sha1)
+    ps = string.copy(ps)
+    as_ = string.copy(as_)
+
+    // Phase 1.3: read merge metadata off the txn (set by wc_merge in
+    // Phase 2.1). Empty source branch → not a merge commit, no
+    // `merged:` field, no ledger write — same byte shape as
+    // pre-merge-ledger commits.
+    merge_tgt    = txn_merge_target_path(txn)
+    merge_src    = txn_merge_source_branch(txn)
+    merge_packed = txn_merge_source_revs_packed(txn)
+    merge_field  = format_merged_field(merge_src, merge_packed)
+    merge_verb_  = txn_merge_verb(txn)
+
+    ts = os.now_utc_iso8601()
+    rev_body = rev_blob_body(new_root, branch, ps, as_, prev, merge_field,
+                                     author, ts, logmsg)
+    rev_sha_borrowed = rep_write_blob(repo, rev_body, string.length(rev_body))
+    if string.length(rev_sha_borrowed) == 0 { return 0 - 1 }
+    rev_sha = string.copy(rev_sha_borrowed)
+
+    // Write the 4-file pointer set (legacy + per-branch).
+    if rev_pointer_write(repo, branch, next, rev_sha) != 0 { return 0 - 1 }
+
+    populate_path_rev_(repo, branch, next, txn)
+
+    // Merge ledger row(s) — atomic enough: rev blob already on disk
+    // (rep_write_blob is content-addressed, so re-writing is a
+    // no-op); the rev pointer file is written; only the ledger
+    // remains. If this fails the rev still landed cleanly — the
+    // ledger can be rebuilt from the rev blob's `merged:` field
+    // via Phase 4.1's verify --rebuild-merges.
+    if string.length(merge_field) > 0 {
+        // Ledger keys on the merge target — what wc_merge passed
+        // as TARGET (e.g. "release_a" for a subdir merge), which
+        // is what `wc_merge`'s eligibility query uses on the next
+        // sweep. Falls back to the branch name when the merge
+        // target is the WC root.
+        ledger_target = merge_tgt
+        if string.length(ledger_target) == 0 { ledger_target = branch }
+        merge_ledger_record(repo, rev_sha, ledger_target, merge_src,
+                            merge_packed, next, merge_verb_, author, ts)
+    }
+
+    return next
+}
+
+// Commit finalise — single entry point. For every commit:
+//   - rev blob gets a `branch:` field identifying the branch advanced
+//   - legacy $repo/revs/NNNNNN and $repo/head pointers still written
+//   - new per-branch layout written too
+//   - path_rev index gets one row per touched path
+//
+// `branch` is typically "main"; pass another name for branch-aware
+// commits. `props_sha1` / `acl_sha1` are "" when the commit doesn't
+// touch props / ACLs.
+//
+// Returns the new rev number on success, -1 on failure.
+commit_finalise(repo: string, txn: ptr, branch: string,
+                       author: string, logmsg: string,
+                       props_sha1: string, acl_sha1: string) -> int
+    requires txn != null
+    ensures result == 0 - 12 || result == 0 - 1 || result >= 1
+{
+    return finalise_on_branch_(repo, txn, branch, author, logmsg,
+                                props_sha1, acl_sha1)
+}
+
+// Branch create: build a filtered copy of an existing branch's tree
+// using a set of glob patterns. Writes the branch dir, spec file,
+// rev pointer set, and a new rev blob with `branch: <name>`.
+//
+//   $repo/branches/<name>/spec         — glob per line
+//   $repo/branches/<name>/head         — rev=N
+//   $repo/branches/<name>/revs/<aa>/<bb>/NNNNNN
+//
+// Returns the new rev number on success, -1 on failure. Constraints:
+//   - `name` must not already exist as a branch
+//   - `base` must exist
+//   - `globs_joined` must be non-empty
+branch_create(repo: string, name: string, base: string,
+                            globs_joined: string, author: string) -> int {
+    if string.length(name) == 0 { return 0 - 1 }
+    if string.length(base) == 0 { return 0 - 1 }
+    if string.length(globs_joined) == 0 { return 0 - 1 }
+
+    br_dir = "${repo}/branches/${name}"
+    if util.io_exists(br_dir) == 1 { return 0 - 1 }
+
+    base_rev = branch_head_rev(repo, base)
+    if base_rev < 0 { return 0 - 1 }
+
+    base_root = load_rev_root_sha1_(repo, base_rev)
+    if string.length(base_root) == 0 { return 0 - 1 }
+
+    // Filter base's tree via the recursive Aether filter. Takes the
+    // same newline-joined globs we'll write to the spec file below.
+    new_root_borrowed = filter_dir(repo, base_root, "", globs_joined)
+    if string.length(new_root_borrowed) == 0 { return 0 - 1 }
+    new_root = string.copy(new_root_borrowed)
+
+    if util.io_mkdir_p(br_dir) != 0 { return 0 - 1 }
+    if write_spec_file_("${br_dir}/spec", globs_joined) != 0 { return 0 - 1 }
+
+    // Cross-branch rev numbering: rev numbers are per-repo, not
+    // per-branch. (See commit message on the original C version.)
+    new_rev = repos_head_rev(repo) + 1
+
+    n_globs = count_globs_(globs_joined)
+    logmsg = "create branch ${name} from ${base} with ${n_globs} include(s)"
+
+    // Branch creation is never a merge — `merged:` stays empty.
+    rev_body = rev_blob_body(new_root, name, "", "", base_rev, "",
+                                     author, os.now_utc_iso8601(), logmsg)
+    rev_sha_borrowed = rep_write_blob(repo, rev_body, string.length(rev_body))
+    if string.length(rev_sha_borrowed) == 0 { return 0 - 1 }
+    rev_sha = string.copy(rev_sha_borrowed)
+
+    if rev_pointer_write(repo, name, new_rev, rev_sha) != 0 { return 0 - 1 }
+    return new_rev
+}
+
+
+// =============================================================================
+// repo_storage/count_reps.ae
+// =============================================================================
+
+// Count .rep files under $repo/reps (recursively), skipping
+// hidden entries. Used by avnadmin for size reporting; every
+// rep-blob file lives under the two-level XX/YY fanout.
+
+
+
+fs_count_rep_files(repo: string) -> int {
+    return count_reps_recurse(string.concat(repo, "/reps"))
+}
+
+count_reps_recurse(dir: string) -> int {
+    d = util.io_listdir(dir)
+    if d == null { return 0 }
+    total = 0
+    n = util.io_listdir_count(d)
+    i = 0
+    while i < n {
+        name = util.io_listdir_name(d, i)
+        name = string.copy(name)
+        skip = 0
+        if string.length(name) == 0 { skip = 1 }
+        if skip == 0 {
+            if string.char_at(name, 0) == 46 { skip = 1 }   // '.'
+        }
+        if skip == 0 {
+            child = string.concat(string.concat(dir, "/"), name)
+            kind = util.io_stat_kind(child)
+            if kind == 2 {
+                total = total + count_reps_recurse(child)
+            }
+            if kind == 1 {
+                nl = string.length(name)
+                if nl > 4 {
+                    suffix = string.substring(name, nl - 4, nl)
+                    if string.equals(suffix, ".rep") == 1 {
+                        total = total + 1
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+    util.io_listdir_free(d)
+    return total
+}
+
+
+// =============================================================================
+// repo_storage/dirblob.ae
+// =============================================================================
+
+// Dir-blob line parser — ported from the eight near-identical
+// "<kind> <sha> <name>\n" scanners across repo_storage/commit_shim.c,
+// repo_storage/txn_shim.c, repos/shim.c, and avnserver/shim.c.
+//
+// Blob format:
+//   f <sha-hex> README\n
+//   d <sha-hex> src\n
+//   ...
+//
+// Sha width varies by repo algo (40 for sha1, 64 for sha256). Everything
+// here is length-aware.
+//
+// The C side calls these in sequence:
+//   n = dir_count_entries(body);
+//   for (i=0; i<n; i++) {
+//     k = dir_entry_kind(body, i);
+//     sha = dir_entry_sha(body, i);
+//     name = dir_entry_name(body, i);
+//   }
+// The three accessors rescan each time (O(n) per call, O(n²) total).
+// That's fine for small directories but explodes for large ones — at
+// 20K-entry dirs the per-commit cost becomes dominant.
+//
+// R287 added a streaming iterator (dir_iter_new / _next / _kind /
+// _sha / _name / _free) for hot loops that iterate every entry in
+// order. Single linear pass = O(n). Hot callers (rebuild_dir,
+// flatten_tree) use the iterator; cold callers (one-off lookups)
+// can stay on the indexed accessors.
+
+
+// Count well-formed entries in `body`. A well-formed line is:
+//   kind ' ' sha-hex ' ' name
+// i.e. at least one char for kind, one space, some non-empty sha,
+// one space, some non-empty name.
+dir_count_entries(body: string) -> int {
+    n = string.length(body)
+    if n == 0 { return 0 }
+    count = 0
+    line_start = 0
+    i = 0
+    while i <= n {
+        at_end = 0
+        c = 0
+        if i == n { at_end = 1 } else { c = string.char_at(body, i) }
+        is_eol = 0
+        if at_end == 1 { is_eol = 1 }
+        if c == 10 { is_eol = 1 }
+        if is_eol == 1 {
+            if line_is_valid(body, line_start, i) == 1 { count = count + 1 }
+            line_start = i + 1
+        }
+        i = i + 1
+    }
+    return count
+}
+
+// Does body[start..end) look like "<kind> <sha> <name>"?
+line_is_valid(body: string, start: int, end: int) -> int {
+    if end - start < 5 { return 0 }
+    // Char 1 must be a space after kind.
+    if string.char_at(body, start + 1) != 32 { return 0 }
+    // Find next space (after sha).
+    i = start + 2
+    sp2 = 0 - 1
+    while i < end {
+        if string.char_at(body, i) == 32 { sp2 = i; break }
+        i = i + 1
+    }
+    if sp2 < 0 { return 0 }
+    sha_len = sp2 - (start + 2)
+    if sha_len <= 0 { return 0 }
+    name_off = sp2 + 1
+    if name_off >= end { return 0 }   // empty name
+    return 1
+}
+
+// Find the start/end offsets of the `target`th valid line. Returns
+// start << 32 | end packed into an int, or -1 if out of range.
+// Aether has 64-bit ints so this works.
+//
+// In practice we split this into two helpers to avoid the bit-pack.
+locate_line_start(body: string, target: int) -> int {
+    n = string.length(body)
+    if n == 0 { return 0 - 1 }
+    count = 0
+    line_start = 0
+    i = 0
+    while i <= n {
+        at_end = 0
+        c = 0
+        if i == n { at_end = 1 } else { c = string.char_at(body, i) }
+        is_eol = 0
+        if at_end == 1 { is_eol = 1 }
+        if c == 10 { is_eol = 1 }
+        if is_eol == 1 {
+            if line_is_valid(body, line_start, i) == 1 {
+                if count == target { return line_start }
+                count = count + 1
+            }
+            line_start = i + 1
+        }
+        i = i + 1
+    }
+    return 0 - 1
+}
+
+locate_line_end(body: string, target: int) -> int {
+    n = string.length(body)
+    if n == 0 { return 0 - 1 }
+    count = 0
+    line_start = 0
+    i = 0
+    while i <= n {
+        at_end = 0
+        c = 0
+        if i == n { at_end = 1 } else { c = string.char_at(body, i) }
+        is_eol = 0
+        if at_end == 1 { is_eol = 1 }
+        if c == 10 { is_eol = 1 }
+        if is_eol == 1 {
+            if line_is_valid(body, line_start, i) == 1 {
+                if count == target { return i }
+                count = count + 1
+            }
+            line_start = i + 1
+        }
+        i = i + 1
+    }
+    return 0 - 1
+}
+
+// Return the kind char (ASCII value) at line `i`. 0 if out of range.
+dir_entry_kind(body: string, i: int) -> int {
+    start = locate_line_start(body, i)
+    if start < 0 { return 0 }
+    return string.char_at(body, start)
+}
+
+// Return the sha-hex at line `i`. "" if out of range.
+dir_entry_sha(body: string, i: int) -> string {
+    start = locate_line_start(body, i)
+    if start < 0 { return "" }
+    end = locate_line_end(body, i)
+    // Find the second space: sha spans from start+2 to that space.
+    j = start + 2
+    while j < end {
+        if string.char_at(body, j) == 32 { break }
+        j = j + 1
+    }
+    return string.substring(body, start + 2, j)
+}
+
+// Return the name at line `i`. "" if out of range.
+dir_entry_name(body: string, i: int) -> string {
+    start = locate_line_start(body, i)
+    if start < 0 { return "" }
+    end = locate_line_end(body, i)
+    j = start + 2
+    while j < end {
+        if string.char_at(body, j) == 32 { break }
+        j = j + 1
+    }
+    if j >= end { return "" }
+    return string.substring(body, j + 1, end)
+}
+
+// Find the entry named `name` (exact match). Returns the kind char
+// (ASCII 'f'/'d') as an int, or 0 if absent.
+dir_find_kind(body: string, name: string) -> int {
+    n = dir_count_entries(body)
+    nlen = string.length(name)
+    i = 0
+    while i < n {
+        ename = dir_entry_name(body, i)
+        if string.length(ename) == nlen {
+            if string.equals(ename, name) == 1 {
+                return dir_entry_kind(body, i)
+            }
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+// Find the entry named `name` and return its sha-hex. "" if absent.
+dir_find_sha(body: string, name: string) -> string {
+    n = dir_count_entries(body)
+    nlen = string.length(name)
+    i = 0
+    while i < n {
+        ename = dir_entry_name(body, i)
+        if string.length(ename) == nlen {
+            if string.equals(ename, name) == 1 {
+                return dir_entry_sha(body, i)
+            }
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// Emit a single dir-blob line: "<kind> <sha> <name>\n". `kind` is the
+// ASCII byte value (102='f', 100='d', 72='H' for redacted). Used by
+// the rebuild, filter, and redact passes that assemble dir blobs.
+dir_entry_line(kind: int, sha: string, name: string) -> string {
+    out = ""
+    // One-byte string from int — build by concat to a 1-byte lookup.
+    // We only need 'f', 'd', 'H' here.
+    if kind == 102 { out = "f " }
+    if kind == 100 { out = "d " }
+    if kind == 72  { out = "H " }
+    if string.length(out) == 0 { return "" }
+    out = string.concat(out, sha)
+    out = string.concat(out, " ")
+    out = string.concat(out, name)
+    return string.concat(out, "\n")
+}
+
+// ---- streaming iterator (R287) -------------------------------------------
+//
+// Walks a dir blob in one linear pass. Hot loops (rebuild_dir,
+// flatten_tree) iterate dir entries in order; the indexed
+// dir_entry_*(body, i) APIs scan from byte 0 every call → O(n²) per
+// loop. The iterator parses one line per dir_iter_next call → O(n).
+//
+// Holds the body string by reference (caller owns it; iterator must
+// not outlive the body). last_sha / last_name are owned copies so
+// callers can hold them across subsequent next() calls without
+// worrying about re-parse churn.
+
+extern malloc(size: int) -> ptr
+extern free(p: ptr)
+
+struct DirIter {
+    body:      string    // borrowed
+    pos:       int       // next byte to scan in body
+    last_kind: int       // ASCII char (102 = 'f', 100 = 'd', 72 = 'H')
+    last_sha:  string    // owned copy
+    last_name: string    // owned copy
+}
+
+// Construct an iterator over `body`. Returns null on alloc failure.
+// `body` is borrowed — the caller must keep it alive until dir_iter_free.
+dir_iter_new(body: string) -> ptr {
+    raw = malloc(48)
+    if raw == null { return null }
+    it = raw as *DirIter
+    it.body      = body
+    it.pos       = 0
+    it.last_kind = 0
+    it.last_sha  = string.copy("")
+    it.last_name = string.copy("")
+    return raw
+}
+
+// Advance to the next valid entry. Returns 1 if found (kind/sha/name
+// accessors now reflect that entry), 0 when exhausted.
+dir_iter_next(it_ptr: ptr) -> int {
+    if it_ptr == null { return 0 }
+    it = it_ptr as *DirIter
+    body = it.body
+    n = string.length(body)
+    pos = it.pos
+    while pos < n {
+        // Find end of this line.
+        eol = pos
+        while eol < n {
+            if string.char_at(body, eol) == 10 { break }
+            eol = eol + 1
+        }
+        if line_is_valid(body, pos, eol) == 1 {
+            // Parse: kind at pos; one space; sha until next space; name until eol.
+            kind_byte = string.char_at(body, pos)
+            j = pos + 2
+            while j < eol {
+                if string.char_at(body, j) == 32 { break }
+                j = j + 1
+            }
+            it.last_kind = kind_byte
+            it.last_sha  = string.copy(string.substring(body, pos + 2, j))
+            it.last_name = string.copy(string.substring(body, j + 1, eol))
+            it.pos = eol + 1
+            return 1
+        }
+        pos = eol + 1
+    }
+    it.pos = n
+    return 0
+}
+
+dir_iter_kind(it_ptr: ptr) -> int {
+    if it_ptr == null { return 0 }
+    it = it_ptr as *DirIter
+    return it.last_kind
+}
+
+dir_iter_sha(it_ptr: ptr) -> string {
+    if it_ptr == null { return "" }
+    it = it_ptr as *DirIter
+    return it.last_sha
+}
+
+dir_iter_name(it_ptr: ptr) -> string {
+    if it_ptr == null { return "" }
+    it = it_ptr as *DirIter
+    return it.last_name
+}
+
+dir_iter_free(it_ptr: ptr) {
+    if it_ptr == null { return }
+    free(it_ptr)
+    return
+}
+
+
+// =============================================================================
+// repo_storage/filter.ae
+// =============================================================================
+
+// Recursive dir-blob filter for repo_storage/commit_shim.c.
+//
+// Given a source tree (rooted at `src_sha`) and a newline-separated
+// list of include globs, produce a filtered tree and return its new
+// root sha. Recurses into subtrees; dirs with no surviving descendants
+// are dropped (except if the dir itself matches a glob literally).
+//
+// The rep store is owned by C (rep_read_blob / _write_blob /
+// _free). This module is the pure recursion + decision logic.
+
+
+// --- C FFI into the rep store + line-level helpers ------------------------
+
+
+// Dir-blob parsers ported earlier in repo_storage/dirblob.ae.
+
+// Repo-path + glob helpers.
+
+// --- exported entry point --------------------------------------------------
+
+// Recursive filter. Returns a sha-hex (string) on success, "" on any
+// failure (including "source blob is missing"). The "no descendants
+// survived" case returns the sha of the empty blob, which callers can
+// detect by reading back the blob and checking length == 0.
+//
+// `globs_joined` is one include-glob per line. Pass the same format
+// `spec_matches_any` expects.
+filter_dir(repo: string, src_sha: string, prefix: string,
+                  globs_joined: string) -> string {
+    src_body = rep_read_blob(repo, src_sha)
+    if string.length(src_body) == 0 {
+        // Empty-dir source blob is legitimate; NULL-ish return from
+        // read_blob is the "missing" case — but the C wrapper returns
+        // "" on both. We can't distinguish here; assume missing.
+        return ""
+    }
+
+    body = ""
+    n_entries = dir_count_entries(src_body)
+    i = 0
+    while i < n_entries {
+        kind = dir_entry_kind(src_body, i)
+        // Snapshot name/sha BEFORE any other dir_* call
+        // (thread-local buffers get overwritten).
+        child_sha = dir_entry_sha(src_body, i)
+        child_name = dir_entry_name(src_body, i)
+        child_path = path_join_rel(prefix, child_name)
+
+        include = 0
+        emit_sha = ""
+
+        if kind == 102 {              // 'f' (file)
+            if spec_matches_any(child_path, globs_joined) == 1 {
+                include = 1
+                emit_sha = child_sha
+            }
+        }
+        if kind == 100 {              // 'd' (directory)
+            // Recurse into the subtree.
+            sub = filter_dir(repo, child_sha, child_path, globs_joined)
+            if string.length(sub) > 0 {
+                // The sub might be empty — read back and check. An
+                // empty-dir blob has length 0. Callers-above semantics:
+                // we include this dir if either (a) descendants
+                // survived OR (b) the dir path itself matches a glob.
+                sub_body = rep_read_blob(repo, sub)
+                sub_is_empty = 0
+                if string.length(sub_body) == 0 { sub_is_empty = 1 }
+                rep_free(sub_body)
+
+                descendants = 0
+                if sub_is_empty == 0 { descendants = 1 }
+                dir_matches = spec_matches_any(child_path, globs_joined)
+
+                if descendants == 1 {
+                    include = 1
+                    emit_sha = sub
+                }
+                if dir_matches == 1 {
+                    include = 1
+                    emit_sha = sub
+                }
+            }
+        }
+
+        if include == 1 {
+            body = string.concat(body, dir_entry_line(kind, emit_sha, child_name))
+        }
+
+        i = i + 1
+    }
+
+    rep_free(src_body)
+
+    new_sha = rep_write_blob(repo, body, string.length(body))
+    return new_sha
+}
+
+
+// =============================================================================
+// repo_storage/format_line.ae
+// =============================================================================
+
+// $repo/format line parser. Was ported from C-side
+// repo_primary_hash + repo_secondary_hashes; both
+// retired (Rounds 132 / 136 respectively) once the .ae callers
+// switched to these accessors directly.
+//
+// Format line shapes (caller has already read the file, trimmed, and
+// passed the first line):
+//   "svnae-fsfs-1"                     (legacy — assumed sha1)
+//   "svnae-fsfs-1 sha256"              (primary = sha256)
+//   "svnae-fsfs-1 sha256,sha1"         (primary = sha256, sha1 secondary)
+//   "svnae-fsfs-1 sha256,sha1,blake"   (many secondaries)
+//
+// Exports:
+//   format_primary_hash(line) -> string   ("" if absent → caller uses "sha1")
+//   format_secondary_count(line) -> int
+//   format_secondary_hash(line, i) -> string  ("" if i out of range)
+
+
+// Find first space; return byte offset after it, or -1 if no space.
+after_first_space(line: string) -> int {
+    n = string.length(line)
+    i = 0
+    while i < n {
+        if string.char_at(line, i) == 32 { return i + 1 }
+        i = i + 1
+    }
+    return 0 - 1
+}
+
+format_primary_hash(line: string) -> string {
+    start = after_first_space(line)
+    if start < 0 { return "" }
+    n = string.length(line)
+    // Primary is up to the first comma (or end).
+    i = start
+    while i < n {
+        if string.char_at(line, i) == 44 { break }
+        i = i + 1
+    }
+    return string.substring(line, start, i)
+}
+
+format_secondary_count(line: string) -> int {
+    start = after_first_space(line)
+    if start < 0 { return 0 }
+    n = string.length(line)
+    // Skip primary.
+    i = start
+    while i < n {
+        if string.char_at(line, i) == 44 { break }
+        i = i + 1
+    }
+    if i >= n { return 0 }
+    // Count comma-separated tokens after the primary's trailing comma.
+    count = 0
+    i = i + 1   // past the first comma
+    tok_start = i
+    while i <= n {
+        at_end = 0
+        c = 0
+        if i == n { at_end = 1 } else { c = string.char_at(line, i) }
+        is_sep = 0
+        if at_end == 1 { is_sep = 1 }
+        if c == 44 { is_sep = 1 }
+        if is_sep == 1 {
+            if i > tok_start { count = count + 1 }
+            tok_start = i + 1
+        }
+        i = i + 1
+    }
+    return count
+}
+
+format_secondary_hash(line: string, target: int) -> string {
+    start = after_first_space(line)
+    if start < 0 { return "" }
+    n = string.length(line)
+    i = start
+    while i < n {
+        if string.char_at(line, i) == 44 { break }
+        i = i + 1
+    }
+    if i >= n { return "" }
+    idx = 0
+    i = i + 1
+    tok_start = i
+    while i <= n {
+        at_end = 0
+        c = 0
+        if i == n { at_end = 1 } else { c = string.char_at(line, i) }
+        is_sep = 0
+        if at_end == 1 { is_sep = 1 }
+        if c == 44 { is_sep = 1 }
+        if is_sep == 1 {
+            if i > tok_start {
+                if idx == target { return string.substring(line, tok_start, i) }
+                idx = idx + 1
+            }
+            tok_start = i + 1
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// Rev-blob body formatter — ported from the three snprintf sites in
+// repo_storage/commit_shim.c that all build the same header.
+// Fields, in order:
+//
+//   root: <sha>
+//   branch: <name>
+//   props: <sha>
+//   acl: <sha>
+//   prev: <int>
+//   merged: <source_branch>:<sha1>,<sha2>,...   (Round 271+; omitted when "")
+//   author: <user>
+//   date: <iso8601>
+//   log: <message>
+//
+// `merged` is the canonical record of what source revs this commit
+// integrated — see TODO MB-H. Empty `merged` means a non-merge
+// commit (the common case); the line is then omitted entirely so
+// the blob's bytes don't change for non-merge commits and old
+// rev-blob layouts continue to round-trip exactly.
+rev_blob_body(root: string, branch: string, props: string, acl: string,
+                     prev: int, merged: string,
+                     author: string, date: string, log: string) -> string {
+    out = "root: "
+    out = string.concat(out, root)
+    out = string.concat(out, "\nbranch: ")
+    out = string.concat(out, branch)
+    out = string.concat(out, "\nprops: ")
+    out = string.concat(out, props)
+    out = string.concat(out, "\nacl: ")
+    out = string.concat(out, acl)
+    out = string.concat(out, "\nprev: ")
+    out = string.concat(out, string.from_int(prev))
+    if string.length(merged) > 0 {
+        out = string.concat(out, "\nmerged: ")
+        out = string.concat(out, merged)
+    }
+    out = string.concat(out, "\nauthor: ")
+    out = string.concat(out, author)
+    out = string.concat(out, "\ndate: ")
+    out = string.concat(out, date)
+    out = string.concat(out, "\nlog: ")
+    out = string.concat(out, log)
+    out = string.concat(out, "\n")
+    return out
+}
+
+// Encode the `merged:` line value. Phase 1.2 shape:
+//
+//   <source_branch>:<sha1>,<sha2>,<sha3>
+//
+// `source_revs_packed` is "\n"-separated SHAs (the same shape that
+// merge_ledger_record consumes). Returns "" when the source branch
+// is empty or no source revs were recorded — caller passes that
+// through to rev_blob_body and the merged: line is omitted.
+//
+// Verb (applied / record-only / reverse) is NOT in the rev blob
+// field — that's a ledger-only concern. Rebuild from rev blob
+// (Phase 4.1) assumes verb=applied; record-only and reverse are
+// special cases relevant to forward sweeps and reportage but not
+// to the canonical "what got integrated" question.
+format_merged_field(source_branch: string,
+                           source_revs_packed: string) -> string {
+    if string.length(source_branch) == 0     { return "" }
+    if string.length(source_revs_packed) == 0 { return "" }
+    n = string.length(source_revs_packed)
+    out = string.concat(source_branch, ":")
+    first = 1
+    seg_start = 0
+    i = 0
+    while i <= n {
+        at_end = 0
+        if i == n { at_end = 1 }
+        if at_end == 0 {
+            c = string.char_at(source_revs_packed, i)
+            if c == 10 { at_end = 1 }
+        }
+        if at_end == 1 {
+            if i > seg_start {
+                sha = string.substring(source_revs_packed, seg_start, i)
+                if first == 0 { out = string.concat(out, ",") }
+                out = string.concat(out, sha)
+                first = 0
+            }
+            seg_start = i + 1
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// Decode a `merged:` field value back into (source_branch,
+// source_revs_packed). Inverse of format_merged_field. Returns
+// ("", "") on malformed input.
+//
+// Returns the SHA list in the same "\n"-separated shape the rest
+// of merge_ledger consumes.
+parse_merged_field(value: string) -> (string, string) {
+    n = string.length(value)
+    if n == 0 { return "", "" }
+    // Split on the first ':'.
+    colon = 0 - 1
+    i = 0
+    while i < n {
+        if string.char_at(value, i) == 58 { colon = i; break }
+        i = i + 1
+    }
+    if colon < 0     { return "", "" }
+    if colon == 0    { return "", "" }
+    if colon == n - 1 { return "", "" }
+    src = string.substring(value, 0, colon)
+    // Remaining is comma-separated SHAs; convert to newline-separated.
+    out = ""
+    seg_start = colon + 1
+    j = colon + 1
+    while j <= n {
+        at_end = 0
+        if j == n { at_end = 1 }
+        if at_end == 0 {
+            c = string.char_at(value, j)
+            if c == 44 { at_end = 1 }   // ','
+        }
+        if at_end == 1 {
+            if j > seg_start {
+                out = string.concat(out, string.substring(value, seg_start, j))
+                out = string.concat(out, "\n")
+            }
+            seg_start = j + 1
+        }
+        j = j + 1
+    }
+    return src, out
+}
+
+
+// Sort the "<sha> <path>" lines in `body` by path ascending, preserving
+// exact line contents. Used by paths-acl / paths-props blob builders in
+// repo_storage/commit_shim.c.
+//
+// Input / output are newline-separated. Blank/malformed lines dropped.
+// O(n²) insertion sort — n is small (touched paths per commit).
+paths_index_sort(body: string) -> string {
+    // Split into lines.
+    n = string.length(body)
+    if n == 0 { return "" }
+    // Walk once collecting (path, full_line) pairs as pipe-joined string:
+    //   path1\t fullline1 \n path2 \t fullline2 \n ...
+    // Sort with insertion sort on path. Final output: fullline1 \n fullline2 \n ...
+    //
+    // We store the structured list in a single pipe/newline-encoded string.
+    entries = ""
+    line_start = 0
+    i = 0
+    while i <= n {
+        at_end = 0
+        c = 0
+        if i == n { at_end = 1 } else { c = string.char_at(body, i) }
+        is_eol = 0
+        if at_end == 1 { is_eol = 1 }
+        if c == 10 { is_eol = 1 }
+        if is_eol == 1 {
+            if i > line_start {
+                // Find first space.
+                sp = line_start
+                while sp < i {
+                    if string.char_at(body, sp) == 32 { break }
+                    sp = sp + 1
+                }
+                if sp > line_start && sp < i {
+                    path = string.substring(body, sp + 1, i)
+                    line = string.substring(body, line_start, i)
+                    entries = pilins_insert_sorted(entries, path, line)
+                }
+            }
+            line_start = i + 1
+        }
+        i = i + 1
+    }
+    // Strip path prefixes — entries format is "path\tline\n".
+    out = ""
+    m = string.length(entries)
+    start = 0
+    j = 0
+    while j < m {
+        cc = string.char_at(entries, j)
+        if cc == 9 {   // tab: everything after up to newline is the line
+            k = j + 1
+            while k < m {
+                if string.char_at(entries, k) == 10 { break }
+                k = k + 1
+            }
+            out = string.concat(out, string.substring(entries, j + 1, k))
+            out = string.concat(out, "\n")
+            j = k + 1
+            start = j
+        } else {
+            j = j + 1
+        }
+    }
+    return out
+}
+
+// Insert (path, line) into `entries` (path\tline\n ...) keeping sorted
+// ascending by path. Returns new entries string.
+pilins_insert_sorted(entries: string, path: string, line: string) -> string {
+    n = string.length(entries)
+    plen = string.length(path)
+    if n == 0 {
+        out = string.concat(path, "\t")
+        out = string.concat(out, line)
+        return string.concat(out, "\n")
+    }
+    out = ""
+    inserted = 0
+    line_start = 0
+    i = 0
+    while i < n {
+        // Current entry: entries[line_start..eol], path is [line_start..tab]
+        tab = line_start
+        while tab < n {
+            if string.char_at(entries, tab) == 9 { break }
+            tab = tab + 1
+        }
+        eol = tab
+        while eol < n {
+            if string.char_at(entries, eol) == 10 { break }
+            eol = eol + 1
+        }
+        this_path = string.substring(entries, line_start, tab)
+        if inserted == 0 {
+            if string.compare(path, this_path) < 0 {
+                one = string.concat(path, "\t")
+                one = string.concat(one, line)
+                one = string.concat(one, "\n")
+                out = string.concat(out, one)
+                inserted = 1
+            }
+        }
+        out = string.concat(out, string.substring(entries, line_start, eol + 1))
+        line_start = eol + 1
+        i = line_start
+    }
+    if inserted == 0 {
+        one = string.concat(path, "\t")
+        one = string.concat(one, line)
+        one = string.concat(one, "\n")
+        out = string.concat(out, one)
+    }
+    return out
+}
+
+
+// =============================================================================
+// repo_storage/merge_ledger.ae
+// =============================================================================
+
+// Server-side merge ledger.
+//
+// Replaces classical SVN's `svn:mergeinfo` property — which lived in
+// versioned content, was hand-editable, was path-keyed (so it broke
+// on rename), accumulated subtree-creep, and put merge tracking in
+// user space.
+//
+// avn keeps merge tracking server-side in `<repo>/merges.db`. The
+// rev blob carries a `merged: <source_branch>:<sha>,<sha>...` field
+// (added by repo_storage/commit_finalise.ae) which is the canonical
+// source of truth; the SQLite tables here are a derived index, fast
+// for the queries `wc_merge` actually runs:
+//
+//   "is source rev S integrated into target branch T?"
+//   "list all source revs from B integrated into T"
+//   "filter this candidate list to revs not yet integrated into T"
+//
+// Re-buildable from rev blobs at any time (`avnadmin verify
+// --rebuild-merges`, Phase 4).
+//
+// Schema:
+//
+//   merge_event      one row per merge commit: who/when/from-where
+//                    (rev_sha is the merge commit's own SHA — what's
+//                     stored in the per-branch revs/ pointer file)
+//   merge_source_rev one row per (target_branch, source_branch,
+//                                 source_rev_sha) — the question
+//                    "is X integrated?" reduces to a primary-key
+//                    lookup. target_branch + source_branch are
+//                    denormalised onto this table for query speed.
+//
+// Every operation is run inside the same SQLite transaction the
+// commit's other index work uses (path_rev population), so a merge
+// commit's rev blob, branch head pointer, path_rev rows, and
+// merge_event rows all land or none do.
+
+
+const MERGE_VERB_APPLIED      = 0    // diff was applied to the target
+const MERGE_VERB_RECORD_ONLY  = 1    // -s ours / --record-only — no diff applied
+const MERGE_VERB_REVERSE      = 2    // reverse merge — undoes a prior forward
+
+const SQLITE_ROW  = 100
+const SQLITE_DONE = 101
+
+// ---- private helpers -----------------------------------------------------
+
+// Open <repo>/merges.db, creating the file + schema lazily on first
+// use. Idempotent — `CREATE TABLE IF NOT EXISTS` makes repeat opens
+// cheap, and old repos that predate this round upgrade silently on
+// the first merge.
+//
+// merge_event.rev_num is the global rev number at which this merge
+// committed, used by Round 276 / Phase 2.3 for as-of-rev filtering
+// (a WC checked out at base_rev=N sees only ledger entries with
+// rev_num <= N — same checkout-versioned semantics classical SVN
+// got from versioning the svn:mergeinfo property).
+//
+// Round 281 — schema v2: merge_source_rev PK widens from
+// (target, source, source_rev_sha) to (target, source, source_rev_sha,
+// rev_sha). The narrower v1 PK was wrong for reverse merges — a
+// forward merge of r5 followed by a reverse merge of r5 needs two
+// rows so the latest-verb-wins query can find both events. With v1's
+// PK the second INSERT OR IGNORE silently dropped the reverse,
+// pinning the integrated state to whichever merge happened first.
+//
+// Per the "no older repos" guarantee (we and the user are the first
+// avn users; nothing in the wild predates this round), there's no
+// migration code — `CREATE TABLE IF NOT EXISTS` simply lays down the
+// v2 schema for fresh repos. Pre-Round-281 fixtures need to be
+// regenerated; see the round commit notes.
+ledger_open_(repo: string) -> ptr {
+    db, oerr = sqlite.open("${repo}/merges.db")
+    if string.length(oerr) > 0 { return null }
+    err = sqlite.exec(db,
+        "CREATE TABLE IF NOT EXISTS merge_event (  rev_sha TEXT NOT NULL,  target_branch TEXT NOT NULL,  source_branch TEXT NOT NULL,  rev_num INTEGER NOT NULL DEFAULT 0,  verb INTEGER NOT NULL,  author TEXT NOT NULL,  ts TEXT NOT NULL,  PRIMARY KEY (rev_sha, source_branch));CREATE TABLE IF NOT EXISTS merge_source_rev (  target_branch  TEXT NOT NULL,  source_branch  TEXT NOT NULL,  source_rev_sha TEXT NOT NULL,  rev_sha        TEXT NOT NULL,  PRIMARY KEY (target_branch, source_branch, source_rev_sha, rev_sha));CREATE INDEX IF NOT EXISTS msr_target_sha ON merge_source_rev (target_branch, source_rev_sha);CREATE INDEX IF NOT EXISTS me_target ON merge_event (target_branch);")
+    if string.length(err) > 0 { sqlite.close(db); return null }
+    return db
+}
+
+// Append one source-rev SHA (newline-terminated) into a packed string.
+append_packed_(out: string, sha: string) -> string {
+    if string.length(sha) == 0 { return out }
+    s = string.concat(out, sha)
+    return string.concat(s, "\n")
+}
+
+// Iterate a "\n"-separated set of SHAs, calling `record_one` per item.
+// Stops on first record failure.
+record_each_(db: ptr, target_branch: string, source_branch: string,
+             rev_sha: string, packed: string) -> int {
+    n = string.length(packed)
+    if n == 0 { return 0 }
+
+    stmt, perr = sqlite.prepare(db,
+        "INSERT OR IGNORE INTO merge_source_rev (target_branch, source_branch, source_rev_sha, rev_sha) VALUES (?, ?, ?, ?)")
+    if string.length(perr) > 0 { return 0 - 1 }
+
+    rc = 0
+    i = 0
+    seg_start = 0
+    while i <= n {
+        at_end = 0
+        if i == n           { at_end = 1 }
+        if at_end == 0 {
+            c = string.char_at(packed, i)
+            if c == 10 { at_end = 1 }
+        }
+        if at_end == 1 {
+            if i > seg_start {
+                sha = string.substring(packed, seg_start, i)
+                sqlite.bind_text(stmt, 1, target_branch)
+                sqlite.bind_text(stmt, 2, source_branch)
+                sqlite.bind_text(stmt, 3, sha)
+                sqlite.bind_text(stmt, 4, rev_sha)
+                sc, _ = sqlite.step(stmt, db)
+                sqlite.reset(stmt)
+                if sc != SQLITE_DONE { rc = 0 - 1 }
+            }
+            seg_start = i + 1
+        }
+        i = i + 1
+    }
+    sqlite.finalize(stmt)
+    return rc
+}
+
+// ---- public API ----------------------------------------------------------
+
+// Eagerly install the schema. Called by `avnadmin create` so a fresh
+// repo has empty merge_event / merge_source_rev tables on disk
+// immediately. The lazy-init path in `ledger_open_` handles older
+// repos that pre-date this round. Returns "" on success, error
+// message on failure.
+merge_ledger_init_schema(repo: string) -> string {
+    db = ledger_open_(repo)
+    if db == null { return "merge_ledger: open/init failed" }
+    sqlite.close(db)
+    return ""
+}
+
+// Record one merge event. `source_revs_packed` is "\n"-separated SHAs
+// — the source revs this merge integrated. `verb` is MERGE_VERB_APPLIED
+// or MERGE_VERB_RECORD_ONLY.
+//
+// Returns 0 on success, -1 on infrastructure failure. Idempotent on
+// the (rev_sha, source_branch) and (target, source, source_rev_sha)
+// keys via INSERT OR IGNORE — re-running merge_ledger_record with
+// identical args is a no-op, which means avnadmin's rebuild path
+// can safely re-record without truncate.
+merge_ledger_record(repo: string,
+                           rev_sha: string,
+                           target_branch: string,
+                           source_branch: string,
+                           source_revs_packed: string,
+                           rev_num: int,
+                           verb: int,
+                           author: string,
+                           ts: string) -> int {
+    if string.length(rev_sha) == 0       { return 0 - 1 }
+    if string.length(target_branch) == 0 { return 0 - 1 }
+    if string.length(source_branch) == 0 { return 0 - 1 }
+
+    db = ledger_open_(repo)
+    if db == null { return 0 - 1 }
+
+    sqlite.exec(db, "BEGIN")
+
+    stmt, perr = sqlite.prepare(db,
+        "INSERT OR IGNORE INTO merge_event (rev_sha, target_branch, source_branch, rev_num, verb, author, ts) VALUES (?, ?, ?, ?, ?, ?, ?)")
+    if string.length(perr) > 0 {
+        sqlite.exec(db, "ROLLBACK")
+        sqlite.close(db)
+        return 0 - 1
+    }
+    sqlite.bind_text(stmt, 1, rev_sha)
+    sqlite.bind_text(stmt, 2, target_branch)
+    sqlite.bind_text(stmt, 3, source_branch)
+    sqlite.bind_int (stmt, 4, rev_num)
+    sqlite.bind_int (stmt, 5, verb)
+    sqlite.bind_text(stmt, 6, author)
+    sqlite.bind_text(stmt, 7, ts)
+    sc, _ = sqlite.step(stmt, db)
+    sqlite.finalize(stmt)
+    if sc != SQLITE_DONE {
+        sqlite.exec(db, "ROLLBACK")
+        sqlite.close(db)
+        return 0 - 1
+    }
+
+    rc = record_each_(db, target_branch, source_branch, rev_sha, source_revs_packed)
+    if rc != 0 {
+        sqlite.exec(db, "ROLLBACK")
+        sqlite.close(db)
+        return 0 - 1
+    }
+
+    sqlite.exec(db, "COMMIT")
+    sqlite.close(db)
+    return 0
+}
+
+// Is `source_rev_sha` integrated into `target_branch` from
+// `source_branch`, AS-OF the caller's view rev? Returns 1 if yes,
+// 0 if no, -1 on infrastructure failure. Pass as_of_rev=0 to mean
+// "any time" (no filtering).
+//
+// The as-of filter joins to merge_event.rev_num: only rows whose
+// merge commit landed at rev_num <= as_of_rev count. This gives
+// a WC checked out at base_rev=N the same eligibility view it
+// would have had pre-Round-276 with svn:mergeinfo (which was
+// versioned content, so a checkout at N saw only mergeinfo from
+// commits <= N).
+merge_ledger_is_integrated(repo: string,
+                                  target_branch: string,
+                                  source_branch: string,
+                                  source_rev_sha: string) -> int {
+    return merge_ledger_is_integrated_as_of_(repo, target_branch,
+                                             source_branch, source_rev_sha, 0)
+}
+
+merge_ledger_is_integrated_as_of_(repo: string,
+                                  target_branch: string,
+                                  source_branch: string,
+                                  source_rev_sha: string,
+                                  as_of_rev: int) -> int {
+    db = ledger_open_(repo)
+    if db == null { return 0 - 1 }
+
+    // Latest-verb-wins (Round 281). Find the most recent merge_event
+    // for (target, source, source_rev_sha) — by descending rev_num —
+    // and return integrated iff its verb is APPLIED or RECORD_ONLY
+    // (verb < 2). A trailing reverse merge (verb=2) flips the rev
+    // back to "not integrated"; a forward merge after a reverse
+    // flips it back. as_of_rev filters merge events to those at or
+    // before the caller's view rev (0 = no filter).
+    sql_text = ""
+    if as_of_rev <= 0 {
+        sql_text = "SELECT me.verb FROM merge_source_rev msr JOIN merge_event me ON msr.rev_sha = me.rev_sha AND msr.source_branch = me.source_branch WHERE msr.target_branch = ? AND msr.source_branch = ? AND msr.source_rev_sha = ? ORDER BY me.rev_num DESC LIMIT 1"
+    } else {
+        sql_text = "SELECT me.verb FROM merge_source_rev msr JOIN merge_event me ON msr.rev_sha = me.rev_sha AND msr.source_branch = me.source_branch WHERE msr.target_branch = ? AND msr.source_branch = ? AND msr.source_rev_sha = ? AND me.rev_num <= ? ORDER BY me.rev_num DESC LIMIT 1"
+    }
+    stmt, perr = sqlite.prepare(db, sql_text)
+    if string.length(perr) > 0 { sqlite.close(db); return 0 - 1 }
+    sqlite.bind_text(stmt, 1, target_branch)
+    sqlite.bind_text(stmt, 2, source_branch)
+    sqlite.bind_text(stmt, 3, source_rev_sha)
+    if as_of_rev > 0 { sqlite.bind_int(stmt, 4, as_of_rev) }
+    sc, _ = sqlite.step(stmt, db)
+    verb = MERGE_VERB_REVERSE
+    if sc == SQLITE_ROW { verb = sqlite.column_int(stmt, 0) }
+    sqlite.finalize(stmt)
+    sqlite.close(db)
+    if sc != SQLITE_ROW { return 0 }
+    if verb == MERGE_VERB_REVERSE { return 0 }
+    return 1
+}
+
+// As-of-rev variant exposed for callers that need it (the
+// runs-for-range computation in merge_ledger_runs.ae).
+merge_ledger_is_integrated_as_of(repo: string,
+                                        target_branch: string,
+                                        source_branch: string,
+                                        source_rev_sha: string,
+                                        as_of_rev: int) -> int {
+    return merge_ledger_is_integrated_as_of_(repo, target_branch,
+                                             source_branch, source_rev_sha,
+                                             as_of_rev)
+}
+
+// R284 — was the LATEST merge event for this (target, source,
+// source_rev_sha) a reverse merge (verb=2)? Used by the
+// reverse-merge filter to skip revs that are already in a reversed
+// state (so `merge -c -N` twice in a row → second is a no-op).
+//
+// Returns:
+//   1 if a row exists AND latest verb == REVERSE
+//   0 if no row OR latest verb != REVERSE  (classical-SVN reverse
+//                                            of an untracked rev
+//                                            still applies)
+//  -1 on infrastructure failure
+//
+// as_of_rev=0 means "no time filter" (any-time history).
+merge_ledger_was_last_reverse_as_of(repo: string,
+                                           target_branch: string,
+                                           source_branch: string,
+                                           source_rev_sha: string,
+                                           as_of_rev: int) -> int {
+    db = ledger_open_(repo)
+    if db == null { return 0 - 1 }
+
+    sql_text = ""
+    if as_of_rev <= 0 {
+        sql_text = "SELECT me.verb FROM merge_source_rev msr JOIN merge_event me ON msr.rev_sha = me.rev_sha AND msr.source_branch = me.source_branch WHERE msr.target_branch = ? AND msr.source_branch = ? AND msr.source_rev_sha = ? ORDER BY me.rev_num DESC LIMIT 1"
+    } else {
+        sql_text = "SELECT me.verb FROM merge_source_rev msr JOIN merge_event me ON msr.rev_sha = me.rev_sha AND msr.source_branch = me.source_branch WHERE msr.target_branch = ? AND msr.source_branch = ? AND msr.source_rev_sha = ? AND me.rev_num <= ? ORDER BY me.rev_num DESC LIMIT 1"
+    }
+    stmt, perr = sqlite.prepare(db, sql_text)
+    if string.length(perr) > 0 { sqlite.close(db); return 0 - 1 }
+    sqlite.bind_text(stmt, 1, target_branch)
+    sqlite.bind_text(stmt, 2, source_branch)
+    sqlite.bind_text(stmt, 3, source_rev_sha)
+    if as_of_rev > 0 { sqlite.bind_int(stmt, 4, as_of_rev) }
+    sc, _ = sqlite.step(stmt, db)
+    verb = 0 - 1
+    if sc == SQLITE_ROW { verb = sqlite.column_int(stmt, 0) }
+    sqlite.finalize(stmt)
+    sqlite.close(db)
+    if sc != SQLITE_ROW { return 0 }
+    if verb == MERGE_VERB_REVERSE { return 1 }
+    return 0
+}
+
+// List all source revs from `source_branch` integrated into
+// `target_branch`. Returned as a "\n"-separated packed string of
+// SHAs (possibly empty). Intended for `avn merged --integrated`
+// and similar reporting.
+//
+// Round 281: filter on latest-verb-wins. A source rev whose most
+// recent merge event was a reverse merge (verb=2) is excluded —
+// the rev is no longer in the target branch's integrated set.
+// Implemented via a correlated subquery that finds the latest
+// verb per (target, source, source_rev_sha) tuple.
+merge_ledger_integrated_set(repo: string,
+                                   target_branch: string,
+                                   source_branch: string) -> string {
+    db = ledger_open_(repo)
+    if db == null { return "" }
+
+    stmt, perr = sqlite.prepare(db,
+        "SELECT DISTINCT msr.source_rev_sha FROM merge_source_rev msr WHERE msr.target_branch = ? AND msr.source_branch = ? AND (SELECT me.verb FROM merge_source_rev msr2 JOIN merge_event me ON me.rev_sha = msr2.rev_sha AND me.source_branch = msr2.source_branch WHERE msr2.target_branch = msr.target_branch AND msr2.source_branch = msr.source_branch AND msr2.source_rev_sha = msr.source_rev_sha ORDER BY me.rev_num DESC LIMIT 1) != 2 ORDER BY msr.source_rev_sha")
+    if string.length(perr) > 0 { sqlite.close(db); return "" }
+    sqlite.bind_text(stmt, 1, target_branch)
+    sqlite.bind_text(stmt, 2, source_branch)
+
+    out = ""
+    sc, _ = sqlite.step(stmt, db)
+    while sc == SQLITE_ROW {
+        sha = sqlite.column_text(stmt, 0)
+        out = append_packed_(out, sha)
+        sc, _ = sqlite.step(stmt, db)
+    }
+    sqlite.finalize(stmt)
+    sqlite.close(db)
+    return out
+}
+
+// Filter `candidate_revs_packed` to the subset NOT yet integrated
+// into `target_branch` from `source_branch`. Order is preserved.
+// Returned as "\n"-separated packed string.
+//
+// This is the call wc_merge will make during a sweep merge to
+// compute which revs to actually apply. Implemented as one prepared
+// statement bound per candidate — at typical scale (a few dozen
+// candidates) the SQLite overhead is irrelevant.
+merge_ledger_eligible_revs(repo: string,
+                                  target_branch: string,
+                                  source_branch: string,
+                                  candidate_revs_packed: string) -> string {
+    n = string.length(candidate_revs_packed)
+    if n == 0 { return "" }
+
+    db = ledger_open_(repo)
+    if db == null { return "" }
+
+    // Latest-verb-wins (Round 281): a candidate is eligible if its
+    // most recent merge event was a reverse merge (verb=2) OR there's
+    // no merge event at all. The query returns the verb of the most
+    // recent matching event — eligible iff the row is missing or
+    // verb=2.
+    stmt, perr = sqlite.prepare(db,
+        "SELECT me.verb FROM merge_source_rev msr JOIN merge_event me ON msr.rev_sha = me.rev_sha AND msr.source_branch = me.source_branch WHERE msr.target_branch = ? AND msr.source_branch = ? AND msr.source_rev_sha = ? ORDER BY me.rev_num DESC LIMIT 1")
+    if string.length(perr) > 0 { sqlite.close(db); return "" }
+
+    out = ""
+    i = 0
+    seg_start = 0
+    while i <= n {
+        at_end = 0
+        if i == n           { at_end = 1 }
+        if at_end == 0 {
+            c = string.char_at(candidate_revs_packed, i)
+            if c == 10 { at_end = 1 }
+        }
+        if at_end == 1 {
+            if i > seg_start {
+                sha = string.substring(candidate_revs_packed, seg_start, i)
+                sqlite.bind_text(stmt, 1, target_branch)
+                sqlite.bind_text(stmt, 2, source_branch)
+                sqlite.bind_text(stmt, 3, sha)
+                sc, _ = sqlite.step(stmt, db)
+                eligible = 0
+                if sc != SQLITE_ROW {
+                    // No merge event → never integrated → eligible.
+                    eligible = 1
+                } else {
+                    if sqlite.column_int(stmt, 0) == MERGE_VERB_REVERSE {
+                        // Latest event was a reverse → eligible again.
+                        eligible = 1
+                    }
+                }
+                sqlite.reset(stmt)
+                if eligible == 1 {
+                    out = append_packed_(out, sha)
+                }
+            }
+            seg_start = i + 1
+        }
+        i = i + 1
+    }
+    sqlite.finalize(stmt)
+    sqlite.close(db)
+    return out
+}
+
+
+// =============================================================================
+// repo_storage/merge_ledger_runs.ae
+// =============================================================================
+
+
+
+// Walk rev numbers in (lo..hi], resolve each to its rev-blob SHA,
+// ask the ledger if it's already integrated. Group consecutive
+// not-integrated revs into "lo:hi\n" runs (same packed shape the
+// pre-Round-276 `mergeinfo_eligible_runs` produced over the
+// svn:mergeinfo property string — wc_merge's iteration loop is
+// agnostic to the source).
+//
+// `as_of_rev` filters merge_event rows to those committed at or
+// before that rev. WCs checked out at base_rev=N pass N here; the
+// query returns the same eligibility view classical SVN's
+// versioned mergeinfo property would have given. Pass 0 for "no
+// filter" (all-time integrated).
+//
+// Round 276 / Phase 2.3 retires the property-based eligibility
+// check in favour of this server-side computation, queried via the
+// /merge_runs HTTP endpoint.
+merge_ledger_eligible_runs_for_range(repo: string,
+                                            target_branch: string,
+                                            source_branch: string,
+                                            lo: int, hi: int,
+                                            as_of_rev: int) -> string {
+    if lo >= hi { return "" }
+    out = ""
+    in_run = 0
+    run_lo = 0
+    run_hi = 0
+    cur = lo + 1
+    while cur <= hi {
+        rev_sha = repos_rev_blob_sha(repo, cur)
+        is_eligible = 0
+        if string.length(rev_sha) == 0 {
+            // Unknown rev — treat as eligible (the merge engine
+            // will surface a real failure if the rev doesn't exist
+            // on the source branch).
+            is_eligible = 1
+        } else {
+            integrated = merge_ledger_is_integrated_as_of(repo, target_branch,
+                                                          source_branch,
+                                                          rev_sha, as_of_rev)
+            if integrated == 0 { is_eligible = 1 }
+        }
+        if is_eligible == 1 {
+            if in_run == 0 {
+                run_lo = cur - 1
+                in_run = 1
+            }
+            run_hi = cur
+        } else {
+            if in_run == 1 {
+                out = string.concat(out, "${run_lo}:${run_hi}\n")
+                in_run = 0
+            }
+        }
+        cur = cur + 1
+    }
+    if in_run == 1 {
+        out = string.concat(out, "${run_lo}:${run_hi}\n")
+    }
+    return out
+}
+
+// R284 — runs of revs in (lo..hi] that are reverse-eligible: i.e.,
+// their latest merge_event (if any) is NOT a reverse merge (verb=2).
+// Used by `wc_merge` when applying a reverse merge so:
+//
+//   merge -c 5; commit;        -- ledger: forward
+//   merge -c -5; commit;       -- ledger: reverse — last verb=2
+//   merge -c -5                -- now a no-op (filter excludes r5)
+//
+// Crucially this DOES include revs that were never tracked (no
+// merge_event) — classical-SVN semantics: `merge -c -N` against a
+// fresh checkout applies the inverse diff regardless of tracking.
+// We only skip if there's a recorded merge_event whose latest verb
+// is REVERSE; that's the "already reversed, don't re-reverse"
+// case.
+merge_ledger_reverse_eligible_runs(repo: string,
+                                           target_branch: string,
+                                           source_branch: string,
+                                           lo: int, hi: int,
+                                           as_of_rev: int) -> string {
+    if lo >= hi { return "" }
+    out = ""
+    in_run = 0
+    run_lo = 0
+    run_hi = 0
+    cur = lo + 1
+    while cur <= hi {
+        rev_sha = repos_rev_blob_sha(repo, cur)
+        skip = 0
+        if string.length(rev_sha) > 0 {
+            already_reversed = merge_ledger_was_last_reverse_as_of(repo,
+                target_branch, source_branch, rev_sha, as_of_rev)
+            if already_reversed == 1 { skip = 1 }
+        }
+        if skip == 0 {
+            if in_run == 0 {
+                run_lo = cur - 1
+                in_run = 1
+            }
+            run_hi = cur
+        } else {
+            if in_run == 1 {
+                out = string.concat(out, "${run_lo}:${run_hi}\n")
+                in_run = 0
+            }
+        }
+        cur = cur + 1
+    }
+    if in_run == 1 {
+        out = string.concat(out, "${run_lo}:${run_hi}\n")
+    }
+    return out
+}
+
+
+// =============================================================================
+// repo_storage/pathutil.ae
+// =============================================================================
+
+// Repo-path relational predicates, ported from repo_storage/txn_shim.c.
+// These operate purely on paths (slash-separated, no leading slash,
+// no trailing slash, no scheme); they don't touch the filesystem.
+// The canonical callers are txn_shim.c's rebuild_dir helpers — we
+// leave the recursion there for now but pull the path logic out.
+
+
+// Is `path` an immediate child of `dir_prefix`? I.e. path == dir/name
+// and `name` contains no further '/'.
+//   child_of("", "a")         → 1
+//   child_of("a/b", "")       → 0  (has '/')
+//   child_of("a/b", "a")      → 1
+//   child_of("a/b/c", "a")    → 0
+//   child_of("a/b", "x")      → 0
+//   child_of("a", "a")        → 0  (same)
+path_is_immediate_child(path: string, dir_prefix: string) -> int {
+    plen = string.length(path)
+    dlen = string.length(dir_prefix)
+    if dlen == 0 {
+        // Immediate child of root: path has no '/'.
+        i = 0
+        while i < plen {
+            if string.char_at(path, i) == 47 { return 0 }
+            i = i + 1
+        }
+        if plen == 0 { return 0 }   // empty path isn't a child
+        return 1
+    }
+    // path must begin with dir_prefix + '/' + non-empty name-without-'/'
+    if plen <= dlen + 1 { return 0 }
+    i = 0
+    while i < dlen {
+        if string.char_at(path, i) != string.char_at(dir_prefix, i) { return 0 }
+        i = i + 1
+    }
+    if string.char_at(path, dlen) != 47 { return 0 }
+    // Remainder (after the '/') must contain no '/'.
+    j = dlen + 1
+    while j < plen {
+        if string.char_at(path, j) == 47 { return 0 }
+        j = j + 1
+    }
+    return 1
+}
+
+// Return the basename of `path` assuming `dir_prefix` is its parent.
+// Callers should have already verified path_is_immediate_child.
+//   basename_after("a/b/c", "a/b")  → "c"
+//   basename_after("readme", "")    → "readme"
+path_basename_after(path: string, dir_prefix: string) -> string {
+    plen = string.length(path)
+    dlen = string.length(dir_prefix)
+    if dlen == 0 { return path }
+    if plen <= dlen + 1 { return "" }
+    return string.substring(path, dlen + 1, plen)
+}
+
+// Join `prefix` and `name` with exactly one '/'. Either input may be
+// empty: path_join_rel("", "x") → "x"; path_join_rel("x", "") → "x".
+// prefix is assumed to have no trailing '/' (standard for repo-relative
+// paths in this codebase).
+//   path_join_rel("a/b", "c")   → "a/b/c"
+//   path_join_rel("", "c")      → "c"
+//   path_join_rel("a", "")      → "a"
+// Named *_rel to distinguish from the FS-path join in Aether's runtime.
+path_join_rel(prefix: string, name: string) -> string {
+    if string.length(prefix) == 0 { return name }
+    if string.length(name) == 0 { return prefix }
+    out = string.concat(prefix, "/")
+    return string.concat(out, name)
+}
+
+// Is `path` equal to `prefix` or a descendant of it? I.e. `prefix`
+// covers `path` in the subtree sense.
+//   covers("a/b", "")       → 1  (everything is under root)
+//   covers("a", "a")        → 1
+//   covers("a/b/c", "a")    → 1
+//   covers("ab", "a")       → 0  (not a / separator)
+//   covers("b", "a")        → 0
+path_covers(path: string, prefix: string) -> int {
+    plen = string.length(prefix)
+    if plen == 0 { return 1 }
+    n = string.length(path)
+    if n < plen { return 0 }
+    i = 0
+    while i < plen {
+        if string.char_at(path, i) != string.char_at(prefix, i) { return 0 }
+        i = i + 1
+    }
+    if n == plen { return 1 }
+    if string.char_at(path, plen) == 47 { return 1 }
+    return 0
+}
+
+
+// =============================================================================
+// repo_storage/rebuild.ae
+// =============================================================================
+
+// Recursive txn → tree rebuilder. Ported from rebuild_dir_c in
+// repo_storage/txn_shim.c (the long-standing structural port candidate).
+//
+// The algorithm:
+//   1. Start with the base dir's entries; for each, apply txn edits
+//      that touch it (delete / replace / recurse-into-subtree).
+//   2. Apply edits whose immediate parent is this dir (add_file,
+//      mkdir, delete, copy).
+//   3. For any new subdirs created in step 2, recurse into them if
+//      the txn has further edits inside.
+//   4. Sort entries by name and emit as a dir blob.
+//
+// The reclist (the sorted-by-name set of (kind, sha, name) we build
+// up) is represented as a newline-separated string in exactly the
+// same "K SHA NAME\n" format the final blob uses. Aether's existing
+// dir-blob readers (dir_count_entries / _entry_name / etc.)
+// parse it on lookup. This avoids reinventing a sorted list type.
+
+
+// --- FFI: rep store + txn accessors + existing helpers --------------------
+
+
+// `struct txn *` on the C side — opaque here, we pass it through.
+
+// R287 — streaming iterator for the hot rebuild loop.
+
+
+// Edit kinds — mirror the C enum.
+const EDIT_ADD_FILE = 1
+const EDIT_MKDIR    = 2
+const EDIT_DELETE   = 3
+const EDIT_COPY     = 4
+
+// --- reclist operations (body-as-string representation) -------------------
+
+// Does this edit list touch `prefix` or any descendant?
+edits_touch_subtree(txn: ptr, prefix: string) -> int {
+    n = txn_count(txn)
+    i = 0
+    while i < n {
+        p = txn_edit_path(txn, i)
+        if path_covers(p, prefix) == 1 { return 1 }
+        i = i + 1
+    }
+    return 0
+}
+
+// Find txn edit with exact path match. Returns kind, or 0 if not
+// present. -1 not used because 0 is not a valid kind.
+txn_find_edit_kind(txn: ptr, path: string) -> int {
+    n = txn_count(txn)
+    i = 0
+    while i < n {
+        ep = txn_edit_path(txn, i)
+        if string.equals(ep, path) == 1 {
+            return txn_edit_kind(txn, i)
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+// R287 — all reclist_* helpers refactored to use the streaming
+// dir-blob iterator. Pre-R287 each helper called dir_count_entries
+// then dir_entry_name/kind/sha(body, i) — three O(N) scans per
+// iteration → O(N²) per call, O(N³) per rebuild. With the iterator
+// each call is one linear pass: O(N) per call, O(N²) per rebuild.
+// (The string-concat cost in append-and-rebuild is still O(N) per
+// call because the body string is re-created; total per-rebuild
+// allocation is O(N²) bytes — same shape as fs_fs's classical
+// directory rewrite cost, and the bottleneck after this fix is the
+// blob-write path, not the in-memory walk.)
+
+// Remove the line whose name field matches `name` from a reclist
+// body. Returns the new body. Keeps all other lines in place.
+reclist_remove(body: string, name: string) -> string {
+    out = ""
+    it = dir_iter_new(body)
+    while dir_iter_next(it) == 1 {
+        ename = dir_iter_name(it)
+        if string.equals(ename, name) == 0 {
+            out = string.concat(out, dir_entry_line(
+                dir_iter_kind(it), dir_iter_sha(it), ename))
+        }
+    }
+    dir_iter_free(it)
+    return out
+}
+
+// Insert-or-replace a line in the reclist. Match by name; if present,
+// overwrite its kind+sha; if absent, append.
+reclist_add(body: string, name: string, kind: int, sha: string) -> string {
+    found = 0
+    out = ""
+    it = dir_iter_new(body)
+    while dir_iter_next(it) == 1 {
+        ename = dir_iter_name(it)
+        if string.equals(ename, name) == 1 {
+            found = 1
+            out = string.concat(out, dir_entry_line(kind, sha, name))
+        }
+        if string.equals(ename, name) == 0 {
+            out = string.concat(out, dir_entry_line(
+                dir_iter_kind(it), dir_iter_sha(it), ename))
+        }
+    }
+    dir_iter_free(it)
+    if found == 0 {
+        out = string.concat(out, dir_entry_line(kind, sha, name))
+    }
+    return out
+}
+
+// R287 fast path: append a line WITHOUT scanning for collisions.
+// Caller must guarantee `name` doesn't already exist in `body`.
+// Used by rebuild_dir step 1 where each base-dir entry is unique
+// vs every other entry seeded so far. O(rl_length) per call vs
+// reclist_add's O(N) — and at the rebuild-loop scale that's the
+// difference between O(N²) and O(N³).
+reclist_append_unique_(body: string, name: string, kind: int, sha: string) -> string {
+    return string.concat(body, dir_entry_line(kind, sha, name))
+}
+
+// Does a dir named `name` already exist in the body? Used by the
+// mkdir branch to avoid clobbering a subdir whose sha we've just
+// computed via recursion.
+reclist_has_dir(body: string, name: string) -> int {
+    found = 0
+    it = dir_iter_new(body)
+    while dir_iter_next(it) == 1 {
+        if dir_iter_kind(it) == 100 {   // 'd'
+            if string.equals(dir_iter_name(it), name) == 1 {
+                found = 1
+                break
+            }
+        }
+    }
+    dir_iter_free(it)
+    return found
+}
+
+// Look up a dir entry's sha by name. Empty string if absent.
+reclist_dir_sha(body: string, name: string) -> string {
+    out = ""
+    it = dir_iter_new(body)
+    while dir_iter_next(it) == 1 {
+        if dir_iter_kind(it) == 100 {
+            if string.equals(dir_iter_name(it), name) == 1 {
+                out = string.copy(dir_iter_sha(it))
+                break
+            }
+        }
+    }
+    dir_iter_free(it)
+    return out
+}
+
+// Update just the sha field of an existing entry (identified by name,
+// kind unchanged).
+reclist_update_sha(body: string, name: string, new_sha: string) -> string {
+    out = ""
+    it = dir_iter_new(body)
+    while dir_iter_next(it) == 1 {
+        ename = dir_iter_name(it)
+        ekind = dir_iter_kind(it)
+        if string.equals(ename, name) == 1 {
+            out = string.concat(out, dir_entry_line(ekind, new_sha, ename))
+        }
+        if string.equals(ename, name) == 0 {
+            out = string.concat(out, dir_entry_line(
+                ekind, dir_iter_sha(it), ename))
+        }
+    }
+    dir_iter_free(it)
+    return out
+}
+
+// Sort the reclist body by name. Insertion sort — O(N²) algorithmic,
+// but with iterator-based O(1) access per step (vs the pre-R287
+// O(N²) per insertion via indexed accessors → O(N⁴) total).
+reclist_sort(body: string) -> string {
+    // Bail quickly when there's at most one entry.
+    n = dir_count_entries(body)
+    if n <= 1 { return body }
+
+    // Insertion sort: walk entries linearly via iterator; insert each
+    // into a running sorted result via a second iterator pass.
+    sorted = ""
+    it = dir_iter_new(body)
+    while dir_iter_next(it) == 1 {
+        this_name = string.copy(dir_iter_name(it))
+        this_kind = dir_iter_kind(it)
+        this_sha  = string.copy(dir_iter_sha(it))
+
+        // Walk sorted so far, insert in order.
+        new_sorted = ""
+        placed = 0
+        sit = dir_iter_new(sorted)
+        while dir_iter_next(sit) == 1 {
+            jname = dir_iter_name(sit)
+            if placed == 0 {
+                if string.compare(this_name, jname) < 0 {
+                    new_sorted = string.concat(new_sorted,
+                        dir_entry_line(this_kind, this_sha, this_name))
+                    placed = 1
+                }
+            }
+            new_sorted = string.concat(new_sorted,
+                dir_entry_line(dir_iter_kind(sit), dir_iter_sha(sit), jname))
+        }
+        dir_iter_free(sit)
+        if placed == 0 {
+            new_sorted = string.concat(new_sorted,
+                dir_entry_line(this_kind, this_sha, this_name))
+        }
+        sorted = new_sorted
+    }
+    dir_iter_free(it)
+    return sorted
+}
+
+// --- exported entry: rebuild_dir ------------------------------------------
+
+// Recursively rebuild the dir rooted at `base_dir_sha` (possibly "")
+// after applying `txn`'s edits. Returns the new dir blob's sha (empty
+// string if nothing survived at all).
+rebuild_dir(repo: string, base_dir_sha: string, prefix: string, txn: ptr) -> string
+    requires txn != null
+{
+    // reclist body starts empty; we build up "K SHA NAME\n" lines.
+    rl = ""
+
+    // Step 1: seed from the base dir's entries, applying top-level txn
+    // actions that exactly hit full paths within this dir. An empty
+    // base_body (either "blob missing" or "blob exists but is the
+    // empty-dir blob") produces zero iterations — correct.
+    //
+    // R287 — uses the streaming dir iterator. The pre-R287 indexed
+    // walk called dir_entry_kind/sha/name(body, ei) for each entry,
+    // and each accessor scans from byte 0 to find line ei → O(N²)
+    // per commit, O(N³) over N commits in growing-dir benchmarks.
+    // The iterator keeps a single byte cursor; one linear pass.
+    if string.length(base_dir_sha) > 0 {
+        base_body = rep_read_blob(repo, base_dir_sha)
+        it = dir_iter_new(base_body)
+        while dir_iter_next(it) == 1 {
+            kind = dir_iter_kind(it)
+            sha  = string.copy(dir_iter_sha(it))
+            name = string.copy(dir_iter_name(it))
+            full_path = path_join_rel(prefix, name)
+
+            k_edit = txn_find_edit_kind(txn, full_path)
+            keep = 1
+            if k_edit == EDIT_DELETE   { keep = 0 }
+            if k_edit == EDIT_ADD_FILE { keep = 0 }  // step 2 will add
+            if keep == 1 {
+                // R287 — fast-path append: each base-dir entry is
+                // unique (came from a sorted unique dir blob) AND `rl`
+                // has no entries with the same name yet (we're seeding
+                // it in iteration order). Skip reclist_add's O(N)
+                // collision-scan and just concat the line. This drops
+                // step 1 from O(N²) to O(N) lookups; the only
+                // remaining O(N²) is the string-concat allocation,
+                // which is unavoidable without a builder primitive.
+                if kind == 100 {                     // 'd'
+                    if edits_touch_subtree(txn, full_path) == 1 {
+                        new_sub = rebuild_dir(repo, sha, full_path, txn)
+                        if string.length(new_sub) > 0 {
+                            rl = reclist_append_unique_(rl, name, kind, new_sub)
+                        }
+                        if string.length(new_sub) == 0 {
+                            empty_sha = rep_write_blob(repo, "", 0)
+                            rl = reclist_append_unique_(rl, name, kind, empty_sha)
+                        }
+                    }
+                    if edits_touch_subtree(txn, full_path) == 0 {
+                        rl = reclist_append_unique_(rl, name, kind, sha)
+                    }
+                }
+                if kind != 100 {
+                    rl = reclist_append_unique_(rl, name, kind, sha)
+                }
+            }
+        }
+        dir_iter_free(it)
+        rep_free(base_body)
+    }
+
+    // Step 2: apply edits whose immediate parent is this dir.
+    n_edits = txn_count(txn)
+    ei = 0
+    while ei < n_edits {
+        epath = txn_edit_path(txn, ei)
+        ekind = txn_edit_kind(txn, ei)
+        if path_is_immediate_child(epath, prefix) == 1 {
+            name = path_basename_after(epath, prefix)
+            if ekind == EDIT_ADD_FILE {
+                content = txn_edit_content_data(txn, ei)
+                clen = txn_edit_content_len(txn, ei)
+                new_sha = rep_write_blob(repo, content, clen)
+                if string.length(new_sha) > 0 {
+                    rl = reclist_add(rl, name, 102, new_sha)   // 'f'
+                }
+            }
+            if ekind == EDIT_MKDIR {
+                if reclist_has_dir(rl, name) == 0 {
+                    empty_sha = rep_write_blob(repo, "", 0)
+                    rl = reclist_add(rl, name, 100, empty_sha) // 'd'
+                }
+            }
+            if ekind == EDIT_DELETE {
+                rl = reclist_remove(rl, name)
+            }
+            if ekind == EDIT_COPY {
+                copy_sha = txn_edit_copy_sha(txn, ei)
+                copy_kind_int = txn_edit_copy_kind(txn, ei)
+                k_byte = 102                                    // 'f'
+                if copy_kind_int == 1 { k_byte = 100 }          // 'd'
+                rl = reclist_add(rl, name, k_byte, copy_sha)
+            }
+        }
+        ei = ei + 1
+    }
+
+    // Step 3: for every dir entry in rl, if the txn has edits in its
+    // subtree, recurse from the entry's current sha.
+    ri = 0
+    rn = dir_count_entries(rl)
+    // We can't modify rl while iterating with its current indices (the
+    // reclist_update_sha rewrites it and the length stays the same),
+    // so snapshot the names we need to revisit.
+    while ri < rn {
+        if dir_entry_kind(rl, ri) == 100 {    // 'd'
+            dname = dir_entry_name(rl, ri)
+            subprefix = path_join_rel(prefix, dname)
+            if edits_touch_subtree(txn, subprefix) == 1 {
+                cur_sha = reclist_dir_sha(rl, dname)
+                new_sub = rebuild_dir(repo, cur_sha, subprefix, txn)
+                if string.length(new_sub) > 0 {
+                    rl = reclist_update_sha(rl, dname, new_sub)
+                }
+            }
+        }
+        ri = ri + 1
+    }
+
+    // Step 4: sort and emit.
+    sorted = reclist_sort(rl)
+    return rep_write_blob(repo, sorted, string.length(sorted))
+}
+
+
+// Helper for the "empty base blob is legitimate" edge case. An empty
+// string returned from rep_read_blob could mean either "blob
+// not found" or "blob exists and is empty" — and they're
+// indistinguishable through the string API. We assume "empty sha
+// means empty blob" by inspection of the sha (the all-zeros sha is
+// the empty-blob marker in practice, but we don't check explicitly;
+// an empty blob behaves correctly as empty input to the loop anyway).
+base_dir_sha_was_empty_marker(sha: string) -> int {
+    // Always treat as not-marker here — if read_blob returned empty,
+    // we fall through and produce a fresh empty body, which is
+    // semantically the same for this walker.
+    return 0
+}
+
+
+// =============================================================================
+// repo_storage/rep_store.ae
+// =============================================================================
+
+// fs_fs rep-store — the blob-I/O half of the rep-store machinery.
+//
+// The full rep-store has two parts: rep-cache.db (sqlite-indexed
+// {hash, rel_path, uncompressed_size, storage}), and the on-disk
+// content-addressed blob files themselves. sqlite stays on the C
+// side (no std binding yet), so the blob-I/O moves here.
+//
+// On-disk blob format (unchanged from the C implementation and
+// shared with the fs_fs readers):
+//
+//   $repo/reps/aa/bb/<sha>.rep
+//   byte 0   : 'R' (raw) or 'Z' (zlib)
+//   bytes 1..: payload (compressed if 'Z')
+//
+// Uncompressed length isn't in the blob header — rep-cache.db's
+// `uncompressed_size` column carries it. The pristine store uses
+// a slightly different layout ('R'/'Z' + 4 LE bytes + payload)
+// because the WC has no rep-cache sidecar. Both formats coexist
+// by design.
+
+
+// Binary-safe byte ops live in util/module.ae — Phase 2a migration.
+
+// Path builder already lives in repo_storage/reppath.ae.
+
+// sqlite — for rep-cache.db index access. Goes through contrib.sqlite v2.
+const SQLITE_ROW  = 100
+const SQLITE_DONE = 101
+
+// ---- encode ------------------------------------------------------------
+//
+// Produce a packed "<use_zlib>\x01<encoded_body>" string where
+// <use_zlib> is "0" or "1" and <encoded_body> is the bytes to write
+// to disk (including the 'R'/'Z' header byte). The C caller needs
+// the use_zlib flag separately to update rep-cache.db's `storage`
+// column without re-sniffing.
+//
+// Zlib is only kept when it saves at least 16 bytes — same rule
+// the C version used and the wc pristine store reuses.
+
+rep_encode_blob(data: string, length: int) -> string {
+    use_zlib = 0
+    body = data
+    body_len = length
+
+    // Bench escape hatch (R285): AVN_NO_COMPRESS=1 in the server's
+    // env stores blobs raw regardless of size, bypassing the zlib
+    // pass entirely. Cuts CPU on the commit path at the cost of
+    // 5–15× larger reps/. Used by bench/bench_avn.py to measure the
+    // compression overhead in steady-state commit latency.
+    if length > 0 {
+        skip_zlib = 0
+        nc = os_getenv("AVN_NO_COMPRESS")
+        if string.length(nc) > 0 {
+            if string.equals(nc, "1") == 1 { skip_zlib = 1 }
+        }
+        if skip_zlib == 0 {
+            zb, zl, zerr = zlib.deflate(data, length, 6)
+            if string.length(zerr) == 0 {
+                if zl + 16 < length {
+                    use_zlib = 1
+                    body = zb
+                    body_len = zl
+                }
+            }
+        }
+    }
+
+    tag = "R"
+    if use_zlib == 1 { tag = "Z" }
+    payload = util.concat(tag, 1, body, body_len)
+    payload_len = 1 + body_len
+
+    header = string.concat(string.from_int(use_zlib), "\x01")
+    // header is "0\x01" or "1\x01" — 2 ASCII bytes built via plain
+    // string.concat, so its strlen would be safe, but we pass the
+    // explicit length anyway for symmetry.
+    return util.concat(header, 2, payload, payload_len)
+}
+
+// Accessors the C caller uses on the encoded envelope.
+
+rep_encoded_use_zlib(encoded: string) -> int {
+    if string.length(encoded) == 0 { return 0 }
+    ch = string.char_at(encoded, 0)
+    if ch == 49 { return 1 }   // '1'
+    return 0
+}
+
+rep_encoded_bytes(encoded: string) -> string {
+    n = string.length(encoded)
+    if n < 2 { return "" }
+    return util.slice(encoded, n, 2, n)
+}
+
+rep_encoded_length(encoded: string) -> int {
+    n = string.length(encoded)
+    if n < 2 { return 0 }
+    return n - 2
+}
+
+// ---- write -----------------------------------------------------------
+//
+// Given an already-encoded body (from rep_encode_blob), ensure the
+// parent dir exists and write the file binary-safe. Returns "" on
+// success, error message otherwise.
+
+rep_write_encoded(repo: string, sha: string, encoded: string) -> string {
+    dir = string.copy(rep_dir(repo, sha))
+    if util.io_mkdir_p(dir) != 0 { return "mkdir_p failed" }
+
+    path = string.copy(rep_path(repo, sha))
+    body = rep_encoded_bytes(encoded)
+    body_len = rep_encoded_length(encoded)
+    return fs.write_binary(path, body, body_len)
+}
+
+// ---- read ------------------------------------------------------------
+//
+// Read the .rep file at the given sha, strip the 'R'/'Z' header,
+// and (if 'Z') inflate to `uncompressed_size` bytes. Returns the
+// decoded payload, or "" on miss / decompression failure.
+
+rep_read_decoded(repo: string, sha: string, uncompressed_size: int) -> string {
+    path = string.copy(rep_path(repo, sha))
+    file, fsize, err = fs.read_binary(path)
+    if string.length(err) > 0 { return "" }
+    if fsize < 1 { return "" }
+
+    header = string.char_at(file, 0)
+    payload_len = fsize - 1
+    payload = util.slice(file, fsize, 1, fsize)
+
+    if header == 82 {          // 'R'
+        return payload
+    }
+    if header == 90 {          // 'Z'
+        bytes, outlen, ierr = zlib.inflate(payload, payload_len)
+        if string.length(ierr) > 0 { return "" }
+        if outlen != uncompressed_size { return "" }
+        return bytes
+    }
+    return ""
+}
+
+// Public C-ABI: cache lookup + decoded read in one shot. Round 183
+// retired the C-side wrap-then-call adapter (rep_store_shim.c)
+// using this helper. Returns the decoded blob bytes as a refcounted
+// AetherString, or "" on miss / corruption.
+rep_read_blob(repo: string, sha1_hex: string) -> string {
+    uncompressed = rep_cache_lookup_uncompressed(repo, sha1_hex)
+    if uncompressed < 0 { return "" }
+    return rep_read_decoded(repo, sha1_hex, uncompressed)
+}
+
+// Backward-compat no-op for callers that bracket their read with a
+// free. AetherString refcounting handles the lifetime.
+rep_free(p: string) {
+    p = p
+    return
+}
+
+// ---- rep-cache.db access --------------------------------------------
+//
+// The rep-cache row is keyed by content hash and carries the on-disk
+// rel_path, the uncompressed byte count (needed to inflate 'Z' blobs),
+// and a storage tag. These helpers are used by the C write/read
+// drivers in rep_store_shim.c so all sqlite access sits in Aether.
+//
+// Return conventions:
+//   rep_cache_has(repo, sha): 1 if present, 0 otherwise (incl. DB miss).
+//   rep_cache_lookup_uncompressed(repo, sha): uncompressed_size on hit,
+//     -1 on miss or DB-open failure. Zero is a legitimate value (empty
+//     blob), so we can't use 0 as a sentinel.
+//   rep_cache_insert(repo, sha, rel_path, uncompressed, storage):
+//     0 on success, non-zero on failure (propagates the sqlite rc).
+
+rep_cache_has(repo: string, sha: string) -> int {
+    db, oerr = sqlite.open("${repo}/rep-cache.db")
+    if string.length(oerr) > 0 { return 0 }
+    stmt, perr = sqlite.prepare(db, "SELECT 1 FROM rep_cache WHERE hash = ?")
+    if string.length(perr) > 0 { sqlite.close(db); return 0 }
+    sqlite.bind_text(stmt, 1, sha)
+    rc, _ = sqlite.step(stmt, db)
+    found = 0
+    if rc == SQLITE_ROW { found = 1 }
+    sqlite.finalize(stmt)
+    sqlite.close(db)
+    return found
+}
+
+rep_cache_lookup_uncompressed(repo: string, sha: string) -> int {
+    db, oerr = sqlite.open("${repo}/rep-cache.db")
+    if string.length(oerr) > 0 { return -1 }
+    stmt, perr = sqlite.prepare(db, "SELECT uncompressed_size FROM rep_cache WHERE hash = ?")
+    if string.length(perr) > 0 { sqlite.close(db); return -1 }
+    sqlite.bind_text(stmt, 1, sha)
+    rc, _ = sqlite.step(stmt, db)
+    out = -1
+    if rc == SQLITE_ROW { out = sqlite.column_int(stmt, 0) }
+    sqlite.finalize(stmt)
+    sqlite.close(db)
+    return out
+}
+
+rep_cache_insert(repo: string, sha: string, rel_path: string,
+                         uncompressed: int, storage: int) -> int {
+    db, oerr = sqlite.open("${repo}/rep-cache.db")
+    if string.length(oerr) > 0 { return 1 }
+    stmt, perr = sqlite.prepare(db,
+        "INSERT INTO rep_cache (hash, rel_path, uncompressed_size, storage) VALUES (?, ?, ?, ?)")
+    if string.length(perr) > 0 { sqlite.close(db); return 2 }
+    sqlite.bind_text(stmt, 1, sha)
+    sqlite.bind_text(stmt, 2, rel_path)
+    sqlite.bind_int (stmt, 3, uncompressed)
+    sqlite.bind_int (stmt, 4, storage)
+    rc, _ = sqlite.step(stmt, db)
+    sqlite.finalize(stmt)
+    sqlite.close(db)
+    if rc == SQLITE_DONE { return 0 }
+    return rc
+}
+
+// ---- write orchestrator ---------------------------------------------
+//
+// The full write_blob pipeline: hash with the repo's primary algo;
+// dedupe via rep-cache; encode + write the .rep file; insert the
+// rep-cache row; fan-out across configured secondary hash names so
+// sec-table lookups work for clients that only know e.g. SHA-256.
+//
+// Returns the primary-hash hex on success, "" on failure. Round 105
+// hoisted this out of repo_storage/rep_store_shim.c, where it was 50
+// lines of orchestration over Aether helpers — every step the C
+// side did was already a single extern call into Aether.
+
+const STORAGE_RAW  = 1
+const STORAGE_ZLIB = 2
+
+
+// Compute and persist secondary-hash rows. `joined` is the \n-
+// separated list of algo names (max 4 entries), provided by
+// repo_secondary_hashes_joined; we walk it inline so we don't need
+// a fixed-array FFI shape.
+write_secondary_hashes_(repo: string, primary_sha: string,
+                         data: string, length: int, joined: string) {
+    if string.length(joined) == 0 { return 0 }
+    rep_cache_sec_ensure(repo)
+
+    n = string.length(joined)
+    pos = 0
+    while pos < n {
+        eol = string.index_of_from(joined, "\n", pos)
+        end = eol
+        if end < 0 { end = n }
+        if end > pos {
+            algo = string.substring(joined, pos, end)
+            sec_hex = openssl.crypto_hash_hex(algo, data, length)
+            if string.length(sec_hex) > 0 {
+                rep_cache_sec_insert(repo, primary_sha, algo, sec_hex)
+            }
+        }
+        if eol < 0 { return 0 }
+        pos = eol + 1
+    }
+    return 0
+}
+
+// Public: dedup-aware blob write. Returns the primary-hash hex of
+// the stored blob, or "" on any failure (hash, encode, file write,
+// cache insert). Idempotent: if the primary hash is already in the
+// cache we short-circuit without writing or re-inserting.
+rep_write_blob(repo: string, data: string, length: int) -> string {
+    primary = repo_primary_hash(repo)
+    sha = openssl.crypto_hash_hex(primary, data, length)
+    if string.length(sha) == 0 { return "" }
+
+    // Owning copy — sha is computed each call so the caller can
+    // safely hold the return value across subsequent rep_write_blob
+    // invocations.
+    sha_owned = string.copy(sha)
+
+    if rep_cache_has(repo, sha_owned) == 1 { return sha_owned }
+
+    encoded = rep_encode_blob(data, length)
+    if string.length(encoded) == 0 { return "" }
+    use_zlib = rep_encoded_use_zlib(encoded)
+
+    werr = rep_write_encoded(repo, sha_owned, encoded)
+    if string.length(werr) > 0 { return "" }
+
+    rel_path = string.copy(rep_rel_path(sha_owned))
+    storage = STORAGE_RAW
+    if use_zlib == 1 { storage = STORAGE_ZLIB }
+    if rep_cache_insert(repo, sha_owned, rel_path, length, storage) != 0 {
+        return ""
+    }
+
+    joined = repo_secondary_hashes_joined(repo)
+    write_secondary_hashes_(repo, sha_owned, data, length, joined)
+
+    return sha_owned
+}
+
+
+// =============================================================================
+// repo_storage/rep_store_sec.ae
+// =============================================================================
+
+// Secondary-hash table operations on rep-cache.db.
+//
+// rep_cache_sec is a side table: every blob in rep_cache may have
+// zero or more secondary hashes (e.g. sha256 alongside the primary
+// sha1) for verification. Created on demand the first time a secondary
+// hash is written so legacy repos pay no schema cost.
+//
+// Round 59 moved these out of repo_storage/rep_store_shim.c; the C side
+// no longer carries any direct sqlite3 calls. Same shape as round 48
+// (rep_cache primary table) and round 55 (avnadmin's path_rev table).
+
+
+const SQLITE_ROW  = 100
+const SQLITE_DONE = 101
+
+// Ensure the rep_cache_sec table exists. Idempotent (CREATE TABLE
+// IF NOT EXISTS). Returns "" on success, error string on failure.
+rep_cache_sec_ensure(repo: string) -> string {
+    db, oerr = sqlite.open("${repo}/rep-cache.db")
+    if string.length(oerr) > 0 { return "open failed" }
+    err = sqlite.exec(db,
+        "CREATE TABLE IF NOT EXISTS rep_cache_sec (  primary_hash TEXT NOT NULL,  algo         TEXT NOT NULL,  secondary_hash TEXT NOT NULL,  PRIMARY KEY (primary_hash, algo))")
+    sqlite.close(db)
+    return err
+}
+
+// Insert a (primary, algo, secondary) triple. INSERT OR IGNORE so
+// re-runs are harmless. Returns "" on success, error string on
+// failure.
+rep_cache_sec_insert(repo: string, primary: string, algo: string, secondary: string) -> string {
+    db, oerr = sqlite.open("${repo}/rep-cache.db")
+    if string.length(oerr) > 0 { return "open failed" }
+    stmt, perr = sqlite.prepare(db,
+        "INSERT OR IGNORE INTO rep_cache_sec (primary_hash, algo, secondary_hash) VALUES (?, ?, ?)")
+    if string.length(perr) > 0 { sqlite.close(db); return perr }
+    sqlite.bind_text(stmt, 1, primary)
+    sqlite.bind_text(stmt, 2, algo)
+    sqlite.bind_text(stmt, 3, secondary)
+    rc, _ = sqlite.step(stmt, db)
+    sqlite.finalize(stmt)
+    sqlite.close(db)
+    if rc == SQLITE_DONE { return "" }
+    return "insert failed"
+}
+
+// Look up the secondary hash for (primary, algo). Returns the hex
+// digest on hit, "" on miss / DB-open failure / no-such-row.
+rep_cache_sec_lookup(repo: string, primary: string, algo: string) -> string {
+    db, oerr = sqlite.open("${repo}/rep-cache.db")
+    if string.length(oerr) > 0 { return "" }
+    stmt, perr = sqlite.prepare(db,
+        "SELECT secondary_hash FROM rep_cache_sec WHERE primary_hash = ? AND algo = ?")
+    if string.length(perr) > 0 { sqlite.close(db); return "" }
+    sqlite.bind_text(stmt, 1, primary)
+    sqlite.bind_text(stmt, 2, algo)
+    rc, _ = sqlite.step(stmt, db)
+    out = ""
+    if rc == SQLITE_ROW {
+        raw = sqlite.column_text(stmt, 0)
+        out = string.copy(raw)
+    }
+    sqlite.finalize(stmt)
+    sqlite.close(db)
+    return out
+}
+
+
+// =============================================================================
+// repo_storage/reppath.ae
+// =============================================================================
+
+// Rep-store path builders for repo_storage/rep_store_shim.c.
+//
+// Layout (inside a bare avn repo):
+//   <repo>/reps/<s0s1>/<s2s3>/<sha>.rep        full file path
+//   <repo>/reps/<s0s1>/<s2s3>                  parent dir (for mkdir -p)
+//   <s0s1>/<s2s3>/<sha>.rep                    rel_path stored in rep-cache
+//
+// Two-level fanout over the first four hex nibbles of the content sha.
+// Shas are sha1 (40 hex) or sha256 (64 hex); shorter inputs return "".
+
+
+rep_path(repo: string, sha: string) -> string {
+    if string.length(sha) < 4 { return "" }
+    out = string.concat(repo, "/reps/")
+    out = string.concat(out, string.substring(sha, 0, 2))
+    out = string.concat(out, "/")
+    out = string.concat(out, string.substring(sha, 2, 4))
+    out = string.concat(out, "/")
+    out = string.concat(out, sha)
+    return string.concat(out, ".rep")
+}
+
+rep_dir(repo: string, sha: string) -> string {
+    if string.length(sha) < 4 { return "" }
+    out = string.concat(repo, "/reps/")
+    out = string.concat(out, string.substring(sha, 0, 2))
+    out = string.concat(out, "/")
+    out = string.concat(out, string.substring(sha, 2, 4))
+    return out
+}
+
+// Relative path (no repo prefix) used as rel_path in the rep_cache row.
+//   XX/YY/<sha>.rep
+rep_rel_path(sha: string) -> string {
+    if string.length(sha) < 4 { return "" }
+    out = string.substring(sha, 0, 2)
+    out = string.concat(out, "/")
+    out = string.concat(out, string.substring(sha, 2, 4))
+    out = string.concat(out, "/")
+    out = string.concat(out, sha)
+    return string.concat(out, ".rep")
+}
+
+
+// =============================================================================
+// repo_storage/spec.ae
+// =============================================================================
+
+// Branch include-spec matcher — ported from path_matches_any in
+// repo_storage/commit_shim.c. This is the first C→Aether port under the
+// shim-snip initiative.
+//
+// Compiled with `aetherc --emit=lib`, so:
+//   - No file I/O here (std.fs is banned under --emit=lib).
+//   - The caller (branch_spec_allows in commit_shim.c) reads the
+//     spec file and passes its contents as `specs_joined` — globs
+//     separated by '\n'.
+//   - Exposed to C as `spec_matches_any(path, specs_joined)`.
+//
+// Glob grammar (kept compatible with the C version's contract):
+//   "prefix/**"  → subtree include; matches prefix and anything under it.
+//   "a/b/c.txt"  → literal path; also matches ancestor dirs (so the
+//                  filtered tree can hold the file).
+//   "a/*.txt"    → fnmatch-style pattern. Round 179 switched to
+//                  std.string.glob_match_pathname (Aether 0.110).
+
+
+// Is `path` an exact prefix of `glob` such that glob[len(path)] == '/'?
+// Used to decide "include `src/foo/bar.txt` implicitly keeps `src` and
+// `src/foo` around so the file has somewhere to live".
+path_is_ancestor_of_glob(path: string, glob: string) {
+    pn = string.length(path)
+    gn = string.length(glob)
+    if pn >= gn { return 0 }
+    if string.char_at(glob, pn) != 47 { return 0 }   // 47 = '/'
+    i = 0
+    while i < pn {
+        if string.char_at(path, i) != string.char_at(glob, i) { return 0 }
+        i = i + 1
+    }
+    return 1
+}
+
+// "prefix/**" subtree check. If `glob` ends in "/**", does `path` fall
+// under that prefix?
+subtree_glob_matches(path: string, glob: string) {
+    gn = string.length(glob)
+    if gn < 3 { return 0 }
+    // Trailing "/**"?
+    if string.char_at(glob, gn - 3) != 47 { return 0 }   // '/'
+    if string.char_at(glob, gn - 2) != 42 { return 0 }   // '*'
+    if string.char_at(glob, gn - 1) != 42 { return 0 }   // '*'
+    plen = gn - 3
+    pn = string.length(path)
+    if pn < plen { return 0 }
+    // path[0..plen] must equal glob[0..plen].
+    i = 0
+    while i < plen {
+        if string.char_at(path, i) != string.char_at(glob, i) { return 0 }
+        i = i + 1
+    }
+    // path == prefix OR path[plen] == '/'.
+    if pn == plen { return 1 }
+    if string.char_at(path, plen) == 47 { return 1 }
+    return 0
+}
+
+// Does `path` match the single `glob`? Returns 1/0.
+path_matches_glob(path: string, glob: string) {
+    // Subtree form first.
+    if subtree_glob_matches(path, glob) == 1 { return 1 }
+    // Exact fnmatch.
+    if string.glob_match_pathname(glob, path) == 1 { return 1 }
+    // Path is an ancestor of this exact glob (implicit parent-dir keep).
+    if path_is_ancestor_of_glob(path, glob) == 1 { return 1 }
+    return 0
+}
+
+// Given newline-separated globs in `specs_joined`, does `path` match
+// ANY of them? Returns 1 on match, 0 on no match.
+//
+// Empty spec (all-whitespace / empty string) returns 0 — the C caller
+// handles "no spec = allow all" above this function.
+spec_matches_any(path: string, specs_joined: string) {
+    pn = string.length(path)
+    if pn == 0 { return 0 }
+    sn = string.length(specs_joined)
+    if sn == 0 { return 0 }
+
+    // Walk specs_joined line by line without allocating.
+    start = 0
+    i = 0
+    while i <= sn {
+        c = 0
+        if i < sn { c = string.char_at(specs_joined, i) }
+        // End of line: process [start, i).
+        if i == sn {
+            if i > start {
+                glob = string.substring(specs_joined, start, i)
+                if string.length(glob) > 0 {
+                    if path_matches_glob(path, glob) == 1 { return 1 }
+                }
+            }
+            i = i + 1
+        } else {
+            if c == 10 {   // '\n'
+                if i > start {
+                    glob = string.substring(specs_joined, start, i)
+                    if string.length(glob) > 0 {
+                        if path_matches_glob(path, glob) == 1 { return 1 }
+                    }
+                }
+                start = i + 1
+                i = i + 1
+            } else {
+                if c == 13 {   // '\r' — tolerate CRLF
+                    if i > start {
+                        glob = string.substring(specs_joined, start, i)
+                        if string.length(glob) > 0 {
+                            if path_matches_glob(path, glob) == 1 { return 1 }
+                        }
+                    }
+                    start = i + 1
+                }
+                i = i + 1
+            }
+        }
+    }
+    return 0
+}
+
+// main() is present so the file type-checks, but it's not used when
+// compiled with --emit=lib.
+
+// =============================================================================
+// repo_storage/tree_builder.ae
+// =============================================================================
+
+// Tree builder — Aether port of repo_storage/shim.c's
+// tree_builder. Round 167 retires the C holder using
+// Aether 0.109's *StructName return-type fix (Section B of
+// fresh-aether-requests.md).
+//
+//   paths         std.list      AetherString per entry
+//   kinds         int_vec   0=file 1=dir
+//   contents      std.list      AetherString per entry (binary-safe)
+//   content_lens  int_vec
+//
+// Used by repo_storage/test_revisions.ae's commit-rev fixture: build a
+// flat (path, kind, content) list, then walk it to emit dir blobs
+// bottom-up.
+
+
+extern malloc(size: int) -> ptr
+extern free(p: ptr)
+
+extern int_vec_new(initial_cap: int) -> ptr
+extern int_vec_count(a: ptr) -> int
+extern int_vec_get(a: ptr, i: int) -> int
+extern int_vec_add(a: ptr, value: int) -> ptr
+extern int_vec_free(a: ptr)
+
+struct TreeBuilder {
+    paths: ptr
+    kinds: ptr
+    contents: ptr
+    content_lens: ptr
+}
+
+fsfs_tree_builder_new() -> ptr {
+    raw = malloc(64)
+    if raw == null { return null }
+    tb = raw as *TreeBuilder
+    tb.paths        = list_new()
+    tb.kinds        = int_vec_new(16)
+    tb.contents     = list_new()
+    tb.content_lens = int_vec_new(16)
+    return raw
+}
+
+fsfs_tree_builder_free(tb_ptr: ptr) {
+    if tb_ptr == null { return }
+    tb = tb_ptr as *TreeBuilder
+    list_free(tb.paths)
+    int_vec_free(tb.kinds)
+    list_free(tb.contents)
+    int_vec_free(tb.content_lens)
+    free(tb_ptr)
+    return
+}
+
+fsfs_tree_builder_add(tb_ptr: ptr, path: string, kind: int,
+                                    content: string, content_len: int) -> int {
+    if tb_ptr == null { return 0 - 1 }
+    tb = tb_ptr as *TreeBuilder
+    list_add_raw(tb.paths, string.copy(path))
+    if kind == 0 {
+        if content_len < 0 { content_len = 0 }
+        list_add_raw(tb.contents, string.copy(content))
+    } else {
+        list_add_raw(tb.contents, string.copy(""))
+        content_len = 0
+    }
+
+    tb.kinds = int_vec_add(tb.kinds, kind)
+    tb.content_lens = int_vec_add(tb.content_lens, content_len)
+    return 0
+}
+
+fsfs_tree_builder_count(tb_ptr: ptr) -> int {
+    if tb_ptr == null { return 0 }
+    tb = tb_ptr as *TreeBuilder
+    return int_vec_count(tb.kinds)
+}
+
+fsfs_tree_builder_path(tb_ptr: ptr, i: int) -> string {
+    if tb_ptr == null { return "" }
+    tb = tb_ptr as *TreeBuilder
+    p = list_get_raw(tb.paths, i)
+    if p == null { return "" }
+    return p
+}
+
+fsfs_tree_builder_kind(tb_ptr: ptr, i: int) -> int {
+    if tb_ptr == null { return 0 - 1 }
+    tb = tb_ptr as *TreeBuilder
+    n = int_vec_count(tb.kinds)
+    if i < 0 { return 0 - 1 }
+    if i >= n { return 0 - 1 }
+    return int_vec_get(tb.kinds, i)
+}
+
+fsfs_tree_builder_content_data(tb_ptr: ptr, i: int) -> string {
+    if tb_ptr == null { return "" }
+    tb = tb_ptr as *TreeBuilder
+    p = list_get_raw(tb.contents, i)
+    if p == null { return "" }
+    return p
+}
+
+
+// =============================================================================
+// repo_storage/txn.ae
+// =============================================================================
+
+// Transaction edit-list. Round 169 retires repo_storage/txn_shim.c
+// (87 lines C) using Aether 0.109's *StructName return-type fix.
+//
+// Storage shape — six parallel containers, all indexed by edit
+// position:
+//
+//   kinds         int_vec   1=ADD_FILE 2=MKDIR 3=DELETE 4=COPY
+//   paths         std.list      AetherString per entry
+//   contents      std.list      AetherString per entry (binary-safe)
+//   content_lens  int_vec   bytes in contents[i]
+//   copy_shas     std.list      AetherString per entry (40-char hex)
+//   copy_kinds    int_vec   0=file 1=dir, only meaningful for COPY
+//
+// Plus optional merge metadata (Round 272 / Phase 1.3 of the
+// merge-ledger work):
+//
+//   merge_source_branch   "" if this txn is not a merge commit
+//   merge_source_revs     std.list, AetherString SHA per source rev
+//                         integrated by this commit
+//   merge_verb            0 applied (default), 1 record-only, 2 reverse
+//
+// commit_finalise reads these and (a) emits a `merged:` line in the
+// rev blob, (b) records merge_event + merge_source_rev rows in
+// <repo>/merges.db. wc_merge will populate them via the new
+// txn_merge_* setters in Phase 2.1.
+
+
+extern malloc(size: int) -> ptr
+extern free(p: ptr)
+
+extern int_vec_new(initial_cap: int) -> ptr
+extern int_vec_count(a: ptr) -> int
+extern int_vec_get(a: ptr, i: int) -> int
+extern int_vec_add(a: ptr, value: int) -> ptr
+extern int_vec_free(a: ptr)
+
+const EDIT_ADD_FILE = 1
+const EDIT_MKDIR    = 2
+const EDIT_DELETE   = 3
+const EDIT_COPY     = 4
+
+const MERGE_VERB_APPLIED      = 0
+const MERGE_VERB_RECORD_ONLY  = 1
+const MERGE_VERB_REVERSE      = 2
+
+struct Txn {
+    base_rev: int
+    kinds: ptr
+    paths: ptr
+    contents: ptr
+    content_lens: ptr
+    copy_shas: ptr
+    copy_kinds: ptr
+    merge_target_path: string
+    merge_source_branch: string
+    merge_source_revs: ptr
+    merge_verb: int
+}
+
+txn_new(base_rev: int) -> ptr {
+    // 112 bytes covers the 11-field struct (1 int + 9 ptr/string + 1
+    // int + padding) on 64-bit. Pre-Round-272 alloc was 64 (7
+    // fields); Round 272 bumped to 96.
+    raw = malloc(112)
+    if raw == null { return null }
+    t = raw as *Txn
+    t.base_rev     = base_rev
+    t.kinds        = int_vec_new(8)
+    t.paths        = list_new()
+    t.contents     = list_new()
+    t.content_lens = int_vec_new(8)
+    t.copy_shas    = list_new()
+    t.copy_kinds   = int_vec_new(8)
+    t.merge_target_path   = ""
+    t.merge_source_branch = ""
+    t.merge_source_revs   = list_new()
+    t.merge_verb          = MERGE_VERB_APPLIED
+    return raw
+}
+
+txn_free(t_ptr: ptr) {
+    if t_ptr == null { return }
+    t = t_ptr as *Txn
+    int_vec_free(t.kinds)
+    list_free(t.paths)
+    list_free(t.contents)
+    int_vec_free(t.content_lens)
+    list_free(t.copy_shas)
+    int_vec_free(t.copy_kinds)
+    list_free(t.merge_source_revs)
+    free(t_ptr)
+    return
+}
+
+txn_base_rev(t_ptr: ptr) -> int {
+    if t_ptr == null { return 0 - 1 }
+    t = t_ptr as *Txn
+    return t.base_rev
+}
+
+txn_count(t_ptr: ptr) -> int {
+    if t_ptr == null { return 0 }
+    t = t_ptr as *Txn
+    return int_vec_count(t.kinds)
+}
+
+// Common-suffix: append to every container so all 6 stay in lockstep.
+push_edit_(t_ptr: ptr,
+            kind: int,
+            path: string,
+            content: string, content_len: int,
+            copy_sha: string, copy_kind: int) -> int {
+    t = t_ptr as *Txn
+    t.kinds        = int_vec_add(t.kinds, kind)
+    t.content_lens = int_vec_add(t.content_lens, content_len)
+    t.copy_kinds   = int_vec_add(t.copy_kinds, copy_kind)
+    list_add_raw(t.paths,     string.copy(path))
+    list_add_raw(t.contents,  string.copy(content))
+    list_add_raw(t.copy_shas, string.copy(copy_sha))
+    return 0
+}
+
+txn_add_file(t_ptr: ptr, path: string, content: string, len: int) -> int {
+    if t_ptr == null { return 0 - 1 }
+    if len < 0 { len = 0 }
+    return push_edit_(t_ptr, EDIT_ADD_FILE, path, content, len, "", 0)
+}
+
+txn_mkdir(t_ptr: ptr, path: string) -> int {
+    if t_ptr == null { return 0 - 1 }
+    return push_edit_(t_ptr, EDIT_MKDIR, path, "", 0, "", 0)
+}
+
+txn_delete(t_ptr: ptr, path: string) -> int {
+    if t_ptr == null { return 0 - 1 }
+    return push_edit_(t_ptr, EDIT_DELETE, path, "", 0, "", 0)
+}
+
+txn_copy(t_ptr: ptr, path: string, from_sha1: string, from_kind: int) -> int {
+    if t_ptr == null { return 0 - 1 }
+    if string.length(from_sha1) != 40 { return 0 - 1 }
+    return push_edit_(t_ptr, EDIT_COPY, path, "", 0, from_sha1, from_kind)
+}
+
+txn_edit_kind(t_ptr: ptr, i: int) -> int {
+    if t_ptr == null { return 0 - 1 }
+    t = t_ptr as *Txn
+    return int_vec_get(t.kinds, i)
+}
+
+txn_edit_path(t_ptr: ptr, i: int) -> string {
+    if t_ptr == null { return "" }
+    t = t_ptr as *Txn
+    p = list_get_raw(t.paths, i)
+    if p == null { return "" }
+    return p
+}
+
+txn_edit_content_data(t_ptr: ptr, i: int) -> string {
+    if t_ptr == null { return "" }
+    t = t_ptr as *Txn
+    p = list_get_raw(t.contents, i)
+    if p == null { return "" }
+    return p
+}
+
+txn_edit_content_len(t_ptr: ptr, i: int) -> int {
+    if t_ptr == null { return 0 }
+    t = t_ptr as *Txn
+    return int_vec_get(t.content_lens, i)
+}
+
+txn_edit_copy_sha(t_ptr: ptr, i: int) -> string {
+    if t_ptr == null { return "" }
+    t = t_ptr as *Txn
+    p = list_get_raw(t.copy_shas, i)
+    if p == null { return "" }
+    return p
+}
+
+txn_edit_copy_kind(t_ptr: ptr, i: int) -> int {
+    if t_ptr == null { return 0 }
+    t = t_ptr as *Txn
+    return int_vec_get(t.copy_kinds, i)
+}
+
+// ---- Merge metadata (Round 272 / Phase 1.3) -----------------------------
+
+// Mark this txn as a merge commit: target path + source branch +
+// verb. target_path is the WC anchor of the merge ("" = WC root),
+// keying for the ledger. Idempotent w.r.t. setting the same source
+// twice; the source-revs list grows via subsequent
+// txn_merge_record_rev calls. Returns 0 on success, -1 on bad
+// input.
+txn_merge_set_source(t_ptr: ptr,
+                            target_path: string,
+                            source_branch: string, verb: int) -> int {
+    if t_ptr == null { return 0 - 1 }
+    if string.length(source_branch) == 0 { return 0 - 1 }
+    t = t_ptr as *Txn
+    t.merge_target_path   = string.copy(target_path)
+    t.merge_source_branch = string.copy(source_branch)
+    t.merge_verb = verb
+    return 0
+}
+
+txn_merge_target_path(t_ptr: ptr) -> string {
+    if t_ptr == null { return "" }
+    t = t_ptr as *Txn
+    return t.merge_target_path
+}
+
+// Append one source-rev SHA to the merge metadata. Caller invokes
+// once per integrated rev. Order is preserved.
+txn_merge_record_rev(t_ptr: ptr, source_sha: string) -> int {
+    if t_ptr == null { return 0 - 1 }
+    if string.length(source_sha) == 0 { return 0 - 1 }
+    t = t_ptr as *Txn
+    list_add_raw(t.merge_source_revs, string.copy(source_sha))
+    return 0
+}
+
+txn_merge_source_branch(t_ptr: ptr) -> string {
+    if t_ptr == null { return "" }
+    t = t_ptr as *Txn
+    return t.merge_source_branch
+}
+
+txn_merge_count(t_ptr: ptr) -> int {
+    if t_ptr == null { return 0 }
+    t = t_ptr as *Txn
+    return list_size(t.merge_source_revs)
+}
+
+txn_merge_source_rev_at(t_ptr: ptr, i: int) -> string {
+    if t_ptr == null { return "" }
+    t = t_ptr as *Txn
+    p = list_get_raw(t.merge_source_revs, i)
+    if p == null { return "" }
+    return p
+}
+
+txn_merge_verb(t_ptr: ptr) -> int {
+    if t_ptr == null { return 0 }
+    t = t_ptr as *Txn
+    return t.merge_verb
+}
+
+// Pack merge_source_revs into the "\n"-separated string shape that
+// merge_ledger.* and format_merged_field consume. Returns "" when
+// the txn carries no merge metadata.
+txn_merge_source_revs_packed(t_ptr: ptr) -> string {
+    if t_ptr == null { return "" }
+    t = t_ptr as *Txn
+    if string.length(t.merge_source_branch) == 0 { return "" }
+    n = list_size(t.merge_source_revs)
+    out = ""
+    i = 0
+    while i < n {
+        sha = list_get_raw(t.merge_source_revs, i)
+        if sha != null {
+            out = string.concat(out, sha)
+            out = string.concat(out, "\n")
+        }
+        i = i + 1
+    }
+    return out
+}
+

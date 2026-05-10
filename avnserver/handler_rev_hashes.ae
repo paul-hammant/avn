@@ -27,6 +27,7 @@
 
 import std.string
 import repos
+import repo_storage
 
 extern acl_allows_mode(repo: string, rev: int, user: string, target_path: string, want_write: int) -> int
 
@@ -35,9 +36,6 @@ extern acl_allows_mode(repo: string, rev: int, user: string, target_path: string
 // rep_cache_sec_lookup) are all Aether-native already; the C
 // trampoline only existed because the prior shape required a
 // fixed-size char[4][32] array to land back on the C side.
-extern format_secondary_count(format_line: string) -> int
-extern format_secondary_hash(format_line: string, i: int) -> string
-extern rep_cache_sec_lookup(repo: string, primary: string, algo: string) -> string
 
 extern hashes_json(algo: string, primary_sha: string,
                           secondary_pairs: string) -> string
@@ -51,13 +49,13 @@ extern svnserver_respond_json_ok(res: ptr, body: string)
 build_secondary_pairs_(repo: string, node_sha: string) -> string {
     line = repos.repos_format_line(repo)
     if string.length(line) == 0 { return "" }
-    n = format_secondary_count(line)
+    n = repo_storage.format_secondary_count(line)
     if n == 0 { return "" }
     pairs = ""
     i = 0
     while i < n {
-        algo = format_secondary_hash(line, i)
-        sec_hex = rep_cache_sec_lookup(repo, node_sha, algo)
+        algo = repo_storage.format_secondary_hash(line, i)
+        sec_hex = repo_storage.rep_cache_sec_lookup(repo, node_sha, algo)
         if string.length(sec_hex) > 0 {
             pairs = string.concat(pairs, algo)
             pairs = string.concat(pairs, " ")

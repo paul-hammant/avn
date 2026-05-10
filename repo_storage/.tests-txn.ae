@@ -12,7 +12,7 @@ main() {
         link_flag("-lz")
         link_flag("-lssl")
         link_flag("-lcrypto")
-        regen("../util/module.ae")
+        regen_with("../util/module.ae", "fs")
         regen("../repo_storage/tree_builder.ae")
         regen("../repo_storage/txn.ae")
         regen("../repo_storage/rebuild.ae")

@@ -24,9 +24,9 @@
 
 import std.string
 import repos
+import repo_storage
 
 extern acl_allows_mode(repo: string, rev: int, user: string, target_path: string, want_write: int) -> int
-extern rep_free(p: string)
 extern svnserver_respond_binary_ok(res: ptr, data: string, length: int,
                                    content_type: string)
 extern svnserver_set_merkle_headers(res: ptr, algo: string, kind: string, sha: string)
@@ -70,7 +70,7 @@ export cat_handle(req: ptr, res: ptr, repo: string, rev: int,
 
     svnserver_respond_binary_ok(res, data, string.length(data),
                                 "application/octet-stream")
-    rep_free(data)
+    repo_storage.rep_free(data)
     return 0
 }
 

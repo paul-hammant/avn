@@ -23,14 +23,11 @@
 // The body is the line-oriented "<sha> <path>\n" shape.
 
 import std.string
+import repo_storage
 
 // Externs hoisted to the top because Aether's resolver requires
 // them to be visible before any function that references them.
 extern load_rev_blob_field(repo: string, rev: int, key: string) -> string
-extern rep_read_blob(repo: string, sha: string) -> string
-extern rep_free(body: string)
-extern rep_write_blob(repo: string, data: string, len: int) -> string
-extern paths_index_sort(body: string) -> string
 
 // Returns the augmented body. Empty input → empty output (caller keeps
 // the "inherit previous" default).
@@ -120,14 +117,14 @@ export auto_follow_copy_acl(repo: string, base_rev: int,
     acl_root = load_rev_blob_field(repo, base_rev, "acl")
     if string.length(acl_root) == 0 { return "" }
 
-    body = rep_read_blob(repo, acl_root)
+    body = repo_storage.rep_read_blob(repo, acl_root)
     if string.length(body) == 0 { return "" }
     augmented = copy_acl_follow(body, from_path, to_path)
-    rep_free(body)
+    repo_storage.rep_free(body)
     if string.length(augmented) == 0 { return "" }
 
-    sorted = paths_index_sort(augmented)
-    return rep_write_blob(repo, sorted, string.length(sorted))
+    sorted = repo_storage.paths_index_sort(augmented)
+    return repo_storage.rep_write_blob(repo, sorted, string.length(sorted))
 }
 
 main() {

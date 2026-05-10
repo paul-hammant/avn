@@ -31,9 +31,8 @@
 
 import std.string
 import std.json
+import repo_storage
 
-extern branch_create(repo: string, name: string, base: string,
-                            globs_joined: string, author: string) -> int
 
 export branch_create_from_body(repo: string, branch_name: string,
                                 body: string, body_len: int,
@@ -75,7 +74,7 @@ export branch_create_from_body(repo: string, branch_name: string,
 
     author = "super"
     if string.length(user_for_author) > 0 { author = user_for_author }
-    new_rev = branch_create(repo, branch_name, base, globs, author)
+    new_rev = repo_storage.branch_create(repo, branch_name, base, globs, author)
     if new_rev < 0 { return -4 }
     return new_rev
 }
