@@ -23,7 +23,6 @@ main() {
         regen("../util/module.ae")
         regen("../repo_storage/tree_builder.ae")
         regen("../repo_storage/txn.ae")
-        regen("../util/int_vec.ae")
         regen("../repo_storage/rebuild.ae")
         regen("../repo_storage/pathutil.ae")
         regen("../repo_storage/rep_store.ae")

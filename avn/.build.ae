@@ -50,7 +50,6 @@ main() {
         regen("../working_copy/mutate.ae")
         regen("../working_copy/commit.ae")
         regen("../util/remote_tree.ae")
-        regen("../util/int_vec.ae")
         regen("../working_copy/update.ae")
         regen("../working_copy/update_apply.ae")
         regen("../working_copy/update_walk.ae")

@@ -7,21 +7,27 @@
 //
 //     http://www.apache.org/licenses/LICENSE-2.0
 
-// util — binary-safe byte ops + future int_vec + io merges.
+// util — binary-safe byte ops + growable int vec.
 //
-// Phase 2a (Round 294): byte_ops.ae merged in first as a foothold.
-// int_vec.ae and io.ae will follow in later sub-phases.
-// remote_tree.ae and error/error.ae stay separate until aether
-// supports exporting structs from modules (deferred per
-// methodical_extern_removal_plan.md Phase 1b note).
+// Phase 2 merge progression (methodical_extern_removal_plan.md):
+//   Phase 2a (Round 294): byte_ops.ae   → concat, slice, pack_le32.
+//   Phase 2b (Round 295): int_vec.ae    → int_vec_new/_count/_get/_add/_free.
+//   Phase 2c (future):    io.ae         → io_*  (16 fs/path helpers).
+// remote_tree.ae and error/error.ae stay as separate extern-bridged
+// files until aether ships exportable structs (their Rtree /
+// SvnaeError structs hit the same limitation that blocked delta).
 //
 // Length parameters on `concat` and `slice` are explicit because
 // inputs may carry embedded NULs — we must not strlen them.
 
-exports (concat, slice, pack_le32)
+exports (
+    concat, slice, pack_le32,
+    int_vec_new, int_vec_count, int_vec_get, int_vec_add, int_vec_free
+)
 
 import std.bytes
 import std.string
+import std.intarr
 
 // Concatenate two byte ranges into a new length-aware AetherString.
 // `prefix_len` / `suf_len` are explicit because both inputs may be
@@ -71,3 +77,91 @@ pack_le32(v: int) -> string {
     return bytes.finish(buf, 4)
 }
 
+// =============================================================================
+// int_vec — growable wrapper around std.intarr
+// =============================================================================
+//
+// std.intarr is a fixed-size packed int buffer; avn port callers
+// (txn edit list, remote_tree node list) need append-style growth
+// without knowing the final count up-front. This wraps intarr with
+// a (capacity, count) pair encoded so we can double-and-copy on
+// overflow.
+//
+// State is encoded as an intarr of (initial_cap + 2) slots:
+//   slot[0]            count       (number of valid entries)
+//   slot[1]            cap         (allocated capacity for entries)
+//   slot[2..2+cap)     entries
+// `cap` lives in slot[1] so we don't have to call intarr_size
+// (which returns the underlying allocation, not the user-facing
+// capacity, on every access).
+//
+// Returns/takes raw `ptr` handles. On out-of-memory the handle
+// stays valid but the value isn't recorded — caller should treat
+// any post-OOM read as undefined.
+
+const HEADER_SLOTS = 2
+
+// Allocate a new growable intarr with the given initial capacity.
+// Returns null on OOM.
+int_vec_new(initial_cap: int) -> ptr {
+    if initial_cap < 4 { initial_cap = 4 }
+    a, _err = intarr.new(initial_cap + HEADER_SLOTS)
+    if a == null { return null }
+    intarr_set_unchecked(a, 0, 0)              // count
+    intarr_set_unchecked(a, 1, initial_cap)    // cap
+    return a
+}
+
+// How many entries are currently stored?
+int_vec_count(a: ptr) -> int {
+    if a == null { return 0 }
+    return intarr_get_unchecked(a, 0)
+}
+
+// Read entry i. Returns 0 on OOB (caller-must-check via int_vec_count).
+int_vec_get(a: ptr, i: int) -> int {
+    if a == null { return 0 }
+    n = intarr_get_unchecked(a, 0)
+    if i < 0 { return 0 }
+    if i >= n { return 0 }
+    return intarr_get_unchecked(a, i + HEADER_SLOTS)
+}
+
+// Append. Returns the same handle on success, OR a new handle if a
+// regrow was needed. Caller must update its variable to the
+// returned ptr. Returns null on OOM (callers can detect and bail).
+int_vec_add(a: ptr, value: int) -> ptr {
+    if a == null { return null }
+    n   = intarr_get_unchecked(a, 0)
+    cap = intarr_get_unchecked(a, 1)
+
+    if n < cap {
+        intarr_set_unchecked(a, n + HEADER_SLOTS, value)
+        intarr_set_unchecked(a, 0, n + 1)
+        return a
+    }
+
+    // Grow: double capacity. Allocate, copy header + entries, free
+    // old, write new value, return new handle.
+    new_cap = cap * 2
+    if new_cap < 16 { new_cap = 16 }
+    fresh, _err = intarr.new(new_cap + HEADER_SLOTS)
+    if fresh == null { return null }
+    intarr_set_unchecked(fresh, 0, n + 1)
+    intarr_set_unchecked(fresh, 1, new_cap)
+    i = 0
+    while i < n {
+        intarr_set_unchecked(fresh, i + HEADER_SLOTS,
+                             intarr_get_unchecked(a, i + HEADER_SLOTS))
+        i = i + 1
+    }
+    intarr_set_unchecked(fresh, n + HEADER_SLOTS, value)
+    intarr_free(a)
+    return fresh
+}
+
+// Release.
+int_vec_free(a: ptr) {
+    if a != null { intarr_free(a) }
+    return 0
+}

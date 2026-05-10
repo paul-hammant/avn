@@ -25,7 +25,6 @@ main() {
         regen("../repo_storage/merge_ledger.ae")
         regen("../repo_storage/format_line.ae")
         regen("../repo_storage/txn.ae")
-        regen("../util/int_vec.ae")
         regen("../repos/blobfield.ae")
         regen("../util/io.ae")
     }

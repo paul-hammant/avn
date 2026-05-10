@@ -23,15 +23,10 @@
 import std.string
 import std.list
 import std.intarr
+import util
 
 extern malloc(size: int) -> ptr
 extern free(p: ptr)
-
-extern int_vec_new(initial_cap: int) -> ptr
-extern int_vec_count(a: ptr) -> int
-extern int_vec_get(a: ptr, i: int) -> int
-extern int_vec_add(a: ptr, value: int) -> ptr
-extern int_vec_free(a: ptr)
 
 extern wc_hash_bytes(wc_root: string, data: string, length: int) -> string
 
@@ -48,10 +43,10 @@ export remote_tree_new() -> ptr {
     if raw == null { return null }
     rt = raw as *Rtree
     rt.paths        = list_new()
-    rt.kinds        = int_vec_new(16)
+    rt.kinds        = util.int_vec_new(16)
     rt.shas         = list_new()
     rt.contents     = list_new()
-    rt.content_lens = int_vec_new(16)
+    rt.content_lens = util.int_vec_new(16)
     return raw
 }
 
@@ -59,10 +54,10 @@ export remote_tree_free(rt_ptr: ptr) {
     if rt_ptr == null { return }
     rt = rt_ptr as *Rtree
     list_free(rt.paths)
-    int_vec_free(rt.kinds)
+    util.int_vec_free(rt.kinds)
     list_free(rt.shas)
     list_free(rt.contents)
-    int_vec_free(rt.content_lens)
+    util.int_vec_free(rt.content_lens)
     free(rt_ptr)
     return
 }
@@ -76,8 +71,8 @@ export remote_tree_add_dir(rt_ptr: ptr, path: string) {
     list_add_raw(rt.shas,     string.copy(""))
     list_add_raw(rt.contents, string.copy(""))
 
-    rt.kinds        = int_vec_add(rt.kinds, 1)
-    rt.content_lens = int_vec_add(rt.content_lens, 0)
+    rt.kinds        = util.int_vec_add(rt.kinds, 1)
+    rt.content_lens = util.int_vec_add(rt.content_lens, 0)
     return 0
 }
 
@@ -97,8 +92,8 @@ export remote_tree_add_file(rt_ptr: ptr, path: string,
     list_add_raw(rt.shas,     string.copy(sha))
     list_add_raw(rt.contents, string.copy(data))
 
-    rt.kinds        = int_vec_add(rt.kinds, 0)
-    rt.content_lens = int_vec_add(rt.content_lens, data_len)
+    rt.kinds        = util.int_vec_add(rt.kinds, 0)
+    rt.content_lens = util.int_vec_add(rt.content_lens, data_len)
     return 0
 }
 
@@ -107,7 +102,7 @@ export remote_tree_add_file(rt_ptr: ptr, path: string,
 export remote_tree_count(rt_ptr: ptr) -> int {
     if rt_ptr == null { return 0 }
     rt = rt_ptr as *Rtree
-    return int_vec_count(rt.kinds)
+    return util.int_vec_count(rt.kinds)
 }
 
 export remote_tree_path_at(rt_ptr: ptr, i: int) -> string {
@@ -121,10 +116,10 @@ export remote_tree_path_at(rt_ptr: ptr, i: int) -> string {
 export remote_tree_kind_at(rt_ptr: ptr, i: int) -> int {
     if rt_ptr == null { return 0 - 1 }
     rt = rt_ptr as *Rtree
-    n = int_vec_count(rt.kinds)
+    n = util.int_vec_count(rt.kinds)
     if i < 0 { return 0 - 1 }
     if i >= n { return 0 - 1 }
-    return int_vec_get(rt.kinds, i)
+    return util.int_vec_get(rt.kinds, i)
 }
 
 export remote_tree_sha_at(rt_ptr: ptr, i: int) -> string {
@@ -146,13 +141,13 @@ export remote_tree_data_at(rt_ptr: ptr, i: int) -> string {
 export remote_tree_data_len_at(rt_ptr: ptr, i: int) -> int {
     if rt_ptr == null { return 0 }
     rt = rt_ptr as *Rtree
-    return int_vec_get(rt.content_lens, i)
+    return util.int_vec_get(rt.content_lens, i)
 }
 
 export remote_tree_find_by_path(rt_ptr: ptr, path: string) -> int {
     if rt_ptr == null { return 0 - 1 }
     rt = rt_ptr as *Rtree
-    n = int_vec_count(rt.kinds)
+    n = util.int_vec_count(rt.kinds)
     paths = rt.paths
     i = 0
     while i < n {
