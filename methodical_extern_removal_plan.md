@@ -223,35 +223,14 @@ single round.
 break cleanly, defer client/ to after the repos/repo_storage tangle is
 sorted in Phase 4.
 
-**Phase 3 status: DEFERRED.** Two aetherc/aeb limitations + one
-codegen issue stack on top of each other:
-
-1. **Forward references in large imported modules.** Standalone
-   `ae check` passes; `import client` from a consumer fails with
-   `Undefined function`. Minimal repro (`caller`/`helper`) works,
-   so it's pattern- or scale-sensitive. Filed in
-   `../aether/import_typer_at_scale.md` Issue A.
-
-2. **Selectively-imported names don't propagate across the import
-   boundary.** `client/module.ae`'s `import std.http.client (set_header,
-   ...)` works standalone, but consumer-side `import client` can't
-   resolve `set_header` in the cloned function bodies. Filed in
-   `../aether/import_typer_at_scale.md` Issue B.
-
-3. **Name collision with `std.http.client`.** Our `client/` directory
-   collides with std.http.client's namespace alias. Workaroundable by
-   renaming `client/` → `remote/` (~110 path edits) but doesn't
-   address #1 + #2 for any other module.
-
-4. **std.json codegen issue in aeb pipeline.** During `aeb avnserver`
-   with merged client/module.ae imported through avn/main.ae, gcc
-   chokes on `std.json/module.ae`'s tuple-return shape (`return null,
-   "not an object"`) — only via the aeb pipeline; standalone aetherc
-   handles it. Looks like a 0.141.0 regression; filed separately if
-   needed.
-
-**Action**: deferred until aether/aetherc improvements land. The
-12 client source files stay as separate `extern`-bridged units.
+**Phase 3 status: DONE (Round 302).** Unblocked by aetherc 0.142.0's
+selective-import propagation fix (Issue B from
+`../aether/import_typer_at_scale.md`). 12 client/*.ae files merged
+into client/module.ae. commit_builder.ae stays separate for now (its
+struct RaCommit could now migrate under 0.141.0's fix; deferred to
+keep this round focused). Namespace-collision workaround: selective
+import `import std.http.client (set_header, send_request, ...)` —
+works because consumers' compilation now sees the propagated bindings.
 
 ### Phase 4 — Untangle `repos` ↔ `repo_storage` cycle, then merge each
 
@@ -285,21 +264,15 @@ Consumers to update:
 
 **Round size:** medium.
 
-**Phase 5 status: DEFERRED.** Round 301 attempt: 30 source files
-merged into `working_copy/module.ae` (4325 lines, no struct issues,
-type-checks standalone). Once `avn/main.ae` does `import working_copy`,
-14 errors fire of the same shape as Phase 3 Issue A: forward refs +
-recursive self-calls + private helper chains. Specifically
-`walk_unversioned_` (recursive), `sort_body_`, `count_records_`,
-`update_stderr_`, `wc_update`. All defined cleanly in the merged
-module. Reverted; same blocker as Phase 3 (filed in
-`../aether/import_typer_at_scale.md` Issue A).
-
-Add'l finding: my consumer-sweep script over-prefixed `extern`
-declarations as `working_copy.X` even though externs are link-time
-forwards to bare C symbols, not module functions. The two failure
-modes (forward-ref + extern-vs-prefix) are independent; a future
-retry needs to handle both.
+**Phase 5 status: DONE (Round 301).** Unblocked by aetherc 0.142.0's
+**128-decl truncation cap fix** — the original Round 301 failures
+weren't classical forward refs, they were the consumer-side typer
+silently dropping decls past the 128th when the merged module had
+~150 functions. With the cap lifted to 4096, 30 files merged
+cleanly (~4300 lines). 7 file-private helpers were duplicated across
+sibling files (record_start_, record_end_, list_field_, etc.) —
+deduped in the merge. 84 functions had been both defined and
+extern'd across files — 176 redundant extern declarations dropped.
 
 ### Phase 6 — Top binaries: `avnserver/`, `avnadmin/`, `avn/`
 
