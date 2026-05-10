@@ -317,20 +317,24 @@ becomes the deciding factor — pick the smallest fan-out / cleanest
 diff first to validate the binary-with-main pattern before scaling.
 
 Pick order:
-1. **`client/commit_builder.ae` (~5 min, R305 candidate).** Last
-   holdout from Phase 3. Has `struct RaCommit` (now exportable under
-   0.141.0). Sole consumers are `client/test_client.ae` and the
-   merged `client/module.ae`'s already-existing extern decls. Fold
-   into `client/module.ae`'s exports list, drop the file. Tiny diff.
-2. **`avnadmin/` (5 helper files, ~30 min).** Simplest binary
-   (admin/db ops; no HTTP; no live state). Validates the
-   binary-with-main pattern (main.ae stays separate, helpers merge
-   into `avnadmin/module.ae`).
-3. **`avn/` (1 helper file = main.ae itself, no work).** Already a
-   single file. Phase 6 may turn out to be a no-op for avn.
-4. **`avnserver/` (42 helper files, ~2 hours).** Largest single dir
-   migration. ~150+ within-avnserver externs collapse. Same shape
-   as avnadmin once that pattern is validated.
+1. **`client/commit_builder.ae` (R305 — DONE).** Phase 3 fully
+   closed. struct RaCommit + 22 lifecycle/accessor/setter fns folded
+   into `client/module.ae`. 17 redundant externs in module.ae
+   dropped; 3 consumers (avn/main.ae, working_copy/module.ae,
+   client/test_client.ae) updated to call `client.remote_commit_*`.
+2. **`avnadmin/` (R306 — DONE).** 4 helper files (admin_db, create,
+   dump, dump_load) merged into `avnadmin/module.ae`. main.ae stays
+   in place and does `import avnadmin`. Validated the binary-with-
+   main pattern. **Discovered constraint:** `import <self_dir>` only
+   resolves when aetherc's CWD is the project root — aeb already
+   honours this, so the pattern works under aeb but fails if anyone
+   manually invokes `aetherc main.ae` from inside the binary's dir.
+3. **`avn/` (R307 candidate).** Already a single main.ae; check
+   whether anything would benefit from an avn/module.ae or if this
+   round is a no-op.
+4. **`avnserver/` (R308, 42 helper files, ~2 hours).** Largest
+   single dir migration. ~150+ within-avnserver externs collapse.
+   Same shape as avnadmin.
 
 Acceptance: same as previous phases — `aeb avn / avnadmin / avnserver`
 all compile-phase clean.

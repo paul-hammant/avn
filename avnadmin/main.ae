@@ -25,13 +25,10 @@
 
 import std.string
 import std.io
+import avnadmin
 
 extern aether_args_count() -> int
 extern aether_args_get(index: int) -> string
-
-extern avnadmin_create(repo: string, algos_spec: string) -> int
-extern avnadmin_dump  (repo: string, out_fd: int) -> int
-extern avnadmin_load  (repo: string, in_fd: int) -> int
 
 // Round 188: switched to std.io fd surface (Aether 0.110 follow-up
 // — Section 1 of nuther-ask-of-aether-team.md). io.fd_open_*
@@ -74,7 +71,7 @@ cmd_create(argv_start: int) {
         return 2
     }
     algos = find_flag("--algos", argv_start)
-    rc = avnadmin_create(path, algos)
+    rc = avnadmin.avnadmin_create(path, algos)
     if rc != 0 {
         if string.length(algos) > 0 {
             println("avnadmin create: unsupported or invalid --algos '${algos}'")
@@ -105,7 +102,7 @@ cmd_dump(argv_start: int) {
         fd = new_fd
         opened = 1
     }
-    rc = avnadmin_dump(path, fd)
+    rc = avnadmin.avnadmin_dump(path, fd)
     if opened == 1 { io.fd_close(fd) }
     if rc != 0 {
         println("avnadmin dump: failed (rc=${rc})")
@@ -133,7 +130,7 @@ cmd_load(argv_start: int) {
         fd = new_fd
         opened = 1
     }
-    rc = avnadmin_load(path, fd)
+    rc = avnadmin.avnadmin_load(path, fd)
     if opened == 1 { io.fd_close(fd) }
     if rc != 0 {
         println("avnadmin load: failed (rc=${rc})")

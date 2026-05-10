@@ -23,10 +23,9 @@ main() {
         regen_with("../repo_storage/module.ae", "fs,os")
         regen_with("../repos/module.ae", "fs,net,os")
         regen_with("../client/module.ae", "fs,os,net")
-        regen("../avnadmin/dump.ae")
-        regen("../avnadmin/admin_db.ae")
-        regen_with("../avnadmin/create.ae", "fs,os")
-        regen_with("../avnadmin/dump_load.ae", "fs,os")
+        // R306 — 4 helper files merged into avnadmin/module.ae.
+        // Caps: fs (io), os (os.now_utc_iso8601). Net not needed.
+        regen_with("../avnadmin/module.ae", "fs,os")
         regen("../ffi/openssl/module.ae")
     }
 }
