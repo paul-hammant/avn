@@ -28,11 +28,6 @@ import ffi.openssl
 // shim. zlib.deflate / zlib.inflate return (string, int, error) tuples;
 // the previous opaque-buf handle dance is gone.
 
-extern io_write_atomic(path: string, data: string, length: int) -> int
-extern io_write_header_and_body(path: string, header: string, body: string, body_len: int) -> int
-extern io_rename(from: string, to: string) -> int
-extern io_is_regular_file(path: string) -> int
-extern io_remove(path: string) -> int
 extern os_getpid_raw() -> int
 // Round 185: switched to fs.read_binary (already shipped) — no
 // more buf carrier, no manual free, length-aware return.
@@ -41,6 +36,7 @@ extern file_exists(path: string) -> int
 extern dir_exists(path: string) -> int
 
 import contrib.sqlite
+import util
 
 const SQLITE_ROW  = 100
 const SQLITE_DONE = 101
@@ -56,7 +52,7 @@ create_repo(path: string) {
     reps = "${path}/reps"
     merr = fs.mkdir_p(reps)
     if string.length(merr) != 0 { return 11 }
-    rc = io_write_atomic("${path}/format", "svnae-fsfs-1\n", 13)
+    rc = util.io_write_atomic("${path}/format", "svnae-fsfs-1\n", 13)
     if rc != 0 { return rc }
     db, oerr = sqlite.open("${path}/rep-cache.db")
     if string.length(oerr) > 0 { return 3 }
@@ -165,13 +161,13 @@ write_blob(repo: string, data: string) {
     tmp = "${full}.tmp.${os_getpid_raw()}.0"
     wrc = 0
     if use_zlib == 1 {
-        wrc = io_write_header_and_body(tmp, storage_hdr, comp, clen)
+        wrc = util.io_write_header_and_body(tmp, storage_hdr, comp, clen)
     } else {
-        wrc = io_write_header_and_body(tmp, storage_hdr, data, n)
+        wrc = util.io_write_header_and_body(tmp, storage_hdr, data, n)
     }
-    if wrc != 0 { io_remove(tmp); return "" }
-    rc = io_rename(tmp, full)
-    if rc != 0 { io_remove(tmp); return "" }
+    if wrc != 0 { util.io_remove(tmp); return "" }
+    rc = util.io_rename(tmp, full)
+    if rc != 0 { util.io_remove(tmp); return "" }
 
     rc = rep_cache_insert(repo, sha1_copy, rel, n, storage)
     if rc != 0 { return "" }

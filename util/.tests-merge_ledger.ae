@@ -26,6 +26,5 @@ main() {
         regen("../repo_storage/format_line.ae")
         regen("../repo_storage/txn.ae")
         regen("../repos/blobfield.ae")
-        regen("../util/io.ae")
     }
 }

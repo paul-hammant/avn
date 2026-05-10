@@ -80,9 +80,6 @@ extern pristine_path(wc_root: string, sha: string) -> string
 extern pristine_dir(wc_root: string, sha: string) -> string
 
 // io helpers.
-extern io_mkdir_p(path: string) -> int
-extern io_exists(path: string) -> int
-extern io_is_regular_file(path: string) -> int
 
 // Binary-safe byte ops live in util/module.ae — Phase 2a migration.
 
@@ -124,10 +121,10 @@ export wc_pristine_put(wc_root: string, data: string, length: int) -> string {
     sha = string.copy(sha)
 
     path = string.copy(pristine_path(wc_root, sha))
-    if io_exists(path) == 1 { return sha }
+    if util.io_exists(path) == 1 { return sha }
 
     dir = string.copy(pristine_dir(wc_root, sha))
-    if io_mkdir_p(dir) != 0 { return "" }
+    if util.io_mkdir_p(dir) != 0 { return "" }
 
     // Decide RAW vs ZLIB. Same threshold fs_fs uses: zlib only if
     // it saves at least 16 bytes over raw.
@@ -203,7 +200,7 @@ export wc_pristine_get(wc_root: string, sha: string) -> string {
 
 export wc_pristine_has(wc_root: string, sha: string) -> int {
     path = string.copy(pristine_path(wc_root, sha))
-    return io_is_regular_file(path)
+    return util.io_is_regular_file(path)
 }
 
 export wc_pristine_size(wc_root: string, sha: string) -> int {

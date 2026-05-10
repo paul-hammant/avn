@@ -43,6 +43,7 @@
 
 import std.fs
 import std.string
+import util
 
 // db lifecycle stays in C (db_shim.c sqlite3_open + close).
 extern wc_db_open(wc_root: string) -> ptr
@@ -62,17 +63,12 @@ extern wc_node_base_sha1(n: ptr) -> string
 extern wc_node_free(n: ptr)
 
 // io helpers come from subr/io.ae.
-extern io_stat_kind(path: string) -> int
-extern io_exists(path: string) -> int
-extern io_unlink(path: string) -> int
-extern io_rmdir(path: string) -> int
-extern io_write_atomic(path: string, data: string, length: int) -> int
 
 // Return 0 on success, -1 if path already tracked, -2 if not on disk,
 // -3 on db error.
 export wc_add(wc_root: string, rel_path: string) -> int {
     disk = "${wc_root}/${rel_path}"
-    skind = io_stat_kind(disk)
+    skind = util.io_stat_kind(disk)
     if skind == 0 { return 0 - 2 }
 
     kind = 0
@@ -133,7 +129,7 @@ export wc_rm(wc_root: string, rel_path: string) -> int {
     // deleted files until commit in some cases; we remove now since
     // this CLI is scoped for "commit soon".
     disk = "${wc_root}/${rel_path}"
-    if kind == 0 { io_unlink(disk) } else { io_rmdir(disk) }
+    if kind == 0 { util.io_unlink(disk) } else { util.io_rmdir(disk) }
 
     return 0
 }
@@ -176,11 +172,11 @@ export wc_cp(wc_root: string, src: string, dst: string) -> int {
     src_disk = "${wc_root}/${src}"
     dst_disk = "${wc_root}/${dst}"
 
-    if io_exists(src_disk) == 0 {
+    if util.io_exists(src_disk) == 0 {
         wc_db_close(db)
         return 0 - 3
     }
-    if io_exists(dst_disk) == 1 {
+    if util.io_exists(dst_disk) == 1 {
         wc_db_close(db)
         return 0 - 2
     }

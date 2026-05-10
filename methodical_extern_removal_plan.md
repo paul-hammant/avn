@@ -173,6 +173,39 @@ Consumers to update:
 **Acceptance:** build green, server/test suite green, bench green.
 Confirms the migration shape works against real code.
 
+**Phase 2 status (Rounds 294-296):**
+
+- **Phase 2a DONE (Round 294)**: byte_ops.ae merged into util/module.ae.
+  Two consumers (working_copy/pristine.ae, repo_storage/rep_store.ae)
+  switched to `import util`. Validated.
+
+- **Phase 2b DONE (Round 295)**: int_vec.ae merged. Sole consumer
+  util/remote_tree.ae switched to `import util` (its own struct Rtree
+  stays local — Rtree blocks remote_tree.ae itself from migrating, but
+  remote_tree consuming util's int_vec_* via import is fine).
+
+- **Phase 2c (Round 296)**: io.ae merge. Pushed through despite an
+  **aeb capability-propagation gap**. After merging io.ae into
+  util/module.ae, util/module.ae imports std.fs. When consumer files
+  switch from `extern io_*` to `import util`, they transitively pull
+  std.fs via util. aeb's `_detect_caps` only scans the file's own
+  `import std.X` lines and doesn't follow `import <module>`, so the
+  regen pass calls `aetherc --emit=lib X.ae` without `--with=fs` and
+  aetherc rejects: `Error: --emit=lib rejects 'import std.fs' without
+  --with=fs.` Documented at `aeb/lib/aether/module.ae` line 254-259:
+  "use `regen_with(path, "fs")` to declare caps explicitly."
+
+  **Workaround applied**: every `regen("../X/Y.ae")` whose target Y.ae
+  transitively pulls fs via util gets switched to
+  `regen_with("../X/Y.ae", "fs")`. Touches every .build.ae /
+  .tests-*.ae file but is mechanical.
+
+  **Future aeb improvement** (to remove the workaround): extend
+  `_detect_caps` to follow `import <mod>` in the scanned file, look
+  up `<mod>/module.ae`'s caps, and union them in. One-time aeb change,
+  fixes the issue for all future migrations and matches aeb's stated
+  convention ("imports trigger automatic regen").
+
 ### Phase 3 — `client/`
 
 `client/` has 14 source files (`accessors.ae`, `commit_build.ae`,

@@ -21,12 +21,12 @@
 import std.string
 
 import contrib.sqlite
+import util
 
 const SQLITE_ROW  = 100
 const SQLITE_DONE = 101
 
 extern os_getpid_raw() -> int
-extern io_remove(path: string) -> int
 
 expect_int(label: string, got: int, want: int) {
     if got == want { return 0 }
@@ -46,7 +46,7 @@ main() {
     fails = 0
     pid = os_getpid_raw()
     dbpath = "/tmp/test_sqlite_${pid}.db"
-    io_remove(dbpath)
+    util.io_remove(dbpath)
 
     db, oerr = sqlite.open(dbpath)
     if string.length(oerr) > 0 {
@@ -111,7 +111,7 @@ main() {
     sqlite.finalize(sel)
 
     sqlite.close(db)
-    io_remove(dbpath)
+    util.io_remove(dbpath)
 
     if fails > 0 {
         println("")

@@ -56,11 +56,6 @@ import ffi.openssl
 // shim. zlib.deflate / zlib.inflate return (string, int, error)
 // tuples; the previous opaque-buf handle dance is gone.
 
-extern io_write_atomic(path: string, data: string, length: int) -> int
-extern io_write_header_and_body(path: string, header: string, body: string, body_len: int) -> int
-extern io_rename(from: string, to: string) -> int
-extern io_is_regular_file(path: string) -> int
-extern io_remove(path: string) -> int
 extern os_getpid_raw() -> int
 // Round 185: switched to fs.read_binary.
 
@@ -69,7 +64,6 @@ extern dir_exists(path: string) -> int
 
 // --- externs from fs_fs/shim.c ---------------------------------------------
 
-extern io_read_file(path: string) -> string
 
 extern fsfs_tree_builder_new() -> ptr
 extern fsfs_tree_builder_add(tb: ptr, path: string, kind: int, content: string, content_len: int) -> int
@@ -81,6 +75,7 @@ extern fsfs_tree_builder_free(tb: ptr)
 
 
 import contrib.sqlite
+import util
 
 const SQLITE_ROW  = 100
 const SQLITE_DONE = 101
@@ -193,13 +188,13 @@ write_blob_text(repo: string, data: string) {
     tmp = "${full}.tmp.${os_getpid_raw()}.0"
     wrc = 0
     if use_zlib == 1 {
-        wrc = io_write_header_and_body(tmp, storage_hdr, comp, clen)
+        wrc = util.io_write_header_and_body(tmp, storage_hdr, comp, clen)
     } else {
-        wrc = io_write_header_and_body(tmp, storage_hdr, data, n)
+        wrc = util.io_write_header_and_body(tmp, storage_hdr, data, n)
     }
-    if wrc != 0 { io_remove(tmp); return "" }
-    rc = io_rename(tmp, full)
-    if rc != 0 { io_remove(tmp); return "" }
+    if wrc != 0 { util.io_remove(tmp); return "" }
+    rc = util.io_rename(tmp, full)
+    if rc != 0 { util.io_remove(tmp); return "" }
 
     rc = rep_cache_insert(repo, sha1_copy, rel, n, storage)
     if rc != 0 { return "" }
@@ -236,7 +231,7 @@ fsfs_init(path: string) {
     merr = fs.mkdir_p("${path}/revs")
     if string.length(merr) != 0 { return 12 }
 
-    rc = io_write_atomic("${path}/format", "svnae-fsfs-1\n", 13)
+    rc = util.io_write_atomic("${path}/format", "svnae-fsfs-1\n", 13)
     if rc != 0 { return rc }
 
     db, oerr = sqlite.open("${path}/rep-cache.db")
@@ -251,16 +246,16 @@ fsfs_init(path: string) {
     rev0_body = "root: ${empty_dir_sha1}\nprev: 0\nauthor: (init)\ndate: ${os.now_utc_iso8601()}\nlog: initial empty revision\n"
     rev0_sha1 = write_blob_text(path, rev0_body)
 
-    rc = io_write_atomic("${path}/revs/000000", "${rev0_sha1}\n", string.length(rev0_sha1) + 1)
+    rc = util.io_write_atomic("${path}/revs/000000", "${rev0_sha1}\n", string.length(rev0_sha1) + 1)
     if rc != 0 { return rc }
-    rc = io_write_atomic("${path}/head", "0\n", 2)
+    rc = util.io_write_atomic("${path}/head", "0\n", 2)
     if rc != 0 { return rc }
     return 0
 }
 
 // Read the current head revision number (as int).
 fsfs_head_rev(repo: string) {
-    raw = io_read_file("${repo}/head")
+    raw = util.io_read_file("${repo}/head")
     if string.length(raw) == 0 { return -1 }
     t = string.trim(raw)
     ok = string.try_int(t)
@@ -283,7 +278,7 @@ rev_file_path(repo: string, rev: int) {
 
 // Read the revision blob for rev `N`. Returns "" on failure.
 fsfs_load_rev_blob(repo: string, rev: int) {
-    raw = io_read_file(rev_file_path(repo, rev))
+    raw = util.io_read_file(rev_file_path(repo, rev))
     if string.length(raw) == 0 { return "" }
     sha1_line = string.trim(raw)
     return read_blob(repo, sha1_line)
@@ -534,11 +529,11 @@ fsfs_commit_flat(repo: string, tb: ptr, author: string, logmsg: string) {
     // Persist revs/<N> pointing at rev_sha1 and bump head.
     rev_path = rev_file_path(repo, next)
     ptr_body = "${rev_sha1}\n"
-    rc = io_write_atomic(rev_path, ptr_body, string.length(ptr_body))
+    rc = util.io_write_atomic(rev_path, ptr_body, string.length(ptr_body))
     if rc != 0 { return -1 }
 
     head_body = "${next}\n"
-    rc = io_write_atomic("${repo}/head", head_body, string.length(head_body))
+    rc = util.io_write_atomic("${repo}/head", head_body, string.length(head_body))
     if rc != 0 { return -1 }
 
     return next
@@ -610,7 +605,7 @@ rmtree(path: string) { system("rm -rf '${path}'"); return 0 }
 count_rep_files(repo: string) {
     count_file = "/tmp/count_${os_getpid_raw()}.txt"
     system("find '${repo}/reps' -name '*.rep' | wc -l > '${count_file}'")
-    raw = io_read_file(count_file)
+    raw = util.io_read_file(count_file)
     if string.length(raw) == 0 { return -1 }
     t = string.trim(raw)
     return string.get_int(t)

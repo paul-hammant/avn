@@ -30,6 +30,7 @@
 // if no on-disk dir exists for it.
 
 import std.string
+import util
 
 extern info_prelude_json(head: int, head_sha: string,
                          name: string, hash_algo: string) -> string
@@ -40,13 +41,6 @@ extern json_escape_string(s: string) -> string
 // their next commit. Empty repo (head=0) → empty sha string.
 extern repos_rev_blob_sha(repo: string, rev: int) -> string
 
-extern io_listdir(path: string) -> ptr
-extern io_listdir_count(handle: ptr) -> int
-extern io_listdir_name(handle: ptr, i: int) -> string
-extern io_listdir_free(handle: ptr)
-extern io_read_file(path: string) -> string
-extern io_file_size(path: string) -> int
-extern io_exists(path: string) -> int
 extern path_join_rel(prefix: string, name: string) -> string
 
 export info_json(repo: string, name: string, head: int, hash_algo: string) -> string {
@@ -59,31 +53,31 @@ export info_json(repo: string, name: string, head: int, hash_algo: string) -> st
     out = string.concat(out, ",\"branches\":[")
     out = string.concat(out, json_escape_string("main"))
 
-    d = io_listdir(branches_dir)
+    d = util.io_listdir(branches_dir)
     if d != null {
-        n = io_listdir_count(d)
+        n = util.io_listdir_count(d)
         i = 0
         while i < n {
-            nm = io_listdir_name(d, i)
+            nm = util.io_listdir_name(d, i)
             if string.equals(nm, "main") == 0 {
                 out = string.concat(out, ",")
                 out = string.concat(out, json_escape_string(nm))
             }
             i = i + 1
         }
-        io_listdir_free(d)
+        util.io_listdir_free(d)
     }
     out = string.concat(out, "]")
 
     // --- specs object ---------------------------------------------------
     out = string.concat(out, ",\"specs\":{")
     first = 1
-    d2 = io_listdir(branches_dir)
+    d2 = util.io_listdir(branches_dir)
     if d2 != null {
-        n = io_listdir_count(d2)
+        n = util.io_listdir_count(d2)
         i = 0
         while i < n {
-            nm = io_listdir_name(d2, i)
+            nm = util.io_listdir_name(d2, i)
             // Snapshot — path_join_rel allocs, but
             // io_listdir_name returns into the list's buffer.
             nm = string.copy(nm)
@@ -95,11 +89,11 @@ export info_json(repo: string, name: string, head: int, hash_algo: string) -> st
             out = string.concat(out, json_escape_string(nm))
             out = string.concat(out, ":")
 
-            spec_sz = io_file_size(spec_path)
+            spec_sz = util.io_file_size(spec_path)
             emitted = 0
             if spec_sz > 0 {
                 if spec_sz < 65536 {
-                    spec_buf = io_read_file(spec_path)
+                    spec_buf = util.io_read_file(spec_path)
                     if string.length(spec_buf) > 0 {
                         out = string.concat(out, specs_to_json_array(spec_buf))
                         emitted = 1
@@ -111,11 +105,11 @@ export info_json(repo: string, name: string, head: int, hash_algo: string) -> st
             }
             i = i + 1
         }
-        io_listdir_free(d2)
+        util.io_listdir_free(d2)
     }
     // If main wasn't already listed (no on-disk dir), emit [] for it.
     main_spec = path_join_rel(branches_dir, "main")
-    if io_exists(main_spec) == 0 {
+    if util.io_exists(main_spec) == 0 {
         if first == 0 { out = string.concat(out, ",") }
         out = string.concat(out, "\"main\":[]")
     }

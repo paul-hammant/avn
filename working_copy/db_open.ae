@@ -34,15 +34,15 @@
 import std.fs
 import std.string
 import contrib.sqlite
+import util
 
 extern wc_db_install_schema(db: ptr) -> int
-extern io_is_regular_file(path: string) -> int
 
 // Open an existing wc.db. Returns null if the WC doesn't already
 // exist at $wc_root.
 export wc_db_open(wc_root: string) -> ptr {
     dbpath = "${wc_root}/.svn/wc.db"
-    if io_is_regular_file(dbpath) == 0 { return null }
+    if util.io_is_regular_file(dbpath) == 0 { return null }
 
     db, oerr = sqlite.open(dbpath)
     if string.length(oerr) > 0 { return null }

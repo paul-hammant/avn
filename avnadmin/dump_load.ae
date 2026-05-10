@@ -26,6 +26,7 @@
 
 import std.string
 import std.io
+import util
 
 // Repo metadata.
 extern repos_head_rev(repo: string) -> int
@@ -51,7 +52,6 @@ extern admin_reps_size_at(packed: string, i: int) -> int
 extern repos_rev_blob_sha(repo: string, rev: int) -> string
 
 // Atomic file write (util/io.ae).
-extern io_write_atomic(path: string, data: string, length: int) -> int
 
 // Round 188: switched to std.io's full fd surface (Aether 0.110
 // follow-up — Section 1 of nuther-ask-of-aether-team.md). The
@@ -222,7 +222,7 @@ export avnadmin_load(repo: string, in_fd: int) -> int {
 
         ptr_body = "${ptr_sha}\n"
         ptr_path = "${repo}/revs/${zpad6_(rev)}"
-        if io_write_atomic(ptr_path, ptr_body, string.length(ptr_body)) != 0 {
+        if util.io_write_atomic(ptr_path, ptr_body, string.length(ptr_body)) != 0 {
             return 0 - 1
         }
         j = j + 1
@@ -233,7 +233,7 @@ export avnadmin_load(repo: string, in_fd: int) -> int {
     // Head.
     head_body = "${head}\n"
     head_path = "${repo}/head"
-    if io_write_atomic(head_path, head_body, string.length(head_body)) != 0 {
+    if util.io_write_atomic(head_path, head_body, string.length(head_body)) != 0 {
         return 0 - 1
     }
     return 0

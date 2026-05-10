@@ -33,11 +33,8 @@
 import std.string
 import std.os
 import std.fs
+import util
 
-extern io_write_atomic(path: string, data: string, length: int) -> int
-extern io_read_file(path: string) -> string
-extern io_file_size(path: string) -> int
-extern io_unlink(path: string) -> int
 
 extern list_new() -> ptr
 extern list_add_raw(list: ptr, item: ptr) -> int
@@ -63,13 +60,13 @@ write_three_(mine: string, mine_len: int,
               base: string, base_len: int,
               theirs: string, theirs_len: int,
               mp: string, bp: string, tp: string) -> int {
-    if io_write_atomic(mp, mine, mine_len) != 0 { return 0 - 1 }
-    if io_write_atomic(bp, base, base_len) != 0 {
-        io_unlink(mp)
+    if util.io_write_atomic(mp, mine, mine_len) != 0 { return 0 - 1 }
+    if util.io_write_atomic(bp, base, base_len) != 0 {
+        util.io_unlink(mp)
         return 0 - 1
     }
-    if io_write_atomic(tp, theirs, theirs_len) != 0 {
-        io_unlink(mp); io_unlink(bp)
+    if util.io_write_atomic(tp, theirs, theirs_len) != 0 {
+        util.io_unlink(mp); util.io_unlink(bp)
         return 0 - 1
     }
     return 0
@@ -117,7 +114,7 @@ export merge(mine: string, mine_len: int,
 
     merged, status = run_diff3_(mp, bp, tp)
 
-    io_unlink(mp); io_unlink(bp); io_unlink(tp)
+    util.io_unlink(mp); util.io_unlink(bp); util.io_unlink(tp)
 
     if status < 0 { return "", 0 - 1 }
     if status > 1 { return "", 0 - 1 }   // diff3 status >= 2 = trouble
@@ -130,8 +127,8 @@ export merge(mine: string, mine_len: int,
 export merge3_apply(wc_path: string,
                             base: string, base_len: int, base_rev: int,
                             theirs: string, theirs_len: int, theirs_rev: int) -> int {
-    if io_file_size(wc_path) < 0 { return 0 - 1 }
-    mine = io_read_file(wc_path)
+    if util.io_file_size(wc_path) < 0 { return 0 - 1 }
+    mine = util.io_read_file(wc_path)
     if string.length(mine) == 0 {
         // Empty file is OK; mine_len = 0.
     }
@@ -148,24 +145,24 @@ export merge3_apply(wc_path: string,
 
     merged, status = run_diff3_(mp, bp, tp)
 
-    io_unlink(mp); io_unlink(bp); io_unlink(tp)
+    util.io_unlink(mp); util.io_unlink(bp); util.io_unlink(tp)
 
     if status < 0 { return 0 - 1 }
     if status > 2 { return 0 - 1 }
 
     merged_len = string.length(merged)
-    if io_write_atomic(wc_path, merged, merged_len) != 0 {
+    if util.io_write_atomic(wc_path, merged, merged_len) != 0 {
         return 0 - 1
     }
 
     if status == 1 {
         // Conflicts: drop sidecars for `avn resolve`.
         side_mine = "${wc_path}.mine"
-        io_write_atomic(side_mine, mine, mine_len)
+        util.io_write_atomic(side_mine, mine, mine_len)
         side_base = "${wc_path}.r${base_rev}"
-        io_write_atomic(side_base, base, base_len)
+        util.io_write_atomic(side_base, base, base_len)
         side_theirs = "${wc_path}.r${theirs_rev}"
-        io_write_atomic(side_theirs, theirs, theirs_len)
+        util.io_write_atomic(side_theirs, theirs, theirs_len)
     }
 
     return status

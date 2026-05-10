@@ -28,6 +28,7 @@
 import std.fs
 import std.string
 import std.collections
+import util
 
 extern wc_db_open(wc_root: string) -> ptr
 extern wc_db_close(db: ptr)
@@ -48,7 +49,6 @@ extern wc_nodelist_free(L: ptr)
 // that std.fs.write_atomic unwraps correctly.
 extern wc_pristine_size(wc_root: string, sha: string) -> int
 extern wc_pristine_get(wc_root: string, sha: string) -> string
-extern io_write_atomic(path: string, data: string, length: int) -> int
 
 diff_tmp_write_pristine_(wc_root: string, sha: string, path: string) -> int {
     sz = wc_pristine_size(wc_root, sha)
@@ -58,12 +58,11 @@ diff_tmp_write_pristine_(wc_root: string, sha: string, path: string) -> int {
     // blobs are size>=1 (avn never stores zero-length pristines),
     // so length-0 is unambiguously a miss.
     if string.length(data) == 0 { return 0 - 1 }
-    return io_write_atomic(path, data, sz)
+    return util.io_write_atomic(path, data, sz)
 }
 
 extern wc_hash_file(wc_root: string, path: string) -> string
 
-extern io_unlink(path: string) -> int
 extern os_getpid_raw() -> int
 
 extern os_run(prog: string, argv_list: ptr, env_list: ptr) -> int
@@ -188,8 +187,8 @@ diff_one_(wc_root: string, L: ptr, i: int, target: string, seq: int) -> int {
     emit_header_(rel)
     run_diff_(label_before, label_after, before, after_p)
 
-    if cleanup_before == 1 { io_unlink(before) }
-    if cleanup_after == 1 { io_unlink(after_p) }
+    if cleanup_before == 1 { util.io_unlink(before) }
+    if cleanup_after == 1 { util.io_unlink(after_p) }
     return seq
 }
 

@@ -41,12 +41,11 @@ extern txn_delete(t: ptr, path: string) -> int
 extern txn_free(t: ptr)
 extern rebuild_dir(repo: string, base_dir_sha: string, prefix: string, t: ptr) -> string
 
-extern io_write_atomic(path: string, data: string, length: int) -> int
 extern dir_exists(path: string) -> int
 
-extern io_read_file(path: string) -> string
 
 import contrib.sqlite
+import util
 
 fsfs_init(path: string) {
     if dir_exists(path) == 1 { return 1 }
@@ -56,7 +55,7 @@ fsfs_init(path: string) {
     if string.length(merr) != 0 { return 11 }
     merr = fs.mkdir_p("${path}/revs")
     if string.length(merr) != 0 { return 12 }
-    rc = io_write_atomic("${path}/format", "svnae-fsfs-1\n", 13)
+    rc = util.io_write_atomic("${path}/format", "svnae-fsfs-1\n", 13)
     if rc != 0 { return rc }
     db, oerr = sqlite.open("${path}/rep-cache.db")
     if string.length(oerr) > 0 { return 3 }
@@ -69,9 +68,9 @@ fsfs_init(path: string) {
     rev0 = "root: ${empty_copy}\nprev: 0\nauthor: (init)\ndate: ${os.now_utc_iso8601()}\nlog: initial empty revision\n"
     rev0_sha = rep_write_blob(path, rev0, string.length(rev0))
     rev0_copy = string.concat("", rev0_sha)
-    rc = io_write_atomic("${path}/revs/000000", "${rev0_copy}\n", string.length(rev0_copy) + 1)
+    rc = util.io_write_atomic("${path}/revs/000000", "${rev0_copy}\n", string.length(rev0_copy) + 1)
     if rc != 0 { return rc }
-    rc = io_write_atomic("${path}/head", "0\n", 2)
+    rc = util.io_write_atomic("${path}/head", "0\n", 2)
     if rc != 0 { return rc }
     return 0
 }
@@ -114,7 +113,7 @@ parse_line_value(body: string, key: string) {
 }
 
 rev_root_sha1(repo: string, rev: int) {
-    raw = io_read_file(rev_file_path(repo, rev))
+    raw = util.io_read_file(rev_file_path(repo, rev))
     if string.length(raw) == 0 { return "" }
     rev_blob_sha1 = string.trim(raw)
     rev_body = rep_read_blob(repo, rev_blob_sha1)
@@ -125,7 +124,7 @@ rev_root_sha1(repo: string, rev: int) {
 }
 
 fsfs_head_rev(repo: string) {
-    raw = io_read_file("${repo}/head")
+    raw = util.io_read_file("${repo}/head")
     if string.length(raw) == 0 { return -1 }
     t = string.trim(raw)
     if string.try_int(t) == 0 { return -1 }
@@ -145,9 +144,9 @@ commit_txn(repo: string, txn: ptr, author: string, logmsg: string) {
     rev_sha_raw = rep_write_blob(repo, rev_body, string.length(rev_body))
     rev_sha = string.concat("", rev_sha_raw)
     ptr_body = "${rev_sha}\n"
-    rc = io_write_atomic(rev_file_path(repo, next), ptr_body, string.length(ptr_body))
+    rc = util.io_write_atomic(rev_file_path(repo, next), ptr_body, string.length(ptr_body))
     if rc != 0 { return -1 }
-    rc = io_write_atomic("${repo}/head", "${next}\n", string.length("${next}\n"))
+    rc = util.io_write_atomic("${repo}/head", "${next}\n", string.length("${next}\n"))
     if rc != 0 { return -1 }
     return next
 }

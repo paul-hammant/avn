@@ -7,27 +7,41 @@
 //
 //     http://www.apache.org/licenses/LICENSE-2.0
 
-// util — binary-safe byte ops + growable int vec.
+// util — binary-safe byte ops + growable int vec + fs/path helpers.
 //
 // Phase 2 merge progression (methodical_extern_removal_plan.md):
 //   Phase 2a (Round 294): byte_ops.ae   → concat, slice, pack_le32.
 //   Phase 2b (Round 295): int_vec.ae    → int_vec_new/_count/_get/_add/_free.
-//   Phase 2c (future):    io.ae         → io_*  (16 fs/path helpers).
+//   Phase 2c (Round 296): io.ae         → io_* fs/path helpers.
 // remote_tree.ae and error/error.ae stay as separate extern-bridged
 // files until aether ships exportable structs (their Rtree /
 // SvnaeError structs hit the same limitation that blocked delta).
+//
+// Phase 2c gotcha: callers that switch from `extern io_*` to
+// `import util` transitively pull std.fs via util. aeb's _detect_caps
+// doesn't follow project-local imports, so .build.ae files that regen
+// such callers must use `regen_with("../X/Y.ae", "fs")` (caps include
+// "fs" plus whatever caps Y.ae used to need directly). Documented in
+// methodical_extern_removal_plan.md Phase 2c.
 //
 // Length parameters on `concat` and `slice` are explicit because
 // inputs may carry embedded NULs — we must not strlen them.
 
 exports (
     concat, slice, pack_le32,
-    int_vec_new, int_vec_count, int_vec_get, int_vec_add, int_vec_free
+    int_vec_new, int_vec_count, int_vec_get, int_vec_add, int_vec_free,
+    io_write_atomic, io_write_header_and_body, io_mkdir_p,
+    io_read_file, io_file_size,
+    io_is_regular_file, io_exists, io_stat_kind,
+    io_listdir, io_listdir_count, io_listdir_name, io_listdir_free,
+    io_unlink, io_remove, io_rmdir, io_rename
 )
 
 import std.bytes
 import std.string
 import std.intarr
+import std.fs
+import std.dir
 
 // Concatenate two byte ranges into a new length-aware AetherString.
 // `prefix_len` / `suf_len` are explicit because both inputs may be
@@ -163,5 +177,118 @@ int_vec_add(a: ptr, value: int) -> ptr {
 // Release.
 int_vec_free(a: ptr) {
     if a != null { intarr_free(a) }
+    return 0
+}
+
+// =============================================================================
+// io — durable-write / mkdir -p / small-file slurp / dir-listing primitives
+// =============================================================================
+//
+// Before Aether gained `--emit=lib --with=fs` (changelog [current]),
+// write_file_atomic + mkdir_p + read_small were duplicated verbatim in
+// commit_shim, rep_store_shim, pristine_shim, checkout_shim, avnadmin,
+// txn_shim, and merge_shim. This module delegates to std.fs so the
+// copies can go away.
+
+io_write_atomic(path: string, data: string, length: int) -> int {
+    err = fs.write_atomic(path, data, length)
+    if string.length(err) > 0 { return 1 }
+    return 0
+}
+
+io_write_header_and_body(path: string, header: string,
+                          body: string, body_len: int) -> int {
+    hlen = string.length(header)
+    total = hlen + body_len
+    buf = bytes.new(total + 1)
+    if buf == null { return 1 }
+    if hlen > 0 {
+        bytes.copy_from_string(buf, 0, header, hlen)
+    }
+    if body_len > 0 {
+        bytes.copy_from_string(buf, hlen, body, body_len)
+    }
+    packed = bytes.finish(buf, total)
+    err = fs.write_atomic(path, packed, total)
+    if string.length(err) > 0 { return 1 }
+    return 0
+}
+
+io_mkdir_p(path: string) -> int {
+    err = fs.mkdir_p(path)
+    if string.length(err) > 0 { return 1 }
+    return 0
+}
+
+io_read_file(path: string) -> string {
+    content, _n, err = fs.read_binary(path)
+    if string.length(err) > 0 { return "" }
+    return content
+}
+
+io_file_size(path: string) -> int {
+    _k, size, _m, err = fs.file_stat(path)
+    if string.length(err) > 0 { return 0 - 1 }
+    return size
+}
+
+io_is_regular_file(path: string) -> int {
+    kind, _s, _m, err = fs.file_stat(path)
+    if string.length(err) > 0 { return 0 }
+    if kind == 1 { return 1 }
+    return 0
+}
+
+io_exists(path: string) -> int {
+    _k, _s, _m, err = fs.file_stat(path)
+    if string.length(err) > 0 { return 0 }
+    return 1
+}
+
+io_stat_kind(path: string) -> int {
+    kind, _s, _m, err = fs.file_stat(path)
+    if string.length(err) > 0 { return 0 }
+    return kind
+}
+
+io_listdir(path: string) -> ptr {
+    return dir_list_raw(path)
+}
+
+io_listdir_count(handle: ptr) -> int {
+    return dir_list_count(handle)
+}
+
+io_listdir_name(handle: ptr, index: int) -> string {
+    return dir_list_get(handle, index)
+}
+
+io_listdir_free(handle: ptr) {
+    dir_list_free(handle)
+}
+
+io_unlink(path: string) -> int {
+    err = fs.delete(path)
+    if string.length(err) > 0 { return 1 }
+    return 0
+}
+
+io_remove(path: string) -> int {
+    _k, _s, _m, stat_err = fs.file_stat(path)
+    if string.length(stat_err) > 0 { return 0 }
+    err = fs.delete(path)
+    if string.length(err) > 0 { return 1 }
+    return 0
+}
+
+io_rmdir(path: string) -> int {
+    err = fs.delete_dir(path)
+    if string.length(err) > 0 { return 1 }
+    return 0
+}
+
+io_rename(from: string, to: string) -> int {
+    err = fs.rename(from, to)
+    if string.length(err) > 0 { return 1 }
     return 0
 }

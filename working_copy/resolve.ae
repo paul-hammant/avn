@@ -28,6 +28,7 @@
 
 import std.fs
 import std.string
+import util
 
 // wc.db lifecycle + helpers.
 extern wc_db_open(wc_root: string) -> ptr
@@ -42,11 +43,6 @@ extern is_sidecar_suffix(s: string) -> int
 extern sidecar_rev(suffix: string) -> int
 
 // Listdir + io.
-extern io_listdir(path: string) -> ptr
-extern io_listdir_count(handle: ptr) -> int
-extern io_listdir_name(handle: ptr, index: int) -> string
-extern io_listdir_free(handle: ptr)
-extern io_unlink(path: string) -> int
 
 // Split rel_path at the last '/'. Returns (dir-part-relative-to-wc-root,
 // basename). If rel_path has no '/', dir-part is "" so caller composes
@@ -85,12 +81,12 @@ copy_overwrite_(src: string, dst: string) -> int {
 // whose stem matches `base`.
 remove_sidecars_(dirpath: string, base: string) {
     blen = string.length(base)
-    d = io_listdir(dirpath)
+    d = util.io_listdir(dirpath)
     if d == null { return 0 }
-    n_entries = io_listdir_count(d)
+    n_entries = util.io_listdir_count(d)
     i = 0
     while i < n_entries {
-        name = io_listdir_name(d, i)
+        name = util.io_listdir_name(d, i)
         nlen = string.length(name)
         if nlen > blen + 1 {
             stem = string.substring(name, 0, blen)
@@ -98,14 +94,14 @@ remove_sidecars_(dirpath: string, base: string) {
                 if string.char_at(name, blen) == 46 {   // '.'
                     suffix = string.substring(name, blen + 1, nlen)
                     if is_sidecar_suffix(suffix) == 1 {
-                        io_unlink("${dirpath}/${name}")
+                        util.io_unlink("${dirpath}/${name}")
                     }
                 }
             }
         }
         i = i + 1
     }
-    io_listdir_free(d)
+    util.io_listdir_free(d)
     return 0
 }
 
@@ -117,12 +113,12 @@ remove_sidecars_(dirpath: string, base: string) {
 find_theirs_sidecar_(dirpath: string, base: string) -> string {
     blen = string.length(base)
     best_rev = 0 - 1
-    d = io_listdir(dirpath)
+    d = util.io_listdir(dirpath)
     if d == null { return "" }
-    n_entries = io_listdir_count(d)
+    n_entries = util.io_listdir_count(d)
     i = 0
     while i < n_entries {
-        name = io_listdir_name(d, i)
+        name = util.io_listdir_name(d, i)
         nlen = string.length(name)
         if nlen > blen + 1 {
             stem = string.substring(name, 0, blen)
@@ -136,7 +132,7 @@ find_theirs_sidecar_(dirpath: string, base: string) -> string {
         }
         i = i + 1
     }
-    io_listdir_free(d)
+    util.io_listdir_free(d)
     if best_rev < 0 { return "" }
     return "${dirpath}/${base}.r${best_rev}"
 }

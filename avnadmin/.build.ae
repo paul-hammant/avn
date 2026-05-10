@@ -1,6 +1,6 @@
 import build
 import aether
-import aether (source, output, regen, extra_source, link_flag)
+import aether (source, output, regen, extra_source, link_flag, regen_with)
 
 main() {
     b = build.start()
@@ -19,19 +19,18 @@ main() {
             link_flag("-Wformat")
             link_flag("-Wformat-security")
         }
-        regen("../util/io.ae")
         regen("../util/module.ae")
         regen("../repo_storage/tree_builder.ae")
         regen("../repo_storage/txn.ae")
         regen("../repo_storage/rebuild.ae")
         regen("../repo_storage/pathutil.ae")
-        regen("../repo_storage/rep_store.ae")
+        regen_with("../repo_storage/rep_store.ae", "fs,os")
         regen("../repo_storage/rep_store_sec.ae")
-        regen("../repo_storage/count_reps.ae")
+        regen_with("../repo_storage/count_reps.ae", "fs")
         regen("../repo_storage/reppath.ae")
-        regen("../repo_storage/commit_finalise.ae")
+        regen_with("../repo_storage/commit_finalise.ae", "fs,os")
         regen("../repo_storage/merge_ledger.ae")
-        regen("../repo_storage/branch_spec.ae")
+        regen_with("../repo_storage/branch_spec.ae", "fs")
         regen("../repo_storage/filter.ae")
         regen("../repo_storage/spec.ae")
         regen("../repo_storage/dirblob.ae")
@@ -44,11 +43,11 @@ main() {
         regen("../repos/list_packed.ae")
         regen("../client/packed.ae")
         regen("../repos/blobfield.ae")
-        regen("../repos/rev_io.ae")
+        regen_with("../repos/rev_io.ae", "fs")
         regen("../avnadmin/dump.ae")
         regen("../avnadmin/admin_db.ae")
-        regen("../avnadmin/create.ae")
-        regen("../avnadmin/dump_load.ae")
+        regen_with("../avnadmin/create.ae", "fs,os")
+        regen_with("../avnadmin/dump_load.ae", "fs")
         regen("../ffi/openssl/module.ae")
     }
 }

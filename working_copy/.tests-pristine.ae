@@ -1,6 +1,6 @@
 import build
 import aether
-import aether (source, output, regen, link_flag)
+import aether (source, output, regen, link_flag, regen_with)
 
 main() {
     b = build.start()
@@ -13,20 +13,19 @@ main() {
         link_flag("-lssl")
         link_flag("-lcrypto")
         regen("../working_copy/db_accessors.ae")
-        regen("../working_copy/db_open.ae")
+        regen_with("../working_copy/db_open.ae", "fs")
         regen("../working_copy/db_schema.ae")
         regen("../working_copy/db_nodes.ae")
         regen("../working_copy/db_node_packed.ae")
         regen("../working_copy/pristine_path.ae")
-        regen("../working_copy/pristine.ae")
-        regen("../repo_storage/rep_store.ae")
+        regen_with("../working_copy/pristine.ae", "fs")
+        regen_with("../repo_storage/rep_store.ae", "fs,os")
         regen("../repo_storage/rep_store_sec.ae")
         regen("../repo_storage/reppath.ae")
-        regen("../repo_storage/count_reps.ae")
+        regen_with("../repo_storage/count_reps.ae", "fs")
         regen("../repo_storage/format_line.ae")
-        regen("../repos/rev_io.ae")
+        regen_with("../repos/rev_io.ae", "fs")
         regen("../repos/blobfield.ae")
-        regen("../util/io.ae")
         regen("../util/module.ae")
         regen("../ffi/openssl/module.ae")
     }

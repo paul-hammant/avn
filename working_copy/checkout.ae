@@ -26,6 +26,7 @@
 // Reads use the Phase 7 RA (cross-HTTP); writes go to local pristine/db.
 
 import std.string
+import util
 
 // RA list/cat handles + accessors stay in C (client/shim.c).
 extern remote_list(base_url: string, repo_name: string, rev: int, path: string) -> ptr
@@ -58,8 +59,6 @@ extern wc_pristine_put(wc_root: string, data: string, len: int) -> string
 extern wc_propset(wc_root: string, path: string, name: string, value: string) -> int
 
 // IO helpers from subr/io.ae and fs_fs/pathutil.ae.
-extern io_mkdir_p(path: string) -> int
-extern io_write_atomic(path: string, data: string, length: int) -> int
 extern path_join_rel(prefix: string, name: string) -> string
 
 // Ingest every prop attached to (rev, rel) onto the working copy at dest.
@@ -102,7 +101,7 @@ walk_(base_url: string, repo: string, rev: int,
         disk = string.copy(disk_borrowed)
 
         if string.equals(kind, "dir") == 1 {
-            if io_mkdir_p(disk) != 0 { remote_list_free(L); return 0 - 1 }
+            if util.io_mkdir_p(disk) != 0 { remote_list_free(L); return 0 - 1 }
             wc_db_upsert_node(db, rel, 1, rev, "", 0)
             ingest_props_(base_url, repo, rev, dest, rel)
             if walk_(base_url, repo, rev, dest, rel, db) != 0 {
@@ -118,7 +117,7 @@ walk_(base_url: string, repo: string, rev: int,
                 return 0 - 1
             }
             len = string.length(data)
-            if io_write_atomic(disk, data, len) != 0 {
+            if util.io_write_atomic(disk, data, len) != 0 {
                 remote_free(data)
                 remote_list_free(L)
                 return 0 - 1
@@ -144,7 +143,7 @@ walk_(base_url: string, repo: string, rev: int,
 // connection info + hash algo, walks the server tree at `rev`.
 export wc_checkout(base_url: string, repo_name: string,
                           dest: string, rev: int) -> int {
-    if io_mkdir_p(dest) != 0 { return 0 - 1 }
+    if util.io_mkdir_p(dest) != 0 { return 0 - 1 }
 
     // Checkout is the only caller that's allowed to *create* a WC.
     // Every other caller (wc_add, wc_commit, wc_status, …) must use

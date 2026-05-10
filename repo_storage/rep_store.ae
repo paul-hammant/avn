@@ -47,7 +47,6 @@ import util
 extern rep_path(repo: string, sha: string) -> string
 extern rep_dir(repo: string, sha: string) -> string
 extern rep_rel_path(sha: string) -> string
-extern io_mkdir_p(path: string) -> int
 
 // sqlite — for rep-cache.db index access. Goes through contrib.sqlite v2.
 import contrib.sqlite
@@ -134,7 +133,7 @@ rep_encoded_length(encoded: string) -> int {
 
 rep_write_encoded(repo: string, sha: string, encoded: string) -> string {
     dir = string.copy(rep_dir(repo, sha))
-    if io_mkdir_p(dir) != 0 { return "mkdir_p failed" }
+    if util.io_mkdir_p(dir) != 0 { return "mkdir_p failed" }
 
     path = string.copy(rep_path(repo, sha))
     body = rep_encoded_bytes(encoded)

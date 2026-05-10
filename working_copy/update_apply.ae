@@ -29,6 +29,7 @@
 
 import std.string
 import std.io
+import util
 
 // --- remote_tree accessors (C-side opaque handle) -------------------------
 extern remote_tree_count(rt: ptr) -> int
@@ -57,10 +58,6 @@ extern wc_db_set_conflicted(db: ptr, path: string, conflicted: int) -> int
 extern wc_pristine_put(wc_root: string, data: string, length: int) -> string
 
 // --- io helpers + merge3 entry -------------------------------------------
-extern io_mkdir_p(path: string) -> int
-extern io_write_atomic(path: string, data: string, length: int) -> int
-extern io_unlink(path: string) -> int
-extern io_rmdir(path: string) -> int
 extern path_join_rel(prefix: string, name: string) -> string
 
 extern merge3_apply(wc_path: string,
@@ -117,8 +114,8 @@ export update_apply_pass_a(wc_root: string, base_url: string, repo: string,
             if r_idx < 0 {
                 // Remote removed it. Delete locally.
                 disk = path_join_rel(wc_root, rel)
-                if kind == 0 { io_unlink(disk) }
-                if kind == 1 { io_rmdir(disk) }
+                if kind == 0 { util.io_unlink(disk) }
+                if kind == 1 { util.io_rmdir(disk) }
                 wc_db_delete_node(db, rel)
             }
             if r_idx >= 0 {
@@ -153,7 +150,7 @@ export update_apply_pass_a(wc_root: string, base_url: string, repo: string,
                             }
                             if local_clean == 1 {
                                 // Straight overwrite.
-                                ok = io_write_atomic(disk, r_data, r_len)
+                                ok = util.io_write_atomic(disk, r_data, r_len)
                                 if ok == 0 {
                                     wc_pristine_put(wc_root, r_data, r_len)
                                     wc_db_upsert_node(db, rel, 0, target_rev, r_sha, 0)
@@ -242,13 +239,13 @@ export update_apply_pass_b(wc_root: string, base_url: string, repo: string,
 
             ok = 0
             if r_kind == 1 {
-                if io_mkdir_p(disk) == 0 {
+                if util.io_mkdir_p(disk) == 0 {
                     wc_db_upsert_node(db, rpath, 1, target_rev, "", 0)
                     ok = 1
                 }
             }
             if r_kind == 0 {
-                if io_write_atomic(disk, r_data, r_len) == 0 {
+                if util.io_write_atomic(disk, r_data, r_len) == 0 {
                     wc_pristine_put(wc_root, r_data, r_len)
                     wc_db_upsert_node(db, rpath, 0, target_rev, r_sha, 0)
                     ok = 1

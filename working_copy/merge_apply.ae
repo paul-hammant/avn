@@ -33,6 +33,7 @@
 
 import std.string
 import std.io
+import util
 
 // --- remote_tree accessors (C-side opaque handle; shared with update_shim's
 //     but named uniquely so both can link into the same binary) ----------
@@ -62,11 +63,6 @@ extern merge3_apply(wc_path: string,
                           theirs_data: string, theirs_len: int, theirs_rev: int) -> int
 
 // --- io helpers ----------------------------------------------------------
-extern io_mkdir_p(path: string) -> int
-extern io_write_atomic(path: string, data: string, length: int) -> int
-extern io_unlink(path: string) -> int
-extern io_rmdir(path: string) -> int
-extern io_exists(path: string) -> int
 extern path_join_rel(prefix: string, name: string) -> string
 
 // --- stderr trace --------------------------------------------------------
@@ -107,8 +103,8 @@ export merge_apply_deletions(wc_root: string, target_path: string,
                     wc_node_free(n)
                     wc_db_upsert_node(db, wc_rel, kind, brev, bsha_copy, 2)
                 }
-                if remote_kind == 0 { io_unlink(disk) }
-                if remote_kind == 1 { io_rmdir(disk) }
+                if remote_kind == 0 { util.io_unlink(disk) }
+                if remote_kind == 1 { util.io_rmdir(disk) }
             }
         }
         i = i + 1
@@ -137,7 +133,7 @@ export merge_apply_adds_mods(wc_root: string, target_path: string,
 
         if rb_kind == 1 {
             // Dir.
-            if io_mkdir_p(disk) == 0 {
+            if util.io_mkdir_p(disk) == 0 {
                 if wc_db_node_exists(db, wc_rel) == 0 {
                     wc_db_upsert_node(db, wc_rel, 1, 0, "", 1)
                 }
@@ -155,11 +151,11 @@ export merge_apply_adds_mods(wc_root: string, target_path: string,
                 }
             }
             if skip == 0 {
-                exists_on_disk = io_exists(disk)
+                exists_on_disk = util.io_exists(disk)
                 tracked = wc_db_node_exists(db, wc_rel)
                 if exists_on_disk == 0 {
                     // Not on disk — new add.
-                    if io_write_atomic(disk, rb_data, rb_len) == 0 {
+                    if util.io_write_atomic(disk, rb_data, rb_len) == 0 {
                         wc_pristine_put(wc_root, rb_data, rb_len)
                         if tracked == 0 {
                             wc_db_upsert_node(db, wc_rel, 0, 0, "", 1)
@@ -169,7 +165,7 @@ export merge_apply_adds_mods(wc_root: string, target_path: string,
                 if exists_on_disk == 1 {
                     if tracked == 0 {
                         // On disk but untracked — same new-add path.
-                        if io_write_atomic(disk, rb_data, rb_len) == 0 {
+                        if util.io_write_atomic(disk, rb_data, rb_len) == 0 {
                             wc_pristine_put(wc_root, rb_data, rb_len)
                             wc_db_upsert_node(db, wc_rel, 0, 0, "", 1)
                         }

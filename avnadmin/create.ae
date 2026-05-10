@@ -31,9 +31,8 @@
 import std.string
 import std.os
 import ffi.openssl
+import util
 
-extern io_mkdir_p(path: string) -> int
-extern io_write_atomic(path: string, data: string, length: int) -> int
 
 extern algos_count(spec: string) -> int
 extern algos_token(spec: string, i: int) -> string
@@ -49,9 +48,9 @@ extern rev_blob_body(root: string, branch: string, props: string, acl: string, p
 // and `load` (which replays revs from a dump). algos_spec defaults to
 // "sha1" when empty.
 create_bare_(repo: string, algos_spec: string) -> int {
-    if io_mkdir_p(repo) != 0 { return 0 - 1 }
-    if io_mkdir_p("${repo}/reps") != 0 { return 0 - 1 }
-    if io_mkdir_p("${repo}/revs") != 0 { return 0 - 1 }
+    if util.io_mkdir_p(repo) != 0 { return 0 - 1 }
+    if util.io_mkdir_p("${repo}/reps") != 0 { return 0 - 1 }
+    if util.io_mkdir_p("${repo}/revs") != 0 { return 0 - 1 }
 
     spec = algos_spec
     if string.length(spec) == 0 { spec = "sha1" }
@@ -67,7 +66,7 @@ create_bare_(repo: string, algos_spec: string) -> int {
     }
 
     fmt_line = "svnae-fsfs-1 ${spec}\n"
-    if io_write_atomic("${repo}/format", fmt_line, string.length(fmt_line)) != 0 {
+    if util.io_write_atomic("${repo}/format", fmt_line, string.length(fmt_line)) != 0 {
         return 0 - 1
     }
 
@@ -96,12 +95,12 @@ export avnadmin_create_bare(repo: string, algos_spec: string) -> int {
 // Phase 8.1 layout: $repo/branches/main/{head, spec, revs/aa/bb/...}
 // in parallel with the legacy $repo/{head, revs/NNNNNN}.
 write_main_branch_layout_(repo: string) -> int {
-    if io_mkdir_p("${repo}/branches") != 0 { return 0 - 1 }
-    if io_mkdir_p("${repo}/branches/main") != 0 { return 0 - 1 }
-    if io_mkdir_p("${repo}/branches/main/revs") != 0 { return 0 - 1 }
-    if io_mkdir_p("${repo}/branches/main/revs/00/00") != 0 { return 0 - 1 }
+    if util.io_mkdir_p("${repo}/branches") != 0 { return 0 - 1 }
+    if util.io_mkdir_p("${repo}/branches/main") != 0 { return 0 - 1 }
+    if util.io_mkdir_p("${repo}/branches/main/revs") != 0 { return 0 - 1 }
+    if util.io_mkdir_p("${repo}/branches/main/revs/00/00") != 0 { return 0 - 1 }
     // Empty spec file — main has no parent, so it means "full tree."
-    if io_write_atomic("${repo}/branches/main/spec", "", 0) != 0 {
+    if util.io_write_atomic("${repo}/branches/main/spec", "", 0) != 0 {
         return 0 - 1
     }
     return 0
@@ -123,17 +122,17 @@ seed_rev0_(repo: string) -> int {
     ptr_body = "${rev0_sha}\n"
 
     // Legacy rev pointer (Phase 8.1 keeps this for unmodified readers).
-    if io_write_atomic("${repo}/revs/000000", ptr_body, string.length(ptr_body)) != 0 {
+    if util.io_write_atomic("${repo}/revs/000000", ptr_body, string.length(ptr_body)) != 0 {
         return 0 - 1
     }
     // Per-branch rev pointer (aa/bb fanout — rev 0 = 00/00).
-    if io_write_atomic("${repo}/branches/main/revs/00/00/000000", ptr_body, string.length(ptr_body)) != 0 {
+    if util.io_write_atomic("${repo}/branches/main/revs/00/00/000000", ptr_body, string.length(ptr_body)) != 0 {
         return 0 - 1
     }
     // Legacy head.
-    if io_write_atomic("${repo}/head", "0\n", 2) != 0 { return 0 - 1 }
+    if util.io_write_atomic("${repo}/head", "0\n", 2) != 0 { return 0 - 1 }
     // Per-branch head ("rev=N\n" — Phase 8.2 may add tree-sha cache here).
-    if io_write_atomic("${repo}/branches/main/head", "rev=0\n", 6) != 0 {
+    if util.io_write_atomic("${repo}/branches/main/head", "rev=0\n", 6) != 0 {
         return 0 - 1
     }
     return 0

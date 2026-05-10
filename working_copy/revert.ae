@@ -26,6 +26,7 @@
 // .svn/wc.db-journal if present.
 
 import std.string
+import util
 
 // wc.db lifecycle + helpers.
 extern wc_db_open(wc_root: string) -> ptr
@@ -45,16 +46,6 @@ extern wc_pristine_get(wc_root: string, sha1: string) -> string
 extern wc_pristine_size(wc_root: string, sha1: string) -> int
 
 // IO helpers.
-extern io_mkdir_p(path: string) -> int
-extern io_write_atomic(path: string, data: string, length: int) -> int
-extern io_listdir(path: string) -> ptr
-extern io_listdir_count(handle: ptr) -> int
-extern io_listdir_name(handle: ptr, index: int) -> string
-extern io_listdir_free(handle: ptr)
-extern io_stat_kind(path: string) -> int
-extern io_unlink(path: string) -> int
-extern io_exists(path: string) -> int
-extern io_is_regular_file(path: string) -> int
 
 // ---- revert ---------------------------------------------------------
 
@@ -88,7 +79,7 @@ export wc_revert(wc_root: string, rel_path: string) -> int {
     if kind == 1 {
         // Dir: nothing content-wise to restore; just clear any
         // pending-delete state. If state==2, recreate the dir on disk.
-        if state == 2 { io_mkdir_p(disk) }
+        if state == 2 { util.io_mkdir_p(disk) }
         wc_db_upsert_node(db, rel_path, 1, brev, "", 0)
         wc_db_close(db)
         return 0
@@ -101,7 +92,7 @@ export wc_revert(wc_root: string, rel_path: string) -> int {
         wc_db_close(db)
         return 0 - 2
     }
-    rc = io_write_atomic(disk, data, psize)
+    rc = util.io_write_atomic(disk, data, psize)
     if rc != 0 {
         wc_db_close(db)
         return 0 - 2
@@ -136,27 +127,27 @@ is_stale_tmp_(name: string) -> int {
 // Walk the directory recursively, deleting every is_stale_tmp_ file.
 // Returns the count of files deleted.
 walk_and_clean_(root: string) -> int {
-    d = io_listdir(root)
+    d = util.io_listdir(root)
     if d == null { return 0 }
     count = 0
-    n_entries = io_listdir_count(d)
+    n_entries = util.io_listdir_count(d)
     i = 0
     while i < n_entries {
-        name = io_listdir_name(d, i)
+        name = util.io_listdir_name(d, i)
         name = string.copy(name)
         full = "${root}/${name}"
-        kind = io_stat_kind(full)
+        kind = util.io_stat_kind(full)
         if kind == 2 {
             count = count + walk_and_clean_(full)
         }
         if kind == 1 {
             if is_stale_tmp_(name) == 1 {
-                if io_unlink(full) == 0 { count = count + 1 }
+                if util.io_unlink(full) == 0 { count = count + 1 }
             }
         }
         i = i + 1
     }
-    io_listdir_free(d)
+    util.io_listdir_free(d)
     return count
 }
 
@@ -165,7 +156,7 @@ export wc_cleanup(wc_root: string) -> int {
 
     // Verify this is a WC by checking for .svn/wc.db.
     wc_db = "${wc_root}/.svn/wc.db"
-    if io_exists(wc_db) == 0 { return 0 - 1 }
+    if util.io_exists(wc_db) == 0 { return 0 - 1 }
 
     // is_stale_tmp_ gates what walk_and_clean_ deletes, so we never
     // accidentally touch real wc.db / format / pristine blob files.
@@ -176,8 +167,8 @@ export wc_cleanup(wc_root: string) -> int {
     // files is the normal-operation signal. Conservative cleanup:
     // just delete if it's a regular file.
     journal = "${wc_root}/.svn/wc.db-journal"
-    if io_is_regular_file(journal) == 1 {
-        if io_unlink(journal) == 0 { count = count + 1 }
+    if util.io_is_regular_file(journal) == 1 {
+        if util.io_unlink(journal) == 0 { count = count + 1 }
     }
 
     return count

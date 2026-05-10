@@ -22,9 +22,8 @@
 // commit may collapse the two.
 
 import std.string
+import util
 
-extern io_read_file(path: string) -> string
-extern io_file_size(path: string) -> int
 
 repos_pad6(n: int) -> string {
     s = string.from_int(n)
@@ -57,8 +56,8 @@ repos_rtrim_ws(s: string) -> string {
 // function.
 export repos_head_rev(repo: string) -> int {
     path = string.concat(repo, "/head")
-    if io_file_size(path) < 0 { return -1 }
-    src = io_read_file(path)
+    if util.io_file_size(path) < 0 { return -1 }
+    src = util.io_read_file(path)
     s = repos_rtrim_ws(src)
     n = string.length(s)
     i = 0
@@ -91,8 +90,8 @@ export repos_head_rev(repo: string) -> int {
 // $repo/revs/NNNNNN → rev blob sha (hex string), or "" on miss.
 export repos_rev_blob_sha(repo: string, rev: int) -> string {
     path = string.concat(string.concat(repo, "/revs/"), repos_pad6(rev))
-    if io_file_size(path) < 0 { return "" }
-    src = io_read_file(path)
+    if util.io_file_size(path) < 0 { return "" }
+    src = util.io_read_file(path)
     return string.copy(repos_rtrim_ws(src))
 }
 
@@ -137,8 +136,8 @@ export repos_inherit_rev_field(repo: string, prev: int, key: string,
 // clipping at the first '\n' if one happens to slip in.
 export repos_format_line(repo: string) -> string {
     path = string.concat(repo, "/format")
-    if io_file_size(path) < 0 { return "" }
-    src = io_read_file(path)
+    if util.io_file_size(path) < 0 { return "" }
+    src = util.io_read_file(path)
 
     // Clip at first '\n' if present.
     n = string.length(src)
