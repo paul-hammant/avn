@@ -30,13 +30,13 @@
 
 import std.string
 import std.os
+import ffi.openssl
 
 extern io_mkdir_p(path: string) -> int
 extern io_write_atomic(path: string, data: string, length: int) -> int
 
 extern algos_count(spec: string) -> int
 extern algos_token(spec: string, i: int) -> string
-extern openssl_hash_supported(algo: string) -> int
 
 extern admin_db_init_schema(repo: string) -> string
 extern merge_ledger_init_schema(repo: string) -> string
@@ -60,7 +60,7 @@ create_bare_(repo: string, algos_spec: string) -> int {
     n = algos_count(spec)
     i = 0
     while i < n {
-        if openssl_hash_supported(algos_token(spec, i)) == 0 {
+        if openssl.openssl_hash_supported(algos_token(spec, i)) == 0 {
             return 0 - 1
         }
         i = i + 1

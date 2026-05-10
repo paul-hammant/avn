@@ -48,10 +48,9 @@ import std.fs
 import std.os
 import std.string
 import std.zlib
+import ffi.openssl
 
 // --- externs from subr shims ------------------------------------------------
-
-extern crypto_hash_hex(algo: string, data: string, length: int) -> string
 
 // Round 176: std.zlib retired the C-side zlib_*/buf_*
 // shim. zlib.deflate / zlib.inflate return (string, int, error)
@@ -170,7 +169,7 @@ rep_cache_insert(repo: string, sha1: string, rel_path: string,
 // embedded NULs are fine). Returns the SHA-1 of the data.
 write_blob_text(repo: string, data: string) {
     n = string.length(data)
-    sha1_copy = crypto_hash_hex("sha1", data, n)
+    sha1_copy = openssl.crypto_hash_hex("sha1", data, n)
 
     if rep_cache_has(repo, sha1_copy) == 1 { return sha1_copy }
 

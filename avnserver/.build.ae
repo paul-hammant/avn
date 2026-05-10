@@ -29,7 +29,7 @@ main() {
             link_flag("-Wformat")
             link_flag("-Wformat-security")
         }
-        regen("../ffi/openssl/crypto_helpers.ae")
+        regen("../ffi/openssl/module.ae")
         regen("../util/io.ae")
         regen("../util/byte_ops.ae")
         regen("../repo_storage/tree_builder.ae")
@@ -97,5 +97,6 @@ main() {
         regen("../avnserver/handler_branch_create.ae")
         regen("../avnserver/handler_copy.ae")
         regen("../avnserver/handler_commit.ae")
+        regen("../avnserver/embed.ae")
     }
 }

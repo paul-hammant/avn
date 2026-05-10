@@ -74,6 +74,6 @@ main() {
         regen("../repo_storage/format_line.ae")
         regen("../repos/rev_io.ae")
         regen("../repos/blobfield.ae")
-        regen("../ffi/openssl/crypto_helpers.ae")
+        regen("../ffi/openssl/module.ae")
     }
 }

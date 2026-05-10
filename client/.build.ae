@@ -27,6 +27,6 @@ main() {
         regen("../client/fetch.ae")
         regen("../repo_storage/pathutil.ae")
         regen("../util/io.ae")
-        regen("../ffi/openssl/crypto_helpers.ae")
+        regen("../ffi/openssl/module.ae")
     }
 }

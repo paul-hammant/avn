@@ -12,6 +12,6 @@ main() {
         link_flag("-lz")
         link_flag("-lssl")
         link_flag("-lcrypto")
-        regen("../ffi/openssl/crypto_helpers.ae")
+        regen("../ffi/openssl/module.ae")
     }
 }

@@ -53,6 +53,7 @@
 import std.string
 import std.json
 import std.http
+import ffi.openssl
 
 // KIND_* constants for commit_from_body's structured-error returns.
 // First four match std.json's numeric values exactly so a pass-through
@@ -111,17 +112,16 @@ extern txn_merge_record_rev(t: ptr, source_sha: string) -> int
 // Resolve rev number (sent on the wire) → rev SHA (stored in ledger).
 extern repos_rev_blob_sha(repo: string, rev: int) -> string
 
-// b64-decode + txn_add_file. crypto_b64_decode returns the
+// b64-decode + txn_add_file. openssl.crypto_b64_decode returns the
 // (bytes, length, err) triple cleanly via export-tuple-return —
 // Round 159 dropped the prior TLS-pair workaround. AetherStrings
 // auto-unwrap at C extern boundaries declared `const char*` (#297),
 // so we call txn_add_file directly.
-extern crypto_b64_decode(b64: string) -> (string, int, string)
 
 txn_add_b64_(txn: ptr, path: string, b64: string) -> int
     requires txn != null
 {
-    raw, n, err = crypto_b64_decode(b64)
+    raw, n, err = openssl.crypto_b64_decode(b64)
     if string.length(err) > 0 { return 0 - 1 }
     return txn_add_file(txn, path, raw, n)
 }

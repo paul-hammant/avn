@@ -26,6 +26,7 @@
 //   - emit body half as JSON response
 
 import std.string
+import ffi.openssl
 
 extern acl_allows_mode(repo: string, rev: int, user: string, target_path: string, want_write: int) -> int
 extern repos_resolve_kind(repo: string, rev: int, path: string) -> int
@@ -40,7 +41,6 @@ extern list_build(repo: string, rev: int, user: string, is_super: int,
 extern svnserver_respond_error(res: ptr, code: int, msg: string)
 extern svnserver_set_merkle_headers(res: ptr, algo: string, kind: string, sha: string)
 extern svnserver_respond_json_ok(res: ptr, body: string)
-extern crypto_hash_hex(algo: string, data: string, length: int) -> string
 
 export list_handle(req: ptr, res: ptr, repo: string, rev: int,
                    dir_path: string, user: string, is_super: int) {
@@ -85,7 +85,7 @@ export list_handle(req: ptr, res: ptr, repo: string, rev: int,
     if is_super == 0 {
         if sep >= 0 {
             redact = string.substring(packed, sep + 1, n)
-            rehash = crypto_hash_hex(algo, redact, string.length(redact))
+            rehash = openssl.crypto_hash_hex(algo, redact, string.length(redact))
             svnserver_set_merkle_headers(res, algo, "dir", rehash)
         }
     }

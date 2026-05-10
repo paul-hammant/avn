@@ -28,6 +28,6 @@ main() {
         regen("../repos/blobfield.ae")
         regen("../util/io.ae")
         regen("../util/byte_ops.ae")
-        regen("../ffi/openssl/crypto_helpers.ae")
+        regen("../ffi/openssl/module.ae")
     }
 }

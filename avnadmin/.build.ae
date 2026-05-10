@@ -50,6 +50,6 @@ main() {
         regen("../avnadmin/admin_db.ae")
         regen("../avnadmin/create.ae")
         regen("../avnadmin/dump_load.ae")
-        regen("../ffi/openssl/crypto_helpers.ae")
+        regen("../ffi/openssl/module.ae")
     }
 }

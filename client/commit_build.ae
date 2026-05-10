@@ -28,6 +28,7 @@
 
 import std.string
 import std.json
+import ffi.openssl
 
 extern remote_cb_base_rev(cb: ptr) -> int
 extern remote_cb_author(cb: ptr) -> string
@@ -57,8 +58,7 @@ extern remote_cb_n_acls(cb: ptr) -> int
 
 // b64-encode (unpadded; the server's base64_decode handles both
 // padded and unpadded — see std.cryptography.base64_decode in the
-// Aether stdlib).
-extern crypto_b64_encode(data: string, length: int) -> string
+// Aether stdlib). Provided by ffi.openssl as `crypto_b64_encode`.
 
 // Append `record` to the "<count>\x02<recs...>\x02" packed string
 // `cur`. count is passed in (caller stores it C-side); returns the
@@ -88,7 +88,7 @@ pack_append_(cur: string, count: int, record: string) -> string {
 export remote_commit_add_file(cb: ptr, path: string, content: string, len: int) -> int {
     b64 = ""
     if len > 0 {
-        b64 = crypto_b64_encode(content, len)
+        b64 = openssl.crypto_b64_encode(content, len)
     }
     rec = "1\x01"
     rec = string.concat(rec, path)

@@ -27,6 +27,7 @@
 // The ACL check and hash primitive stay in C.
 
 import std.string
+import ffi.openssl
 
 extern rep_read_blob(repo: string, sha: string) -> string
 extern rep_free(body: string)
@@ -43,7 +44,6 @@ extern path_join_rel(prefix: string, name: string) -> string
 // repo's primary algo and calls the canonical crypto_hash_hex.
 extern acl_allows_mode(repo: string, rev: int, user: string, target_path: string, want_write: int) -> int
 extern repo_primary_hash(repo: string) -> string
-extern crypto_hash_hex(algo: string, data: string, length: int) -> string
 
 // Recursive entry. Returns the hex digest of the redacted dir body,
 // or "" on failure.
@@ -87,7 +87,7 @@ export redacted_dir_sha(repo: string, rev: int, user: string,
     }
     rep_free(body)
     algo = repo_primary_hash(repo)
-    return crypto_hash_hex(algo, redact, string.length(redact))
+    return openssl.crypto_hash_hex(algo, redact, string.length(redact))
 }
 
 
