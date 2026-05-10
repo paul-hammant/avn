@@ -21,44 +21,20 @@
 // wrapper client/test_client.sh handles the server lifecycle.
 
 import std.string
+import client
 
 extern aether_args_count() -> int
 extern aether_args_get(index: int) -> string
 
 // RA externs — one per function we built in client/shim.c.
 
-extern remote_head_rev(base_url: string, repo_name: string) -> int
-extern remote_head_sha(base_url: string, repo_name: string) -> string
 
-extern remote_log(base_url: string, repo_name: string) -> ptr
-extern remote_log_count(lg: ptr) -> int
-extern remote_log_rev(lg: ptr, i: int) -> int
-extern remote_log_author(lg: ptr, i: int) -> string
-extern remote_log_date(lg: ptr, i: int) -> string
-extern remote_log_msg(lg: ptr, i: int) -> string
-extern remote_log_free(lg: ptr)
 
-extern remote_info_rev(base_url: string, repo_name: string, rev: int) -> ptr
-extern remote_info_rev_num(I: ptr) -> int
-extern remote_info_author(I: ptr) -> string
-extern remote_info_date(I: ptr) -> string
-extern remote_info_msg(I: ptr) -> string
-extern remote_info_free(I: ptr)
 
-extern remote_cat(base_url: string, repo_name: string, rev: int, path: string) -> string
-extern remote_free(p: string)
 
-extern remote_list(base_url: string, repo_name: string, rev: int, path: string) -> ptr
-extern remote_list_count(L: ptr) -> int
-extern remote_list_name(L: ptr, i: int) -> string
-extern remote_list_kind(L: ptr, i: int) -> string
-extern remote_list_free(L: ptr)
 
 extern remote_commit_begin(base_rev: int, author: string, logmsg: string) -> ptr
 extern remote_commit_set_parent_sha(cb: ptr, parent_sha: string) -> int
-extern remote_commit_add_file(cb: ptr, path: string, content: string, len: int) -> int
-extern remote_commit_mkdir(cb: ptr, path: string) -> int
-extern remote_commit_delete(cb: ptr, path: string) -> int
 extern remote_commit_finish(cb: ptr, base_url: string, repo_name: string) -> int
 
 // --- harness --------------------------------------------------------------
@@ -88,70 +64,70 @@ main() {
     fails = 0
 
     // --- head_rev -----
-    head = remote_head_rev(base, repo)
+    head = client.remote_head_rev(base, repo)
     fails = fails + expect_int("head_rev is 3 (seeded)", head, 3)
 
     // --- log ----------
-    lg = remote_log(base, repo)
-    fails = fails + expect_int("log count == 4", remote_log_count(lg), 4)
-    fails = fails + expect_str("log[1] author", remote_log_author(lg, 1), "alice")
-    fails = fails + expect_str("log[2] msg",    remote_log_msg(lg, 2),    "answer to everything")
-    remote_log_free(lg)
+    lg = client.remote_log(base, repo)
+    fails = fails + expect_int("log count == 4", client.remote_log_count(lg), 4)
+    fails = fails + expect_str("log[1] author", client.remote_log_author(lg, 1), "alice")
+    fails = fails + expect_str("log[2] msg",    client.remote_log_msg(lg, 2),    "answer to everything")
+    client.remote_log_free(lg)
 
     // --- info ---------
-    I = remote_info_rev(base, repo, 2)
-    fails = fails + expect_int("info r2 rev",    remote_info_rev_num(I), 2)
-    fails = fails + expect_str("info r2 author", remote_info_author(I),  "bob")
-    fails = fails + expect_str("info r2 msg",    remote_info_msg(I),     "answer to everything")
-    remote_info_free(I)
+    I = client.remote_info_rev(base, repo, 2)
+    fails = fails + expect_int("info r2 rev",    client.remote_info_rev_num(I), 2)
+    fails = fails + expect_str("info r2 author", client.remote_info_author(I),  "bob")
+    fails = fails + expect_str("info r2 msg",    client.remote_info_msg(I),     "answer to everything")
+    client.remote_info_free(I)
 
     // --- cat ----------
-    c = remote_cat(base, repo, 1, "README")
+    c = client.remote_cat(base, repo, 1, "README")
     fails = fails + expect_str("cat r1 README", c, "Hello\n")
-    remote_free(c)
+    client.remote_free(c)
 
-    c = remote_cat(base, repo, 2, "src/main.c")
+    c = client.remote_cat(base, repo, 2, "src/main.c")
     fails = fails + expect_str("cat r2 src/main.c", c, "int main() { return 42; }\n")
-    remote_free(c)
+    client.remote_free(c)
 
-    c = remote_cat(base, repo, 1, "src/main.c")
+    c = client.remote_cat(base, repo, 1, "src/main.c")
     fails = fails + expect_str("cat r1 src/main.c (immutable)", c, "int main() { return 0; }\n")
-    remote_free(c)
+    client.remote_free(c)
 
     // --- list ---------
-    L = remote_list(base, repo, 1, "")
-    fails = fails + expect_int("list r1 count", remote_list_count(L), 3)
-    fails = fails + expect_str("list r1 [0] name", remote_list_name(L, 0), "LICENSE")
-    fails = fails + expect_str("list r1 [0] kind", remote_list_kind(L, 0), "file")
-    fails = fails + expect_str("list r1 [2] name", remote_list_name(L, 2), "src")
-    fails = fails + expect_str("list r1 [2] kind", remote_list_kind(L, 2), "dir")
-    remote_list_free(L)
+    L = client.remote_list(base, repo, 1, "")
+    fails = fails + expect_int("list r1 count", client.remote_list_count(L), 3)
+    fails = fails + expect_str("list r1 [0] name", client.remote_list_name(L, 0), "LICENSE")
+    fails = fails + expect_str("list r1 [0] kind", client.remote_list_kind(L, 0), "file")
+    fails = fails + expect_str("list r1 [2] name", client.remote_list_name(L, 2), "src")
+    fails = fails + expect_str("list r1 [2] kind", client.remote_list_kind(L, 2), "dir")
+    client.remote_list_free(L)
 
-    L = remote_list(base, repo, 2, "src")
-    fails = fails + expect_int("list r2 src count", remote_list_count(L), 1)
-    fails = fails + expect_str("list r2 src [0] name", remote_list_name(L, 0), "main.c")
-    remote_list_free(L)
+    L = client.remote_list(base, repo, 2, "src")
+    fails = fails + expect_int("list r2 src count", client.remote_list_count(L), 1)
+    fails = fails + expect_str("list r2 src [0] name", client.remote_list_name(L, 0), "main.c")
+    client.remote_list_free(L)
 
     // --- commit via RA -----------
     // Head is 3. Commit rev 4 adding NOTES and deleting LICENSE.
     // R286: parent_sha required — fetch HEAD's sha before commit.
     cb = remote_commit_begin(3, "ra-client", "via RA commit")
-    remote_commit_set_parent_sha(cb, remote_head_sha(base, repo))
-    remote_commit_add_file(cb, "NOTES", "ra commit content\n", 18)
-    remote_commit_delete(cb, "LICENSE")
+    remote_commit_set_parent_sha(cb, client.remote_head_sha(base, repo))
+    client.remote_commit_add_file(cb, "NOTES", "ra commit content\n", 18)
+    client.remote_commit_delete(cb, "LICENSE")
     new_rev = remote_commit_finish(cb, base, repo)
     fails = fails + expect_int("commit via RA -> rev 4", new_rev, 4)
 
     // head advanced.
-    fails = fails + expect_int("head after RA commit", remote_head_rev(base, repo), 4)
+    fails = fails + expect_int("head after RA commit", client.remote_head_rev(base, repo), 4)
 
     // NOTES is there.
-    c = remote_cat(base, repo, 4, "NOTES")
+    c = client.remote_cat(base, repo, 4, "NOTES")
     fails = fails + expect_str("cat r4 NOTES", c, "ra commit content\n")
-    remote_free(c)
+    client.remote_free(c)
 
     // LICENSE gone at r4.
-    c = remote_cat(base, repo, 4, "LICENSE")
+    c = client.remote_cat(base, repo, 4, "LICENSE")
     // remote_cat returns 0 on failure; Aether compares ptr-as-string
     // against "" — treat 0 or "" the same for this assertion.
     if c == 0 {
@@ -163,29 +139,29 @@ main() {
             println("FAIL cat r4 LICENSE: expected gone, got [${c}]")
             fails = fails + 1
         }
-        remote_free(c)
+        client.remote_free(c)
     }
 
     // LICENSE preserved at r2 (not r3 — seed deletes LICENSE in r3).
-    c = remote_cat(base, repo, 2, "LICENSE")
+    c = client.remote_cat(base, repo, 2, "LICENSE")
     fails = fails + expect_str("r2 LICENSE preserved", c, "Apache-2.0\n")
-    remote_free(c)
+    client.remote_free(c)
 
     // Commit with mkdir.
     cb = remote_commit_begin(4, "ra-client", "add dir")
-    remote_commit_set_parent_sha(cb, remote_head_sha(base, repo))
-    remote_commit_mkdir(cb, "newdir")
+    remote_commit_set_parent_sha(cb, client.remote_head_sha(base, repo))
+    client.remote_commit_mkdir(cb, "newdir")
     new_rev = remote_commit_finish(cb, base, repo)
     fails = fails + expect_int("commit mkdir -> rev 5", new_rev, 5)
 
-    L = remote_list(base, repo, 5, "")
+    L = client.remote_list(base, repo, 5, "")
     // Root of r5 has: README, newdir, src, NOTES — 4 entries alphabetically.
-    fails = fails + expect_int("r5 root count", remote_list_count(L), 4)
-    remote_list_free(L)
+    fails = fails + expect_int("r5 root count", client.remote_list_count(L), 4)
+    client.remote_list_free(L)
 
-    L = remote_list(base, repo, 5, "newdir")
-    fails = fails + expect_int("newdir empty", remote_list_count(L), 0)
-    remote_list_free(L)
+    L = client.remote_list(base, repo, 5, "newdir")
+    fails = fails + expect_int("newdir empty", client.remote_list_count(L), 0)
+    client.remote_list_free(L)
 
     if fails > 0 {
         println("")

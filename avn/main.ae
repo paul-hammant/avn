@@ -34,6 +34,7 @@ import std.string
 import std.io
 import std.os
 import working_copy
+import client
 
 extern aether_args_count() -> int
 extern aether_args_get(index: int) -> string
@@ -105,26 +106,12 @@ wc_join_(cwd_offset: string, arg: string) -> string {
 
 // --- RA externs (same as test_client.ae) --------------------------------------
 
-extern remote_head_rev(base_url: string, repo_name: string) -> int
 // R286 — combined head_rev + head_sha lookup; saves a /info round-trip
 // per commit on the stateless path.
-extern remote_head(base_url: string, repo_name: string) -> (int, string)
 
-extern remote_log(base_url: string, repo_name: string) -> ptr
-extern remote_log_count(lg: ptr) -> int
-extern remote_log_rev(lg: ptr, i: int) -> int
-extern remote_log_author(lg: ptr, i: int) -> string
-extern remote_log_date(lg: ptr, i: int) -> string
-extern remote_log_msg(lg: ptr, i: int) -> string
-extern remote_log_free(lg: ptr)
 
 // Round 274 / Phase 2.2 — `avn merged` ledger query.
-extern fetch_merged(base: string, repo: string,
-                    target_branch: string, source_branch: string) -> string
 // Round 278 / Phase 2.3a — eligible-revs dry-run.
-extern fetch_merge_runs(base: string, repo: string,
-                        target_branch: string, source_branch: string,
-                        lo: int, hi: int, as_of_rev: int) -> string
 // Round 278 / Phase 2.3a — `avn merged --pending` reads the WC
 // side of the merge pipeline (rows that wc_merge accumulated
 // but haven't been committed yet).
@@ -133,63 +120,28 @@ extern fetch_merge_runs(base: string, repo: string,
 // info table so `avn merged --pending -v` can decorate each pending
 // row with author/date/log via the existing remote_info_rev path.
 
-extern remote_paths_changed(base_url: string, repo_name: string, rev: int) -> ptr
-extern remote_paths_count(P: ptr) -> int
-extern remote_paths_action(P: ptr, i: int) -> string
-extern remote_paths_path(P: ptr, i: int) -> string
-extern remote_paths_free(P: ptr)
 
-extern client_verify(base_url: string, repo_name: string, rev: int) -> int
-extern client_verify_full(base_url: string, repo_name: string, rev: int, with_secondaries: int) -> int
 
-extern remote_blame(base_url: string, repo_name: string, rev: int, path: string) -> ptr
-extern remote_blame_count(B: ptr) -> int
-extern remote_blame_rev(B: ptr, i: int) -> int
-extern remote_blame_author(B: ptr, i: int) -> string
-extern remote_blame_text(B: ptr, i: int) -> string
-extern remote_blame_free(B: ptr)
 
-extern remote_info_rev(base_url: string, repo_name: string, rev: int) -> ptr
-extern remote_info_rev_num(I: ptr) -> int
-extern remote_info_author(I: ptr) -> string
-extern remote_info_date(I: ptr) -> string
-extern remote_info_msg(I: ptr) -> string
-extern remote_info_free(I: ptr)
 
-extern remote_cat(base_url: string, repo_name: string, rev: int, path: string) -> string
-extern remote_free(p: string)
 
-extern remote_list(base_url: string, repo_name: string, rev: int, path: string) -> ptr
-extern remote_list_count(L: ptr) -> int
-extern remote_list_name(L: ptr, i: int) -> string
-extern remote_list_kind(L: ptr, i: int) -> string
-extern remote_list_free(L: ptr)
 
 extern remote_commit_begin(base_rev: int, author: string, logmsg: string) -> ptr
-extern remote_commit_add_file(cb: ptr, path: string, content: string, len: int) -> int
-extern remote_commit_mkdir(cb: ptr, path: string) -> int
-extern remote_commit_delete(cb: ptr, path: string) -> int
 extern remote_commit_finish(cb: ptr, base_url: string, repo_name: string) -> int
 // R286 — variant that also returns the new commit's rev_sha (for chain CAS).
 extern remote_commit_finish_with_sha(cb: ptr, base_url: string, repo_name: string) -> (int, string)
 extern remote_commit_set_parent_sha(cb: ptr, parent_sha: string) -> int
-extern remote_commit_acl_add(cb: ptr, path: string, rule: string) -> int
 
-extern set_user(user: string)
-extern set_super_token(token: string)
 extern os_getenv(name: string) -> string
-extern get_200(url: string) -> string
 
 env_get(name: string) {
     v = os_getenv(name)
     if v == null { return "" }
     return v
 }
-http_get_body(url: string) { return get_200(url) }
+http_get_body(url: string) { return client.get_200(url) }
 
 // WC operations (Phase 5+).
-extern remote_server_copy(base_url: string, repo_name: string, base_rev: int, from_path: string, to_path: string, author: string, logmsg: string) -> int
-extern remote_branch_create(base_url: string, repo_name: string, name: string, base: string, includes_joined: string) -> int
 
 
 // --- URL parsing ----------------------------------------------------------
@@ -453,24 +405,24 @@ cmd_info(argv_start: int) {
             return 2
         }
     } else {
-        rev = remote_head_rev(base, repo)
+        rev = client.remote_head_rev(base, repo)
         if rev < 0 {
             println("avn info: could not contact server")
             return 1
         }
     }
 
-    I = remote_info_rev(base, repo, rev)
+    I = client.remote_info_rev(base, repo, rev)
     if I == 0 {
         println("avn info: no such revision")
         return 1
     }
     println("URL:         ${url}")
-    println("Revision:    ${remote_info_rev_num(I)}")
-    println("Author:      ${remote_info_author(I)}")
-    println("Date:        ${remote_info_date(I)}")
-    println("Log:         ${remote_info_msg(I)}")
-    remote_info_free(I)
+    println("Revision:    ${client.remote_info_rev_num(I)}")
+    println("Author:      ${client.remote_info_author(I)}")
+    println("Date:        ${client.remote_info_date(I)}")
+    println("Log:         ${client.remote_info_msg(I)}")
+    client.remote_info_free(I)
     return 0
 }
 
@@ -508,12 +460,12 @@ cmd_verify(argv_start: int) {
     if string.length(rev_str) > 0 {
         if string.try_int(rev_str) == 1 { rev = string.get_int(rev_str) }
     }
-    if rev < 0 { rev = remote_head_rev(base, repo) }
+    if rev < 0 { rev = client.remote_head_rev(base, repo) }
     if rev < 0 {
         println("avn verify: could not contact server")
         return 1
     }
-    rc = client_verify_full(base, repo, rev, with_secondaries)
+    rc = client.client_verify_full(base, repo, rev, with_secondaries)
     if rc == -2 {
         println("avn verify: MISMATCH — repository content does not match advertised hashes")
         return 1
@@ -551,7 +503,7 @@ cmd_acl(argv_start: int) {
     repo = url_repo(url)
     // R286 — combined HEAD lookup; pass both rev and sha down so
     // the commit body can carry parent_sha (server now requires it).
-    head, head_sha = remote_head(base, repo)
+    head, head_sha = client.remote_head(base, repo)
     if head < 0 {
         println("avn acl: could not contact server")
         return 1
@@ -592,7 +544,7 @@ cmd_acl_set(head: int, head_sha: string, base: string, repo: string,
     i = argv_start + 3
     n = aether_args_count()
     while i < n {
-        remote_commit_acl_add(cb, path, aether_args_get(i))
+        client.remote_commit_acl_add(cb, path, aether_args_get(i))
         i = i + 1
     }
     new_rev = remote_commit_finish(cb, base, repo)
@@ -607,7 +559,7 @@ cmd_acl_set(head: int, head_sha: string, base: string, repo: string,
 cmd_acl_clear(head: int, head_sha: string, base: string, repo: string, path: string) {
     cb = remote_commit_begin(head, "acl-admin", "avn acl clear ${path}")
     remote_commit_set_parent_sha(cb, head_sha)
-    remote_commit_acl_add(cb, path, "+*")
+    client.remote_commit_acl_add(cb, path, "+*")
     new_rev = remote_commit_finish(cb, base, repo)
     if new_rev < 0 {
         println("avn acl clear: commit failed")
@@ -659,27 +611,27 @@ cmd_blame(argv_start: int) {
     if string.length(rev_str) > 0 {
         if string.try_int(rev_str) == 1 { rev = string.get_int(rev_str) }
     }
-    if rev < 0 { rev = remote_head_rev(base, repo) }
+    if rev < 0 { rev = client.remote_head_rev(base, repo) }
     if rev < 0 {
         println("avn blame: could not contact server")
         return 1
     }
-    B = remote_blame(base, repo, rev, path)
+    B = client.remote_blame(base, repo, rev, path)
     if B == 0 {
         println("avn blame: ${path} not found at r${rev}")
         return 1
     }
-    n = remote_blame_count(B)
+    n = client.remote_blame_count(B)
     i = 0
     while i < n {
-        r = remote_blame_rev(B, i)
-        au = remote_blame_author(B, i)
-        t = remote_blame_text(B, i)
+        r = client.remote_blame_rev(B, i)
+        au = client.remote_blame_author(B, i)
+        t = client.remote_blame_text(B, i)
         // Reference avn formats as "   <rev>   <author> <line>".
         println("${r} ${au} ${t}")
         i = i + 1
     }
-    remote_blame_free(B)
+    client.remote_blame_free(B)
     return 0
 }
 
@@ -712,41 +664,41 @@ cmd_log(argv_start: int) {
     base = url_base(url)
     repo = url_repo(url)
 
-    lg = remote_log(base, repo)
+    lg = client.remote_log(base, repo)
     if lg == 0 {
         println("avn log: could not contact server")
         return 1
     }
-    n = remote_log_count(lg)
+    n = client.remote_log_count(lg)
     // Print newest first (reverse), matching reference avn log's default.
     i = n - 1
     while i >= 0 {
         println("------------------------------------------------------------")
-        rev = remote_log_rev(lg, i)
-        au  = remote_log_author(lg, i)
-        dt  = remote_log_date(lg, i)
+        rev = client.remote_log_rev(lg, i)
+        au  = client.remote_log_author(lg, i)
+        dt  = client.remote_log_date(lg, i)
         println("r${rev} | ${au} | ${dt}")
         if verbose == 1 {
             println("Changed paths:")
-            P = remote_paths_changed(base, repo, rev)
+            P = client.remote_paths_changed(base, repo, rev)
             if P != 0 {
-                pn = remote_paths_count(P)
+                pn = client.remote_paths_count(P)
                 j = 0
                 while j < pn {
-                    act = remote_paths_action(P, j)
-                    pth = remote_paths_path(P, j)
+                    act = client.remote_paths_action(P, j)
+                    pth = client.remote_paths_path(P, j)
                     println("   ${act} /${pth}")
                     j = j + 1
                 }
-                remote_paths_free(P)
+                client.remote_paths_free(P)
             }
         }
         println("")
-        println(remote_log_msg(lg, i))
+        println(client.remote_log_msg(lg, i))
         i = i - 1
     }
     println("------------------------------------------------------------")
-    remote_log_free(lg)
+    client.remote_log_free(lg)
     return 0
 }
 
@@ -846,7 +798,7 @@ cmd_merged(argv_start: int) {
         }
         a_s = string.substring(r_flag, 0, colon)
         b_s = string.substring(r_flag, colon + 1, string.length(r_flag))
-        head_rev = remote_head_rev(base, repo)
+        head_rev = client.remote_head_rev(base, repo)
         lo = 0
         hi = 0
         if string.equals(a_s, "HEAD") == 1 {
@@ -902,7 +854,7 @@ cmd_merged(argv_start: int) {
                 }
             }
         }
-        runs = fetch_merge_runs(base, repo, target, source, lo, hi, as_of)
+        runs = client.fetch_merge_runs(base, repo, target, source, lo, hi, as_of)
         if json_out == 1 {
             print_eligible_json_(target, source, lo, hi, runs, verbose, base, repo)
         } else {
@@ -915,7 +867,7 @@ cmd_merged(argv_start: int) {
     // need a SHA → rev # → log resolution path that doesn't exist
     // yet — see TODO Q1. For now -v is silently ignored on this
     // path and the bare SHA list comes back.
-    out = fetch_merged(base, repo, target, source)
+    out = client.fetch_merged(base, repo, target, source)
     if json_out == 1 {
         print_integrated_json_(target, source, out)
     } else {
@@ -1004,17 +956,17 @@ json_escape_(s: string) -> string {
 // Falls back to "rNN  ?  ?  (rev info unavailable)" if the server
 // lookup fails, so the row stays present rather than vanishing.
 decorate_rev_text_(base: string, repo: string, rev: int) -> string {
-    I = remote_info_rev(base, repo, rev)
+    I = client.remote_info_rev(base, repo, rev)
     if I == 0 {
         return "r${rev}  ?  ?  (rev info unavailable)"
     }
-    author = remote_info_author(I)
-    date   = remote_info_date(I)
-    msg    = remote_info_msg(I)
+    author = client.remote_info_author(I)
+    date   = client.remote_info_date(I)
+    msg    = client.remote_info_msg(I)
     msg_one = strip_newlines_(msg)
     msg_cut = truncate_log_(msg_one, VERBOSE_LOG_TRUNC)
     out = "r${rev}  ${author}  ${date}  ${msg_cut}"
-    remote_info_free(I)
+    client.remote_info_free(I)
     return out
 }
 
@@ -1025,11 +977,11 @@ append_rev_json_(out: string, rev: int, base: string, repo: string) -> string {
     author = ""
     date   = ""
     msg    = ""
-    I = remote_info_rev(base, repo, rev)
+    I = client.remote_info_rev(base, repo, rev)
     if I != 0 {
-        author = remote_info_author(I)
-        date   = remote_info_date(I)
-        msg    = remote_info_msg(I)
+        author = client.remote_info_author(I)
+        date   = client.remote_info_date(I)
+        msg    = client.remote_info_msg(I)
     }
     res = string.concat(out, "{\"rev\":")
     res = string.concat(res, "${rev}")
@@ -1040,7 +992,7 @@ append_rev_json_(out: string, rev: int, base: string, repo: string) -> string {
     res = string.concat(res, "\",\"log\":\"")
     res = string.concat(res, json_escape_(msg))
     res = string.concat(res, "\"}")
-    if I != 0 { remote_info_free(I) }
+    if I != 0 { client.remote_info_free(I) }
     return res
 }
 
@@ -1052,11 +1004,11 @@ append_rev_aux_json_(out: string, rev: int, base: string, repo: string) -> strin
     author = ""
     date   = ""
     msg    = ""
-    I = remote_info_rev(base, repo, rev)
+    I = client.remote_info_rev(base, repo, rev)
     if I != 0 {
-        author = remote_info_author(I)
-        date   = remote_info_date(I)
-        msg    = remote_info_msg(I)
+        author = client.remote_info_author(I)
+        date   = client.remote_info_date(I)
+        msg    = client.remote_info_msg(I)
     }
     res = string.concat(out, ",\"author\":\"")
     res = string.concat(res, json_escape_(author))
@@ -1065,7 +1017,7 @@ append_rev_aux_json_(out: string, rev: int, base: string, repo: string) -> strin
     res = string.concat(res, "\",\"log\":\"")
     res = string.concat(res, json_escape_(msg))
     res = string.concat(res, "\"")
-    if I != 0 { remote_info_free(I) }
+    if I != 0 { client.remote_info_free(I) }
     return res
 }
 
@@ -1469,23 +1421,23 @@ cmd_ls(argv_start: int) {
     if string.length(rev_str) > 0 {
         if string.try_int(rev_str) == 1 { rev = string.get_int(rev_str) }
     } else {
-        rev = remote_head_rev(base, repo)
+        rev = client.remote_head_rev(base, repo)
         if rev < 0 {
             println("avn ls: could not contact server")
             return 1
         }
     }
 
-    L = remote_list(base, repo, rev, path)
+    L = client.remote_list(base, repo, rev, path)
     if L == 0 {
         println("avn ls: not a directory (or revision missing)")
         return 1
     }
-    c = remote_list_count(L)
+    c = client.remote_list_count(L)
     i = 0
     while i < c {
-        name = remote_list_name(L, i)
-        kind = remote_list_kind(L, i)
+        name = client.remote_list_name(L, i)
+        kind = client.remote_list_kind(L, i)
         if string.equals(kind, "dir") == 1 {
             println("${name}/")
         } else {
@@ -1493,7 +1445,7 @@ cmd_ls(argv_start: int) {
         }
         i = i + 1
     }
-    remote_list_free(L)
+    client.remote_list_free(L)
     return 0
 }
 
@@ -1513,14 +1465,14 @@ cmd_cat(argv_start: int) {
     if string.length(rev_str) > 0 {
         if string.try_int(rev_str) == 1 { rev = string.get_int(rev_str) }
     } else {
-        rev = remote_head_rev(base, repo)
+        rev = client.remote_head_rev(base, repo)
         if rev < 0 {
             println("avn cat: could not contact server")
             return 1
         }
     }
 
-    data = remote_cat(base, repo, rev, path)
+    data = client.remote_cat(base, repo, rev, path)
     if data == 0 {
         println("avn cat: not found")
         return 1
@@ -1530,7 +1482,7 @@ cmd_cat(argv_start: int) {
     // correct. We don't append a newline — files already include their
     // own trailing newline when they want one.
     io.stdout_write(data, string.length(data))
-    remote_free(data)
+    client.remote_free(data)
     return 0
 }
 
@@ -1546,7 +1498,7 @@ emit_mkdir_unique_(cb: ptr, dir: string, seen: string) -> string {
     if string.length(dir) == 0 { return seen }
     needle = string.concat("\n", string.concat(dir, "\n"))
     if string.index_of(seen, needle) >= 0 { return seen }
-    remote_commit_mkdir(cb, dir)
+    client.remote_commit_mkdir(cb, dir)
     return string.concat(seen, needle)
 }
 
@@ -1640,7 +1592,7 @@ cmd_commit(argv_start: int) {
     // thread the sha across commits without re-querying HEAD, and
     // for explicit conflict-detection ("I want to commit ON TOP OF
     // exactly this sha").
-    base_rev, head_sha = remote_head(base, repo)
+    base_rev, head_sha = client.remote_head(base, repo)
     if base_rev < 0 {
         println("avn commit: could not contact server")
         return 1
@@ -1682,7 +1634,7 @@ cmd_commit(argv_start: int) {
                     path = string.substring(spec, 0, eq)
                     content = string.substring(spec, eq + 1, string.length(spec))
                     mkdirs_seen = emit_auto_mkdirs_(cb, path, mkdirs_seen)
-                    remote_commit_add_file(cb, path, content, string.length(content))
+                    client.remote_commit_add_file(cb, path, content, string.length(content))
                 }
             }
             i = i + 2
@@ -1697,7 +1649,7 @@ cmd_commit(argv_start: int) {
         }
         if string.equals(a, "--delete") == 1 {
             if i + 1 < n {
-                remote_commit_delete(cb, aether_args_get(i + 1))
+                client.remote_commit_delete(cb, aether_args_get(i + 1))
             }
             i = i + 2
             continue
@@ -1888,14 +1840,14 @@ cmd_merge(argv_start: int) {
             base_for_head = base_url_deep(url)
             repo_for_head = repo_name_deep(url)
             if string.equals(a_s, "HEAD") == 1 {
-                rev_a = remote_head_rev(base_for_head, repo_for_head)
+                rev_a = client.remote_head_rev(base_for_head, repo_for_head)
                 if rev_a < 0 { println("avn merge: cannot resolve HEAD"); return 2 }
             } else {
                 if string.try_int(a_s) == 0 { println("avn merge: -r A not a number"); return 2 }
                 rev_a = string.get_int(a_s)
             }
             if string.equals(b_s, "HEAD") == 1 {
-                rev_b = remote_head_rev(base_for_head, repo_for_head)
+                rev_b = client.remote_head_rev(base_for_head, repo_for_head)
                 if rev_b < 0 { println("avn merge: cannot resolve HEAD"); return 2 }
             } else {
                 if string.try_int(b_s) == 0 { println("avn merge: -r B not a number"); return 2 }
@@ -2111,10 +2063,10 @@ cmd_cp(argv_start: int) {
         rev = parse_rev_suffix(src)
         if rev < 0 {
             // Default to head.
-            rev = remote_head_rev(base_src, repo_src)
+            rev = client.remote_head_rev(base_src, repo_src)
             if rev < 0 { println("avn cp: cannot contact server"); return 1 }
         }
-        new_rev = remote_server_copy(base_src, repo_src, rev, from_path, to_path, author, logmsg)
+        new_rev = client.remote_server_copy(base_src, repo_src, rev, from_path, to_path, author, logmsg)
         if new_rev < 0 { println("avn cp: server-side copy failed"); return 1 }
         println("Committed revision ${new_rev}.")
         return 0
@@ -2395,7 +2347,7 @@ cmd_branch_create(argv_start: int) {
 
     base_url = url_base(url)
     repo = url_repo(url)
-    rc = remote_branch_create(base_url, repo, name, from_branch, includes_joined)
+    rc = client.remote_branch_create(base_url, repo, name, from_branch, includes_joined)
     if rc < 0 {
         println("avn branch create: failed (branch exists, bad base, or not super-user?)")
         return 1
@@ -2531,7 +2483,7 @@ cmd_checkout(argv_start: int) {
     if string.length(rev_str) > 0 {
         if string.try_int(rev_str) == 1 { rev = string.get_int(rev_str) }
     } else {
-        rev = remote_head_rev(base, repo)
+        rev = client.remote_head_rev(base, repo)
         if rev < 0 {
             println("avn checkout: could not contact server")
             return 1
@@ -2585,9 +2537,9 @@ main() {
     // Placeholder auth: the server trusts whatever we send. Real auth
     // (Basic / LDAP / AD) arrives later.
     user_env = env_get("SVN_USER")
-    if string.length(user_env) > 0 { set_user(user_env) }
+    if string.length(user_env) > 0 { client.set_user(user_env) }
     tok_env  = env_get("SVN_SUPERUSER_TOKEN")
-    if string.length(tok_env) > 0 { set_super_token(tok_env) }
+    if string.length(tok_env) > 0 { client.set_super_token(tok_env) }
 
     sub = aether_args_get(1)
     // Most subcommands have URL at argv[2]; status/add/rm don't.

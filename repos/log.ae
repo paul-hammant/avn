@@ -23,6 +23,7 @@
 
 import std.string
 import std.intarr
+import client
 
 extern repos_head_rev(repo: string) -> int
 extern repos_rev_blob_sha(repo: string, rev: int) -> string
@@ -37,9 +38,6 @@ extern rep_free(p: string)
 // and repos_info_packed for the author attribution. All already
 // ported in sibling modules.
 extern paths_changed_packed(repo: string, rev: int) -> string
-extern packed_paths_count(packed: string) -> int
-extern packed_paths_action(packed: string, i: int) -> string
-extern packed_paths_path(packed: string, i: int) -> string
 
 extern repos_rev_field(repo: string, rev: int, key: string) -> string
 extern resolve_kind(repo: string, root_sha: string, path: string) -> int
@@ -443,13 +441,13 @@ export repos_blame_packed(repo: string, target_rev: int, path: string) -> string
         action = ""
         paths = paths_changed_packed(repo, r)
         if string.length(paths) > 0 {
-            pn = packed_paths_count(paths)
+            pn = client.packed_paths_count(paths)
             pi = 0
             while pi < pn {
-                p = packed_paths_path(paths, pi)
+                p = client.packed_paths_path(paths, pi)
                 if string.equals(p, path) == 1 {
                     touches = 1
-                    a = packed_paths_action(paths, pi)
+                    a = client.packed_paths_action(paths, pi)
                     action = string.copy(a)
                     break
                 }

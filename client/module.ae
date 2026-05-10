@@ -1,0 +1,2356 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+
+// client — remote-access (HTTP-to-avnserver) client library.
+//
+// Phase 3 merge (methodical_extern_removal_plan.md, Round 302).
+// Unblocked by aetherc 0.142.0 — selective-import propagation across
+// the import boundary now works, so std.http.client's selective
+// imports here surface in consumers' compilations transparently.
+// (And the 128-decl truncation cap from 0.142.0 also matters at the
+// 124-export scale here.)
+//
+// commit_builder.ae stays separate for now (deferred from this round
+// for risk-reduction — it has struct RaCommit which 0.141.0 unblocked,
+// so it can fold in next round if needed).
+
+import std.string
+import std.config
+import std.json
+import std.cryptography
+import std.intarr
+import std.list
+import std.io
+import ffi.openssl
+// std.http.client imported selectively —  would
+// collide with our own module name as seen from consumers.
+import std.http.client (request, request_free,
+                        response_body, response_free,
+                        response_header, response_status,
+                        send_request, set_body, set_header, set_timeout)
+
+
+// =============================================================================
+// client/accessors.ae
+// =============================================================================
+
+// ra (RA-client) accessor families — Aether port of client/shim.c's
+// log/paths/blame/info/props/list packed-handle wrappers. Same
+// shape as Round 154's repos/accessors.ae: the "handle" is just
+// the underlying packed-record AetherString; per-call accessor
+// returns are refcounted so we don't need pin_str.
+
+
+
+// Parsers (Aether-side, client/packed.ae).
+
+
+
+
+
+
+// ---- log handle -------------------------------------------------
+
+remote_log(base_url: string, repo_name: string) -> ptr {
+    p = fetch_log(base_url, repo_name)
+    if string.length(p) == 0 { return null }
+    return string.copy(p)
+}
+remote_log_count (lg: ptr) -> int {
+    if lg == null { return 0 }
+    return packed_log_count(lg)
+}
+remote_log_rev   (lg: ptr, i: int) -> int {
+    if lg == null { return 0 - 1 }
+    return packed_log_rev(lg, i)
+}
+remote_log_author(lg: ptr, i: int) -> string {
+    if lg == null { return "" }
+    return packed_log_author(lg, i)
+}
+remote_log_date  (lg: ptr, i: int) -> string {
+    if lg == null { return "" }
+    return packed_log_date(lg, i)
+}
+remote_log_msg   (lg: ptr, i: int) -> string {
+    if lg == null { return "" }
+    return packed_log_msg(lg, i)
+}
+remote_log_free  (lg: ptr) { return 0 }
+
+// ---- paths-changed handle --------------------------------------
+
+remote_paths_changed(base_url: string, repo_name: string, rev: int) -> ptr {
+    p = fetch_paths(base_url, repo_name, rev)
+    if string.length(p) == 0 { return null }
+    return string.copy(p)
+}
+remote_paths_count (P: ptr) -> int {
+    if P == null { return 0 }
+    return packed_paths_count(P)
+}
+remote_paths_action(P: ptr, i: int) -> string {
+    if P == null { return "" }
+    return packed_paths_action(P, i)
+}
+remote_paths_path  (P: ptr, i: int) -> string {
+    if P == null { return "" }
+    return packed_paths_path(P, i)
+}
+remote_paths_free  (P: ptr) { return 0 }
+
+// ---- blame handle ----------------------------------------------
+
+remote_blame(base_url: string, repo_name: string, rev: int, path: string) -> ptr {
+    p = fetch_blame(base_url, repo_name, rev, path)
+    if string.length(p) == 0 { return null }
+    return string.copy(p)
+}
+remote_blame_count (B: ptr) -> int {
+    if B == null { return 0 }
+    return packed_blame_count(B)
+}
+remote_blame_rev   (B: ptr, i: int) -> int {
+    if B == null { return 0 - 1 }
+    return packed_blame_rev(B, i)
+}
+remote_blame_author(B: ptr, i: int) -> string {
+    if B == null { return "" }
+    return packed_blame_author(B, i)
+}
+remote_blame_text  (B: ptr, i: int) -> string {
+    if B == null { return "" }
+    return packed_blame_text(B, i)
+}
+remote_blame_free  (B: ptr) { return 0 }
+
+// ---- info handle (single-record) -------------------------------
+
+remote_info_rev(base_url: string, repo_name: string, rev: int) -> ptr {
+    p = fetch_info(base_url, repo_name, rev)
+    if string.length(p) == 0 { return null }
+    return string.copy(p)
+}
+remote_info_rev_num(I: ptr) -> int {
+    if I == null { return 0 - 1 }
+    return packed_info_rev(I)
+}
+remote_info_author(I: ptr) -> string {
+    if I == null { return "" }
+    return packed_info_author(I)
+}
+remote_info_date  (I: ptr) -> string {
+    if I == null { return "" }
+    return packed_info_date(I)
+}
+remote_info_msg   (I: ptr) -> string {
+    if I == null { return "" }
+    return packed_info_msg(I)
+}
+remote_info_root  (I: ptr) -> string {
+    if I == null { return "" }
+    return packed_info_root(I)
+}
+remote_info_free  (I: ptr) { return 0 }
+
+// ---- props handle ----------------------------------------------
+
+remote_get_props(base_url: string, repo_name: string, rev: int, path: string) -> ptr {
+    p = fetch_props(base_url, repo_name, rev, path)
+    if string.length(p) == 0 { return null }
+    return string.copy(p)
+}
+remote_props_count(P: ptr) -> int {
+    if P == null { return 0 }
+    return packed_props_count(P)
+}
+remote_props_name (P: ptr, i: int) -> string {
+    if P == null { return "" }
+    return packed_props_name(P, i)
+}
+remote_props_value(P: ptr, i: int) -> string {
+    if P == null { return "" }
+    return packed_props_value(P, i)
+}
+remote_props_free (P: ptr) { return 0 }
+
+// ---- list handle -----------------------------------------------
+
+remote_list(base_url: string, repo_name: string, rev: int, path: string) -> ptr {
+    p = fetch_list(base_url, repo_name, rev, path)
+    if string.length(p) == 0 { return null }
+    return string.copy(p)
+}
+remote_list_count(L: ptr) -> int {
+    if L == null { return 0 }
+    return packed_list_count(L)
+}
+remote_list_name(L: ptr, i: int) -> string {
+    if L == null { return "" }
+    return packed_list_name(L, i)
+}
+remote_list_kind(L: ptr, i: int) -> string {
+    if L == null { return "" }
+    return packed_list_kind(L, i)
+}
+remote_list_free(L: ptr) { return 0 }
+
+
+// =============================================================================
+// client/auth_state.ae
+// =============================================================================
+
+// Per-process auth state for the avn REST client. Set once
+// at CLI startup (--user=foo / --token=... or env); read on every
+// outgoing HTTP request via send_with_auth. Backed by std.config.
+
+
+const KEY_USER       = "ra.user"
+const KEY_SUPERTOKEN = "ra.super_token"
+
+set_user(user: string) {
+    if string.length(user) == 0 { return }
+    config.put(KEY_USER, user)
+    return
+}
+
+set_super_token(token: string) {
+    if string.length(token) == 0 { return }
+    config.put(KEY_SUPERTOKEN, token)
+    return
+}
+
+get_user() -> string {
+    return config.get(KEY_USER)
+}
+
+get_super_token() -> string {
+    return config.get(KEY_SUPERTOKEN)
+}
+
+
+// =============================================================================
+// client/cat.ae
+// =============================================================================
+
+// remote_cat — GET /repos/<r>/rev/<n>/cat/<p> via std.http.client.
+// Round 177 retires the C-side wrapper in ra/shim.c that did the
+// malloc-detach dance. The "binary fidelity" claim in the original
+// shim was a fiction (aether_string_length on the unwrapped char*
+// fell through to strlen anyway), so moving Aether-side preserves
+// the same observable behaviour with no FFI roundtrip.
+
+
+
+// Skip leading '/' in the user path so URLs look clean.
+strip_leading_slash_(s: string) -> string {
+    n = string.length(s)
+    i = 0
+    while i < n {
+        if string.char_at(s, i) != 47 { return string.substring(s, i, n) }
+        i = i + 1
+    }
+    return ""
+}
+
+remote_cat(base_url: string, repo_name: string, rev: int,
+                     path: string) -> string {
+    clean_path = strip_leading_slash_(path)
+    url = url_rev_cat(base_url, repo_name, rev, clean_path)
+    resp = get(url)
+    if resp == null { return "" }
+    status = response_status(resp)
+    if status != 200 {
+        response_free(resp)
+        return ""
+    }
+    body = response_body(resp)
+    body_copy = string.copy(body)
+    response_free(resp)
+    return body_copy
+}
+
+// remote_free retained as an Aether-side no-op for back-compat
+// with callers that bracket their remote_cat result with a free.
+// AetherString refcounting handles lifetime; the explicit free is
+// redundant but the call sites are too numerous to touch in one
+// round, so we leave the API surface intact.
+remote_free(p: string) {
+    p = p
+    return
+}
+
+
+// =============================================================================
+// client/commit_build.ae
+// =============================================================================
+
+// RA client commit-body builder. Walks the in-memory struct
+// remote_commit *cb via C-side accessors and produces the JSON
+// body the server expects:
+//
+//   { "base_rev": N, "author": "...", "log": "...",
+//     "edits": [ {"op":"add-file|mkdir|delete", "path":p, "content"?:b64}, ...],
+//     "props": { path1: {key: value, ...}, ... },
+//     "acl":   { path1: ["+a","-b"], ... } }
+//
+// Uses std.json for construction — each node stands alone until
+// attached to its parent, matching std.json's deep-copy-on-set
+// semantics.
+
+
+extern remote_cb_base_rev(cb: ptr) -> int
+extern remote_cb_author(cb: ptr) -> string
+extern remote_cb_logmsg(cb: ptr) -> string
+extern remote_cb_edits_packed(cb: ptr) -> string
+extern remote_cb_props_packed(cb: ptr) -> string
+extern remote_cb_acls_packed(cb: ptr) -> string
+
+// Round 274 / Phase 2.1 — merged_from accessors.
+extern remote_cb_merge_target_path(cb: ptr) -> string
+extern remote_cb_merge_source_branch(cb: ptr) -> string
+extern remote_cb_merge_source_revs_packed(cb: ptr) -> string
+extern remote_cb_merge_verb(cb: ptr) -> int
+
+// R286 — parent_sha accessor for the chain CAS.
+extern remote_cb_parent_sha(cb: ptr) -> string
+
+// Round 146: writers ported from C (remote_commit_add_file etc.
+// in ra/shim.c). The struct stays C-side; setters below replace
+// the old pack_append + 5 add-op pile.
+extern remote_cb_set_edits_packed(cb: ptr, packed: string)
+extern remote_cb_set_props_packed(cb: ptr, packed: string)
+extern remote_cb_set_acls_packed(cb: ptr, packed: string)
+extern remote_cb_n_edits(cb: ptr) -> int
+extern remote_cb_n_props(cb: ptr) -> int
+extern remote_cb_n_acls(cb: ptr) -> int
+
+// b64-encode (unpadded; the server's base64_decode handles both
+// padded and unpadded — see std.cryptography.base64_decode in the
+// Aether stdlib). Provided by ffi.openssl as `crypto_b64_encode`.
+
+// Append `record` to the "<count>\x02<recs...>\x02" packed string
+// `cur`. count is passed in (caller stores it C-side); returns the
+// new packed string. The new record gets a trailing \x02 separator
+// — same shape client/parse.ae expects on the read side.
+pack_append_(cur: string, count: int, record: string) -> string {
+    new_count = count + 1
+    if string.length(cur) == 0 {
+        out = "${new_count}\x02"
+        out = string.concat(out, record)
+        out = string.concat(out, "\x02")
+        return out
+    }
+    sep = string.index_of(cur, "\x02")
+    body = string.substring(cur, sep + 1, string.length(cur))
+    out = "${new_count}\x02"
+    out = string.concat(out, body)
+    out = string.concat(out, record)
+    out = string.concat(out, "\x02")
+    return out
+}
+
+// Public add-ops. Each builds a record with the right op-tag, calls
+// pack_append_, and stashes the result back via the C-side setter.
+// Round 146 ported these from ra/shim.c. Returns 0 on success
+// (matching the prior C contract).
+remote_commit_add_file(cb: ptr, path: string, content: string, len: int) -> int {
+    b64 = ""
+    if len > 0 {
+        b64 = openssl.crypto_b64_encode(content, len)
+    }
+    rec = "1\x01"
+    rec = string.concat(rec, path)
+    rec = string.concat(rec, "\x01")
+    rec = string.concat(rec, b64)
+    n = remote_cb_n_edits(cb)
+    cur = remote_cb_edits_packed(cb)
+    new_packed = pack_append_(cur, n, rec)
+    remote_cb_set_edits_packed(cb, new_packed)
+    return 0
+}
+
+remote_commit_mkdir(cb: ptr, path: string) -> int {
+    rec = "2\x01"
+    rec = string.concat(rec, path)
+    rec = string.concat(rec, "\x01")
+    n = remote_cb_n_edits(cb)
+    cur = remote_cb_edits_packed(cb)
+    new_packed = pack_append_(cur, n, rec)
+    remote_cb_set_edits_packed(cb, new_packed)
+    return 0
+}
+
+remote_commit_delete(cb: ptr, path: string) -> int {
+    rec = "3\x01"
+    rec = string.concat(rec, path)
+    rec = string.concat(rec, "\x01")
+    n = remote_cb_n_edits(cb)
+    cur = remote_cb_edits_packed(cb)
+    new_packed = pack_append_(cur, n, rec)
+    remote_cb_set_edits_packed(cb, new_packed)
+    return 0
+}
+
+remote_commit_acl_add(cb: ptr, path: string, rule: string) -> int {
+    rec = path
+    rec = string.concat(rec, "\x01")
+    rec = string.concat(rec, rule)
+    n = remote_cb_n_acls(cb)
+    cur = remote_cb_acls_packed(cb)
+    new_packed = pack_append_(cur, n, rec)
+    remote_cb_set_acls_packed(cb, new_packed)
+    return 0
+}
+
+remote_commit_set_prop(cb: ptr, path: string, key: string, value: string) -> int {
+    rec = path
+    rec = string.concat(rec, "\x01")
+    rec = string.concat(rec, key)
+    rec = string.concat(rec, "\x01")
+    rec = string.concat(rec, value)
+    n = remote_cb_n_props(cb)
+    cur = remote_cb_props_packed(cb)
+    new_packed = pack_append_(cur, n, rec)
+    remote_cb_set_props_packed(cb, new_packed)
+    return 0
+}
+
+// Round 62: the C builder accumulates each collection (edits / props /
+// acls) as a single packed string in the same shape client/parse.ae
+// produces on the read side:
+//   "<count>\x02<rec0>\x02<rec1>\x02..."   with records joined by \x01
+// Walking the buffer with split is one pass per buffer instead of 5
+// cross-FFI accessor calls per record.
+
+// Drop the leading "<count>\x02" header and the trailing "\x02"
+// sentinel, then split on \x02 to get record strings. Returns a ptr
+// to a string-array (caller frees via string.array_free, and reads
+// the count via string.array_size). Empty / malformed input yields
+// an empty array.
+records_(packed: string) -> ptr {
+    n = string.length(packed)
+    if n == 0 { return string.split("", "\x02") }
+    sep = string.index_of(packed, "\x02")
+    if sep < 0 { return string.split("", "\x02") }
+    body = string.substring(packed, sep + 1, n)
+    blen = string.length(body)
+    if blen > 0 {
+        last = string.char_at(body, blen - 1)
+        if last == 2 {
+            body = string.substring(body, 0, blen - 1)
+        }
+    }
+    if string.length(body) == 0 { return string.split("", "\x02") }
+    return string.split(body, "\x02")
+}
+
+remote_commit_build_body(cb: ptr) -> string {
+    body = json_create_object()
+    json.object_set(body, "base_rev", json.create_number(remote_cb_base_rev(cb)))
+    json.object_set(body, "author", json_create_string(remote_cb_author(cb)))
+    json.object_set(body, "log", json_create_string(remote_cb_logmsg(cb)))
+
+    // R286 — parent_sha. Always emitted (server validates: empty
+    // when base_rev==0, non-empty match-of-HEAD when base_rev>0).
+    psha = remote_cb_parent_sha(cb)
+    json.object_set(body, "parent_sha", json_create_string(psha))
+
+    // edits: array of {op, path, [content]}. Records: "<op>\x01<path>\x01<b64>".
+    edits = json_create_array()
+    epacked = remote_cb_edits_packed(cb)
+    earr = records_(epacked)
+    en = 0
+    if string.length(epacked) > 0 { en = string.array_size(earr) }
+    i = 0
+    while i < en {
+        rec = string.array_get(earr, i)
+        fields = string.split(rec, "\x01")
+        op_s = string.array_get(fields, 0)
+        op   = string.get_int(op_s)
+        path = string.array_get(fields, 1)
+        path = string.copy(path)
+
+        e = json_create_object()
+        if op == 1 {
+            json.object_set(e, "op", json_create_string("add-file"))
+            json.object_set(e, "path", json_create_string(path))
+            b64 = string.array_get(fields, 2)
+            b64 = string.copy(b64)
+            json.object_set(e, "content", json_create_string(b64))
+        }
+        if op == 2 {
+            json.object_set(e, "op", json_create_string("mkdir"))
+            json.object_set(e, "path", json_create_string(path))
+        }
+        if op == 3 {
+            json.object_set(e, "op", json_create_string("delete"))
+            json.object_set(e, "path", json_create_string(path))
+        }
+        json.array_add(edits, e)
+        string.array_free(fields)
+        i = i + 1
+    }
+    string.array_free(earr)
+    json.object_set(body, "edits", edits)
+
+    // props: { path: {k:v, ...} } — group by path. Records:
+    //   "<path>\x01<key>\x01<value>"
+    ppacked = remote_cb_props_packed(cb)
+    parr = records_(ppacked)
+    pn = 0
+    if string.length(ppacked) > 0 { pn = string.array_size(parr) }
+    if pn > 0 {
+        jp = json_create_object()
+        pi = 0
+        while pi < pn {
+            rec = string.array_get(parr, pi)
+            f = string.split(rec, "\x01")
+            this_path = string.array_get(f, 0)
+            this_path = string.copy(this_path)
+            string.array_free(f)
+            already = json.object_has(jp, this_path)
+            if already == 0 {
+                per = json_create_object()
+                k = pi
+                while k < pn {
+                    rk = string.array_get(parr, k)
+                    fk = string.split(rk, "\x01")
+                    kpath = string.array_get(fk, 0)
+                    if string.equals(kpath, this_path) == 1 {
+                        key = string.array_get(fk, 1)
+                        key = string.copy(key)
+                        val = string.array_get(fk, 2)
+                        val = string.copy(val)
+                        json.object_set(per, key, json_create_string(val))
+                    }
+                    string.array_free(fk)
+                    k = k + 1
+                }
+                json.object_set(jp, this_path, per)
+            }
+            pi = pi + 1
+        }
+        json.object_set(body, "props", jp)
+    }
+    string.array_free(parr)
+
+    // acl: { path: ["+alice","-eve"] }. Records: "<path>\x01<rule>".
+    apacked = remote_cb_acls_packed(cb)
+    aarr = records_(apacked)
+    an = 0
+    if string.length(apacked) > 0 { an = string.array_size(aarr) }
+    if an > 0 {
+        ja = json_create_object()
+        ai = 0
+        while ai < an {
+            rec = string.array_get(aarr, ai)
+            f = string.split(rec, "\x01")
+            this_path = string.array_get(f, 0)
+            this_path = string.copy(this_path)
+            string.array_free(f)
+            already = json.object_has(ja, this_path)
+            if already == 0 {
+                arr = json_create_array()
+                k = ai
+                while k < an {
+                    rk = string.array_get(aarr, k)
+                    fk = string.split(rk, "\x01")
+                    kpath = string.array_get(fk, 0)
+                    if string.equals(kpath, this_path) == 1 {
+                        rule = string.array_get(fk, 1)
+                        rule = string.copy(rule)
+                        json.array_add(arr, json_create_string(rule))
+                    }
+                    string.array_free(fk)
+                    k = k + 1
+                }
+                json.object_set(ja, this_path, arr)
+            }
+            ai = ai + 1
+        }
+        json.object_set(body, "acl", ja)
+    }
+    string.array_free(aarr)
+
+    // Round 274 / Phase 2.1 — merged_from. When the WC's
+    // pending_merge accumulator had rows, wc_commit threaded them
+    // here via remote_commit_set_merged_from. Empty source_branch
+    // means non-merge commit; we omit the field so older servers
+    // that don't recognise it (none today, but Phase 2.x's wire
+    // contract is forward-compatible) ignore it.
+    msrc = remote_cb_merge_source_branch(cb)
+    if string.length(msrc) > 0 {
+        mtgt = remote_cb_merge_target_path(cb)
+        mf = json_create_object()
+        json.object_set(mf, "target_path",   json_create_string(mtgt))
+        json.object_set(mf, "source_branch", json_create_string(msrc))
+        json.object_set(mf, "verb",          json.create_number(remote_cb_merge_verb(cb)))
+        revs = json_create_array()
+        rpacked = remote_cb_merge_source_revs_packed(cb)
+        rn = string.length(rpacked)
+        seg_start = 0
+        ri = 0
+        while ri <= rn {
+            at_end = 0
+            if ri == rn { at_end = 1 }
+            if at_end == 0 {
+                c = string.char_at(rpacked, ri)
+                if c == 10 { at_end = 1 }
+            }
+            if at_end == 1 {
+                if ri > seg_start {
+                    s = string.substring(rpacked, seg_start, ri)
+                    json.array_add(revs, json.create_number(string.get_int(s)))
+                }
+                seg_start = ri + 1
+            }
+            ri = ri + 1
+        }
+        json.object_set(mf, "source_revs", revs)
+        json.object_set(body, "merged_from", mf)
+    }
+
+    out, _ = json.stringify(body)
+    json.free(body)
+    return out
+}
+
+
+// Build the /copy POST body:
+//   { "base_rev": N, "from_path": "...", "to_path": "...",
+//     "author": "...", "log": "..." }
+remote_copy_build_body(base_rev: int, from_path: string, to_path: string,
+                           author: string, logmsg: string) -> string {
+    body = json_create_object()
+    json.object_set(body, "base_rev", json.create_number(base_rev))
+    json.object_set(body, "from_path", json_create_string(from_path))
+    json.object_set(body, "to_path", json_create_string(to_path))
+    json.object_set(body, "author", json_create_string(author))
+    json.object_set(body, "log", json_create_string(logmsg))
+    out, _ = json.stringify(body)
+    json.free(body)
+    return out
+}
+
+// Build the /branches/<NAME>/create POST body:
+//   { "base": "<sha-or-branch>", "include": ["glob", ...] }
+// `includes_joined` is a \n-separated list (empty lines skipped).
+remote_branch_create_body(base: string, includes_joined: string) -> string {
+    body = json_create_object()
+    json.object_set(body, "base", json_create_string(base))
+
+    arr = json_create_array()
+    n = string.length(includes_joined)
+    line_start = 0
+    i = 0
+    while i <= n {
+        at_end = 0
+        c = 0
+        if i == n { at_end = 1 } else { c = string.char_at(includes_joined, i) }
+        is_eol = 0
+        if at_end == 1 { is_eol = 1 }
+        if c == 10 { is_eol = 1 }
+        if is_eol == 1 {
+            if i > line_start {
+                seg = string.substring(includes_joined, line_start, i)
+                if string.length(seg) > 0 {
+                    json.array_add(arr, json_create_string(seg))
+                }
+            }
+            line_start = i + 1
+        }
+        i = i + 1
+    }
+    json.object_set(body, "include", arr)
+
+    out, _ = json.stringify(body)
+    json.free(body)
+    return out
+}
+
+
+// =============================================================================
+// client/copy_branch.ae
+// =============================================================================
+
+// RA orchestration for server-side copy + branch create. Both build
+// a JSON body via commit_build.ae and POST it through a thin
+// tuple-returning C adapter; the only thing that differs between
+// the two endpoints is the URL builder + the expected HTTP status.
+
+
+// JSON body builders (client/commit_build.ae).
+
+// URL builders (client/urls.ae).
+
+// POST body, expect HTTP <expected_status>, parse rev from response
+// (client/fetch.ae). Round 102 hoisted this shared helper into fetch
+// so the C-side remote_commit_finish can reuse it too.
+
+// POST /repos/{r}/copy with { base_rev, from_path, to_path, author, log }.
+// Returns the new revision number on 200, -1 on any failure.
+remote_server_copy(base_url: string, repo_name: string,
+                             base_rev: int,
+                             from_path: string, to_path: string,
+                             author: string, logmsg: string) -> int {
+    json = remote_copy_build_body(base_rev, from_path, to_path,
+                                      author, logmsg)
+    url = url_copy(base_url, repo_name)
+    return post_for_rev(url, json, 200)
+}
+
+// POST /repos/{r}/branches/<NAME>/create with { base, include }.
+// Super-user only. Returns the new revision number on 201, -1 on any
+// failure. `includes_joined` is a single newline-separated string
+// for ergonomic passage from Aether (Aether ptr-array types are
+// awkward across FFI).
+remote_branch_create(base_url: string, repo_name: string,
+                               name: string, base: string,
+                               includes_joined: string) -> int {
+    inc = includes_joined
+    if string.length(inc) == 0 { inc = "" }
+    json = remote_branch_create_body(base, inc)
+    url = url_branches_create(base_url, repo_name, name)
+    return post_for_rev(url, json, 201)
+}
+
+
+// =============================================================================
+// client/fetch.ae
+// =============================================================================
+
+// client/fetch.ae — per-domain "fetch URL + parse body → packed string"
+// helpers. Each pairs one URL builder (urls.ae) with one JSON parser
+// (parse.ae). The C-side packed-handle constructors (remote_log
+// etc. in ra/shim.c) call one of these and then wrap the returned
+// packed string in packed_handle_new — no more C-side
+// http_get_200 + parse indirection.
+//
+// Returning "" on any failure matches the C-side semantics: empty
+// packed string makes packed_handle_new return NULL, which
+// every existing caller already treats as "miss / give up."
+
+
+
+// Skip leading '/' so the URL the server sees doesn't double up its
+// own /repos/<r>/rev/<n>/ prefix. Matches what http_get_200 callers
+// in shim.c used to do at the boundary.
+
+fetch_log(base: string, repo: string) -> string {
+    body = get_200(url_log(base, repo))
+    if string.length(body) == 0 { return "" }
+    return remote_parse_log(body)
+}
+
+fetch_paths(base: string, repo: string, rev: int) -> string {
+    body = get_200(url_rev_paths(base, repo, rev))
+    if string.length(body) == 0 { return "" }
+    return remote_parse_paths(body)
+}
+
+fetch_blame(base: string, repo: string, rev: int, path: string) -> string {
+    p = strip_leading_slash_(path)
+    body = get_200(url_rev_blame(base, repo, rev, p))
+    if string.length(body) == 0 { return "" }
+    return remote_parse_blame(body)
+}
+
+fetch_info(base: string, repo: string, rev: int) -> string {
+    body = get_200(url_rev_info(base, repo, rev))
+    if string.length(body) == 0 { return "" }
+    return remote_parse_info_rev(body)
+}
+
+fetch_props(base: string, repo: string, rev: int, path: string) -> string {
+    p = strip_leading_slash_(path)
+    body = get_200(url_rev_props(base, repo, rev, p))
+    if string.length(body) == 0 { return "" }
+    return remote_parse_props(body)
+}
+
+fetch_list(base: string, repo: string, rev: int, path: string) -> string {
+    p = strip_leading_slash_(path)
+    body = get_200(url_rev_list(base, repo, rev, p))
+    if string.length(body) == 0 { return "" }
+    return remote_parse_list(body)
+}
+
+// Round 274 / Phase 2.2 — fetch the merge ledger's integrated set
+// for (target, source) on `repo`. Returns "\n"-separated SHA list
+// (possibly empty) — already parsed out of the JSON envelope.
+fetch_merged(base: string, repo: string,
+                    target_branch: string, source_branch: string) -> string {
+    url = string.concat(base, "/repos/")
+    url = string.concat(url, repo)
+    url = string.concat(url, "/merged/")
+    url = string.concat(url, target_branch)
+    url = string.concat(url, "/")
+    url = string.concat(url, source_branch)
+    body = get_200(url)
+    if string.length(body) == 0 { return "" }
+    return remote_parse_merged(body)
+}
+
+// Round 276 / Phase 2.3 — fetch eligible-run shape for a sweep
+// merge of (lo..hi] as-of the WC's base rev. Returns
+// "lo1:hi1\nlo2:hi2\n..." (possibly empty when the whole range is
+// already integrated). wc_merge consumes it directly through its
+// existing run-iteration loop. as_of_rev=0 disables the time
+// filter (= "any-time integrated").
+fetch_merge_runs(base: string, repo: string,
+                        target_branch: string, source_branch: string,
+                        lo: int, hi: int, as_of_rev: int) -> string {
+    url = string.concat(base, "/repos/")
+    url = string.concat(url, repo)
+    url = string.concat(url, "/merge_runs/")
+    url = string.concat(url, target_branch)
+    url = string.concat(url, "/")
+    url = string.concat(url, source_branch)
+    url = string.concat(url, "/")
+    url = string.concat(url, "${lo}")
+    url = string.concat(url, "/")
+    url = string.concat(url, "${hi}")
+    url = string.concat(url, "/")
+    url = string.concat(url, "${as_of_rev}")
+    body = get_200(url)
+    if string.length(body) == 0 { return "" }
+    return remote_parse_merge_runs(body)
+}
+
+// R284 — runs of revs in (lo..hi] that are reverse-eligible: their
+// latest merge_event (if any) is NOT a reverse merge. Used by
+// wc_merge's reverse-merge path so `merge -c -N` twice in a row →
+// second is a no-op. Untracked revs (no merge_event) are INCLUDED:
+// classical-SVN reverse merge of an untracked rev still applies the
+// inverse diff. Same wire shape ("lo:hi\n..."), served by the
+// /reverse_runs endpoint.
+fetch_reverse_runs(base: string, repo: string,
+                          target_branch: string, source_branch: string,
+                          lo: int, hi: int, as_of_rev: int) -> string {
+    url = string.concat(base, "/repos/")
+    url = string.concat(url, repo)
+    url = string.concat(url, "/reverse_runs/")
+    url = string.concat(url, target_branch)
+    url = string.concat(url, "/")
+    url = string.concat(url, source_branch)
+    url = string.concat(url, "/")
+    url = string.concat(url, "${lo}")
+    url = string.concat(url, "/")
+    url = string.concat(url, "${hi}")
+    url = string.concat(url, "/")
+    url = string.concat(url, "${as_of_rev}")
+    body = get_200(url)
+    if string.length(body) == 0 { return "" }
+    return remote_parse_merge_runs(body)
+}
+
+// POST `body` (JSON) to `url`, expect HTTP <expected_status>, parse
+// rev from response. Returns -1 on any failure (transport, wrong
+// status, parse error). Shared by:
+//   - copy_branch.ae   (server-side copy / branch_create POSTs)
+//   - remote_commit_finish  (commit POST, in ra/shim.c)
+// Round 102 retired the C-side http_post_json + take_body helpers
+// in favour of this single shared post-and-parse-rev pipeline.
+post_for_rev(url: string, body: string, expected_status: int) -> int {
+    resp = post_json(url, body, string.length(body))
+    if resp == null { return 0 - 1 }
+    status = response_status(resp)
+    if status != expected_status {
+        response_free(resp)
+        // Surface 409 (out of date — Round 264 added this on the
+        // server side) as -12 so wc_commit can pass it up to the CLI
+        // for a "WC out of date" message instead of generic failure.
+        if status == 409 { return 0 - 12 }
+        return 0 - 1
+    }
+    body_str = response_body(resp)
+    rev = remote_parse_rev_response(body_str)
+    response_free(resp)
+    return rev
+}
+
+// R286 — same as post_for_rev but also returns the rev_sha from the
+// response body. Used by remote_commit_finish_with_sha so the CLI /
+// programmatic caller can chain parent_sha into the next commit.
+// Returns (-1, "") on any failure (incl. -12 for HTTP 409).
+post_for_rev_sha(url: string, body: string, expected_status: int) -> (int, string) {
+    resp = post_json(url, body, string.length(body))
+    if resp == null { return 0 - 1, "" }
+    status = response_status(resp)
+    if status != expected_status {
+        response_free(resp)
+        if status == 409 { return 0 - 12, "" }
+        return 0 - 1, ""
+    }
+    body_str = response_body(resp)
+    rev = remote_parse_rev_response(body_str)
+    sha = string.copy(remote_parse_rev_sha_response(body_str))
+    response_free(resp)
+    return rev, sha
+}
+
+
+// =============================================================================
+// client/http_client.ae
+// =============================================================================
+
+// client/http_client.ae — Aether-side HTTP plumbing for the RA shim.
+//
+// Replaces ~200 lines of libcurl in client/shim.c with std.http.client
+// v2 calls. The C side keeps its existing * / http_get* /
+// http_post_json signatures so every downstream caller (tens of call
+// sites across handler shims, log/paths/blame builders, commit + copy
+// + branch_create code paths) links unchanged. The C bodies become
+// thin wrappers that invoke our four exports here, then unpack the
+// returned packed-string envelope into the out-params those callers
+// already use.
+//
+// Auth state (X-Svnae-User, X-Svnae-Superuser tokens) lives in C —
+// it's set via remote_set_user / remote_set_superuser_token and
+// passed in to each of these calls.
+
+
+// ---- helpers ---------------------------------------------------------
+//
+// The Aether helper returns an opaque response handle (ptr). The C
+// wrapper then calls back into typed accessors to read fields. This
+// avoids the AetherString-concat trap where building a packed envelope
+// in Aether and slicing it in C ran into surprising interpolation
+// ordering issues with the response_body length (round 46 first
+// draft — fix preserved as a comment-only note in the journal).
+//
+// Auth state lives in std.config — set via set_user / set_super_token
+// in client/auth_state.ae at CLI startup.
+
+// Build a request, attach auth headers, send it, return the
+// std.http.client response handle the C side reads through accessors.
+// On transport failure returns null — the C wrapper treats that as -1.
+send_with_auth(req: ptr) -> ptr {
+    user = get_user()
+    if string.length(user) > 0 {
+        set_header(req, "X-Svnae-User", user)
+    }
+    super_token = get_super_token()
+    if string.length(super_token) > 0 {
+        set_header(req, "X-Svnae-Superuser", super_token)
+    }
+    set_timeout(req, 30)
+
+    resp, err = send_request(req)
+    request_free(req)
+    if string.length(err) > 0 {
+        return null
+    }
+    return resp
+}
+
+// GET. Returns std.http.client response handle (ptr) or null on
+// transport failure. Caller owns the response — must call
+// response_free when done.
+get(url: string) -> ptr {
+    req = request("GET", url)
+    return send_with_auth(req)
+}
+
+// POST application/json with the given body bytes. Same return shape.
+post_json(url: string, body: string, body_len: int) -> ptr {
+    req = request("POST", url)
+    set_body(req, body, body_len, "application/json")
+    return send_with_auth(req)
+}
+
+// Typed accessors over a response handle. The C side uses these
+// instead of slicing a packed string — keeps the response_body call
+// cleanly isolated, which fixed an AetherString length-shadowing
+// issue we hit in the first draft.
+
+response_status(resp: ptr) -> int {
+    return response_status(resp)
+}
+
+response_body(resp: ptr) -> string {
+    return response_body(resp)
+}
+
+response_header(resp: ptr, name: string) -> string {
+    return response_header(resp, name)
+}
+
+response_free(resp: ptr) {
+    response_free(resp)
+}
+
+// One-shot GET helper: fetch URL, return body iff status==200, "" on
+// any failure (transport, non-200). Frees the response handle. The
+// returned string survives across FFI because we copy via
+// string.copy before releasing the std.http.client buffer. Used by
+// the per-domain "fetch + parse + return packed" callers in fetch.ae
+// and by info.ae (head_rev / hash_algo) — saves each from open-coding
+// the same six-line dance.
+get_200(url: string) -> string {
+    req = request("GET", url)
+    resp = send_with_auth(req)
+    if resp == null { return "" }
+    status = response_status(resp)
+    if status != 200 {
+        response_free(resp)
+        return ""
+    }
+    body = response_body(resp)
+    body_copy = string.copy(body)
+    response_free(resp)
+    return body_copy
+}
+
+
+// =============================================================================
+// client/info.ae
+// =============================================================================
+
+// RA endpoint helpers that just GET /repos/<r>/info, parse the JSON,
+// and return one scalar field. Round 88 ports them out of
+// client/shim.c. Round 100 retires http_get_body in favour of
+// get_200 (Aether-side, in http_client.ae).
+
+
+
+// Returns the server's current revision number, or -1 on failure
+// (transport error, non-200 status, or JSON parse failure).
+remote_head_rev(base_url: string, repo_name: string) -> int {
+    body = get_200(url_info(base_url, repo_name))
+    if string.length(body) == 0 { return 0 - 1 }
+    return remote_parse_head_rev(body)
+}
+
+// R286 — returns the rev_sha at HEAD as a 40-char hex string.
+// Empty string on empty repo (head=0) or transport failure. Used by
+// stateless clients to thread parent_sha into their next commit.
+remote_head_sha(base_url: string, repo_name: string) -> string {
+    body = get_200(url_info(base_url, repo_name))
+    if string.length(body) == 0 { return "" }
+    return string.copy(remote_parse_head_sha(body))
+}
+
+// R286 — combined head_rev + head_sha fetch. One round-trip; caller
+// gets both values back via the tuple. Stateless cmd_commit uses
+// this so we don't pay two /info GETs per commit.
+remote_head(base_url: string, repo_name: string) -> (int, string) {
+    body = get_200(url_info(base_url, repo_name))
+    if string.length(body) == 0 { return 0 - 1, "" }
+    rv  = remote_parse_head_rev(body)
+    sha = string.copy(remote_parse_head_sha(body))
+    return rv, sha
+}
+
+// Returns the server's primary content-address algorithm, or "" on
+// failure. Pre-Phase-6.1 servers omit the field; the Aether parser
+// defaults to "sha1".
+remote_hash_algo(base_url: string, repo_name: string) -> string {
+    body = get_200(url_info(base_url, repo_name))
+    if string.length(body) == 0 { return "" }
+    return remote_parse_hash_algo(body)
+}
+
+
+// =============================================================================
+// client/packed.ae
+// =============================================================================
+
+// Accessors over the packed "N\x02<entry>\x02<entry>\x02..." and
+// "<f0>\x01<f1>\x01..." record shapes produced by client/parse.ae.
+//
+// The existing C side of client/shim.c used to re-parse these strings
+// into struct-of-arrays and hand out per-field accessors. That was
+// ~150 LOC of near-duplicated tokenising across four entry points
+// (log, paths, blame, list) plus a one-off five-field record (info).
+//
+// These helpers fold all of that back into Aether. Each accessor is
+// O(i) in the count which is fine for the kiB-scale arrays we handle
+// on the client. The C side now just stashes the packed string as
+// its opaque handle.
+
+
+// ---- internal helpers ----------------------------------------------------
+
+// Return substring(s, start, n) as a borrowed string. "n" is the
+// length in bytes. Guards against negative/oob by clamping.
+slice_(s: string, start: int, n: int) -> string {
+    slen = string.length(s)
+    if start < 0 { start = 0 }
+    if start > slen { start = slen }
+    stop = start + n
+    if stop < start { stop = start }
+    if stop > slen { stop = slen }
+    return string.substring(s, start, stop)
+}
+
+// Scan `s` starting at byte offset `from` for the first `ch` (a
+// one-character string, typically "\x01" or "\x02"). Returns the
+// absolute offset of the hit or -1.
+scan_from_(s: string, from: int, ch: string) -> int {
+    slen = string.length(s)
+    if from < 0 { from = 0 }
+    if from >= slen { return -1 }
+    // We don't have an "index_of from offset" in std.string yet, so
+    // substring + index_of is the cheapest equivalent. For our sizes
+    // (a few KB per packed blob, tens of entries) this is fine.
+    tail = string.substring(s, from, slen)
+    rel = string.index_of(tail, ch)
+    if rel < 0 { return -1 }
+    return from + rel
+}
+
+// Find the start offset of the packed header's first entry, given a
+// "<N>\x02...." packed string. Returns -1 on malformed input.
+entry_area_start_(packed: string) -> int {
+    hsep = string.index_of(packed, "\x02")
+    if hsep < 0 { return -1 }
+    return hsep + 1
+}
+
+// Return (start, len) for the i-th entry of a packed "<N>\x02e0\x02e1..."
+// string, as two parallel functions. If the entry is out of range or
+// the packed string is malformed, both return -1 / 0.
+entry_start_(packed: string, i: int) -> int {
+    area = entry_area_start_(packed)
+    if area < 0 { return -1 }
+    pos = area
+    k = 0
+    while k < i {
+        sep = scan_from_(packed, pos, "\x02")
+        if sep < 0 { return -1 }
+        pos = sep + 1
+        k = k + 1
+    }
+    return pos
+}
+
+entry_end_(packed: string, start: int) -> int {
+    if start < 0 { return -1 }
+    sep = scan_from_(packed, start, "\x02")
+    if sep < 0 { return string.length(packed) }
+    return sep
+}
+
+// Return the `fi`-th \x01-separated field within packed[start..end].
+// Returns "" for out-of-range fields. Copies the substring so the
+// C caller can free the parent packed string without dangling.
+record_field_(packed: string, start: int, end: int, fi: int) -> string {
+    if start < 0 { return "" }
+    if end < start { return "" }
+    pos = start
+    k = 0
+    while k < fi {
+        sep = scan_from_(packed, pos, "\x01")
+        if sep < 0 { return "" }
+        if sep >= end { return "" }
+        pos = sep + 1
+        k = k + 1
+    }
+    sep = scan_from_(packed, pos, "\x01")
+    if sep < 0 { sep = end }
+    if sep > end { sep = end }
+    // slice_ copies — string.substring returns a fresh string.
+    return string.substring(packed, pos, sep)
+}
+
+// Parse the leading "<N>\x02" count off a packed array-string.
+// Returns -1 if the separator is absent.
+array_count_(packed: string) -> int {
+    hsep = string.index_of(packed, "\x02")
+    if hsep < 0 { return -1 }
+    head = string.substring(packed, 0, hsep)
+    return string.get_int(head)
+}
+
+// ---- log -----------------------------------------------------------------
+
+packed_log_count(packed: string) -> int {
+    if string.length(packed) == 0 { return 0 }
+    n = array_count_(packed)
+    if n < 0 { return 0 }
+    return n
+}
+
+
+packed_log_rev(packed: string, i: int) -> int {
+    start = entry_start_(packed, i)
+    if start < 0 { return -1 }
+    end = entry_end_(packed, start)
+    s = record_field_(packed, start, end, 0)
+    if string.length(s) == 0 { return -1 }
+    return string.get_int(s)
+}
+
+
+packed_log_author(packed: string, i: int) -> string {
+    start = entry_start_(packed, i)
+    if start < 0 { return "" }
+    end = entry_end_(packed, start)
+    return record_field_(packed, start, end, 1)
+}
+
+
+packed_log_date(packed: string, i: int) -> string {
+    start = entry_start_(packed, i)
+    if start < 0 { return "" }
+    end = entry_end_(packed, start)
+    return record_field_(packed, start, end, 2)
+}
+
+
+packed_log_msg(packed: string, i: int) -> string {
+    start = entry_start_(packed, i)
+    if start < 0 { return "" }
+    end = entry_end_(packed, start)
+    return record_field_(packed, start, end, 3)
+}
+
+
+// ---- paths ---------------------------------------------------------------
+//
+// Record shape: "<action>\x01<path>", where action is a single char
+// from {A,M,D,?}.
+
+packed_paths_count(packed: string) -> int {
+    if string.length(packed) == 0 { return 0 }
+    n = array_count_(packed)
+    if n < 0 { return 0 }
+    return n
+}
+
+
+packed_paths_action(packed: string, i: int) -> string {
+    start = entry_start_(packed, i)
+    if start < 0 { return "" }
+    end = entry_end_(packed, start)
+    return record_field_(packed, start, end, 0)
+}
+
+
+packed_paths_path(packed: string, i: int) -> string {
+    start = entry_start_(packed, i)
+    if start < 0 { return "" }
+    end = entry_end_(packed, start)
+    return record_field_(packed, start, end, 1)
+}
+
+
+// ---- blame ---------------------------------------------------------------
+//
+// Record shape: "<rev>\x01<author>\x01<text>".
+
+packed_blame_count(packed: string) -> int {
+    if string.length(packed) == 0 { return 0 }
+    n = array_count_(packed)
+    if n < 0 { return 0 }
+    return n
+}
+
+
+packed_blame_rev(packed: string, i: int) -> int {
+    start = entry_start_(packed, i)
+    if start < 0 { return -1 }
+    end = entry_end_(packed, start)
+    s = record_field_(packed, start, end, 0)
+    if string.length(s) == 0 { return -1 }
+    return string.get_int(s)
+}
+
+
+packed_blame_author(packed: string, i: int) -> string {
+    start = entry_start_(packed, i)
+    if start < 0 { return "" }
+    end = entry_end_(packed, start)
+    return record_field_(packed, start, end, 1)
+}
+
+
+packed_blame_text(packed: string, i: int) -> string {
+    start = entry_start_(packed, i)
+    if start < 0 { return "" }
+    end = entry_end_(packed, start)
+    return record_field_(packed, start, end, 2)
+}
+
+
+// ---- props ---------------------------------------------------------------
+//
+// Record shape: "<name>\x01<value>". Produced by remote_parse_props over a
+// JSON {k:v,...} object.
+
+packed_props_count(packed: string) -> int {
+    if string.length(packed) == 0 { return 0 }
+    n = array_count_(packed)
+    if n < 0 { return 0 }
+    return n
+}
+
+
+packed_props_name(packed: string, i: int) -> string {
+    start = entry_start_(packed, i)
+    if start < 0 { return "" }
+    end = entry_end_(packed, start)
+    return record_field_(packed, start, end, 0)
+}
+
+
+packed_props_value(packed: string, i: int) -> string {
+    start = entry_start_(packed, i)
+    if start < 0 { return "" }
+    end = entry_end_(packed, start)
+    return record_field_(packed, start, end, 1)
+}
+
+
+// ---- list ----------------------------------------------------------------
+//
+// Record shape: "<name>\x01<kind-char>", where kind-char is 'd' or 'f'.
+// Accessors map kind-char to "dir" / "file" so C can return a stable
+// string without its own lookup.
+
+packed_list_count(packed: string) -> int {
+    if string.length(packed) == 0 { return 0 }
+    n = array_count_(packed)
+    if n < 0 { return 0 }
+    return n
+}
+
+
+packed_list_name(packed: string, i: int) -> string {
+    start = entry_start_(packed, i)
+    if start < 0 { return "" }
+    end = entry_end_(packed, start)
+    return record_field_(packed, start, end, 0)
+}
+
+
+packed_list_kind(packed: string, i: int) -> string {
+    start = entry_start_(packed, i)
+    if start < 0 { return "" }
+    end = entry_end_(packed, start)
+    kc = record_field_(packed, start, end, 1)
+    if string.equals(kc, "d") == 1 { return "dir" }
+    return "file"
+}
+
+
+// ---- info (single record) ------------------------------------------------
+//
+// Shape: "<rev>\x01<author>\x01<date>\x01<msg>\x01<root>".
+
+packed_info_rev(packed: string) -> int {
+    if string.length(packed) == 0 { return -1 }
+    end = string.length(packed)
+    s = record_field_(packed, 0, end, 0)
+    if string.length(s) == 0 { return -1 }
+    return string.get_int(s)
+}
+
+
+packed_info_author(packed: string) -> string {
+    end = string.length(packed)
+    return record_field_(packed, 0, end, 1)
+}
+
+
+packed_info_date(packed: string) -> string {
+    end = string.length(packed)
+    return record_field_(packed, 0, end, 2)
+}
+
+
+packed_info_msg(packed: string) -> string {
+    end = string.length(packed)
+    return record_field_(packed, 0, end, 3)
+}
+
+
+packed_info_root(packed: string) -> string {
+    end = string.length(packed)
+    return record_field_(packed, 0, end, 4)
+}
+
+
+
+// =============================================================================
+// client/parse.ae
+// =============================================================================
+
+// JSON-body parsers for RA client GETs. The C side still owns the
+// HTTP + auth-header + curl lifecycle (std.http lacks custom-
+// header support), so each C accessor does:
+//
+//   1. curl GET URL with X-Svnae-User/Superuser headers
+//   2. feed response body to an Aether parser here
+//   3. return the scalar / string the parser extracted
+//
+// Each parser returns a sentinel on failure that the C caller
+// translates to its conventional "NULL / -1 / ..." shape.
+
+
+// Parse {"head": N} → N. Returns -1 on malformed JSON or missing
+// field; the C caller maps that to "HTTP failure or absent head".
+remote_parse_head_rev(body: string) -> int {
+    if string.length(body) == 0 { return -1 }
+    root, err = json.parse(body)
+    if string.length(err) > 0 { return -1 }
+    h, gerr = json.object_get(root, "head")
+    if string.length(gerr) > 0 { json.free(root); return -1 }
+    rv = json.get_int(h)
+    json.free(root)
+    return rv
+}
+
+// R286 — parse {"head_sha": "..."} from /info. Returns "" if the
+// field is missing (empty repo, head=0) or the body is malformed.
+// Used by clients to thread parent_sha into their next commit.
+remote_parse_head_sha(body: string) -> string {
+    if string.length(body) == 0 { return "" }
+    root, err = json.parse(body)
+    if string.length(err) > 0 { return "" }
+    s = get_string_field(root, "head_sha")
+    json.free(root)
+    return s
+}
+
+// Parse {"rev": N} → N. Same shape as remote_parse_head_rev but for
+// the commit/copy/branch-create response bodies. Returns -1 on any
+// failure.
+remote_parse_rev_response(body: string) -> int {
+    if string.length(body) == 0 { return -1 }
+    root, err = json.parse(body)
+    if string.length(err) > 0 { return -1 }
+    h, gerr = json.object_get(root, "rev")
+    if string.length(gerr) > 0 { json.free(root); return -1 }
+    if h == null { json.free(root); return -1 }
+    rv = json.get_int(h)
+    json.free(root)
+    return rv
+}
+
+// R286 — parse {"rev_sha": "..."} from a commit/copy/branch-create
+// response. Returns "" on miss (e.g. older server's rev-only response).
+remote_parse_rev_sha_response(body: string) -> string {
+    if string.length(body) == 0 { return "" }
+    root, err = json.parse(body)
+    if string.length(err) > 0 { return "" }
+    s = get_string_field(root, "rev_sha")
+    json.free(root)
+    return s
+}
+
+// Parse {"hash_algo": "sha1" | "sha256"} → algo name. Older
+// servers (pre Phase 6.1) omit the field; in that case we default
+// to "sha1" so callers can forge ahead.
+// Returns "" only on malformed JSON / empty body.
+remote_parse_hash_algo(body: string) -> string {
+    if string.length(body) == 0 { return "" }
+    root, err = json.parse(body)
+    if string.length(err) > 0 { return "" }
+    result = "sha1"
+    h, gerr = json.object_get(root, "hash_algo")
+    if string.length(gerr) == 0 {
+        s, _ = json.get_string(h)
+        if string.length(s) > 0 { result = string.copy(s) }
+    }
+    json.free(root)
+    return result
+}
+
+// Parse a rev-info JSON response into a packed string:
+//   "<rev_int>\x01<author>\x01<date>\x01<msg>\x01<root>"
+// The C caller splits on \x01 and populates its remote_info
+// struct. Returns "" on malformed JSON so the caller can fail
+// the whole request.
+//
+// Absent individual string fields become empty segments; absent
+// rev becomes "-1".
+remote_parse_info_rev(body: string) -> string {
+    if string.length(body) == 0 { return "" }
+    root, err = json.parse(body)
+    if string.length(err) > 0 { return "" }
+
+    rev_str = "-1"
+    jr, err1 = json.object_get(root, "rev")
+    if string.length(err1) == 0 {
+        rev_str = string.from_int(json.get_int(jr))
+    }
+
+    author = get_string_field(root, "author")
+    date   = get_string_field(root, "date")
+    msg    = get_string_field(root, "msg")
+    root_s = get_string_field(root, "root")
+
+    json.free(root)
+
+    // Pack as "<rev>\x01<author>\x01<date>\x01<msg>\x01<root>".
+    out = string.concat(rev_str, "\x01")
+    out = string.concat(out, author)
+    out = string.concat(out, "\x01")
+    out = string.concat(out, date)
+    out = string.concat(out, "\x01")
+    out = string.concat(out, msg)
+    out = string.concat(out, "\x01")
+    out = string.concat(out, root_s)
+    return out
+}
+
+// Shared helper: object[key] → string, defaulting to "".
+// Caller is responsible for json.free'ing the root; the borrowed
+// string returned by json.get_string is copied so the return
+// outlives the parent object.
+get_string_field(obj: ptr, key: string) -> string {
+    v, err = json.object_get(obj, key)
+    if string.length(err) > 0 { return "" }
+    s, serr = json.get_string(v)
+    if string.length(serr) > 0 { return "" }
+    return string.copy(s)
+}
+
+// Parse a log-list JSON response into a packed string of entries
+// separated by \x02 (record separator). Each entry is itself
+// packed as "<rev>\x01<author>\x01<date>\x01<msg>" (same shape
+// as remote_parse_info_rev minus the root field).
+//
+// C caller splits on \x02 to get entries, then on \x01 to get
+// fields, populating struct log_entry[].
+//
+// Returns "" on malformed JSON or when entries[] is missing.
+remote_parse_log(body: string) -> string {
+    if string.length(body) == 0 { return "" }
+    root, err = json.parse(body)
+    if string.length(err) > 0 { return "" }
+
+    jentries, jerr = json.object_get(root, "entries")
+    if string.length(jerr) > 0 { json.free(root); return "" }
+    if jentries == null { json.free(root); return "" }
+
+    n = json.array_size(jentries)
+    out = ""
+    i = 0
+    while i < n {
+        entry, _ae = json.array_get(jentries, i)
+        rev = -1
+        jr, rerr = json.object_get(entry, "rev")
+        if string.length(rerr) == 0 { rev = json.get_int(jr) }
+
+        author = get_string_field(entry, "author")
+        date   = get_string_field(entry, "date")
+        msg    = get_string_field(entry, "msg")
+
+        packed = string.concat(string.from_int(rev), "\x01")
+        packed = string.concat(packed, author)
+        packed = string.concat(packed, "\x01")
+        packed = string.concat(packed, date)
+        packed = string.concat(packed, "\x01")
+        packed = string.concat(packed, msg)
+
+        if i == 0 { out = packed }
+        if i > 0 {
+            out = string.concat(out, "\x02")
+            out = string.concat(out, packed)
+        }
+        i = i + 1
+    }
+
+    // Prepend "N\x02" — record count — so the C caller doesn't
+    // have to pre-scan for \x02 count.
+    header = string.concat(string.from_int(n), "\x02")
+    json.free(root)
+    if n == 0 { return header }
+    return string.concat(header, out)
+}
+
+// Parse paths-changed JSON into packed "N\x02<entry>\x02<entry>..."
+// where each entry is "<action>\x01<path>". action is a single
+// char from {A,M,D,?}.
+remote_parse_paths(body: string) -> string {
+    if string.length(body) == 0 { return "" }
+    root, err = json.parse(body)
+    if string.length(err) > 0 { return "" }
+
+    jentries, jerr = json.object_get(root, "entries")
+    if string.length(jerr) > 0 { json.free(root); return "" }
+    if jentries == null { json.free(root); return "" }
+
+    n = json.array_size(jentries)
+    out = ""
+    i = 0
+    while i < n {
+        entry, _ = json.array_get(jentries, i)
+        action = get_string_field(entry, "action")
+        if string.length(action) == 0 { action = "?" }
+        path = get_string_field(entry, "path")
+
+        packed = string.concat(action, "\x01")
+        packed = string.concat(packed, path)
+
+        if i == 0 { out = packed }
+        if i > 0 {
+            out = string.concat(out, "\x02")
+            out = string.concat(out, packed)
+        }
+        i = i + 1
+    }
+
+    header = string.concat(string.from_int(n), "\x02")
+    json.free(root)
+    if n == 0 { return header }
+    return string.concat(header, out)
+}
+
+// Parse a props JSON object {k: v, k: v, ...} into
+// "N\x02<key>\x01<value>\x02<key>\x01<value>..."
+remote_parse_props(body: string) -> string {
+    if string.length(body) == 0 { return "" }
+    root, err = json.parse(body)
+    if string.length(err) > 0 { return "" }
+
+    n = json.object_size(root)
+    out = ""
+    i = 0
+    while i < n {
+        key, jv, _eerr = json.object_entry(root, i)
+        sv, _serr = json.get_string(jv)
+
+        packed = string.concat(key, "\x01")
+        packed = string.concat(packed, sv)
+
+        if i == 0 { out = packed }
+        if i > 0 {
+            out = string.concat(out, "\x02")
+            out = string.concat(out, packed)
+        }
+        i = i + 1
+    }
+
+    header = string.concat(string.from_int(n), "\x02")
+    json.free(root)
+    if n == 0 { return header }
+    return string.concat(header, out)
+}
+
+// Parse a blame JSON {"lines":[{rev,author,text}, ...]} into
+// "N\x02<rev>\x01<author>\x01<text>\x02..."
+remote_parse_blame(body: string) -> string {
+    if string.length(body) == 0 { return "" }
+    root, err = json.parse(body)
+    if string.length(err) > 0 { return "" }
+
+    jlines, lerr = json.object_get(root, "lines")
+    if string.length(lerr) > 0 { json.free(root); return "" }
+    if jlines == null { json.free(root); return "" }
+
+    n = json.array_size(jlines)
+    out = ""
+    i = 0
+    while i < n {
+        entry, _ = json.array_get(jlines, i)
+        rev = -1
+        jr, rerr = json.object_get(entry, "rev")
+        if string.length(rerr) == 0 { rev = json.get_int(jr) }
+
+        author = get_string_field(entry, "author")
+        text   = get_string_field(entry, "text")
+
+        packed = string.concat(string.from_int(rev), "\x01")
+        packed = string.concat(packed, author)
+        packed = string.concat(packed, "\x01")
+        packed = string.concat(packed, text)
+
+        if i == 0 { out = packed }
+        if i > 0 {
+            out = string.concat(out, "\x02")
+            out = string.concat(out, packed)
+        }
+        i = i + 1
+    }
+
+    header = string.concat(string.from_int(n), "\x02")
+    json.free(root)
+    if n == 0 { return header }
+    return string.concat(header, out)
+}
+
+// Parse a list JSON {"entries":[{name,kind}, ...]} into
+// "N\x02<name>\x01<kind-char>\x02..."
+// kind-char is 'd' for "dir", 'f' otherwise (the existing C
+// remote_list accessors only distinguish dir vs file).
+remote_parse_list(body: string) -> string {
+    if string.length(body) == 0 { return "" }
+    root, err = json.parse(body)
+    if string.length(err) > 0 { return "" }
+
+    jentries, jerr = json.object_get(root, "entries")
+    if string.length(jerr) > 0 { json.free(root); return "" }
+    if jentries == null { json.free(root); return "" }
+
+    n = json.array_size(jentries)
+    out = ""
+    i = 0
+    while i < n {
+        entry, _ = json.array_get(jentries, i)
+        name = get_string_field(entry, "name")
+        kind = get_string_field(entry, "kind")
+        kind_c = "f"
+        if string.equals(kind, "dir") == 1 { kind_c = "d" }
+
+        packed = string.concat(name, "\x01")
+        packed = string.concat(packed, kind_c)
+
+        if i == 0 { out = packed }
+        if i > 0 {
+            out = string.concat(out, "\x02")
+            out = string.concat(out, packed)
+        }
+        i = i + 1
+    }
+
+    header = string.concat(string.from_int(n), "\x02")
+    json.free(root)
+    if n == 0 { return header }
+    return string.concat(header, out)
+}
+
+// Round 276 / Phase 2.3 — parse {"runs":[{lo,hi},…]} from
+// GET /merge_runs/.../<lo>/<hi> into the same "lo:hi\n..." packed
+// string wc_merge has consumed since the property era. wc_merge
+// can pass the result through unchanged.
+remote_parse_merge_runs(body: string) -> string {
+    if string.length(body) == 0 { return "" }
+    root, err = json.parse(body)
+    if string.length(err) > 0 { return "" }
+    jarr, jerr = json.object_get(root, "runs")
+    if string.length(jerr) > 0 { json.free(root); return "" }
+    if jarr == null { json.free(root); return "" }
+    n = json.array_size(jarr)
+    out = ""
+    i = 0
+    while i < n {
+        e, _ = json.array_get(jarr, i)
+        if e != null {
+            jlo, _ = json.object_get(e, "lo")
+            jhi, _ = json.object_get(e, "hi")
+            if jlo != null {
+                if jhi != null {
+                    lo = json.get_int(jlo)
+                    hi = json.get_int(jhi)
+                    out = string.concat(out, "${lo}:${hi}\n")
+                }
+            }
+        }
+        i = i + 1
+    }
+    json.free(root)
+    return out
+}
+
+// Round 274 / Phase 2.2 — parse {"integrated":["sha","sha",...]}
+// from GET /merged/<target>/<source> into a "\n"-separated SHA
+// list, ready to print or further process.
+remote_parse_merged(body: string) -> string {
+    if string.length(body) == 0 { return "" }
+    root, err = json.parse(body)
+    if string.length(err) > 0 { return "" }
+
+    jarr, jerr = json.object_get(root, "integrated")
+    if string.length(jerr) > 0 { json.free(root); return "" }
+    if jarr == null { json.free(root); return "" }
+
+    n = json.array_size(jarr)
+    out = ""
+    i = 0
+    while i < n {
+        e, _ = json.array_get(jarr, i)
+        if e != null {
+            sha, eerr = json.get_string(e)
+            if string.length(eerr) == 0 {
+                if string.length(sha) > 0 {
+                    out = string.concat(out, sha)
+                    out = string.concat(out, "\n")
+                }
+            }
+        }
+        i = i + 1
+    }
+    json.free(root)
+    return out
+}
+
+// Parse a /hashes JSON {"primary":..., "secondaries":[{algo,hash},...]}
+// into "N\x02<algo>\x01<hash>\x02..." (same two-separator shape as
+// the other remote_parse_* helpers). Returns "0\x02" on a hash response
+// with no secondaries, "" on malformed JSON or empty body.
+remote_parse_hashes_secondaries(body: string) -> string {
+    if string.length(body) == 0 { return "" }
+    root, err = json.parse(body)
+    if string.length(err) > 0 { return "" }
+
+    jsec, jse = json.object_get(root, "secondaries")
+    if string.length(jse) > 0 { json.free(root); return "0\x02" }
+    if jsec == null { json.free(root); return "0\x02" }
+
+    n = json.array_size(jsec)
+    out = ""
+    i = 0
+    while i < n {
+        entry, _ = json.array_get(jsec, i)
+        algo = get_string_field(entry, "algo")
+        h    = get_string_field(entry, "hash")
+
+        packed = string.concat(algo, "\x01")
+        packed = string.concat(packed, h)
+
+        if i == 0 { out = packed }
+        if i > 0 {
+            out = string.concat(out, "\x02")
+            out = string.concat(out, packed)
+        }
+        i = i + 1
+    }
+
+    header = string.concat(string.from_int(n), "\x02")
+    json.free(root)
+    if n == 0 { return header }
+    return string.concat(header, out)
+}
+
+
+// =============================================================================
+// client/urls.ae
+// =============================================================================
+
+// URL builders for the REST client. Every call site in client/shim.c
+// snprintf's something like "<base>/repos/<repo>/rev/<N>/..." — these
+// helpers centralise the shape.
+
+
+// "<base>/repos/<repo>/rev/<N>/info"
+url_rev_info(base: string, repo: string, rev: int) -> string {
+    out = rev_prefix(base, repo, rev)
+    return string.concat(out, "/info")
+}
+
+// "<base>/repos/<repo>/rev/<N>/paths"
+url_rev_paths(base: string, repo: string, rev: int) -> string {
+    out = rev_prefix(base, repo, rev)
+    return string.concat(out, "/paths")
+}
+
+// "<base>/repos/<repo>/rev/<N>/cat/<path>"
+url_rev_cat(base: string, repo: string, rev: int, path: string) -> string {
+    out = rev_prefix(base, repo, rev)
+    out = string.concat(out, "/cat/")
+    return string.concat(out, path)
+}
+
+// "<base>/repos/<repo>/rev/<N>/list[/<path>]" — path may be empty.
+url_rev_list(base: string, repo: string, rev: int, path: string) -> string {
+    out = rev_prefix(base, repo, rev)
+    if string.length(path) == 0 { return string.concat(out, "/list") }
+    out = string.concat(out, "/list/")
+    return string.concat(out, path)
+}
+
+// "<base>/repos/<repo>/rev/<N>/props[/<path>]" — path may be empty.
+url_rev_props(base: string, repo: string, rev: int, path: string) -> string {
+    out = rev_prefix(base, repo, rev)
+    if string.length(path) == 0 { return string.concat(out, "/props") }
+    out = string.concat(out, "/props/")
+    return string.concat(out, path)
+}
+
+// "<base>/repos/<repo>/rev/<N>/blame/<path>"
+url_rev_blame(base: string, repo: string, rev: int, path: string) -> string {
+    out = rev_prefix(base, repo, rev)
+    out = string.concat(out, "/blame/")
+    return string.concat(out, path)
+}
+
+// "<base>/repos/<repo>/rev/<N>/hashes/<path>"
+url_rev_hashes(base: string, repo: string, rev: int, path: string) -> string {
+    out = rev_prefix(base, repo, rev)
+    out = string.concat(out, "/hashes/")
+    return string.concat(out, path)
+}
+
+// "<base>/repos/<repo>/info"
+url_info(base: string, repo: string) -> string {
+    out = string.concat(base, "/repos/")
+    out = string.concat(out, repo)
+    return string.concat(out, "/info")
+}
+
+// "<base>/repos/<repo>/log"
+url_log(base: string, repo: string) -> string {
+    out = string.concat(base, "/repos/")
+    out = string.concat(out, repo)
+    return string.concat(out, "/log")
+}
+
+// "<base>/repos/<repo>/commit"
+url_commit(base: string, repo: string) -> string {
+    out = string.concat(base, "/repos/")
+    out = string.concat(out, repo)
+    return string.concat(out, "/commit")
+}
+
+// "<base>/repos/<repo>/copy"
+url_copy(base: string, repo: string) -> string {
+    out = string.concat(base, "/repos/")
+    out = string.concat(out, repo)
+    return string.concat(out, "/copy")
+}
+
+// "<base>/repos/<repo>/branches/<name>/create"
+url_branches_create(base: string, repo: string, branch_name: string) -> string {
+    out = string.concat(base, "/repos/")
+    out = string.concat(out, repo)
+    out = string.concat(out, "/branches/")
+    out = string.concat(out, branch_name)
+    return string.concat(out, "/create")
+}
+
+// Helper: "<base>/repos/<repo>/rev/<N>"
+rev_prefix(base: string, repo: string, rev: int) -> string {
+    out = string.concat(base, "/repos/")
+    out = string.concat(out, repo)
+    out = string.concat(out, "/rev/")
+    return string.concat(out, string.from_int(rev))
+}
+
+
+// =============================================================================
+// client/verify.ae
+// =============================================================================
+
+// Recursive Merkle-tree verification of a remote rev.
+//
+// `client_verify_full(base, repo, rev, with_secondaries)` walks
+// the tree at `rev` top-down, re-hashes every file content and dir
+// blob locally using the server's advertised algorithm, and confirms:
+//
+//   1. Each file/dir node's locally-computed content hash matches
+//      the X-Svnae-Node-Hash header the server returned.
+//   2. For each directory, the re-assembled blob (lines
+//      "<kind> <child-sha> <name>\n", sorted) hashes to the same
+//      sha that the parent dir pointed at.
+//   3. The root-dir sha equals the rev blob's "root" field.
+//
+// When with_secondaries=1, the tree is re-walked after the primary
+// pass and every file's secondary-hash entries are re-verified.
+//
+// Returns:
+//    0  full verification success
+//   -1  I/O / protocol error (diagnostic on stderr)
+//   -2  hash mismatch (diagnostic on stderr)
+//
+// Round 51 ported this from ~410 lines of C in client/shim.c.
+
+
+
+// URL builders (Aether-side already).
+
+// HTTP via std.http.client (the round-46 helper). Returns std.http.client
+// response handle; call accessors then free.
+
+// Server-info accessors (still C-side handle for now).
+
+// Path joiner: append `name` to `prefix` with a `/`, dropping the
+// separator when prefix is empty (so root-relative paths stay clean).
+extern path_join_rel(prefix: string, name: string) -> string
+
+// List parser already lives in client/parse.ae + client/packed.ae.
+
+// Secondary-hashes parser. Returns a packed
+// "N\x02<algo>\x01<hex>\x02..." string that the C helpers below
+// walk; we re-use them so the secondary parser doesn't need its own
+// per-field accessors.
+
+// stderr writer for diagnostics.
+verify_stderr_(s: string) -> int {
+    return io.stderr_write(s, string.length(s))
+}
+
+// Counter is a 2-element std.intarr (slot 0 = files, slot 1 =
+// secondaries). Round 147 retired the C-side verify_counter
+// struct + 6 accessors; std.intarr's get_unchecked / set_unchecked
+// give the same semantics in Aether.
+
+// Entry-list builder used by verify_dir was a C-side struct-of-
+// arrays in Round 146; Round 148 ported it to three parallel
+// Aether containers (std.list of names, std.intarr of kinds,
+// std.list of shas) and an inline insertion sort below. Tree
+// fan-out is small (typically <100 entries) so O(n²) sort cost is
+// invisible.
+
+// Sort the three parallel containers in lockstep by `names[i]`.
+// Insertion sort, stable, in-place.
+sort_entries_(names: ptr, kinds: ptr, shas: ptr, n: int) {
+    i = 1
+    while i < n {
+        j = i
+        done = 0
+        while j > 0 {
+            if done == 0 {
+                a = list_get_raw(names, j - 1)
+                b = list_get_raw(names, j)
+                if string.compare(a, b) <= 0 {
+                    done = 1
+                }
+                if done == 0 {
+                    list_set(names, j - 1, b)
+                    list_set(names, j, a)
+                    ka = intarr_get_unchecked(kinds, j - 1)
+                    kb = intarr_get_unchecked(kinds, j)
+                    intarr_set_unchecked(kinds, j - 1, kb)
+                    intarr_set_unchecked(kinds, j, ka)
+                    sa = list_get_raw(shas, j - 1)
+                    sb = list_get_raw(shas, j)
+                    list_set(shas, j - 1, sb)
+                    list_set(shas, j, sa)
+                    j = j - 1
+                }
+            }
+            if done == 1 { j = 0 }
+        }
+        i = i + 1
+    }
+}
+
+// ---- helpers ---------------------------------------------------------
+
+// Hash with the algo and return ("", err) on failure.
+local_hash(algo: string, data: string, length: int) -> string {
+    digest, err = cryptography.hash_hex(algo, data, length)
+    if string.length(err) > 0 { return "" }
+    return digest
+}
+
+// One GET that returns (body, status, node_hash, ok-flag). Frees the
+// response handle on the way out.
+do_get(url: string) -> ptr {
+    return get(url)
+}
+
+// Verify a single file. Returns the locally-computed sha on success,
+// "" on I/O failure or hash mismatch (with diagnostics on stderr).
+verify_file(base: string, repo: string, rev: int, algo: string, rel: string) -> string {
+    url = url_rev_cat(base, repo, rev, rel)
+    resp = do_get(url)
+    if resp == null {
+        verify_stderr_("verify: GET failed for ${rel}\n")
+        return ""
+    }
+    status = response_status(resp)
+    if status != 200 {
+        verify_stderr_("verify: GET failed for ${rel} (status ${status})\n")
+        response_free(resp)
+        return ""
+    }
+    body = response_body(resp)
+    body_owned = string.copy(body)
+    server_hash = response_header(resp, "X-Svnae-Node-Hash")
+    server_hash_owned = string.copy(server_hash)
+    response_free(resp)
+
+    clen = string.length(body_owned)
+    local = local_hash(algo, body_owned, clen)
+    if string.length(local) == 0 { return "" }
+
+    if string.equals(local, server_hash_owned) == 0 {
+        verify_stderr_("verify: hash mismatch at /${rel}\n")
+        verify_stderr_("  server: ${server_hash_owned}\n")
+        verify_stderr_("  local:  ${local}\n")
+        return ""
+    }
+    return local
+}
+
+// Verify a directory recursively. Returns its locally-recomputed sha
+// on success, "" on any failure (which includes any descendant
+// failure — diagnostic already printed by the leaf).
+verify_dir(base: string, repo: string, rev: int, algo: string, rel: string) -> string {
+    url = url_rev_list(base, repo, rev, rel)
+    resp = do_get(url)
+    if resp == null {
+        verify_stderr_("verify: GET /list failed for /${rel}\n")
+        return ""
+    }
+    status = response_status(resp)
+    if status != 200 {
+        verify_stderr_("verify: GET /list failed for /${rel} (status ${status})\n")
+        response_free(resp)
+        return ""
+    }
+    body = response_body(resp)
+    body_owned = string.copy(body)
+    dir_hdr = response_header(resp, "X-Svnae-Node-Hash")
+    dir_hdr_owned = string.copy(dir_hdr)
+    response_free(resp)
+
+    packed = remote_parse_list(body_owned)
+    if string.length(packed) == 0 { return "" }
+    packed_owned = string.copy(packed)
+
+    n = packed_list_count(packed_owned)
+    // Three parallel containers: names + shas in std.list, kinds in
+    // a fixed-size std.intarr (size known up-front). Round 148
+    // ported these from the C-side verify_entries struct.
+    names = list_new()
+    shas  = list_new()
+    kinds, _kerr = intarr.new(n)
+
+    i = 0
+    while i < n {
+        nm = packed_list_name(packed_owned, i)
+        kd = packed_list_kind(packed_owned, i)
+        kind_c = 102   // 'f'
+        if string.equals(kd, "dir") == 1 { kind_c = 100 }   // 'd'
+        list_add_raw(names, string.copy(nm))
+        list_add_raw(shas, string.copy(""))
+        intarr_set_unchecked(kinds, i, kind_c)
+        i = i + 1
+    }
+
+    // Recurse into every child to compute its sha.
+    i = 0
+    aborted = 0
+    while i < n {
+        if aborted == 0 {
+            name = list_get_raw(names, i)
+            kind_c = intarr_get_unchecked(kinds, i)
+            child_rel = path_join_rel(rel, name)
+            child_sha = ""
+            if kind_c == 100 {
+                child_sha = verify_dir(base, repo, rev, algo, child_rel)
+            } else {
+                child_sha = verify_file(base, repo, rev, algo, child_rel)
+            }
+            if string.length(child_sha) == 0 {
+                aborted = 1
+            }
+            if aborted == 0 {
+                list_set(shas, i, string.copy(child_sha))
+            }
+        }
+        i = i + 1
+    }
+    if aborted == 1 {
+        list_free(names)
+        list_free(shas)
+        intarr_free(kinds)
+        return ""
+    }
+
+    // Rebuild the dir blob (sorted by name) and hash it. Line format:
+    //   "<kind> <sha> <name>\n"
+    sort_entries_(names, kinds, shas, n)
+    blob = ""
+    i = 0
+    while i < n {
+        name = list_get_raw(names, i)
+        sha  = list_get_raw(shas, i)
+        kind_c = intarr_get_unchecked(kinds, i)
+        kind_s = "f"
+        if kind_c == 100 { kind_s = "d" }
+        line = "${kind_s} ${sha} ${name}\n"
+        blob = string.concat(blob, line)
+        i = i + 1
+    }
+    blob_len = string.length(blob)
+    local = local_hash(algo, blob, blob_len)
+    list_free(names)
+    list_free(shas)
+    intarr_free(kinds)
+
+    if string.length(local) == 0 { return "" }
+    if string.equals(local, dir_hdr_owned) == 0 {
+        rel_disp = rel
+        if string.length(rel_disp) == 0 { rel_disp = "" }
+        verify_stderr_("verify: dir hash mismatch at /${rel_disp}\n")
+        verify_stderr_("  server: ${dir_hdr_owned}\n")
+        verify_stderr_("  local:  ${local}\n")
+        return ""
+    }
+    return local
+}
+
+// Walk the tree at `rel` and re-verify every file's secondary
+// hashes. Returns 0 match, -1 I/O error, -2 mismatch.
+verify_secondaries_in_dir(base: string, repo: string, rev: int,
+                           rel: string, counter: ptr) -> int {
+    url = url_rev_list(base, repo, rev, rel)
+    resp = do_get(url)
+    if resp == null { return -1 }
+    status = response_status(resp)
+    if status != 200 { response_free(resp); return -1 }
+    body = response_body(resp)
+    body_owned = string.copy(body)
+    response_free(resp)
+
+    packed = remote_parse_list(body_owned)
+    if string.length(packed) == 0 { return -1 }
+    packed_owned = string.copy(packed)
+    n = packed_list_count(packed_owned)
+
+    overall = 0
+    i = 0
+    while i < n {
+        name = packed_list_name(packed_owned, i)
+        kd   = packed_list_kind(packed_owned, i)
+        name_owned = string.copy(name)
+        child_rel = path_join_rel(rel, name_owned)
+
+        if string.equals(kd, "dir") == 1 {
+            rc = verify_secondaries_in_dir(base, repo, rev, child_rel, counter)
+            if rc != 0 {
+                if overall == 0 { overall = rc }
+            }
+        } else {
+            rc = verify_one_file_secondaries(base, repo, rev, child_rel, counter)
+            if rc != 0 {
+                if overall == 0 { overall = rc }
+            }
+            intarr_set_unchecked(counter, 0,
+                intarr_get_unchecked(counter, 0) + 1)
+        }
+        i = i + 1
+    }
+    return overall
+}
+
+// Fetch /cat + /hashes for one file, re-hash for every declared
+// secondary, compare. Returns 0 match, -1 I/O, -2 mismatch.
+verify_one_file_secondaries(base: string, repo: string, rev: int,
+                             rel: string, counter: ptr) -> int {
+    cat_url = url_rev_cat(base, repo, rev, rel)
+    cresp = do_get(cat_url)
+    if cresp == null { return -1 }
+    if response_status(cresp) != 200 {
+        response_free(cresp)
+        return -1
+    }
+    cbody = response_body(cresp)
+    cbody_owned = string.copy(cbody)
+    response_free(cresp)
+    body_len = string.length(cbody_owned)
+
+    h_url = url_rev_hashes(base, repo, rev, rel)
+    hresp = do_get(h_url)
+    if hresp == null { return -1 }
+    if response_status(hresp) != 200 {
+        response_free(hresp)
+        return -1
+    }
+    hbody = response_body(hresp)
+    hbody_owned = string.copy(hbody)
+    response_free(hresp)
+
+    sec_packed = remote_parse_hashes_secondaries(hbody_owned)
+    if string.length(sec_packed) == 0 { return 0 }   // no secondaries
+    sec_owned = string.copy(sec_packed)
+
+    // Walk the packed string: "<n>\x02<algo>\x01<hex>\x02..."
+    // Use string.index_of_from to step through.
+    n_end = string.index_of(sec_owned, "\x02")
+    if n_end < 0 { return -1 }
+    n_str = string.substring(sec_owned, 0, n_end)
+    if string.try_int(n_str) == 0 { return -1 }
+    sec_n = string.get_int(n_str)
+    pos = n_end + 1
+
+    overall = 0
+    si = 0
+    while si < sec_n {
+        entry_end = string.index_of_from(sec_owned, "\x02", pos)
+        if entry_end < 0 { entry_end = string.length(sec_owned) }
+        mid = string.index_of_from(sec_owned, "\x01", pos)
+        if mid < 0 { return -1 }
+        if mid >= entry_end { return -1 }
+        algo_s = string.substring(sec_owned, pos, mid)
+        server_hex = string.substring(sec_owned, mid + 1, entry_end)
+        local = local_hash(algo_s, cbody_owned, body_len)
+        if string.equals(local, server_hex) == 1 {
+            intarr_set_unchecked(counter, 1,
+                intarr_get_unchecked(counter, 1) + 1)
+        } else {
+            verify_stderr_("verify: secondary ${algo_s} mismatch at /${rel}\n")
+            verify_stderr_("  server: ${server_hex}\n")
+            verify_stderr_("  local:  ${local}\n")
+            if overall == 0 { overall = -2 }
+        }
+        pos = entry_end + 1
+        si = si + 1
+    }
+    return overall
+}
+
+// Public entry. Prints a one-line summary on success.
+client_verify_full(base_url: string, repo_name: string, rev: int, with_secondaries: int) -> int {
+    algo_raw = remote_hash_algo(base_url, repo_name)
+    if algo_raw == null {
+        verify_stderr_("verify: server info unavailable\n")
+        return -1
+    }
+    algo = string.copy(algo_raw)
+    remote_free(algo_raw)
+    if string.length(algo) == 0 {
+        verify_stderr_("verify: server info unavailable\n")
+        return -1
+    }
+
+    info = remote_info_rev(base_url, repo_name, rev)
+    if info == null {
+        verify_stderr_("verify: rev ${rev} info unavailable\n")
+        return -1
+    }
+    claimed_root = remote_info_root(info)
+    claimed_root_owned = string.copy(claimed_root)
+    remote_info_free(info)
+    if string.length(claimed_root_owned) == 0 {
+        verify_stderr_("verify: rev ${rev} has no root sha in /info\n")
+        return -1
+    }
+
+    root_sha = verify_dir(base_url, repo_name, rev, algo, "")
+    if string.length(root_sha) == 0 { return -2 }
+
+    if string.equals(root_sha, claimed_root_owned) == 0 {
+        verify_stderr_("verify: root sha mismatch\n")
+        verify_stderr_("  rev-blob root: ${claimed_root_owned}\n")
+        verify_stderr_("  recomputed:    ${root_sha}\n")
+        return -2
+    }
+
+    files = 0
+    sec_count = 0
+    if with_secondaries == 1 {
+        counter, _err = intarr.new(2)
+        sec_rc = verify_secondaries_in_dir(base_url, repo_name, rev, "", counter)
+        files = intarr_get_unchecked(counter, 0)
+        sec_count = intarr_get_unchecked(counter, 1)
+        intarr_free(counter)
+        if sec_rc != 0 {
+            verify_stderr_("verify: secondary check failed (rc=${sec_rc})\n")
+            return sec_rc
+        }
+        println("verify: OK (algo=${algo}, root=${root_sha}, ${files} file(s), ${sec_count} secondary hash(es) verified)")
+    } else {
+        println("verify: OK (algo=${algo}, root=${root_sha})")
+    }
+    return 0
+}
+
+client_verify(base_url: string, repo_name: string, rev: int) -> int {
+    return client_verify_full(base_url, repo_name, rev, 0)
+}
+

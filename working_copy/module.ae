@@ -29,6 +29,7 @@ import std.os
 import std.string
 import std.zlib
 import util
+import client
 
 
 // =============================================================================
@@ -49,21 +50,8 @@ import util
 
 
 // RA list/cat handles + accessors stay in C (client/shim.c).
-extern remote_list(base_url: string, repo_name: string, rev: int, path: string) -> ptr
-extern remote_list_count(L: ptr) -> int
-extern remote_list_name(L: ptr, i: int) -> string
-extern remote_list_kind(L: ptr, i: int) -> string
-extern remote_list_free(L: ptr)
-extern remote_cat(base_url: string, repo_name: string, rev: int, path: string) -> string
-extern remote_free(p: string)
-extern remote_hash_algo(base_url: string, repo_name: string) -> string
 
 // RA props handle + accessors.
-extern remote_get_props(base_url: string, repo_name: string, rev: int, path: string) -> ptr
-extern remote_props_count(P: ptr) -> int
-extern remote_props_name(P: ptr, i: int) -> string
-extern remote_props_value(P: ptr, i: int) -> string
-extern remote_props_free(P: ptr)
 
 // wc.db lifecycle + helpers.
 
@@ -77,19 +65,19 @@ extern path_join_rel(prefix: string, name: string) -> string
 // Ingest every prop attached to (rev, rel) onto the working copy at dest.
 ingest_props_(base_url: string, repo: string, rev: int,
               dest: string, rel: string) {
-    P = remote_get_props(base_url, repo, rev, rel)
+    P = client.remote_get_props(base_url, repo, rev, rel)
     if P == null { return 0 }
-    pn = remote_props_count(P)
+    pn = client.remote_props_count(P)
     j = 0
     while j < pn {
-        nm  = remote_props_name(P, j)
-        val = remote_props_value(P, j)
+        nm  = client.remote_props_name(P, j)
+        val = client.remote_props_value(P, j)
         nm  = string.copy(nm)
         val = string.copy(val)
         wc_propset(dest, rel, nm, val)
         j = j + 1
     }
-    remote_props_free(P)
+    client.remote_props_free(P)
     return 0
 }
 
@@ -97,14 +85,14 @@ ingest_props_(base_url: string, repo: string, rev: int,
 // recording each in db. Returns 0 on success, -1 on first failure.
 walk_(base_url: string, repo: string, rev: int,
       dest: string, prefix: string, db: ptr) -> int {
-    L = remote_list(base_url, repo, rev, prefix)
+    L = client.remote_list(base_url, repo, rev, prefix)
     if L == null { return 0 - 1 }
-    n = remote_list_count(L)
+    n = client.remote_list_count(L)
 
     i = 0
     while i < n {
-        name = remote_list_name(L, i)
-        kind = remote_list_kind(L, i)
+        name = client.remote_list_name(L, i)
+        kind = client.remote_list_kind(L, i)
         name = string.copy(name)
         kind = string.copy(kind)
 
@@ -114,41 +102,41 @@ walk_(base_url: string, repo: string, rev: int,
         disk = string.copy(disk_borrowed)
 
         if string.equals(kind, "dir") == 1 {
-            if util.io_mkdir_p(disk) != 0 { remote_list_free(L); return 0 - 1 }
+            if util.io_mkdir_p(disk) != 0 { client.remote_list_free(L); return 0 - 1 }
             wc_db_upsert_node(db, rel, 1, rev, "", 0)
             ingest_props_(base_url, repo, rev, dest, rel)
             if walk_(base_url, repo, rev, dest, rel, db) != 0 {
-                remote_list_free(L)
+                client.remote_list_free(L)
                 return 0 - 1
             }
         } else {
-            data = remote_cat(base_url, repo, rev, rel)
+            data = client.remote_cat(base_url, repo, rev, rel)
             if string.length(data) == 0 {
                 // Empty cat is a real failure (every file has at least
                 // a NUL terminator, but remote_cat returns NULL→"" on miss).
-                remote_list_free(L)
+                client.remote_list_free(L)
                 return 0 - 1
             }
             len = string.length(data)
             if util.io_write_atomic(disk, data, len) != 0 {
-                remote_free(data)
-                remote_list_free(L)
+                client.remote_free(data)
+                client.remote_list_free(L)
                 return 0 - 1
             }
             sha = wc_pristine_put(dest, data, len)
             if string.length(sha) == 0 {
-                remote_free(data)
-                remote_list_free(L)
+                client.remote_free(data)
+                client.remote_list_free(L)
                 return 0 - 1
             }
             sha = string.copy(sha)
             wc_db_upsert_node(db, rel, 0, rev, sha, 0)
-            remote_free(data)
+            client.remote_free(data)
             ingest_props_(base_url, repo, rev, dest, rel)
         }
         i = i + 1
     }
-    remote_list_free(L)
+    client.remote_list_free(L)
     return 0
 }
 
@@ -174,7 +162,7 @@ wc_checkout(base_url: string, repo_name: string,
     // Record the server's content-address algo so this WC's local
     // pristine store + modification-detection logic match. Defaults
     // to sha1 if the server doesn't advertise (pre-Phase-6.1).
-    algo = remote_hash_algo(base_url, repo_name)
+    algo = client.remote_hash_algo(base_url, repo_name)
     if string.length(algo) == 0 { algo = "sha1" }
     algo = string.copy(algo)
     wc_db_set_info(db, "hash_algo", algo)
@@ -199,7 +187,7 @@ wc_checkout(base_url: string, repo_name: string,
 //      state=2 (deleted)            → remote_commit_delete
 //      state=1 (added) + kind=dir   → remote_commit_mkdir
 //      state=1 (added) + kind=file  → read disk, remote_commit_add_file
-//      state=0 + file + dirty       → remote_commit_add_file (modify wire shape)
+//      state=0 + file + dirty       → client.remote_commit_add_file (modify wire shape)
 //                                     pristine-put the new bytes
 // 3. Send WC props (every tracked path with props) — server inherits
 //    by rep-sharing for paths we don't mention.
@@ -226,11 +214,6 @@ extern remote_commit_begin(base_rev: int, author: string, logmsg: string) -> ptr
 // R286 — parent_sha setter on the commit builder, plus the head_sha
 // fetch (combined with head_rev in one /info round-trip).
 extern remote_commit_set_parent_sha(cb: ptr, parent_sha: string) -> int
-extern remote_head_sha(base_url: string, repo_name: string) -> string
-extern remote_commit_add_file(cb: ptr, path: string, content: string, len: int) -> int
-extern remote_commit_mkdir(cb: ptr, path: string) -> int
-extern remote_commit_delete(cb: ptr, path: string) -> int
-extern remote_commit_set_prop(cb: ptr, path: string, key: string, value: string) -> int
 extern remote_commit_set_merged_from(cb: ptr, target_path: string,
                                      source_branch: string,
                                      source_revs_packed: string, verb: int) -> int
@@ -328,7 +311,7 @@ wc_commit(wc_root: string, author: string, logmsg: string) -> int {
     // First commit on empty repo (base_rev == 0): pass empty string.
     parent_head_sha = ""
     if base_rev > 0 {
-        parent_head_sha = remote_head_sha(base_url, repo)
+        parent_head_sha = client.remote_head_sha(base_url, repo)
     }
     remote_commit_set_parent_sha(cb, parent_head_sha)
     any_edits = 0
@@ -344,18 +327,18 @@ wc_commit(wc_root: string, author: string, logmsg: string) -> int {
         disk1 = "${wc_root}/${rel}"
         role = classify_(wc_root, rel, kind, st, base_sha)
         if role == 3 {
-            remote_commit_delete(cb, rel)
+            client.remote_commit_delete(cb, rel)
             any_edits = 1
         }
         if role == 2 {
-            remote_commit_mkdir(cb, rel)
+            client.remote_commit_mkdir(cb, rel)
             any_edits = 1
         }
         if role == 1 {
             data = read_file_(disk1)
             if string.length(data) >= 0 {
                 len = string.length(data)
-                remote_commit_add_file(cb, rel, data, len)
+                client.remote_commit_add_file(cb, rel, data, len)
                 wc_pristine_put(wc_root, data, len)
                 any_edits = 1
             }
@@ -378,7 +361,7 @@ wc_commit(wc_root: string, author: string, logmsg: string) -> int {
                 pname = string.copy(pname)
                 pval  = wc_proplist_value(P, j)
                 pval  = string.copy(pval)
-                remote_commit_set_prop(cb, rel, pname, pval)
+                client.remote_commit_set_prop(cb, rel, pname, pval)
                 j = j + 1
             }
             wc_proplist_free(P)
@@ -1294,16 +1277,10 @@ ignore_matches(patterns: string, name: string) -> int {
 // the property-based mergeinfo_eligible_runs from Round 269). The
 // HTTP client returns the same packed "lo:hi\n..." run shape the
 // existing iteration loop already consumes.
-extern fetch_merge_runs(base: string, repo: string,
-                        target_branch: string, source_branch: string,
-                        lo: int, hi: int, as_of_rev: int) -> string
 
 // R284 — runs of revs that are reverse-eligible (latest merge event
 // for the rev is NOT a reverse). Untracked revs ARE included so
 // classical-SVN-style reverse merges of unmerged revs still apply.
-extern fetch_reverse_runs(base: string, repo: string,
-                          target_branch: string, source_branch: string,
-                          lo: int, hi: int, as_of_rev: int) -> string
 
 // pending_merge accumulator (Round 274 / Phase 2.1) — carries
 // merge metadata from `avn merge` to `avn commit`. Server-side,
@@ -1430,7 +1407,7 @@ wc_merge(wc_root: string, source_path: string,
     // tracking the merge runs through the full requested range.
     runs = ""
     if reverse == 0 {
-        runs = fetch_merge_runs(base_url, repo, target_path, source_path,
+        runs = client.fetch_merge_runs(base_url, repo, target_path, source_path,
                                 rev_base, rev_theirs, wc_base_rev)
     } else {
         // R284 — reverse merges filter through /reverse_runs: skip
@@ -1440,7 +1417,7 @@ wc_merge(wc_root: string, source_path: string,
         // (never merged either way) are INCLUDED in the runs —
         // classical-SVN semantics: `merge -c -N` against a fresh
         // checkout still drops r5's content via the inverse diff.
-        runs = fetch_reverse_runs(base_url, repo, target_path, source_path,
+        runs = client.fetch_reverse_runs(base_url, repo, target_path, source_path,
                                   rev_base, rev_theirs, wc_base_rev)
     }
     runs = string.copy(runs)
@@ -1831,13 +1808,6 @@ merge_apply_adds_mods(wc_root: string, target_path: string,
 
 
 
-extern remote_list(base_url: string, repo_name: string, rev: int, path: string) -> ptr
-extern remote_list_count(L: ptr) -> int
-extern remote_list_name(L: ptr, i: int) -> string
-extern remote_list_kind(L: ptr, i: int) -> string
-extern remote_list_free(L: ptr)
-extern remote_cat(base_url: string, repo_name: string, rev: int, path: string) -> string
-extern remote_free(p: string)
 
 extern path_join_rel(prefix: string, name: string) -> string
 
@@ -1851,17 +1821,17 @@ merge_walk_remote(wc_root: string,
     full = path_join_rel(source_path, sub_prefix)
     full = string.copy(full)
 
-    L = remote_list(base_url, repo, rev, full)
+    L = client.remote_list(base_url, repo, rev, full)
     if L == null { return -1 }
 
-    n = remote_list_count(L)
+    n = client.remote_list_count(L)
     result = 0
     i = 0
     while i < n {
         if result == 0 {
-            name = remote_list_name(L, i)
+            name = client.remote_list_name(L, i)
             name = string.copy(name)
-            kind = remote_list_kind(L, i)
+            kind = client.remote_list_kind(L, i)
             kind = string.copy(kind)
             rel = path_join_rel(sub_prefix, name)
             rel = string.copy(rel)
@@ -1876,7 +1846,7 @@ merge_walk_remote(wc_root: string,
             if string.equals(kind, "dir") == 0 {
                 remote_full = path_join_rel(full, name)
                 remote_full = string.copy(remote_full)
-                data = remote_cat(base_url, repo, rev, remote_full)
+                data = client.remote_cat(base_url, repo, rev, remote_full)
                 if string.length(data) == 0 {
                     result = -1
                 }
@@ -1886,13 +1856,13 @@ merge_walk_remote(wc_root: string,
                         sha = wc_hash_bytes(wc_root, data, string.length(data))
                     }
                     util.remote_tree_add_file(rt, rel, data, string.length(data), sha)
-                    remote_free(data)
+                    client.remote_free(data)
                 }
             }
         }
         i = i + 1
     }
-    remote_list_free(L)
+    client.remote_list_free(L)
     return result
 }
 
@@ -3522,7 +3492,6 @@ statuslist_code_at(packed: string, i: int) -> int    { return list_field_int_(pa
 // Nodelist (tracked WC nodes).
 
 // RA: server's current head.
-extern remote_head_rev(base_url: string, repo_name: string) -> int
 
 // Remote-tree opaque storage primitive (C-side, update_shim.c). The
 // recursive RA walk in working_copy/update_walk.ae populates it via
@@ -3557,7 +3526,7 @@ wc_update(wc_root: string, target_rev: int) -> int {
     repo     = string.copy(repo)
 
     if target_rev < 0 {
-        target_rev = remote_head_rev(base_url, repo)
+        target_rev = client.remote_head_rev(base_url, repo)
         if target_rev < 0 {
             wc_db_close(db)
             return 0 - 1
@@ -3850,27 +3819,21 @@ update_apply_pass_b(wc_root: string, base_url: string, repo: string,
 // accessed through their count/name/value accessors.
 
 
-extern remote_get_props(base_url: string, repo: string,
-                           rev: int, path: string) -> ptr
-extern remote_props_count(P: ptr) -> int
-extern remote_props_name(P: ptr, i: int) -> string
-extern remote_props_value(P: ptr, i: int) -> string
-extern remote_props_free(P: ptr)
 
 
 
 ingest_props(base_url: string, repo: string, rev: int,
                      wc_root: string, rel: string) {
-    P = remote_get_props(base_url, repo, rev, rel)
+    P = client.remote_get_props(base_url, repo, rev, rel)
     rn = 0
-    if P != null { rn = remote_props_count(P) }
+    if P != null { rn = client.remote_props_count(P) }
 
     // (a) Overwrite / add from remote.
     j = 0
     while j < rn {
-        pname = remote_props_name(P, j)
+        pname = client.remote_props_name(P, j)
         pname = string.copy(pname)
-        pval = remote_props_value(P, j)
+        pval = client.remote_props_value(P, j)
         pval = string.copy(pval)
         wc_propset(wc_root, rel, pname, pval)
         j = j + 1
@@ -3888,7 +3851,7 @@ ingest_props(base_url: string, repo: string, rev: int,
             found = 0
             k = 0
             while k < rn {
-                rname = remote_props_name(P, k)
+                rname = client.remote_props_name(P, k)
                 if string.equals(lname, rname) == 1 {
                     found = 1
                     break
@@ -3903,7 +3866,7 @@ ingest_props(base_url: string, repo: string, rev: int,
         wc_proplist_free(L)
     }
 
-    if P != null { remote_props_free(P) }
+    if P != null { client.remote_props_free(P) }
 }
 
 
@@ -3922,13 +3885,6 @@ ingest_props(base_url: string, repo: string, rev: int,
 
 
 
-extern remote_list(base_url: string, repo_name: string, rev: int, path: string) -> ptr
-extern remote_list_count(L: ptr) -> int
-extern remote_list_name(L: ptr, i: int) -> string
-extern remote_list_kind(L: ptr, i: int) -> string
-extern remote_list_free(L: ptr)
-extern remote_cat(base_url: string, repo_name: string, rev: int, path: string) -> string
-extern remote_free(p: string)
 
 extern path_join_rel(prefix: string, name: string) -> string
 
@@ -3939,17 +3895,17 @@ extern path_join_rel(prefix: string, name: string) -> string
 update_walk_remote(wc_root: string,
                            base_url: string, repo: string, rev: int,
                            prefix: string, rt: ptr) -> int {
-    L = remote_list(base_url, repo, rev, prefix)
+    L = client.remote_list(base_url, repo, rev, prefix)
     if L == null { return -1 }
 
-    n = remote_list_count(L)
+    n = client.remote_list_count(L)
     result = 0
     i = 0
     while i < n {
         if result == 0 {
-            name = remote_list_name(L, i)
+            name = client.remote_list_name(L, i)
             name = string.copy(name)
-            kind = remote_list_kind(L, i)
+            kind = client.remote_list_kind(L, i)
             kind = string.copy(kind)
             rel = path_join_rel(prefix, name)
             rel = string.copy(rel)
@@ -3961,7 +3917,7 @@ update_walk_remote(wc_root: string,
                 }
             }
             if string.equals(kind, "dir") == 0 {
-                data = remote_cat(base_url, repo, rev, rel)
+                data = client.remote_cat(base_url, repo, rev, rel)
                 if string.length(data) == 0 {
                     result = -1
                 }
@@ -3971,13 +3927,13 @@ update_walk_remote(wc_root: string,
                         sha = wc_hash_bytes(wc_root, data, string.length(data))
                     }
                     util.remote_tree_add_file(rt, rel, data, string.length(data), sha)
-                    remote_free(data)
+                    client.remote_free(data)
                 }
             }
         }
         i = i + 1
     }
-    remote_list_free(L)
+    client.remote_list_free(L)
     return result
 }
 

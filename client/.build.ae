@@ -1,6 +1,6 @@
 import build
 import aether
-import aether (source, output, regen, extra_source, link_flag)
+import aether (source, output, regen, regen_with, extra_source, link_flag)
 
 main() {
     b = build.start()
@@ -12,19 +12,11 @@ main() {
         link_flag("-lz")
         link_flag("-lssl")
         link_flag("-lcrypto")
-        regen("../client/accessors.ae")
-        regen("../client/http_client.ae")
-        regen("../client/verify.ae")
-        regen("../client/urls.ae")
-        regen("../client/parse.ae")
-        regen("../client/packed.ae")
-        regen("../client/commit_build.ae")
+        // Phase 3 (Round 302): 12 client/*.ae files merged into module.ae.
+        // module.ae imports std.http.client → "net" cap.
+        // commit_builder.ae stays separate for now.
+        regen_with("../client/module.ae", "net")
         regen("../client/commit_builder.ae")
-        regen("../client/cat.ae")
-        regen("../client/auth_state.ae")
-        regen("../client/copy_branch.ae")
-        regen("../client/info.ae")
-        regen("../client/fetch.ae")
         regen("../repo_storage/pathutil.ae")
         regen("../ffi/openssl/module.ae")
     }
