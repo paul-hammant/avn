@@ -1,0 +1,4040 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+
+// working_copy — local working-copy state, db, pristine store, and ops.
+//
+// Phase 5 merge (methodical_extern_removal_plan.md, Round 301): unifies
+// 30 source files. No struct-export concerns (working_copy has none).
+// Files merged: checkout, commit, db_*, diff, ignore, merge*, mutate,
+// pending_merge, pristine*, props*, resolve, revert, sidecar, status*,
+// update*, wc_accessors.
+//
+// Unblocked by aetherc 0.142.0 — fixed selective-import name
+// propagation across the import boundary AND lifted the 128-decl
+// truncation cap (this module has ~150 functions). Both shapes
+// documented in ../aether/import_typer_at_scale.md.
+
+import contrib.sqlite
+import std.collections
+import std.cryptography
+import std.fs
+import std.io
+import std.os
+import std.string
+import std.zlib
+import util
+
+
+// =============================================================================
+// working_copy/checkout.ae
+// =============================================================================
+
+// avn checkout — recursive tree download from a remote URL into a
+// local working copy directory.
+//
+//   wc_checkout(base_url, repo_name, dest, rev) -> 0 on success
+//
+// 1. mkdir -p dest; init wc.db; record url + repo_name + base_rev in info
+// 2. Walk the tree recursively via RA list(rev, path):
+//      - file: RA cat → write to disk → pristine_put → upsert nodes row
+//      - dir:  mkdir → upsert dir row → recurse → ingest props
+//
+// Reads use the Phase 7 RA (cross-HTTP); writes go to local pristine/db.
+
+
+// RA list/cat handles + accessors stay in C (client/shim.c).
+extern remote_list(base_url: string, repo_name: string, rev: int, path: string) -> ptr
+extern remote_list_count(L: ptr) -> int
+extern remote_list_name(L: ptr, i: int) -> string
+extern remote_list_kind(L: ptr, i: int) -> string
+extern remote_list_free(L: ptr)
+extern remote_cat(base_url: string, repo_name: string, rev: int, path: string) -> string
+extern remote_free(p: string)
+extern remote_hash_algo(base_url: string, repo_name: string) -> string
+
+// RA props handle + accessors.
+extern remote_get_props(base_url: string, repo_name: string, rev: int, path: string) -> ptr
+extern remote_props_count(P: ptr) -> int
+extern remote_props_name(P: ptr, i: int) -> string
+extern remote_props_value(P: ptr, i: int) -> string
+extern remote_props_free(P: ptr)
+
+// wc.db lifecycle + helpers.
+
+// Pristine store.
+
+// WC propset (per-path key=value persist).
+
+// IO helpers from subr/io.ae and fs_fs/pathutil.ae.
+extern path_join_rel(prefix: string, name: string) -> string
+
+// Ingest every prop attached to (rev, rel) onto the working copy at dest.
+ingest_props_(base_url: string, repo: string, rev: int,
+              dest: string, rel: string) {
+    P = remote_get_props(base_url, repo, rev, rel)
+    if P == null { return 0 }
+    pn = remote_props_count(P)
+    j = 0
+    while j < pn {
+        nm  = remote_props_name(P, j)
+        val = remote_props_value(P, j)
+        nm  = string.copy(nm)
+        val = string.copy(val)
+        wc_propset(dest, rel, nm, val)
+        j = j + 1
+    }
+    remote_props_free(P)
+    return 0
+}
+
+// Recursive walk: download every entry under prefix into $dest/<prefix>,
+// recording each in db. Returns 0 on success, -1 on first failure.
+walk_(base_url: string, repo: string, rev: int,
+      dest: string, prefix: string, db: ptr) -> int {
+    L = remote_list(base_url, repo, rev, prefix)
+    if L == null { return 0 - 1 }
+    n = remote_list_count(L)
+
+    i = 0
+    while i < n {
+        name = remote_list_name(L, i)
+        kind = remote_list_kind(L, i)
+        name = string.copy(name)
+        kind = string.copy(kind)
+
+        rel_borrowed  = path_join_rel(prefix, name)
+        rel  = string.copy(rel_borrowed)
+        disk_borrowed = path_join_rel(dest, rel)
+        disk = string.copy(disk_borrowed)
+
+        if string.equals(kind, "dir") == 1 {
+            if util.io_mkdir_p(disk) != 0 { remote_list_free(L); return 0 - 1 }
+            wc_db_upsert_node(db, rel, 1, rev, "", 0)
+            ingest_props_(base_url, repo, rev, dest, rel)
+            if walk_(base_url, repo, rev, dest, rel, db) != 0 {
+                remote_list_free(L)
+                return 0 - 1
+            }
+        } else {
+            data = remote_cat(base_url, repo, rev, rel)
+            if string.length(data) == 0 {
+                // Empty cat is a real failure (every file has at least
+                // a NUL terminator, but remote_cat returns NULL→"" on miss).
+                remote_list_free(L)
+                return 0 - 1
+            }
+            len = string.length(data)
+            if util.io_write_atomic(disk, data, len) != 0 {
+                remote_free(data)
+                remote_list_free(L)
+                return 0 - 1
+            }
+            sha = wc_pristine_put(dest, data, len)
+            if string.length(sha) == 0 {
+                remote_free(data)
+                remote_list_free(L)
+                return 0 - 1
+            }
+            sha = string.copy(sha)
+            wc_db_upsert_node(db, rel, 0, rev, sha, 0)
+            remote_free(data)
+            ingest_props_(base_url, repo, rev, dest, rel)
+        }
+        i = i + 1
+    }
+    remote_list_free(L)
+    return 0
+}
+
+// Public entry point. Creates dest if needed, opens wc.db, records
+// connection info + hash algo, walks the server tree at `rev`.
+wc_checkout(base_url: string, repo_name: string,
+                          dest: string, rev: int) -> int {
+    if util.io_mkdir_p(dest) != 0 { return 0 - 1 }
+
+    // Checkout is the only caller that's allowed to *create* a WC.
+    // Every other caller (wc_add, wc_commit, wc_status, …) must use
+    // wc_db_open which now refuses if .svn/wc.db doesn't exist —
+    // see Round 265 / db_open.ae.
+    db = wc_db_init(dest)
+    if db == null { return 0 - 1 }
+
+    full_url = "${base_url}/${repo_name}"
+    wc_db_set_info(db, "url",      full_url)
+    wc_db_set_info(db, "base_url", base_url)
+    wc_db_set_info(db, "repo",     repo_name)
+    wc_db_set_info(db, "base_rev", "${rev}")
+
+    // Record the server's content-address algo so this WC's local
+    // pristine store + modification-detection logic match. Defaults
+    // to sha1 if the server doesn't advertise (pre-Phase-6.1).
+    algo = remote_hash_algo(base_url, repo_name)
+    if string.length(algo) == 0 { algo = "sha1" }
+    algo = string.copy(algo)
+    wc_db_set_info(db, "hash_algo", algo)
+
+    rc = walk_(base_url, repo_name, rev, dest, "", db)
+    wc_db_close(db)
+    return rc
+}
+
+
+// =============================================================================
+// working_copy/commit.ae
+// =============================================================================
+
+// avn commit — wc-backed commit pipeline.
+//
+//   wc_commit(wc_root, author, logmsg) -> new_rev | -1 (error)
+//                                              | -2 (no edits) | -3 (conflicts)
+//
+// 1. Walk wc.db nodes; refuse if any conflicted.
+// 2. Build an RA commit from pending edits:
+//      state=2 (deleted)            → remote_commit_delete
+//      state=1 (added) + kind=dir   → remote_commit_mkdir
+//      state=1 (added) + kind=file  → read disk, remote_commit_add_file
+//      state=0 + file + dirty       → remote_commit_add_file (modify wire shape)
+//                                     pristine-put the new bytes
+// 3. Send WC props (every tracked path with props) — server inherits
+//    by rep-sharing for paths we don't mention.
+// 4. POST. On success, reconcile wc.db rows: state=0, base_rev=new_rev,
+//    base_sha1=current content sha for added/modified, delete rows for
+//    state=2.
+//
+// Round 71 (Gordian) ports wc_commit out of working_copy/commit_shim.c.
+// Eliminates the parallel `roles[]` / `new_sha1s[]` arrays — pass 2
+// reclassifies from the nodelist directly (same logic as pass 1, but
+// only doing the wc.db reconcile rather than the wire-side remote_commit_*
+// calls). Re-hashing modified-file disk content costs nothing
+// observable (small files, in-page cache).
+
+
+// wc.db lifecycle + helpers.
+
+// Nodelist accessors.
+
+// Pristine + hashing.
+
+// RA commit builder (C-side opaque).
+extern remote_commit_begin(base_rev: int, author: string, logmsg: string) -> ptr
+// R286 — parent_sha setter on the commit builder, plus the head_sha
+// fetch (combined with head_rev in one /info round-trip).
+extern remote_commit_set_parent_sha(cb: ptr, parent_sha: string) -> int
+extern remote_head_sha(base_url: string, repo_name: string) -> string
+extern remote_commit_add_file(cb: ptr, path: string, content: string, len: int) -> int
+extern remote_commit_mkdir(cb: ptr, path: string) -> int
+extern remote_commit_delete(cb: ptr, path: string) -> int
+extern remote_commit_set_prop(cb: ptr, path: string, key: string, value: string) -> int
+extern remote_commit_set_merged_from(cb: ptr, target_path: string,
+                                     source_branch: string,
+                                     source_revs_packed: string, verb: int) -> int
+extern remote_commit_finish(cb: ptr, base_url: string, repo_name: string) -> int
+
+// pending_merge accumulator (Round 274 / Phase 2.1).
+
+// WC proplist (Aether export, C-side handle).
+
+// Slurp `path` into a binary-safe Aether string. Returns "" on error.
+read_file_(path: string) -> string {
+    data, _n, err = fs.read_binary(path)
+    if string.length(err) > 0 { return "" }
+    return data
+}
+
+// Compute the disk file's hash for change detection. Returns "" on
+// error. wc_root threads through so the WC's configured algorithm
+// (sha1 by default, sha256 on Phase 6.1 repos) gets used.
+commit_sha_of_file_(wc_root: string, disk: string) -> string {
+    h = wc_hash_file(wc_root, disk)
+    if string.length(h) == 0 { return "" }
+    return string.copy(h)
+}
+
+// Should this row produce an edit on the RA commit? Returns the
+// role code (1=add-file 2=mkdir 3=delete 0=no-edit). Mirrors the
+// pass-1 classifier; reused by pass-2 for the wc.db reconcile.
+classify_(wc_root: string, rel: string, kind: int, st: int, base_sha: string) -> int {
+    if st == 2 { return 3 }
+    if st == 1 {
+        if kind == 1 { return 2 }
+        return 1
+    }
+    if kind == 0 {
+        disk = "${wc_root}/${rel}"
+        cur = commit_sha_of_file_(wc_root, disk)
+        if string.length(cur) == 0 { return 0 }
+        if string.equals(cur, base_sha) == 1 { return 0 }
+        return 1
+    }
+    return 0
+}
+
+wc_commit(wc_root: string, author: string, logmsg: string) -> int {
+    db = wc_db_open(wc_root)
+    if db == null { return 0 - 1 }
+
+    // get_info returns refcounted AetherString already (Round 143);
+    // no explicit free pair needed here.
+    base_url    = wc_db_get_info(db, "base_url")
+    repo        = wc_db_get_info(db, "repo")
+    base_rev_s  = wc_db_get_info(db, "base_rev")
+
+    if string.length(base_url) == 0 {
+        wc_db_close(db)
+        return 0 - 1
+    }
+    if string.length(repo) == 0 {
+        wc_db_close(db)
+        return 0 - 1
+    }
+    if string.length(base_rev_s) == 0 {
+        wc_db_close(db)
+        return 0 - 1
+    }
+    base_url   = string.copy(base_url)
+    repo       = string.copy(repo)
+    base_rev   = string.get_int(base_rev_s)
+
+    L = wc_db_list_nodes(db)
+    n = wc_nodelist_count(L)
+
+    // Refuse to commit if any node is conflicted.
+    i = 0
+    while i < n {
+        if wc_nodelist_conflicted(L, i) == 1 {
+            confl_path = wc_nodelist_path(L, i)
+            confl_path = string.copy(confl_path)
+            println("svn: commit failed: '${confl_path}' remains in conflict; run avn resolve first")
+            wc_nodelist_free(L)
+            wc_db_close(db)
+            return 0 - 3
+        }
+        i = i + 1
+    }
+
+    // Pass 1: build the RA commit.
+    cb = remote_commit_begin(base_rev, author, logmsg)
+    // R286 — fetch HEAD's rev_sha and stamp it as parent_sha. The
+    // server validates parent_sha == repos_rev_blob_sha(repo, base_rev).
+    // For the WC's stale-base case (someone else committed on top of
+    // our base_rev), the server's existing rev-num check (-12 → 409)
+    // already catches it; this just adds belt-and-braces SHA-level CAS.
+    // First commit on empty repo (base_rev == 0): pass empty string.
+    parent_head_sha = ""
+    if base_rev > 0 {
+        parent_head_sha = remote_head_sha(base_url, repo)
+    }
+    remote_commit_set_parent_sha(cb, parent_head_sha)
+    any_edits = 0
+    i = 0
+    while i < n {
+        rel        = wc_nodelist_path(L, i)
+        rel        = string.copy(rel)
+        kind       = wc_nodelist_kind(L, i)
+        st         = wc_nodelist_state(L, i)
+        base_sha   = wc_nodelist_base_sha1(L, i)
+        base_sha   = string.copy(base_sha)
+
+        disk1 = "${wc_root}/${rel}"
+        role = classify_(wc_root, rel, kind, st, base_sha)
+        if role == 3 {
+            remote_commit_delete(cb, rel)
+            any_edits = 1
+        }
+        if role == 2 {
+            remote_commit_mkdir(cb, rel)
+            any_edits = 1
+        }
+        if role == 1 {
+            data = read_file_(disk1)
+            if string.length(data) >= 0 {
+                len = string.length(data)
+                remote_commit_add_file(cb, rel, data, len)
+                wc_pristine_put(wc_root, data, len)
+                any_edits = 1
+            }
+        }
+        i = i + 1
+    }
+
+    // Send WC props for every tracked path that has any. The server
+    // inherits via rep-sharing for paths we don't mention.
+    i = 0
+    while i < n {
+        rel = wc_nodelist_path(L, i)
+        rel = string.copy(rel)
+        P = wc_proplist(wc_root, rel)
+        if P != null {
+            pn = wc_proplist_count(P)
+            j = 0
+            while j < pn {
+                pname = wc_proplist_name(P, j)
+                pname = string.copy(pname)
+                pval  = wc_proplist_value(P, j)
+                pval  = string.copy(pval)
+                remote_commit_set_prop(cb, rel, pname, pval)
+                j = j + 1
+            }
+            wc_proplist_free(P)
+        }
+        i = i + 1
+    }
+
+    // Drain pending_merge into the commit body. wc_merge accumulated
+    // (source_branch, source_rev, verb) rows in the WC's
+    // pending_merge table; avn commit hands them to the server in
+    // the body's `merged_from` JSON field. commit_parse on the
+    // server resolves rev numbers to SHAs and routes them to
+    // commit_finalise, which writes the rev blob's `merged:` field
+    // and the merge ledger. After a successful commit the WC
+    // clears pending_merge.
+    pending_n = wc_pending_merge_count(wc_root)
+    if pending_n > 0 {
+        ptgt  = wc_pending_merge_target_path(wc_root)
+        psrc  = wc_pending_merge_source_branch(wc_root)
+        pverb = wc_pending_merge_verb(wc_root)
+        prevs = wc_pending_merge_drain(wc_root)
+        ptgt  = string.copy(ptgt)
+        psrc  = string.copy(psrc)
+        prevs = string.copy(prevs)
+        remote_commit_set_merged_from(cb, ptgt, psrc, prevs, pverb)
+    }
+
+    if any_edits == 0 && pending_n == 0 {
+        // Nothing to commit. We finish to free the builder; the server
+        // produces a new rev for an empty edit list (matches HTTP-layer
+        // behaviour). Tests want a meaningful sentinel, so return -2.
+        //
+        // R286: capture the new rev and bump wc.db's base_rev so a
+        // subsequent commit doesn't get rejected by the parent_sha
+        // CAS for sending a stale base_rev. Pre-R286 the empty-edits
+        // path discarded the new_rev silently, leaving the WC out of
+        // sync with the server's actual HEAD.
+        empty_rev = remote_commit_finish(cb, base_url, repo)
+        if empty_rev > 0 {
+            wc_db_set_info(db, "base_rev", "${empty_rev}")
+        }
+        wc_nodelist_free(L)
+        wc_db_close(db)
+        return 0 - 2
+    }
+
+    new_rev = remote_commit_finish(cb, base_url, repo)
+    if new_rev == 0 - 12 {
+        // Server rejected with 409 — WC's base_rev predates HEAD and
+        // a path conflicts with an intervening commit. Pass -4 up so
+        // cmd_commit can print a distinct "out of date" message.
+        wc_nodelist_free(L)
+        wc_db_close(db)
+        return 0 - 4
+    }
+    if new_rev < 0 {
+        wc_nodelist_free(L)
+        wc_db_close(db)
+        return 0 - 1
+    }
+
+    // Pass 2: reconcile wc.db with the new base revision. Re-classify
+    // from the same nodelist (state hasn't been touched in between).
+    i = 0
+    while i < n {
+        rel        = wc_nodelist_path(L, i)
+        rel        = string.copy(rel)
+        kind       = wc_nodelist_kind(L, i)
+        st         = wc_nodelist_state(L, i)
+        base_sha   = wc_nodelist_base_sha1(L, i)
+        base_sha   = string.copy(base_sha)
+        disk2      = "${wc_root}/${rel}"
+
+        role = classify_(wc_root, rel, kind, st, base_sha)
+        if role == 3 {
+            wc_db_delete_node(db, rel)
+        }
+        if role == 2 {
+            wc_db_upsert_node(db, rel, 1, new_rev, "", 0)
+        }
+        if role == 1 {
+            // Re-hash disk to record the post-commit content sha. For
+            // added files and modified files alike, disk now reflects
+            // what was committed.
+            new_sha = commit_sha_of_file_(wc_root, disk2)
+            wc_db_upsert_node(db, rel, 0, new_rev, new_sha, 0)
+        }
+        if role == 0 {
+            // Unchanged — still bump base_rev so subsequent commits
+            // have a consistent base.
+            wc_db_upsert_node(db, rel, kind, new_rev, base_sha, 0)
+        }
+        i = i + 1
+    }
+
+    wc_db_set_info(db, "base_rev", "${new_rev}")
+
+    wc_nodelist_free(L)
+    wc_db_close(db)
+
+    // Commit accepted by the server — pending_merge metadata is now
+    // recorded in the rev blob + ledger. Clear the WC side so a
+    // follow-up `avn merge` doesn't re-send the same revs.
+    if pending_n > 0 { wc_pending_merge_clear(wc_root) }
+
+    return new_rev
+}
+
+
+// =============================================================================
+// working_copy/db_accessors.ae
+// =============================================================================
+
+// wc.db node + nodelist handle accessors — Aether port of
+// working_copy/db_shim.c's two packed-handle families. Same recipe as
+// Round 154 (repos) and Round 155 (ra).
+//
+// node       — single-record handle: a "<path>\x01<kind>\x01...
+//              \x01<state>\x01<conflicted>" string with no
+//              leading-count header.
+// nodelist   — array handle: "<n>\x02<rec0>\x02<rec1>\x02..." with
+//              the same record shape.
+//
+// Field accessors live in working_copy/db_node_packed.ae; this file just
+// surfaces the public ABI through which db_nodes.ae's get_node /
+// list_nodes producers feed into the accessors callers expect.
+
+
+
+
+// ---- node handle (single-record) -------------------------------
+
+wc_node_handle(packed: string) -> ptr {
+    if string.length(packed) == 0 { return null }
+    return string.copy(packed)
+}
+
+wc_node_path     (n: ptr) -> string {
+    if n == null { return "" }
+    return node_path(n)
+}
+wc_node_kind     (n: ptr) -> int {
+    if n == null { return 0 - 1 }
+    return node_kind(n)
+}
+wc_node_base_rev (n: ptr) -> int {
+    if n == null { return 0 - 1 }
+    return node_base_rev(n)
+}
+wc_node_base_sha1(n: ptr) -> string {
+    if n == null { return "" }
+    return node_base_sha1(n)
+}
+wc_node_state    (n: ptr) -> int {
+    if n == null { return 0 - 1 }
+    return node_state(n)
+}
+wc_node_conflicted(n: ptr) -> int {
+    if n == null { return 0 }
+    return node_conflicted(n)
+}
+wc_node_free     (n: ptr) { return 0 }
+
+// ---- nodelist handle ------------------------------------------
+
+wc_nodelist_handle(packed: string) -> ptr {
+    if string.length(packed) == 0 { return null }
+    return string.copy(packed)
+}
+
+wc_nodelist_count    (L: ptr) -> int {
+    if L == null { return 0 }
+    return node_count(L)
+}
+wc_nodelist_path     (L: ptr, i: int) -> string {
+    if L == null { return "" }
+    return node_path_at(L, i)
+}
+wc_nodelist_kind     (L: ptr, i: int) -> int {
+    if L == null { return 0 - 1 }
+    return node_kind_at(L, i)
+}
+wc_nodelist_base_rev (L: ptr, i: int) -> int {
+    if L == null { return 0 - 1 }
+    return node_base_rev_at(L, i)
+}
+wc_nodelist_base_sha1(L: ptr, i: int) -> string {
+    if L == null { return "" }
+    return node_base_sha1_at(L, i)
+}
+wc_nodelist_state    (L: ptr, i: int) -> int {
+    if L == null { return 0 - 1 }
+    return node_state_at(L, i)
+}
+wc_nodelist_conflicted(L: ptr, i: int) -> int {
+    if L == null { return 0 }
+    return node_conflicted_at(L, i)
+}
+wc_nodelist_free     (L: ptr) { return 0 }
+
+
+// =============================================================================
+// working_copy/db_node_packed.ae
+// =============================================================================
+
+// wc_node packed-record accessors. Same shape as client/packed.ae —
+// each row is "<path>\x01<kind>\x01<base_rev>\x01<base_sha1>\x01
+// <state>\x01<conflicted>"; lists are "<n>\x02<rec>\x02...". The C
+// side keeps the {packed, n, pins} struct from subr/packed_handle/
+// and one-line accessor wrappers using packed_pin_at /
+// packed_int_at.
+
+
+// ---- record-level field extractors (used by single-record handles) ----
+
+// Field index lookup: returns the raw substring at \x01-separated field
+// fi within record `rec`, or "" if out of range.
+field_(rec: string, fi: int) -> string {
+    n = string.length(rec)
+    if n == 0 { return "" }
+    pos = 0
+    k = 0
+    while k < fi {
+        sep = string.index_of_from(rec, "\x01", pos)
+        if sep < 0 { return "" }
+        pos = sep + 1
+        k = k + 1
+    }
+    end = string.index_of_from(rec, "\x01", pos)
+    if end < 0 { end = n }
+    return string.substring(rec, pos, end)
+}
+
+field_int_(rec: string, fi: int) -> int {
+    s = field_(rec, fi)
+    if string.length(s) == 0 { return 0 - 1 }
+    return string.get_int(s)
+}
+
+// ---- record locator over packed list ----
+
+// Find the start offset of the i-th record in a "<n>\x02<rec>\x02..."
+// packed string. Returns -1 if out of range.
+record_start_(packed: string, i: int) -> int {
+    sep = string.index_of(packed, "\x02")
+    if sep < 0 { return 0 - 1 }
+    pos = sep + 1
+    n = string.length(packed)
+    k = 0
+    while k < i {
+        if pos >= n { return 0 - 1 }
+        rsep = string.index_of_from(packed, "\x02", pos)
+        if rsep < 0 { return 0 - 1 }
+        pos = rsep + 1
+        k = k + 1
+    }
+    return pos
+}
+
+record_end_(packed: string, start: int) -> int {
+    if start < 0 { return 0 - 1 }
+    n = string.length(packed)
+    if start >= n { return n }
+    rsep = string.index_of_from(packed, "\x02", start)
+    if rsep < 0 { return n }
+    return rsep
+}
+
+// Field-extractor for the i-th row of a packed list.
+list_field_(packed: string, i: int, fi: int) -> string {
+    s = record_start_(packed, i)
+    if s < 0 { return "" }
+    e = record_end_(packed, s)
+    if e <= s { return "" }
+    rec = string.substring(packed, s, e)
+    return field_(rec, fi)
+}
+
+list_field_int_(packed: string, i: int, fi: int) -> int {
+    s = record_start_(packed, i)
+    if s < 0 { return 0 - 1 }
+    e = record_end_(packed, s)
+    if e <= s { return 0 - 1 }
+    rec = string.substring(packed, s, e)
+    return field_int_(rec, fi)
+}
+
+// ---- list count ----
+
+node_count(packed: string) -> int {
+    if string.length(packed) == 0 { return 0 }
+    sep = string.index_of(packed, "\x02")
+    if sep < 0 { return 0 }
+    nstr = string.substring(packed, 0, sep)
+    return string.get_int(nstr)
+}
+
+// ---- single-record (info-style) field accessors ----
+
+node_path(packed: string) -> string         { return field_(packed, 0) }
+node_kind(packed: string) -> int            { return field_int_(packed, 1) }
+node_base_rev(packed: string) -> int        { return field_int_(packed, 2) }
+node_base_sha1(packed: string) -> string    { return field_(packed, 3) }
+node_state(packed: string) -> int           { return field_int_(packed, 4) }
+node_conflicted(packed: string) -> int      { return field_int_(packed, 5) }
+
+// ---- per-row accessors for the list shape ----
+
+node_path_at(packed: string, i: int) -> string         { return list_field_(packed, i, 0) }
+node_kind_at(packed: string, i: int) -> int            { return list_field_int_(packed, i, 1) }
+node_base_rev_at(packed: string, i: int) -> int        { return list_field_int_(packed, i, 2) }
+node_base_sha1_at(packed: string, i: int) -> string    { return list_field_(packed, i, 3) }
+node_state_at(packed: string, i: int) -> int           { return list_field_int_(packed, i, 4) }
+node_conflicted_at(packed: string, i: int) -> int      { return list_field_int_(packed, i, 5) }
+
+
+// =============================================================================
+// working_copy/db_nodes.ae
+// =============================================================================
+
+// wc.db node CRUD — the single-statement, scalar-only operations
+// on the `nodes` table: existence probe, row delete, conflicted-
+// flag update. Row-fetch / upsert still live in db_shim.c because
+// they either return a struct handle or take enough parameters
+// that the C form reads more cleanly.
+//
+// Aether callers (merge_apply.ae, update_apply.ae) already reach
+// these via extern; porting the implementation preserves the same
+// wc_db_* symbol names via `export`, so no downstream edits
+// are needed.
+
+
+const SQLITE_ROW  = 100
+const SQLITE_DONE = 101
+
+// Packed-string handle constructors (db_shim.c). Both wrap into the
+// shared packed_handle struct; field accessors are in
+// working_copy/db_node_packed.ae.
+
+// Malloc lifecycle helper for get_info — the sqlite-owned column
+// pointer goes stale after finalize(), so we hand the caller a
+// (wc_info_dup retired in Round 143 — string.copy on the
+// sqlite column does the same detach in pure Aether.)
+
+// Build a single packed record "<path>\x01<kind>\x01<base_rev>\x01
+// <base_sha1>\x01<state>\x01<conflicted>". Used by both get_node
+// (alone) and list_nodes (joined with \x02 separators).
+node_record_(path: string, kind: int, base_rev: int, base_sha1: string, node_state: int, conflicted: int) -> string {
+    return "${path}\x01${kind}\x01${base_rev}\x01${base_sha1}\x01${node_state}\x01${conflicted}"
+}
+
+wc_db_node_exists(db: ptr, path: string) -> int {
+    stmt, perr = sqlite.prepare(db, "SELECT 1 FROM nodes WHERE path = ?")
+    if string.length(perr) > 0 { return 0 }
+    sqlite.bind_text(stmt, 1, path)
+    rc, _ = sqlite.step(stmt, db)
+    sqlite.finalize(stmt)
+    if rc == SQLITE_ROW { return 1 }
+    return 0
+}
+
+wc_db_delete_node(db: ptr, path: string) -> int {
+    stmt, perr = sqlite.prepare(db, "DELETE FROM nodes WHERE path = ?")
+    if string.length(perr) > 0 { return -1 }
+    sqlite.bind_text(stmt, 1, path)
+    rc, _ = sqlite.step(stmt, db)
+    sqlite.finalize(stmt)
+    if rc == SQLITE_DONE { return 0 }
+    return -1
+}
+
+wc_db_set_conflicted(db: ptr, path: string, conflicted: int) -> int {
+    stmt, perr = sqlite.prepare(db, "UPDATE nodes SET conflicted = ? WHERE path = ?")
+    if string.length(perr) > 0 { return -1 }
+    sqlite.bind_int (stmt, 1, conflicted)
+    sqlite.bind_text(stmt, 2, path)
+    rc, _ = sqlite.step(stmt, db)
+    sqlite.finalize(stmt)
+    if rc == SQLITE_DONE { return 0 }
+    return -1
+}
+
+// Insert or replace a node row. Returns 0 on success, non-zero on
+// failure. ON CONFLICT(path) updates every field except `conflicted`
+// — conflicted is maintained by wc_db_set_conflicted, so a
+// routine upsert must not clear it.
+wc_db_upsert_node(db: ptr, path: string, kind: int, base_rev: int, base_sha1: string, node_state: int) -> int {
+    stmt, perr = sqlite.prepare(db,
+        "INSERT INTO nodes (path, kind, base_rev, base_sha1, state) VALUES (?, ?, ?, ?, ?) ON CONFLICT(path) DO UPDATE SET kind=excluded.kind, base_rev=excluded.base_rev, base_sha1=excluded.base_sha1, state=excluded.state")
+    if string.length(perr) > 0 { return -1 }
+    sqlite.bind_text(stmt, 1, path)
+    sqlite.bind_int (stmt, 2, kind)
+    sqlite.bind_int (stmt, 3, base_rev)
+    sqlite.bind_text(stmt, 4, base_sha1)
+    sqlite.bind_int (stmt, 5, node_state)
+    rc, _ = sqlite.step(stmt, db)
+    sqlite.finalize(stmt)
+    if rc == SQLITE_DONE { return 0 }
+    return -1
+}
+
+// Fetch one row by path. Returns a ptr the caller frees with
+// wc_node_free, or null when the row is missing.
+wc_db_get_node(db: ptr, path: string) -> ptr {
+    stmt, perr = sqlite.prepare(db,
+        "SELECT path, kind, base_rev, base_sha1, state, conflicted FROM nodes WHERE path = ?")
+    if string.length(perr) > 0 { return null }
+    sqlite.bind_text(stmt, 1, path)
+    rc, _ = sqlite.step(stmt, db)
+    out = null
+    if rc == SQLITE_ROW {
+        p          = sqlite.column_text(stmt, 0)
+        kind       = sqlite.column_int (stmt, 1)
+        base_rev   = sqlite.column_int (stmt, 2)
+        base_sha1  = sqlite.column_text(stmt, 3)
+        node_state = sqlite.column_int (stmt, 4)
+        conflicted = sqlite.column_int (stmt, 5)
+        rec = node_record_(p, kind, base_rev, base_sha1, node_state, conflicted)
+        out = wc_node_handle(rec)
+    }
+    sqlite.finalize(stmt)
+    return out
+}
+
+// Upsert key/value into the `info` table. Returns 0 on success,
+// non-zero on failure.
+wc_db_set_info(db: ptr, key: string, value: string) -> int {
+    stmt, perr = sqlite.prepare(db,
+        "INSERT INTO info (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+    if string.length(perr) > 0 { return -1 }
+    sqlite.bind_text(stmt, 1, key)
+    sqlite.bind_text(stmt, 2, value)
+    rc, _ = sqlite.step(stmt, db)
+    sqlite.finalize(stmt)
+    if rc == SQLITE_DONE { return 0 }
+    return -1
+}
+
+// Read the value for `key` from the `info` table. Returns the
+// row's value as an AetherString, or "" when the row is missing.
+// The sqlite column pointer is volatile after finalize, so we
+// detach through string.copy (refcounted AetherString) before the
+// finalize runs. Round 143 retired the C-side strdup-detach
+// helper; .ae callers no longer need an explicit free pair.
+wc_db_get_info(db: ptr, key: string) -> string {
+    stmt, perr = sqlite.prepare(db, "SELECT value FROM info WHERE key = ?")
+    if string.length(perr) > 0 { return "" }
+    sqlite.bind_text(stmt, 1, key)
+    rc, _ = sqlite.step(stmt, db)
+    out = ""
+    if rc == SQLITE_ROW {
+        s = sqlite.column_text(stmt, 0)
+        out = string.copy(s)
+    }
+    sqlite.finalize(stmt)
+    return out
+}
+
+// Snapshot every row in `nodes` into a growable C-backed struct
+// array. Ordered by path for deterministic iteration. Returns a
+// ptr to the nodelist (caller frees with wc_nodelist_free)
+// or null on prepare failure.
+wc_db_list_nodes(db: ptr) -> ptr {
+    stmt, perr = sqlite.prepare(db,
+        "SELECT path, kind, base_rev, base_sha1, state, conflicted FROM nodes ORDER BY path")
+    if string.length(perr) > 0 { return null }
+    n = 0
+    body = ""
+    while sqlite.next_row(stmt, db) == 1 {
+        path       = sqlite.column_text(stmt, 0)
+        kind       = sqlite.column_int (stmt, 1)
+        base_rev   = sqlite.column_int (stmt, 2)
+        base_sha1  = sqlite.column_text(stmt, 3)
+        node_state = sqlite.column_int (stmt, 4)
+        conflicted = sqlite.column_int (stmt, 5)
+        rec = node_record_(path, kind, base_rev, base_sha1, node_state, conflicted)
+        body = string.concat(body, rec)
+        body = string.concat(body, "\x02")
+        n = n + 1
+    }
+    sqlite.finalize(stmt)
+    head = "${n}\x02"
+    packed = string.concat(head, body)
+    return wc_nodelist_handle(packed)
+}
+
+
+// =============================================================================
+// working_copy/db_open.ae
+// =============================================================================
+
+// wc.db lifecycle: open existing / initialise new / close.
+//
+// Round 182 retired working_copy/db_shim.c (69 lines C). The C side
+// existed only to mkdir_p the parent dir before sqlite3_open_v2;
+// with std.fs.mkdir_p and contrib.sqlite.open this is a few lines
+// of Aether.
+//
+// Two distinct entry points (Round 265 split, fixing MB-C):
+//
+//   wc_db_open(wc_root)  — open an EXISTING WC. Returns null if
+//                          $wc_root/.svn/wc.db doesn't already
+//                          exist. Used by everything except checkout.
+//
+//   wc_db_init(wc_root)  — INITIALISE a fresh WC: mkdir
+//                          $wc_root/.svn/pristine, create wc.db,
+//                          install schema. Used only by wc_checkout.
+//
+// Pre-Round 265, wc_db_open both fs.mkdir_p'd .svn/pristine and
+// auto-created the sqlite db, so any caller pointing at a non-WC
+// directory (a fresh WC subdir, an arbitrary path, …) silently got
+// a brand-new isolated WC. `cd $WC/sub && avn add foo.txt` would
+// create `$WC/sub/.svn/wc.db` from nothing; the parent's commit
+// later saw no changes — exactly the MB-C surface in TODO.md.
+
+
+
+// Open an existing wc.db. Returns null if the WC doesn't already
+// exist at $wc_root.
+wc_db_open(wc_root: string) -> ptr {
+    dbpath = "${wc_root}/.svn/wc.db"
+    if util.io_is_regular_file(dbpath) == 0 { return null }
+
+    db, oerr = sqlite.open(dbpath)
+    if string.length(oerr) > 0 { return null }
+
+    // Schema install is idempotent (CREATE TABLE IF NOT EXISTS); a
+    // mid-version repo opens cleanly if the binary has new columns.
+    if wc_db_install_schema(db) != 0 {
+        sqlite.close(db)
+        return null
+    }
+    return db
+}
+
+// Initialise a fresh WC under $wc_root: create .svn/pristine, the
+// wc.db, and the schema. Returns null on any failure. Only
+// wc_checkout (and tests that explicitly stage a fresh WC) should
+// call this.
+wc_db_init(wc_root: string) -> ptr {
+    pristine_dir = "${wc_root}/.svn/pristine"
+    merr = fs.mkdir_p(pristine_dir)
+    if string.length(merr) > 0 { return null }
+
+    dbpath = "${wc_root}/.svn/wc.db"
+    db, oerr = sqlite.open(dbpath)
+    if string.length(oerr) > 0 { return null }
+
+    if wc_db_install_schema(db) != 0 {
+        sqlite.close(db)
+        return null
+    }
+    return db
+}
+
+wc_db_close(db: ptr) {
+    if db == null { return }
+    sqlite.close(db)
+    return
+}
+
+
+// =============================================================================
+// working_copy/db_schema.ae
+// =============================================================================
+
+// wc.db schema install + the Phase 5.13 conflicted-column migration.
+//
+// Called from wc_db_open (working_copy/db_shim.c) immediately after
+// the sqlite handle is opened. Installing the schema from Aether
+// keeps the DDL and the migration rule in one readable place; the
+// C side is left with just sqlite3_open_v2 + handoff.
+//
+// The handle we're given may be a freshly-created DB (install all
+// tables) or an existing one (IF NOT EXISTS keeps that idempotent).
+// The `conflicted` column was added mid-phase; old wc.db files
+// predating it need the ALTER TABLE, hence the PRAGMA probe first.
+
+
+const SQLITE_ROW = 100
+
+// Run the CREATE TABLE IF NOT EXISTS statements and, if this wc.db
+// predates the `conflicted` column on `nodes`, add it with a
+// default of 0. Returns 0 on success, non-zero on any sqlite
+// failure along the way (caller closes the handle and bails).
+//
+// Round 274 / Phase 2.1: pending_merge accumulates merge-record
+// state between `avn merge ...` invocations. avn commit drains it
+// into the commit body's `merged_from` JSON; server resolves rev
+// numbers to SHAs and writes the ledger row. After successful
+// commit the WC clears the table.
+wc_db_install_schema(db: ptr) -> int {
+    err = sqlite.exec(db,
+        "CREATE TABLE IF NOT EXISTS nodes (  path       TEXT PRIMARY KEY,  kind       INT NOT NULL,  base_rev   INT NOT NULL,  base_sha1  TEXT NOT NULL,  state      INT NOT NULL,  conflicted INT NOT NULL DEFAULT 0);CREATE TABLE IF NOT EXISTS info (  key   TEXT PRIMARY KEY,  value TEXT NOT NULL);CREATE TABLE IF NOT EXISTS pending_merge (  target_path   TEXT NOT NULL,  source_branch TEXT NOT NULL,  source_rev    INTEGER NOT NULL,  verb          INTEGER NOT NULL,  PRIMARY KEY (target_path, source_branch, source_rev));")
+    if string.length(err) > 0 { return 1 }
+
+    // Migration: add `conflicted` on older wc.db files that have
+    // `nodes` without it. PRAGMA table_info row layout: (cid, name,
+    // type, notnull, dflt_value, pk) — name is column 1.
+    stmt, perr = sqlite.prepare(db, "PRAGMA table_info(nodes)")
+    if string.length(perr) > 0 { return 0 }
+    has_conflicted = 0
+    while sqlite.next_row(stmt, db) == 1 {
+        nm = sqlite.column_text(stmt, 1)
+        if string.equals(nm, "conflicted") == 1 { has_conflicted = 1 }
+    }
+    sqlite.finalize(stmt)
+    if has_conflicted == 0 {
+        // Ignore err — ALTER TABLE racing against a concurrent add
+        // returns "duplicate column"; harmless, PRAGMA's truth
+        // supersedes on the next open.
+        sqlite.exec(db,
+            "ALTER TABLE nodes ADD COLUMN conflicted INT NOT NULL DEFAULT 0")
+    }
+    return 0
+}
+
+
+
+// =============================================================================
+// working_copy/diff.ae
+// =============================================================================
+
+// avn diff — for every modified tracked file, shell out to
+// /usr/bin/diff -u with svn-style labels and let the diff tool's
+// stdout flow through ours.
+//
+//   wc_diff(wc_root, rel_path_or_empty)
+//     "" rel_path → diff every changed node; otherwise just that one.
+//
+// Round 80 (Gordian) ports the orchestration off working_copy/diff_shim.c.
+// fork + execl /usr/bin/diff goes through std.os.os_run; tmp-file
+// staging via fs.write_atomic; pristine fetch via the canonical
+// wc_pristine_get (Round 129 retired the C wrapper).
+
+
+
+
+// Pristine slurp + size. Round 113 retired the C-side
+// diff_tmp_write_pristine — the whole step (size lookup,
+// blob fetch, tmp write) is one Aether-native function now,
+// thanks to wc_pristine_get returning a length-aware AetherString
+// that std.fs.write_atomic unwraps correctly.
+
+diff_tmp_write_pristine_(wc_root: string, sha: string, path: string) -> int {
+    sz = wc_pristine_size(wc_root, sha)
+    if sz < 0 { return 0 - 1 }
+    data = wc_pristine_get(wc_root, sha)
+    // wc_pristine_get returns "" on miss; even legitimate empty
+    // blobs are size>=1 (avn never stores zero-length pristines),
+    // so length-0 is unambiguously a miss.
+    if string.length(data) == 0 { return 0 - 1 }
+    return util.io_write_atomic(path, data, sz)
+}
+
+
+extern os_getpid_raw() -> int
+
+extern os_run(prog: string, argv_list: ptr, env_list: ptr) -> int
+extern list_new() -> ptr
+extern list_add_raw(list: ptr, item: ptr) -> int
+extern list_free(list: ptr)
+
+// Globally-monotonic counter for tmp filenames so two avn diff calls
+// running concurrently in the same process don't collide.
+tmp_seq_(prefix: string, seq: int) -> string {
+    pid = os_getpid_raw()
+    return "/tmp/diff_${pid}_${seq}_${prefix}.tmp"
+}
+
+// Write `data` to a fresh tmp file. Returns the path or "" on error.
+write_data_tmp_(data: string, len: int, seq: int, label: string) -> string {
+    p = tmp_seq_(label, seq)
+    err = fs.write_atomic(p, data, len)
+    if string.length(err) > 0 { return "" }
+    return p
+}
+
+// Run /usr/bin/diff -u --label LB --label LA before after, inheriting
+// our stdout. Output goes directly. Return value of diff itself is
+// irrelevant — 0 = identical, 1 = differ, 2 = trouble; we always
+// succeed as long as the tool ran.
+run_diff_(label_before: string, label_after: string, before_p: string, after_p: string) {
+    argv = list_new()
+    list_add_raw(argv, "-u")
+    list_add_raw(argv, "--label")
+    list_add_raw(argv, label_before)
+    list_add_raw(argv, "--label")
+    list_add_raw(argv, label_after)
+    list_add_raw(argv, before_p)
+    list_add_raw(argv, after_p)
+    os_run("/usr/bin/diff", argv, null)
+    list_free(argv)
+    return 0
+}
+
+// Emit the svn-style header for a single path.
+emit_header_(rel: string) {
+    println("Index: ${rel}")
+    println("===================================================================")
+    return 0
+}
+
+// Diff a single nodelist row at index i. Returns the next seq value
+// so the caller can keep tmp-file names monotonic across rows.
+diff_one_(wc_root: string, L: ptr, i: int, target: string, seq: int) -> int {
+    rel      = wc_nodelist_path(L, i)
+    kind     = wc_nodelist_kind(L, i)
+    st       = wc_nodelist_state(L, i)
+    brev     = wc_nodelist_base_rev(L, i)
+    base_sha = wc_nodelist_base_sha1(L, i)
+
+    rel = string.copy(rel)
+    base_sha = string.copy(base_sha)
+
+    // Filter to the requested path if non-empty.
+    if string.length(target) > 0 {
+        if string.equals(rel, target) == 0 { return seq }
+    }
+    // Files only; dirs don't have content to diff.
+    if kind != 0 { return seq }
+
+    disk = "${wc_root}/${rel}"
+
+    // Pick the (before, after, label_before, label_after) tuple based
+    // on the node's state. before / after are tmp paths or the disk
+    // path itself; cleanup_before / cleanup_after track what to unlink.
+    before = ""
+    after_p = ""
+    cleanup_before = 0
+    cleanup_after = 0
+    label_before = ""
+    label_after = ""
+
+    if st == 1 {
+        // added: before = empty tmp, after = disk
+        before = write_data_tmp_("", 0, seq, "before")
+        seq = seq + 1
+        after_p = disk
+        cleanup_before = 1
+        label_before = "${rel}\t(nonexistent)"
+        label_after  = "${rel}\t(working copy)"
+    }
+    if st == 2 {
+        // deleted: before = pristine, after = empty tmp
+        psize = wc_pristine_size(wc_root, base_sha)
+        before = tmp_seq_("before", seq)
+        seq = seq + 1
+        rcw = diff_tmp_write_pristine_(wc_root, base_sha, before)
+        if rcw != 0 { return seq }
+        after_p = write_data_tmp_("", 0, seq, "after")
+        seq = seq + 1
+        cleanup_before = 1
+        cleanup_after  = 1
+        label_before = "${rel}\t(revision ${brev})"
+        label_after  = "${rel}\t(nonexistent)"
+        psize = psize        // silence warning; will be removed
+    }
+    if st == 0 {
+        // normal: only diff if disk != pristine.
+        cur = wc_hash_file(wc_root, disk)
+        cur = string.copy(cur)
+        if string.length(cur) == 0 { return seq }
+        if string.equals(cur, base_sha) == 1 { return seq }
+        before = tmp_seq_("before", seq)
+        seq = seq + 1
+        rcw = diff_tmp_write_pristine_(wc_root, base_sha, before)
+        if rcw != 0 { return seq }
+        after_p = disk
+        cleanup_before = 1
+        label_before = "${rel}\t(revision ${brev})"
+        label_after  = "${rel}\t(working copy)"
+    }
+
+    if string.length(before) == 0 { return seq }
+    if string.length(after_p) == 0 { return seq }
+
+    emit_header_(rel)
+    run_diff_(label_before, label_after, before, after_p)
+
+    if cleanup_before == 1 { util.io_unlink(before) }
+    if cleanup_after == 1 { util.io_unlink(after_p) }
+    return seq
+}
+
+wc_diff(wc_root: string, rel_path_or_empty: string) -> int {
+    db = wc_db_open(wc_root)
+    if db == null { return 0 - 1 }
+    L = wc_db_list_nodes(db)
+    n = wc_nodelist_count(L)
+
+    target = ""
+    if string.length(rel_path_or_empty) > 0 { target = rel_path_or_empty }
+    target = string.copy(target)
+
+    seq = 0
+    i = 0
+    while i < n {
+        seq = diff_one_(wc_root, L, i, target, seq)
+        i = i + 1
+    }
+
+    wc_nodelist_free(L)
+    wc_db_close(db)
+    return 0
+}
+
+
+// =============================================================================
+// working_copy/ignore.ae
+// =============================================================================
+
+// svn:ignore pattern matcher — ported from matches_ignore in
+// working_copy/status_shim.c. Compiled with --emit=lib.
+//
+// svn:ignore is a newline-separated list of fnmatch(3) patterns with no
+// FNM_PATHNAME (so `*` matches across `/` too — though in practice the
+// patterns are matched against bare basenames, one directory at a time).
+// Leading/trailing whitespace and empty/blank lines are ignored.
+
+
+// Round 179: string.glob_match (Aether 0.110) replaced the
+// fnmatch-shim FFI. Same POSIX fnmatch(3) semantics with flags=0.
+
+// Trim ASCII spaces, tabs, and '\r' from both ends of `s`.
+trim_ws(s: string) -> string {
+    n = string.length(s)
+    if n == 0 { return "" }
+    lo = 0
+    while lo < n {
+        c = string.char_at(s, lo)
+        if c != 32 && c != 9 && c != 13 { break }
+        lo = lo + 1
+    }
+    hi = n
+    while hi > lo {
+        c = string.char_at(s, hi - 1)
+        if c != 32 && c != 9 && c != 13 { break }
+        hi = hi - 1
+    }
+    if lo == 0 && hi == n { return s }
+    return string.substring(s, lo, hi)
+}
+
+// Does `name` match any fnmatch pattern in the newline-separated list
+// `patterns`? Returns 1 on match, 0 otherwise. Empty/whitespace-only
+// lines are skipped.
+ignore_matches(patterns: string, name: string) -> int {
+    if string.length(patterns) == 0 { return 0 }
+    if string.length(name) == 0 { return 0 }
+    n = string.length(patterns)
+    start = 0
+    i = 0
+    while i <= n {
+        at_end = 0
+        c = 0
+        if i == n { at_end = 1 } else { c = string.char_at(patterns, i) }
+        is_eol = 0
+        if at_end == 1 { is_eol = 1 }
+        if c == 10 { is_eol = 1 }
+        if is_eol == 1 {
+            if i > start {
+                tok = trim_ws(string.substring(patterns, start, i))
+                if string.length(tok) > 0 {
+                    if string.glob_match(tok, name) == 1 { return 1 }
+                }
+            }
+            start = i + 1
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+
+// =============================================================================
+// working_copy/merge.ae
+// =============================================================================
+
+// avn merge — linear rev-range forward / reverse merge.
+//
+//   wc_merge(wc_root, source_path, rev_a, rev_b, target_path)
+//
+// Apply the file-tree diff between two source-path revisions onto the
+// WC. Round 274+ records merge metadata into wc.db's pending_merge
+// table; avn commit drains it into the commit body's `merged_from`
+// JSON; the server writes the merge ledger.
+//
+// rev_a < rev_b: forward merge — apply (source@A → source@B) to WC.
+// rev_a > rev_b: reverse merge — undo (source@B → source@A).
+// rev_a == rev_b: no-op.
+//
+// Round 70 (Gordian) ports the orchestration out of merge_shim.c.
+// The recursive walker is in working_copy/merge_walk.ae; the deletion +
+// add/mod two-pass apply is in working_copy/merge_apply.ae. What was
+// left in C was the glue calling them around the opaque remote_tree
+// handles.
+
+
+
+// (svn:mergeinfo prop helpers retired in Round 276 — wc_merge no
+// longer touches that property; the merge ledger lives server-side.)
+
+// Opaque remote_tree storage in C (merge_shim.c). The recursive walk fills
+// it via remote_tree_add_dir / _add_file; apply passes read it via
+// the mergert_* accessors.
+
+// Walker + apply passes (Aether-side helpers). wc_root is passed
+// explicitly through the walker so add_file can hash files at
+// add-time (Round 140 retired the C-side TLS pointer).
+
+// Server-side merge ledger query (Round 276 / Phase 2.3 — replaces
+// the property-based mergeinfo_eligible_runs from Round 269). The
+// HTTP client returns the same packed "lo:hi\n..." run shape the
+// existing iteration loop already consumes.
+extern fetch_merge_runs(base: string, repo: string,
+                        target_branch: string, source_branch: string,
+                        lo: int, hi: int, as_of_rev: int) -> string
+
+// R284 — runs of revs that are reverse-eligible (latest merge event
+// for the rev is NOT a reverse). Untracked revs ARE included so
+// classical-SVN-style reverse merges of unmerged revs still apply.
+extern fetch_reverse_runs(base: string, repo: string,
+                          target_branch: string, source_branch: string,
+                          lo: int, hi: int, as_of_rev: int) -> string
+
+// pending_merge accumulator (Round 274 / Phase 2.1) — carries
+// merge metadata from `avn merge` to `avn commit`. Server-side,
+// commit_finalise drains pending into rev blob `merged:` field
+// and merge ledger rows.
+
+// Apply one (lo..hi] diff chunk: fetch the source tree at lo and at
+// hi, optionally swap for a reverse merge, run the two-pass apply
+// (deletions then adds/mods). Returns 0 on success, -1 on any
+// fetch/apply failure. Caller owns the wc_db_open/close pairing
+// for performance — opening once per chunk would be wasteful.
+apply_merge_chunk_(wc_root: string, base_url: string, repo: string,
+                   source_path: string, target_path: string,
+                   lo: int, hi: int, reverse: int, db: ptr) -> int {
+    a = util.remote_tree_new()
+    b = util.remote_tree_new()
+    arc = merge_walk_remote(wc_root, base_url, repo, lo, source_path, "", a)
+    brc = merge_walk_remote(wc_root, base_url, repo, hi, source_path, "", b)
+    if arc != 0 {
+        util.remote_tree_free(a); util.remote_tree_free(b); return 0 - 1
+    }
+    if brc != 0 {
+        util.remote_tree_free(a); util.remote_tree_free(b); return 0 - 1
+    }
+
+    if reverse == 1 {
+        tmp = a
+        a = b
+        b = tmp
+    }
+
+    merge_apply_deletions(wc_root, target_path, a, b, db)
+    merge_apply_adds_mods(wc_root, target_path, lo, hi, a, b, db)
+
+    util.remote_tree_free(a)
+    util.remote_tree_free(b)
+    return 0
+}
+
+// Parse one "lo:hi\n" line out of a packed runs string starting at
+// `pos`. Returns (next_pos, lo, hi). next_pos == -1 signals end-of-
+// string (no more lines).
+next_run_(runs: string, pos: int) -> (int, int, int) {
+    n = string.length(runs)
+    if pos >= n { return 0 - 1, 0, 0 }
+    // Find the colon.
+    colon = pos
+    while colon < n {
+        if string.char_at(runs, colon) == 58 { break }   // ':'
+        colon = colon + 1
+    }
+    if colon >= n { return 0 - 1, 0, 0 }
+    // Find the newline (or EOS).
+    nl = colon + 1
+    while nl < n {
+        if string.char_at(runs, nl) == 10 { break }   // '\n'
+        nl = nl + 1
+    }
+    lo_str = string.substring(runs, pos,       colon)
+    hi_str = string.substring(runs, colon + 1, nl)
+    lo = string.get_int(lo_str)
+    hi = string.get_int(hi_str)
+    next_pos = nl + 1
+    return next_pos, lo, hi
+}
+
+wc_merge(wc_root: string, source_path: string,
+                       rev_a: int, rev_b: int,
+                       target_path: string) -> int {
+    if rev_a == rev_b { return 0 }
+    if string.length(target_path) == 0 { target_path = "" }
+
+    reverse = 0
+    if rev_a > rev_b { reverse = 1 }
+
+    // After the swap rev_base < rev_theirs; rev_a / rev_b stay
+    // intact for mergeinfo bookkeeping.
+    rev_base = rev_a
+    rev_theirs = rev_b
+    if reverse == 1 {
+        rev_base = rev_b
+        rev_theirs = rev_a
+    }
+
+    db = wc_db_open(wc_root)
+    if db == null { return 0 - 1 }
+    // get_info returns refcounted AetherString (Round 143).
+    base_url = wc_db_get_info(db, "base_url")
+    repo     = wc_db_get_info(db, "repo")
+    base_rev_s = wc_db_get_info(db, "base_rev")
+    wc_db_close(db)
+    if string.length(base_url) == 0 { return 0 - 1 }
+    if string.length(repo) == 0 { return 0 - 1 }
+    base_url = string.copy(base_url)
+    repo     = string.copy(repo)
+    // WC's base rev — used as the as-of-rev filter for the merge
+    // ledger query so a checkout-at-rev-N sees the eligibility view
+    // it would have seen pre-Round-276 with versioned mergeinfo.
+    wc_base_rev = 0
+    if string.length(base_rev_s) > 0 {
+        if string.try_int(base_rev_s) == 1 {
+            wc_base_rev = string.get_int(base_rev_s)
+        }
+    }
+
+    // MB-G / MB-G-2 (Rounds 268-269): split the requested range
+    // into the maximal-contiguous sub-ranges that aren't already in
+    // svn:mergeinfo, and apply each separately. Without this,
+    // `avn merge -r N:HEAD URL/trunk` after earlier cherry-picks
+    // re-applies revs already in the WC and three-way-merges them
+    // back onto themselves — spurious conflict markers.
+    //
+    // Round 268 only handled the contiguous prefix; Round 269
+    // handles arbitrary gaps (e.g. cherry-picked r5 and r7 then
+    // sweep r4..r9 → two runs (5..6] and (7..9]).
+    //
+    // Round 276 / Phase 2.3: server-side ledger query replaces the
+    // property-based eligibility filter. The HTTP response shape is
+    // identical to what mergeinfo_eligible_runs used to return —
+    // the iteration loop downstream is unchanged.
+    //
+    // Reverse merges (`-c -N`) skip the filter — there's no
+    // ledger-level concept of "blocked" yet; until we add reverse
+    // tracking the merge runs through the full requested range.
+    runs = ""
+    if reverse == 0 {
+        runs = fetch_merge_runs(base_url, repo, target_path, source_path,
+                                rev_base, rev_theirs, wc_base_rev)
+    } else {
+        // R284 — reverse merges filter through /reverse_runs: skip
+        // revs whose latest merge event was already a reverse, so
+        //   merge -c -5; commit; merge -c -5
+        // is a no-op rather than re-reversing. Untracked revs
+        // (never merged either way) are INCLUDED in the runs —
+        // classical-SVN semantics: `merge -c -N` against a fresh
+        // checkout still drops r5's content via the inverse diff.
+        runs = fetch_reverse_runs(base_url, repo, target_path, source_path,
+                                  rev_base, rev_theirs, wc_base_rev)
+    }
+    runs = string.copy(runs)
+
+    if string.length(runs) == 0 {
+        // Whole range already merged — record nothing, no-op.
+        // (Pre-Round-276 also poked the property at this point for
+        // idempotent re-runs; the ledger doesn't need that — the
+        // server only writes a row when commit_finalise sees a
+        // non-empty source-revs list.)
+        return 0
+    }
+
+    // One wc_db handle for the whole iteration.
+    db = wc_db_open(wc_root)
+    if db == null { return 0 - 1 }
+
+    pos = 0
+    rc = 0
+    while pos >= 0 {
+        next_pos, lo, hi = next_run_(runs, pos)
+        if next_pos < 0 { break }
+        rc = apply_merge_chunk_(wc_root, base_url, repo, source_path,
+                                target_path, lo, hi, reverse, db)
+        if rc != 0 { break }
+        // Record each integrated rev into pending_merge so
+        // avn commit can carry the merge metadata server-side.
+        // Reverse merges (verb=2) and applied merges (verb=0)
+        // both go through this path; commit_parse on the server
+        // resolves rev → SHA before writing to merges.db.
+        verb_ = 0
+        if reverse == 1 { verb_ = 2 }
+        rev_i = lo + 1
+        while rev_i <= hi {
+            wc_pending_merge_record(wc_root, target_path, source_path,
+                                    rev_i, verb_)
+            rev_i = rev_i + 1
+        }
+        pos = next_pos
+    }
+    wc_db_close(db)
+    return rc
+}
+
+
+// =============================================================================
+// working_copy/merge3.ae
+// =============================================================================
+
+// Three-way text merge — port of working_copy/merge3_shim.c::merge3
+// + merge3_apply to Aether, made possible by os.run_capture
+// returning (stdout, status, err) tuple as of aether 0.94+.
+//
+// Algorithm: write the three buffers (mine / base / theirs) to
+// temp files; shell out to /usr/bin/diff3 -m with --label MINE /
+// BASE / THEIRS; capture stdout. diff3's exit status:
+//   0 -> clean merge; stdout is the merged file
+//   1 -> conflicts; stdout has <<<<<<< / ======= / >>>>>>> markers
+//   >1 -> diff3 itself errored
+//
+// The two public exports both keep their pre-Round-112 semantics:
+// merge3_apply takes a wc_path + base + theirs + revs, runs
+// the merge, writes merged back atomically, drops .mine / .r<rev>
+// sidecars on conflicts. merge3 takes raw buffers and returns
+// (merged_string, status) via the leading-status-byte channel.
+
+
+
+extern list_new() -> ptr
+extern list_add_raw(list: ptr, item: ptr) -> int
+extern list_free(list: ptr)
+
+// ---- internal helpers ----
+
+// Generate a /tmp path unique enough to avoid collisions across
+// concurrent merges. Uses pid and a per-call sequence stashed in
+// a 1-byte std.bytes scratch... actually std.os has no monotonic
+// counter and Aether functions can't keep statics, so we encode
+// a kind tag (0=mine, 1=base, 2=theirs, 3+ = sidecar slots) and
+// pid into the name. Collisions across processes are pid-bounded;
+// collisions within a process are handled by the kind tag.
+extern os_getpid_raw() -> int
+
+tmp_path_(kind: string) -> string {
+    pid = os_getpid_raw()
+    return "/tmp/m3_${pid}_${kind}.tmp"
+}
+
+write_three_(mine: string, mine_len: int,
+              base: string, base_len: int,
+              theirs: string, theirs_len: int,
+              mp: string, bp: string, tp: string) -> int {
+    if util.io_write_atomic(mp, mine, mine_len) != 0 { return 0 - 1 }
+    if util.io_write_atomic(bp, base, base_len) != 0 {
+        util.io_unlink(mp)
+        return 0 - 1
+    }
+    if util.io_write_atomic(tp, theirs, theirs_len) != 0 {
+        util.io_unlink(mp); util.io_unlink(bp)
+        return 0 - 1
+    }
+    return 0
+}
+
+run_diff3_(mp: string, bp: string, tp: string) -> {
+    argv = list_new()
+    // os.run_capture's build_argv_array prepends prog as argv[0]
+    // for us; this list is argv[1..].
+    list_add_raw(argv, "-m")
+    list_add_raw(argv, "--label")
+    list_add_raw(argv, "MINE")
+    list_add_raw(argv, "--label")
+    list_add_raw(argv, "BASE")
+    list_add_raw(argv, "--label")
+    list_add_raw(argv, "THEIRS")
+    list_add_raw(argv, mp)
+    list_add_raw(argv, bp)
+    list_add_raw(argv, tp)
+    out, status, err = os.run_capture("/usr/bin/diff3", argv, null)
+    list_free(argv)
+    if string.length(err) > 0 {
+        return "", 0 - 1
+    }
+    return out, status
+}
+
+// ---- public ----
+
+// Public buffer-mode merge3. Returns (merged_bytes, status) where:
+//   status == -1  -> error (run_diff3 failure, etc.)
+//   status ==  0  -> clean merge; merged_bytes is the result
+//   status ==  1  -> conflicts; merged_bytes has marker-annotated text
+merge(mine: string, mine_len: int,
+              base: string, base_len: int,
+              theirs: string, theirs_len: int) -> (string, int) {
+    mp = tmp_path_("mine")
+    bp = tmp_path_("base")
+    tp = tmp_path_("theirs")
+
+    if write_three_(mine, mine_len, base, base_len, theirs, theirs_len,
+                     mp, bp, tp) != 0 {
+        return "", 0 - 1
+    }
+
+    merged, status = run_diff3_(mp, bp, tp)
+
+    util.io_unlink(mp); util.io_unlink(bp); util.io_unlink(tp)
+
+    if status < 0 { return "", 0 - 1 }
+    if status > 1 { return "", 0 - 1 }   // diff3 status >= 2 = trouble
+    return merged, status
+}
+
+// Public on-disk merge3. Reads wc_path as `mine`; writes merged
+// back atomically; drops sidecars on conflict. Returns 0 (clean),
+// 1 (conflicts), or -1 (error).
+merge3_apply(wc_path: string,
+                            base: string, base_len: int, base_rev: int,
+                            theirs: string, theirs_len: int, theirs_rev: int) -> int {
+    if util.io_file_size(wc_path) < 0 { return 0 - 1 }
+    mine = util.io_read_file(wc_path)
+    if string.length(mine) == 0 {
+        // Empty file is OK; mine_len = 0.
+    }
+    mine_len = string.length(mine)
+
+    mp = tmp_path_("mine")
+    bp = tmp_path_("base")
+    tp = tmp_path_("theirs")
+
+    if write_three_(mine, mine_len, base, base_len, theirs, theirs_len,
+                     mp, bp, tp) != 0 {
+        return 0 - 1
+    }
+
+    merged, status = run_diff3_(mp, bp, tp)
+
+    util.io_unlink(mp); util.io_unlink(bp); util.io_unlink(tp)
+
+    if status < 0 { return 0 - 1 }
+    if status > 2 { return 0 - 1 }
+
+    merged_len = string.length(merged)
+    if util.io_write_atomic(wc_path, merged, merged_len) != 0 {
+        return 0 - 1
+    }
+
+    if status == 1 {
+        // Conflicts: drop sidecars for `avn resolve`.
+        side_mine = "${wc_path}.mine"
+        util.io_write_atomic(side_mine, mine, mine_len)
+        side_base = "${wc_path}.r${base_rev}"
+        util.io_write_atomic(side_base, base, base_len)
+        side_theirs = "${wc_path}.r${theirs_rev}"
+        util.io_write_atomic(side_theirs, theirs, theirs_len)
+    }
+
+    return status
+}
+
+
+// =============================================================================
+// working_copy/merge_apply.ae
+// =============================================================================
+
+// Apply-pass of wc_merge. Ported from working_copy/merge_shim.c's
+// two-pass diff-and-apply loop.
+//
+// The C side owns:
+//   - the two remote_tree snapshots (A = base tree at rev_base, B = theirs
+//     tree at rev_theirs; both fetched via walk_remote)
+//   - the sqlite3 db handle
+//   - per-path node lookups (wc_db_get_node)
+//
+// This Aether side owns the diff-then-apply logic:
+//   pass 1: A has a path, B doesn't → delete from WC (if tracked)
+//   pass 2: for each path in B:
+//     - dir: mkdir_p + upsert as added if absent
+//     - file:
+//       - same sha in A (unchanged on remote) → skip
+//       - not tracked locally → straight write + pristine + add
+//       - tracked → 3-way merge (mine=disk, base=A, theirs=B)
+
+
+// --- remote_tree accessors (C-side opaque handle; shared with update_shim's
+//     but named uniquely so both can link into the same binary) ----------
+
+// --- db handle + per-path node accessor -----------------------------------
+
+// --- pristine + merge3 ---------------------------------------------------
+
+// --- io helpers ----------------------------------------------------------
+extern path_join_rel(prefix: string, name: string) -> string
+
+// --- stderr trace --------------------------------------------------------
+// Round 180: switched to std.io.stderr_write (Aether 0.110).
+merge_stderr_(s: string) {
+    io.stderr_write(s, string.length(s))
+    return
+}
+
+// Map a source-relative path `p` into the WC under `target_path` (may
+// be empty, meaning apply at WC root).
+map_wc_rel(target_path: string, p: string) -> string {
+    return path_join_rel(target_path, p)
+}
+
+// =========================================================================
+// pass 1: deletions — A has a path, B doesn't.
+// =========================================================================
+
+merge_apply_deletions(wc_root: string, target_path: string,
+                             a_rt: ptr, b_rt: ptr, db: ptr) {
+    n_a = util.remote_tree_count(a_rt)
+    i = 0
+    while i < n_a {
+        remote_path = util.remote_tree_path_at(a_rt, i)
+        remote_kind = util.remote_tree_kind_at(a_rt, i)
+        if util.remote_tree_find_by_path(b_rt, remote_path) < 0 {
+            wc_rel = map_wc_rel(target_path, remote_path)
+            disk = path_join_rel(wc_root, wc_rel)
+            if wc_db_node_exists(db, wc_rel) == 1 {
+                n = wc_db_get_node(db, wc_rel)
+                if string.length(wc_node_base_sha1(n)) >= 0 {
+                    brev = wc_node_base_rev(n)
+                    bsha = wc_node_base_sha1(n)
+                    kind = wc_node_kind(n)
+                    // Snapshot bsha before freeing.
+                    bsha_copy = string.concat(bsha, "")
+                    wc_node_free(n)
+                    wc_db_upsert_node(db, wc_rel, kind, brev, bsha_copy, 2)
+                }
+                if remote_kind == 0 { util.io_unlink(disk) }
+                if remote_kind == 1 { util.io_rmdir(disk) }
+            }
+        }
+        i = i + 1
+    }
+}
+
+
+// =========================================================================
+// pass 2: adds and mods from B.
+// =========================================================================
+
+merge_apply_adds_mods(wc_root: string, target_path: string,
+                             rev_a: int, rev_b: int,
+                             a_rt: ptr, b_rt: ptr, db: ptr) {
+    n_b = util.remote_tree_count(b_rt)
+    i = 0
+    while i < n_b {
+        rb_path = util.remote_tree_path_at(b_rt, i)
+        rb_kind = util.remote_tree_kind_at(b_rt, i)
+        rb_sha  = util.remote_tree_sha_at(b_rt, i)
+        rb_data = util.remote_tree_data_at(b_rt, i)
+        rb_len  = util.remote_tree_data_len_at(b_rt, i)
+
+        wc_rel = map_wc_rel(target_path, rb_path)
+        disk = path_join_rel(wc_root, wc_rel)
+
+        if rb_kind == 1 {
+            // Dir.
+            if util.io_mkdir_p(disk) == 0 {
+                if wc_db_node_exists(db, wc_rel) == 0 {
+                    wc_db_upsert_node(db, wc_rel, 1, 0, "", 1)
+                }
+            }
+        }
+        if rb_kind == 0 {
+            // File.
+            a_idx = util.remote_tree_find_by_path(a_rt, rb_path)
+            skip = 0
+            if a_idx >= 0 {
+                if util.remote_tree_kind_at(a_rt, a_idx) == 0 {
+                    if string.equals(util.remote_tree_sha_at(a_rt, a_idx), rb_sha) == 1 {
+                        skip = 1     // unchanged on remote between A and B
+                    }
+                }
+            }
+            if skip == 0 {
+                exists_on_disk = util.io_exists(disk)
+                tracked = wc_db_node_exists(db, wc_rel)
+                if exists_on_disk == 0 {
+                    // Not on disk — new add.
+                    if util.io_write_atomic(disk, rb_data, rb_len) == 0 {
+                        wc_pristine_put(wc_root, rb_data, rb_len)
+                        if tracked == 0 {
+                            wc_db_upsert_node(db, wc_rel, 0, 0, "", 1)
+                        }
+                    }
+                }
+                if exists_on_disk == 1 {
+                    if tracked == 0 {
+                        // On disk but untracked — same new-add path.
+                        if util.io_write_atomic(disk, rb_data, rb_len) == 0 {
+                            wc_pristine_put(wc_root, rb_data, rb_len)
+                            wc_db_upsert_node(db, wc_rel, 0, 0, "", 1)
+                        }
+                    }
+                    if tracked == 1 {
+                        // Tracked + on disk — 3-way merge.
+                        a_data = ""
+                        a_len = 0
+                        if a_idx >= 0 {
+                            a_data = util.remote_tree_data_at(a_rt, a_idx)
+                            a_len = util.remote_tree_data_len_at(a_rt, a_idx)
+                        }
+                        m3rc = merge3_apply(disk,
+                                                  a_data, a_len, rev_a,
+                                                  rb_data, rb_len, rev_b)
+                        if m3rc == 1 {
+                            wc_db_set_conflicted(db, wc_rel, 1)
+                            merge_stderr_("C    ")
+                            merge_stderr_(wc_rel)
+                            merge_stderr_("\n")
+                        }
+                        if m3rc < 0 {
+                            merge_stderr_("error merging ")
+                            merge_stderr_(wc_rel)
+                            merge_stderr_("; left alone\n")
+                        }
+                        // m3rc == 0: clean merge; pristine stays as is
+                        // (the WC's original head), commit picks it up
+                        // via disk-vs-pristine status.
+                    }
+                }
+            }
+        }
+
+        i = i + 1
+    }
+}
+
+
+
+// =============================================================================
+// working_copy/merge_walk.ae
+// =============================================================================
+
+// Recursive remote-tree walker for `avn merge`.
+//
+// Differs from update_walk in that the URL is built from
+// source_path + sub_prefix but entries are recorded against
+// sub_prefix only — the merge picks up `source_path@rev` contents
+// and replays them into the current WC's root.
+//
+// Previously a 33-line recursive C static in working_copy/merge_shim.c.
+
+
+
+extern remote_list(base_url: string, repo_name: string, rev: int, path: string) -> ptr
+extern remote_list_count(L: ptr) -> int
+extern remote_list_name(L: ptr, i: int) -> string
+extern remote_list_kind(L: ptr, i: int) -> string
+extern remote_list_free(L: ptr)
+extern remote_cat(base_url: string, repo_name: string, rev: int, path: string) -> string
+extern remote_free(p: string)
+
+extern path_join_rel(prefix: string, name: string) -> string
+
+
+// Round 140: wc_root threaded through explicitly so add_file can
+// compute per-file sha1; replaces the C-side TLS pointer.
+merge_walk_remote(wc_root: string,
+                          base_url: string, repo: string, rev: int,
+                          source_path: string, sub_prefix: string,
+                          rt: ptr) -> int {
+    full = path_join_rel(source_path, sub_prefix)
+    full = string.copy(full)
+
+    L = remote_list(base_url, repo, rev, full)
+    if L == null { return -1 }
+
+    n = remote_list_count(L)
+    result = 0
+    i = 0
+    while i < n {
+        if result == 0 {
+            name = remote_list_name(L, i)
+            name = string.copy(name)
+            kind = remote_list_kind(L, i)
+            kind = string.copy(kind)
+            rel = path_join_rel(sub_prefix, name)
+            rel = string.copy(rel)
+
+            if string.equals(kind, "dir") == 1 {
+                util.remote_tree_add_dir(rt, rel)
+                if merge_walk_remote(wc_root, base_url, repo, rev,
+                                           source_path, rel, rt) != 0 {
+                    result = -1
+                }
+            }
+            if string.equals(kind, "dir") == 0 {
+                remote_full = path_join_rel(full, name)
+                remote_full = string.copy(remote_full)
+                data = remote_cat(base_url, repo, rev, remote_full)
+                if string.length(data) == 0 {
+                    result = -1
+                }
+                if result == 0 {
+                    sha = ""
+                    if string.length(wc_root) > 0 {
+                        sha = wc_hash_bytes(wc_root, data, string.length(data))
+                    }
+                    util.remote_tree_add_file(rt, rel, data, string.length(data), sha)
+                    remote_free(data)
+                }
+            }
+        }
+        i = i + 1
+    }
+    remote_list_free(L)
+    return result
+}
+
+
+
+// =============================================================================
+// working_copy/mutate.ae
+// =============================================================================
+
+// WC-level structural ops: add / rm / cp / mv.
+//
+// These are tiny: they only change wc.db state rows plus on-disk
+// file presence. The actual file write (for add) is the user's
+// responsibility — they create the file first and then `avn add
+// PATH` registers it. `avn rm PATH` removes from disk AND marks
+// the node deleted in the db.
+//
+// State transitions (matching the legacy mutate_shim.c / cp_shim.c
+// pre-Round 63 behaviour):
+//   add(path):
+//     - file must exist on disk, must not already be tracked
+//     - upsert nodes(path, kind, 0, "", 1=added)
+//   rm(path):
+//     - if untracked, return -1
+//     - if state=added, delete the row entirely (revert the add).
+//       Do NOT delete the on-disk file — user just added it.
+//     - else mark state=deleted, keep base_rev / base_sha1 so revert
+//       can restore from pristine. Then unlink/rmdir on disk
+//       best-effort.
+//   cp(src, dst):
+//     - src must be tracked (file kind only — Phase 5.9 limitation)
+//       and present on disk
+//     - dst must not be tracked nor present on disk
+//     - copy bytes src→dst atomically, register dst with state=added
+//   mv(src, dst):
+//     - cp(src, dst), then rm(src). One atomic-ish sequence.
+
+
+// db lifecycle stays in C (db_shim.c sqlite3_open + close).
+
+// Node CRUD lives in db_nodes.ae (already an Aether export).
+
+// Node-handle accessors live in db_shim.c.
+
+// io helpers come from subr/io.ae.
+
+// Return 0 on success, -1 if path already tracked, -2 if not on disk,
+// -3 on db error.
+wc_add(wc_root: string, rel_path: string) -> int {
+    disk = "${wc_root}/${rel_path}"
+    skind = util.io_stat_kind(disk)
+    if skind == 0 { return 0 - 2 }
+
+    kind = 0
+    if skind == 2 { kind = 1 }   // dir
+
+    db = wc_db_open(wc_root)
+    if db == null { return 0 - 3 }
+
+    if wc_db_node_exists(db, rel_path) == 1 {
+        // Already tracked — could be a previously-scheduled delete
+        // we're un-deleting. Phase 5 just rejects; user can `avn rm`
+        // first to re-add.
+        wc_db_close(db)
+        return 0 - 1
+    }
+
+    rc = wc_db_upsert_node(db, rel_path, kind, 0, "", 1)   // 1 = added
+    wc_db_close(db)
+    if rc == 0 { return 0 }
+    return 0 - 3
+}
+
+
+// Return 0 on success, -1 if not tracked, -2 on db error.
+wc_rm(wc_root: string, rel_path: string) -> int {
+    db = wc_db_open(wc_root)
+    if db == null { return 0 - 2 }
+
+    n = wc_db_get_node(db, rel_path)
+    if n == null {
+        wc_db_close(db)
+        return 0 - 1
+    }
+
+    state    = wc_node_state(n)
+    kind     = wc_node_kind(n)
+    base_rev = wc_node_base_rev(n)
+    base_sha = wc_node_base_sha1(n)
+    base_sha = string.copy(base_sha)
+    wc_node_free(n)
+
+    if state == 1 {
+        // Revert the add — drop the row. Keep the on-disk file; user
+        // didn't intend to lose content they just added.
+        rc = wc_db_delete_node(db, rel_path)
+        wc_db_close(db)
+        if rc == 0 { return 0 }
+        return 0 - 2
+    }
+
+    // Normal or already-deleted: mark deleted but keep base_rev /
+    // base_sha so revert can restore from pristine later.
+    rc = wc_db_upsert_node(db, rel_path, kind, base_rev, base_sha, 2)   // 2 = deleted
+    wc_db_close(db)
+    if rc != 0 { return 0 - 2 }
+
+    // Remove file/dir from disk best-effort. Reference avn keeps
+    // deleted files until commit in some cases; we remove now since
+    // this CLI is scoped for "commit soon".
+    disk = "${wc_root}/${rel_path}"
+    if kind == 0 { util.io_unlink(disk) } else { util.io_rmdir(disk) }
+
+    return 0
+}
+
+
+// Binary-safe file copy via std.fs.read_binary + write_atomic.
+// Returns 0 on success, -1 on any failure.
+copy_file_(src: string, dst: string) -> int {
+    data, n, rerr = fs.read_binary(src)
+    if string.length(rerr) > 0 { return 0 - 1 }
+    werr = fs.write_atomic(dst, data, n)
+    if string.length(werr) > 0 { return 0 - 1 }
+    return 0
+}
+
+// Return: 0 ok, -1 src not tracked, -2 dst already exists,
+//         -3 src not on disk, -4 other error.
+wc_cp(wc_root: string, src: string, dst: string) -> int {
+    db = wc_db_open(wc_root)
+    if db == null { return 0 - 4 }
+
+    sn = wc_db_get_node(db, src)
+    if sn == null {
+        wc_db_close(db)
+        return 0 - 1
+    }
+    src_kind = wc_node_kind(sn)
+    wc_node_free(sn)
+    if src_kind != 0 {
+        // Directory copy not supported in Phase 5.9.
+        wc_db_close(db)
+        return 0 - 4
+    }
+
+    if wc_db_node_exists(db, dst) == 1 {
+        wc_db_close(db)
+        return 0 - 2
+    }
+
+    src_disk = "${wc_root}/${src}"
+    dst_disk = "${wc_root}/${dst}"
+
+    if util.io_exists(src_disk) == 0 {
+        wc_db_close(db)
+        return 0 - 3
+    }
+    if util.io_exists(dst_disk) == 1 {
+        wc_db_close(db)
+        return 0 - 2
+    }
+
+    if copy_file_(src_disk, dst_disk) != 0 {
+        wc_db_close(db)
+        return 0 - 4
+    }
+
+    // Register dst as state=added. Content sha1 unknown to the db
+    // at this stage — leave empty; next commit will compute it from
+    // the on-disk file (same path as any freshly-added node).
+    rc = wc_db_upsert_node(db, dst, 0, 0, "", 1)   // file, added
+    wc_db_close(db)
+    if rc == 0 { return 0 }
+    return 0 - 4
+}
+
+
+// mv = cp + rm. Phase 5.9 best-effort: a failed rm leaves a half-
+// finished state (dst copy with src still tracked).
+wc_mv(wc_root: string, src: string, dst: string) -> int {
+    rc = wc_cp(wc_root, src, dst)
+    if rc != 0 { return rc }
+    rc = wc_rm(wc_root, src)
+    if rc != 0 { return 0 - 4 }
+    return 0
+}
+
+
+// =============================================================================
+// working_copy/pending_merge.ae
+// =============================================================================
+
+
+const SQLITE_ROW  = 100
+const SQLITE_DONE = 101
+
+
+// Record one (target_path, source_branch, source_rev, verb) row.
+// Idempotent on the primary key — re-recording the same triple is
+// a no-op. Returns 0 on success, -1 on infrastructure failure, -2
+// if there's already a row with the SAME (target, source, rev)
+// but a DIFFERENT verb (caller's commit would be inconsistent —
+// reject early).
+//
+// `target_path` is the merge's WC anchor — what the user passed
+// to `avn merge ... TARGET`. Empty string means the merge target
+// was the WC root.
+wc_pending_merge_record(wc_root: string,
+                               target_path: string,
+                               source_branch: string,
+                               source_rev: int,
+                               verb: int) -> int {
+    if string.length(source_branch) == 0 { return 0 - 1 }
+
+    db = wc_db_open(wc_root)
+    if db == null { return 0 - 1 }
+
+    // Reject conflicting verb on the same (target, source, rev).
+    chk, perr = sqlite.prepare(db,
+        "SELECT verb FROM pending_merge WHERE target_path = ? AND source_branch = ? AND source_rev = ?")
+    if string.length(perr) > 0 { wc_db_close(db); return 0 - 1 }
+    sqlite.bind_text(chk, 1, target_path)
+    sqlite.bind_text(chk, 2, source_branch)
+    sqlite.bind_int (chk, 3, source_rev)
+    sc, _ = sqlite.step(chk, db)
+    if sc == SQLITE_ROW {
+        existing = sqlite.column_int(chk, 0)
+        sqlite.finalize(chk)
+        if existing != verb { wc_db_close(db); return 0 - 2 }
+        wc_db_close(db)
+        return 0
+    }
+    sqlite.finalize(chk)
+
+    stmt, p2 = sqlite.prepare(db,
+        "INSERT INTO pending_merge (target_path, source_branch, source_rev, verb) VALUES (?, ?, ?, ?)")
+    if string.length(p2) > 0 { wc_db_close(db); return 0 - 1 }
+    sqlite.bind_text(stmt, 1, target_path)
+    sqlite.bind_text(stmt, 2, source_branch)
+    sqlite.bind_int (stmt, 3, source_rev)
+    sqlite.bind_int (stmt, 4, verb)
+    sc2, _ = sqlite.step(stmt, db)
+    sqlite.finalize(stmt)
+    wc_db_close(db)
+    if sc2 != SQLITE_DONE { return 0 - 1 }
+    return 0
+}
+
+// Number of pending merge rows. avn commit calls this to decide
+// whether to attach a merged_from object to the commit body.
+wc_pending_merge_count(wc_root: string) -> int {
+    db = wc_db_open(wc_root)
+    if db == null { return 0 }
+
+    stmt, perr = sqlite.prepare(db, "SELECT COUNT(*) FROM pending_merge")
+    if string.length(perr) > 0 { wc_db_close(db); return 0 }
+    sc, _ = sqlite.step(stmt, db)
+    n = 0
+    if sc == SQLITE_ROW { n = sqlite.column_int(stmt, 0) }
+    sqlite.finalize(stmt)
+    wc_db_close(db)
+    return n
+}
+
+// Source branch of the pending merges. Phase 2.1 assumes a single
+// source branch per pending session — the cherry-pick scenarios
+// in the convergence test are all-from-trunk, all-from-main, etc.
+// Returns "" if there are no pending merges.
+//
+// Cross-source mixing (avn merge URL/foo + avn merge URL/bar
+// before avn commit) returns the FIRST source branch encountered,
+// which may not match all rows. Phase 2.x handling of multi-source
+// is filed; for now, callers can scan via the per-row accessors
+// if they need the truth.
+wc_pending_merge_source_branch(wc_root: string) -> string {
+    db = wc_db_open(wc_root)
+    if db == null { return "" }
+
+    stmt, perr = sqlite.prepare(db,
+        "SELECT source_branch FROM pending_merge ORDER BY source_branch LIMIT 1")
+    if string.length(perr) > 0 { wc_db_close(db); return "" }
+    sc, _ = sqlite.step(stmt, db)
+    out = ""
+    if sc == SQLITE_ROW {
+        out = string.copy(sqlite.column_text(stmt, 0))
+    }
+    sqlite.finalize(stmt)
+    wc_db_close(db)
+    return out
+}
+
+// Target path of the pending merges. Same single-target assumption
+// as the source-branch getter — first row wins on multi-target.
+wc_pending_merge_target_path(wc_root: string) -> string {
+    db = wc_db_open(wc_root)
+    if db == null { return "" }
+
+    stmt, perr = sqlite.prepare(db,
+        "SELECT target_path FROM pending_merge ORDER BY target_path LIMIT 1")
+    if string.length(perr) > 0 { wc_db_close(db); return "" }
+    sc, _ = sqlite.step(stmt, db)
+    out = ""
+    if sc == SQLITE_ROW {
+        out = string.copy(sqlite.column_text(stmt, 0))
+    }
+    sqlite.finalize(stmt)
+    wc_db_close(db)
+    return out
+}
+
+// Verb of the pending merges. Like _source_branch above, returns
+// the first row's verb when multiple verbs are present; defaults
+// to 0 (applied) when no rows.
+wc_pending_merge_verb(wc_root: string) -> int {
+    db = wc_db_open(wc_root)
+    if db == null { return 0 }
+
+    stmt, perr = sqlite.prepare(db,
+        "SELECT verb FROM pending_merge ORDER BY source_branch, source_rev LIMIT 1")
+    if string.length(perr) > 0 { wc_db_close(db); return 0 }
+    sc, _ = sqlite.step(stmt, db)
+    v = 0
+    if sc == SQLITE_ROW { v = sqlite.column_int(stmt, 0) }
+    sqlite.finalize(stmt)
+    wc_db_close(db)
+    return v
+}
+
+// Drain the pending source revs as a "\n"-separated decimal-int
+// string ("5\n6\n7\n"). Server resolves each int to a SHA via
+// repos_rev_blob_sha at commit-parse time. Returns "" if empty.
+//
+// Doesn't delete anything — `wc_pending_merge_clear` does that
+// after the commit succeeds. Drain-then-clear gives wc_commit a
+// chance to abort cleanly if the server rejects.
+wc_pending_merge_drain(wc_root: string) -> string {
+    db = wc_db_open(wc_root)
+    if db == null { return "" }
+
+    stmt, perr = sqlite.prepare(db,
+        "SELECT source_rev FROM pending_merge ORDER BY source_rev")
+    if string.length(perr) > 0 { wc_db_close(db); return "" }
+
+    out = ""
+    sc, _ = sqlite.step(stmt, db)
+    while sc == SQLITE_ROW {
+        rev = sqlite.column_int(stmt, 0)
+        out = string.concat(out, "${rev}")
+        out = string.concat(out, "\n")
+        sc, _ = sqlite.step(stmt, db)
+    }
+    sqlite.finalize(stmt)
+    wc_db_close(db)
+    return out
+}
+
+// Round 278 / Phase 2.3a: dump the pending_merge table for `avn
+// merged --pending`. Returns one row per line:
+//   <target_path>\t<source_branch>\t<source_rev>\t<verb>
+// Empty if nothing pending. Verb-as-int (0 applied, 1 record-only,
+// 2 reverse) — caller turns into a label.
+wc_pending_merge_dump(wc_root: string) -> string {
+    db = wc_db_open(wc_root)
+    if db == null { return "" }
+
+    stmt, perr = sqlite.prepare(db,
+        "SELECT target_path, source_branch, source_rev, verb FROM pending_merge ORDER BY target_path, source_branch, source_rev")
+    if string.length(perr) > 0 { wc_db_close(db); return "" }
+
+    out = ""
+    sc, _ = sqlite.step(stmt, db)
+    while sc == SQLITE_ROW {
+        tgt = sqlite.column_text(stmt, 0)
+        src = sqlite.column_text(stmt, 1)
+        rev = sqlite.column_int (stmt, 2)
+        v   = sqlite.column_int (stmt, 3)
+        out = string.concat(out, tgt)
+        out = string.concat(out, "\t")
+        out = string.concat(out, src)
+        out = string.concat(out, "\t")
+        out = string.concat(out, "${rev}")
+        out = string.concat(out, "\t")
+        out = string.concat(out, "${v}")
+        out = string.concat(out, "\n")
+        sc, _ = sqlite.step(stmt, db)
+    }
+    sqlite.finalize(stmt)
+    wc_db_close(db)
+    return out
+}
+
+// Wipe pending_merge. Called after a commit that has carried the
+// merge metadata to the server.
+wc_pending_merge_clear(wc_root: string) -> int {
+    db = wc_db_open(wc_root)
+    if db == null { return 0 - 1 }
+    err = sqlite.exec(db, "DELETE FROM pending_merge")
+    wc_db_close(db)
+    if string.length(err) > 0 { return 0 - 1 }
+    return 0
+}
+
+
+// =============================================================================
+// working_copy/pristine.ae
+// =============================================================================
+
+// Working-copy pristine store — put / get / has / size / hash.
+//
+// This file replaces the bulk of working_copy/pristine_shim.c. SHA-1 /
+// SHA-256 come from std.cryptography (0.88), zlib deflate/inflate
+// from std.zlib (0.90+), binary-safe file I/O from std.fs
+// (read_binary 0.82, write_binary 0.86). The wc.db info-table
+// lookup for the configured hash algorithm (Round 37) reads via
+// the same subr.sqlite bindings the fs_fs rep-store uses. What
+// stays in C: three tiny byte-level helpers — pack_le32, binary-
+// safe concat, binary-safe slice — since std.string has no byte-
+// construction primitive that doesn't run through an intermediate
+// C-style string.
+//
+// On-disk format (identical to fs_fs rep-store, and unchanged from
+// the C implementation):
+//
+//   $wc/.svn/pristine/aa/bb/<sha1>.rep
+//   byte 0       : 'R' (raw) or 'Z' (zlib)
+//   bytes 1..4   : uncompressed length, 4-byte little-endian
+//   bytes 5..    : payload (compressed if 'Z')
+//
+// Dedup rule: identical blobs hash the same under the repo's
+// configured algorithm, so the file name *is* the cache — if the
+// .rep file exists, pristine_put is a no-op.
+//
+// Compression rule (also matches fs_fs): only keep the zlib output
+// if it saves at least 16 bytes. Level 6, same default the C
+// version used.
+
+
+
+const SQLITE_ROW = 100
+
+// Read the wc's configured hash algorithm from .svn/wc.db's info
+// table. Returns "sha1" when the DB is missing, the info row is
+// absent, or the stored value is empty — mirrors the C wrapper's
+// fallback that every caller relied on. The concrete caller never
+// sees an empty string.
+wc_hash_algo(wc_root: string) -> string {
+    db, oerr = sqlite.open("${wc_root}/.svn/wc.db")
+    if string.length(oerr) > 0 { return "sha1" }
+    stmt, perr = sqlite.prepare(db, "SELECT value FROM info WHERE key = ?")
+    if string.length(perr) > 0 { sqlite.close(db); return "sha1" }
+    sqlite.bind_text(stmt, 1, "hash_algo")
+    rc, _ = sqlite.step(stmt, db)
+    algo = ""
+    if rc == SQLITE_ROW {
+        raw = sqlite.column_text(stmt, 0)
+        algo = string.copy(raw)
+    }
+    sqlite.finalize(stmt)
+    sqlite.close(db)
+    if string.length(algo) == 0 { return "sha1" }
+    return algo
+}
+
+// Path builder already lives in working_copy/pristine_path.ae.
+
+// io helpers.
+
+// Binary-safe byte ops live in util/module.ae — Phase 2a migration.
+
+// ---- hashing -------------------------------------------------------------
+
+// Hash `data[0..length]` using the wc's configured algorithm. Returns
+// the hex digest, or "" on failure.
+wc_hash_bytes(wc_root: string, data: string, length: int) -> string {
+    algo = wc_hash_algo(wc_root)
+    if string.equals(algo, "sha256") == 1 {
+        digest, err = cryptography.sha256_hex(data, length)
+        if string.length(err) > 0 { return "" }
+        return digest
+    }
+    // sha1 is the default for anything else (including "sha1" and
+    // legacy empty).
+    digest, err = cryptography.sha1_hex(data, length)
+    if string.length(err) > 0 { return "" }
+    return digest
+}
+
+
+// Hash the contents of `path` on disk. "" on I/O or hash failure.
+wc_hash_file(wc_root: string, path: string) -> string {
+    content, clen, err = fs.read_binary(path)
+    if string.length(err) > 0 { return "" }
+    return wc_hash_bytes(wc_root, content, clen)
+}
+
+
+// ---- pristine put --------------------------------------------------------
+
+// Write `data[0..length]` into the pristine store. Returns the sha
+// hex string on success (or the existing sha if the blob is already
+// cached), "" on failure.
+wc_pristine_put(wc_root: string, data: string, length: int) -> string {
+    sha = wc_hash_bytes(wc_root, data, length)
+    if string.length(sha) == 0 { return "" }
+    sha = string.copy(sha)
+
+    path = string.copy(pristine_path(wc_root, sha))
+    if util.io_exists(path) == 1 { return sha }
+
+    dir = string.copy(pristine_dir(wc_root, sha))
+    if util.io_mkdir_p(dir) != 0 { return "" }
+
+    // Decide RAW vs ZLIB. Same threshold fs_fs uses: zlib only if
+    // it saves at least 16 bytes over raw.
+    use_zlib = 0
+    zbytes = ""
+    zlen = 0
+    if length > 0 {
+        zb, zl, zerr = zlib.deflate(data, length, 6)
+        if string.length(zerr) == 0 {
+            if zl + 16 < length {
+                use_zlib = 1
+                zbytes = zb
+                zlen = zl
+            }
+        }
+    }
+
+    // Build the file buffer: header byte + 4-byte LE length + payload.
+    header_tag = "R"
+    if use_zlib == 1 { header_tag = "Z" }
+
+    le = util.pack_le32(length)
+
+    body = data
+    body_len = length
+    if use_zlib == 1 {
+        body = zbytes
+        body_len = zlen
+    }
+
+    buf = util.concat(header_tag, 1, le, 4)
+    buf = util.concat(buf, 5, body, body_len)
+
+    total_len = 1 + 4 + body_len
+    werr = fs.write_binary(path, buf, total_len)
+    if string.length(werr) > 0 { return "" }
+    return sha
+}
+
+
+// ---- pristine get --------------------------------------------------------
+
+// Read the pristine blob for `sha`. Returns the bytes as an
+// AetherString (binary-safe via string_new_with_length). "" on miss
+// or corruption.
+wc_pristine_get(wc_root: string, sha: string) -> string {
+    path = string.copy(pristine_path(wc_root, sha))
+    file, fsize, err = fs.read_binary(path)
+    if string.length(err) > 0 { return "" }
+    if fsize < 5 { return "" }
+
+    header = string.char_at(file, 0)
+    uncompressed = unpack_le32(file, 1)
+
+    payload_len = fsize - 5
+    payload = util.slice(file, fsize, 5, fsize)
+
+    if header == 82 {          // 'R'
+        if payload_len != uncompressed { return "" }
+        return payload
+    }
+    if header == 90 {          // 'Z'
+        bytes, outlen, ierr = zlib.inflate(payload, payload_len)
+        if string.length(ierr) > 0 { return "" }
+        if outlen != uncompressed { return "" }
+        return bytes
+    }
+    return ""
+}
+
+
+// ---- has / size ---------------------------------------------------------
+
+wc_pristine_has(wc_root: string, sha: string) -> int {
+    path = string.copy(pristine_path(wc_root, sha))
+    return util.io_is_regular_file(path)
+}
+
+wc_pristine_size(wc_root: string, sha: string) -> int {
+    path = string.copy(pristine_path(wc_root, sha))
+    file, fsize, err = fs.read_binary(path)
+    if string.length(err) > 0 { return -1 }
+    if fsize < 5 { return -1 }
+    return unpack_le32(file, 1)
+}
+
+// ---- little-endian uint32 unpack ---------------------------------------
+
+// char_at returns the byte as a non-negative int in [0,255], so no
+// sign-extension masking is needed.
+unpack_le32(s: string, pos: int) -> int {
+    b0 = string.char_at(s, pos)
+    b1 = string.char_at(s, pos + 1)
+    b2 = string.char_at(s, pos + 2)
+    b3 = string.char_at(s, pos + 3)
+    return b0 | (b1 << 8) | (b2 << 16) | (b3 << 24)
+}
+
+
+// =============================================================================
+// working_copy/pristine_path.ae
+// =============================================================================
+
+// Pristine-store path builder for working_copy/pristine_shim.c.
+//
+// Layout is a two-level fanout over the first four hex nibbles of the
+// content sha:
+//
+//   <wc_root>/.svn/pristine/<s0s1>/<s2s3>/<sha>.rep
+//   <wc_root>/.svn/pristine/<s0s1>/<s2s3>              (dir-only)
+//
+// Callers that need the dir (for mkdir -p) use pristine_dir; callers
+// that need the full file path use pristine_path. The sha is assumed
+// to be at least 4 chars long (sha1 = 40, sha256 = 64); shorter inputs
+// return "".
+
+
+pristine_path(wc_root: string, sha: string) -> string {
+    if string.length(sha) < 4 { return "" }
+    out = string.concat(wc_root, "/.svn/pristine/")
+    out = string.concat(out, string.substring(sha, 0, 2))
+    out = string.concat(out, "/")
+    out = string.concat(out, string.substring(sha, 2, 4))
+    out = string.concat(out, "/")
+    out = string.concat(out, sha)
+    return string.concat(out, ".rep")
+}
+
+pristine_dir(wc_root: string, sha: string) -> string {
+    if string.length(sha) < 4 { return "" }
+    out = string.concat(wc_root, "/.svn/pristine/")
+    out = string.concat(out, string.substring(sha, 0, 2))
+    out = string.concat(out, "/")
+    out = string.concat(out, string.substring(sha, 2, 4))
+    return out
+}
+
+
+// =============================================================================
+// working_copy/props.ae
+// =============================================================================
+
+// WC-side properties — five operations over wc.db's `props` table:
+//
+//   wc_propset(wc_root, path, name, value) -> 0 ok, -2 untracked
+//   wc_propget(wc_root, path, name)        -> "" unset
+//   wc_propdel(wc_root, path, name)        -> 0 ok
+//   wc_proplist(wc_root, path)             -> handle (C-side)
+//   wc_props_free(s)                       -> trampoline to free()
+//
+// Round 66 ports the SQL drive out of working_copy/props_shim.c. The
+// proplist-handle struct + accessors stay in C (props_shim.c) — same
+// pattern as db_nodes.ae + wc_nodelist_*: Aether drives the
+// SELECT loop and calls a C-side _append per row.
+
+
+const SQLITE_ROW  = 100
+const SQLITE_DONE = 101
+
+
+// Storage primitives for the proplist handle (C-side, props_shim.c).
+// Proplist handle constructor (props_shim.c). Wraps a Aether-built
+// packed string "<n>\x02<name>\x01<value>\x02..." into the shared
+// packed_handle; field accessors live in working_copy/props_packed.ae.
+
+// Idempotent schema install. Round 66: previously each operation
+// (propset / propget / propdel / proplist) called ensure_schema
+// independently; we keep that contract here so callers don't have to
+// run a global init step.
+ensure_schema_(db: ptr) -> int {
+    err = sqlite.exec(db,
+        "CREATE TABLE IF NOT EXISTS props (  path  TEXT NOT NULL,  name  TEXT NOT NULL,  value TEXT NOT NULL,  PRIMARY KEY (path, name))")
+    if string.length(err) > 0 { return 0 - 1 }
+    return 0
+}
+
+// Open the wc.db via the C-side wc_db_open (which installs
+// the full schema — nodes, info, etc — and creates the .svn/pristine
+// hierarchy if missing). Then layer the props-table schema on top.
+// Returns null on failure.
+open_with_schema_(wc_root: string) -> ptr {
+    db = wc_db_open(wc_root)
+    if db == null { return null }
+    if ensure_schema_(db) != 0 { wc_db_close(db); return null }
+    return db
+}
+
+// Close via the C-side close (which handles the wc.db sqlite3
+// resource the same way the open did).
+close_(db: ptr) {
+    wc_db_close(db)
+    return 0
+}
+
+// Set / overwrite a property. Returns 0 ok, -1 db error, -2 path
+// not tracked.
+wc_propset(wc_root: string, path: string,
+                         name: string, value: string) -> int {
+    db = open_with_schema_(wc_root)
+    if db == null { return 0 - 1 }
+
+    if wc_db_node_exists(db, path) == 0 {
+        close_(db)
+        return 0 - 2
+    }
+
+    stmt, perr = sqlite.prepare(db,
+        "INSERT INTO props (path, name, value) VALUES (?, ?, ?) ON CONFLICT(path, name) DO UPDATE SET value=excluded.value")
+    if string.length(perr) > 0 { close_(db); return 0 - 1 }
+    sqlite.bind_text(stmt, 1, path)
+    sqlite.bind_text(stmt, 2, name)
+    sqlite.bind_text(stmt, 3, value)
+    rc, _ = sqlite.step(stmt, db)
+    sqlite.finalize(stmt)
+    close_(db)
+    if rc == SQLITE_DONE { return 0 }
+    return 0 - 1
+}
+
+// Read a property's value. Returns "" both on miss and on
+// set-to-empty-string. Existing C callers (status_shim, merge_shim)
+// already treat both cases identically — `propget(...) ? : ""` —
+// so the collapse to "" preserves observable behaviour.
+//
+// Exported as propget_value so the legacy C symbol
+// wc_propget can be a thin C-side wrapper that strdup's
+// the Aether-owned string out of the refcounted runtime into
+// caller-owned heap, preserving the previous `char *` ABI +
+// wc_props_free contract.
+propget_value(wc_root: string, path: string, name: string) -> string {
+    db = open_with_schema_(wc_root)
+    if db == null { return "" }
+
+    stmt, perr = sqlite.prepare(db,
+        "SELECT value FROM props WHERE path=? AND name=?")
+    if string.length(perr) > 0 { close_(db); return "" }
+    sqlite.bind_text(stmt, 1, path)
+    sqlite.bind_text(stmt, 2, name)
+
+    rc, _ = sqlite.step(stmt, db)
+    out = ""
+    if rc == SQLITE_ROW {
+        v = sqlite.column_text(stmt, 0)
+        out = string.copy(v)
+    }
+    sqlite.finalize(stmt)
+    close_(db)
+    return out
+}
+
+// Delete a property. Returns 0 on success (including no-such-row,
+// which DELETE treats as a no-op), -1 on db error.
+wc_propdel(wc_root: string, path: string, name: string) -> int {
+    db = open_with_schema_(wc_root)
+    if db == null { return 0 - 1 }
+
+    stmt, perr = sqlite.prepare(db,
+        "DELETE FROM props WHERE path=? AND name=?")
+    if string.length(perr) > 0 { close_(db); return 0 - 1 }
+    sqlite.bind_text(stmt, 1, path)
+    sqlite.bind_text(stmt, 2, name)
+    rc, _ = sqlite.step(stmt, db)
+    sqlite.finalize(stmt)
+    close_(db)
+    if rc == SQLITE_DONE { return 0 }
+    return 0 - 1
+}
+
+// Sorted (name, value) listing for `path`. Returns a C-side handle
+// (struct wc_proplist *) the caller iterates via the
+// proplist_count / _name / _value / _free accessors that stay in
+// props_shim.c. Returns null when the open or prepare fails (caller
+// treats as "no props").
+wc_proplist(wc_root: string, path: string) -> ptr {
+    db = open_with_schema_(wc_root)
+    if db == null { return null }
+
+    stmt, perr = sqlite.prepare(db,
+        "SELECT name, value FROM props WHERE path=? ORDER BY name")
+    if string.length(perr) > 0 { close_(db); return null }
+    sqlite.bind_text(stmt, 1, path)
+
+    n = 0
+    body = ""
+    while sqlite.next_row(stmt, db) == 1 {
+        nm = sqlite.column_text(stmt, 0)
+        vl = sqlite.column_text(stmt, 1)
+        rec = "${nm}\x01${vl}\x02"
+        body = string.concat(body, rec)
+        n = n + 1
+    }
+    sqlite.finalize(stmt)
+    close_(db)
+    head = "${n}\x02"
+    packed = string.concat(head, body)
+    return wc_proplist_handle(packed)
+}
+
+
+// =============================================================================
+// working_copy/props_packed.ae
+// =============================================================================
+
+// wc_proplist packed-record accessors. Same shape as
+// working_copy/db_node_packed.ae and working_copy/status_packed.ae — each row is
+// "<name>\x01<value>"; the list packs as
+// "<n>\x02<rec>\x02<rec>\x02...". The C side keeps the {packed, n,
+// pins} struct from subr/packed_handle/ and one-line accessor
+// wrappers using packed_pin_at.
+//
+
+
+
+
+// ---- exports ----
+
+proplist_count(packed: string) -> int {
+    if string.length(packed) == 0 { return 0 }
+    sep = string.index_of(packed, "\x02")
+    if sep < 0 { return 0 }
+    nstr = string.substring(packed, 0, sep)
+    return string.get_int(nstr)
+}
+
+proplist_name_at (packed: string, i: int) -> string { return list_field_(packed, i, 0) }
+proplist_value_at(packed: string, i: int) -> string { return list_field_(packed, i, 1) }
+
+
+// =============================================================================
+// working_copy/resolve.ae
+// =============================================================================
+
+// avn resolve — clear the `conflicted` flag on a WC node, optionally
+// choosing which version becomes the working-copy content:
+//
+//   wc_resolve(wc_root, path, accept)
+//     accept 0 = "working"      — keep WC file as-is (user hand-resolved)
+//     accept 1 = "mine-full"    — replace WC file with the `.mine` sidecar
+//     accept 2 = "theirs-full"  — replace WC file with `.r<theirs_rev>` sidecar
+//
+// In all cases: sidecar files (`.mine`, `.r<N>`) are deleted and
+// the node's conflicted=0 is persisted.
+//
+// Returns 0 on success, -1 if the path isn't conflicted or on error.
+
+
+// wc.db lifecycle + helpers.
+
+// Sidecar suffix probes (working_copy/sidecar.ae).
+
+// Listdir + io.
+
+// Split rel_path at the last '/'. Returns (dir-part-relative-to-wc-root,
+// basename). If rel_path has no '/', dir-part is "" so caller composes
+// just wc_root.
+split_dir_base_(wc_root: string, rel_path: string) -> ptr {
+    n = string.length(rel_path)
+    last_slash = 0 - 1
+    i = 0
+    while i < n {
+        if string.char_at(rel_path, i) == 47 {   // '/'
+            last_slash = i
+        }
+        i = i + 1
+    }
+    arr_in = ""
+    if last_slash >= 0 {
+        dir = string.substring(rel_path, 0, last_slash)
+        base = string.substring(rel_path, last_slash + 1, n)
+        arr_in = "${wc_root}/${dir}\x01${base}"
+    } else {
+        arr_in = "${wc_root}\x01${rel_path}"
+    }
+    return string.split(arr_in, "\x01")
+}
+
+// Binary-safe file copy via std.fs read_binary + write_atomic.
+copy_overwrite_(src: string, dst: string) -> int {
+    data, n, rerr = fs.read_binary(src)
+    if string.length(rerr) > 0 { return 0 - 1 }
+    werr = fs.write_atomic(dst, data, n)
+    if string.length(werr) > 0 { return 0 - 1 }
+    return 0
+}
+
+// Delete every sidecar (`.mine`, `.r<N>`) in the containing directory
+// whose stem matches `base`.
+remove_sidecars_(dirpath: string, base: string) {
+    blen = string.length(base)
+    d = util.io_listdir(dirpath)
+    if d == null { return 0 }
+    n_entries = util.io_listdir_count(d)
+    i = 0
+    while i < n_entries {
+        name = util.io_listdir_name(d, i)
+        nlen = string.length(name)
+        if nlen > blen + 1 {
+            stem = string.substring(name, 0, blen)
+            if string.equals(stem, base) == 1 {
+                if string.char_at(name, blen) == 46 {   // '.'
+                    suffix = string.substring(name, blen + 1, nlen)
+                    if is_sidecar_suffix(suffix) == 1 {
+                        util.io_unlink("${dirpath}/${name}")
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+    util.io_listdir_free(d)
+    return 0
+}
+
+// Find the `<base>.r<N>` sidecar with the largest N. There are
+// typically two: common-ancestor and theirs. We take the larger N
+// (which by construction is theirs).
+//
+// Returns the full path to the chosen sidecar, or "" on miss.
+find_theirs_sidecar_(dirpath: string, base: string) -> string {
+    blen = string.length(base)
+    best_rev = 0 - 1
+    d = util.io_listdir(dirpath)
+    if d == null { return "" }
+    n_entries = util.io_listdir_count(d)
+    i = 0
+    while i < n_entries {
+        name = util.io_listdir_name(d, i)
+        nlen = string.length(name)
+        if nlen > blen + 1 {
+            stem = string.substring(name, 0, blen)
+            if string.equals(stem, base) == 1 {
+                if string.char_at(name, blen) == 46 {
+                    suffix = string.substring(name, blen + 1, nlen)
+                    nv = sidecar_rev(suffix)
+                    if nv > best_rev { best_rev = nv }
+                }
+            }
+        }
+        i = i + 1
+    }
+    util.io_listdir_free(d)
+    if best_rev < 0 { return "" }
+    return "${dirpath}/${base}.r${best_rev}"
+}
+
+wc_resolve(wc_root: string, rel_path: string, accept: int) -> int {
+    db = wc_db_open(wc_root)
+    if db == null { return 0 - 1 }
+
+    n = wc_db_get_node(db, rel_path)
+    if n == null { wc_db_close(db); return 0 - 1 }
+    is_conflicted = wc_node_conflicted(n)
+    wc_node_free(n)
+    if is_conflicted == 0 {
+        wc_db_close(db)
+        return 0 - 1
+    }
+
+    parts = split_dir_base_(wc_root, rel_path)
+    dirpath = string.array_get(parts, 0)
+    base    = string.array_get(parts, 1)
+    dirpath = string.copy(dirpath)
+    base    = string.copy(base)
+    string.array_free(parts)
+
+    disk = "${wc_root}/${rel_path}"
+
+    if accept == 1 {
+        // mine-full: copy .mine over the file.
+        mine = "${disk}.mine"
+        if copy_overwrite_(mine, disk) != 0 {
+            wc_db_close(db)
+            return 0 - 1
+        }
+    }
+    if accept == 2 {
+        // theirs-full: copy the highest-rev sidecar over the file.
+        theirs = find_theirs_sidecar_(dirpath, base)
+        if string.length(theirs) == 0 {
+            wc_db_close(db)
+            return 0 - 1
+        }
+        if copy_overwrite_(theirs, disk) != 0 {
+            wc_db_close(db)
+            return 0 - 1
+        }
+    }
+    // accept == 0 (working): leave the file alone.
+
+    remove_sidecars_(dirpath, base)
+    rc = wc_db_set_conflicted(db, rel_path, 0)
+    wc_db_close(db)
+    if rc == 0 { return 0 }
+    return 0 - 1
+}
+
+
+// =============================================================================
+// working_copy/revert.ae
+// =============================================================================
+
+// avn revert + avn cleanup.
+//
+// revert: discard local changes by restoring from pristine + reset
+// the node's state. State transitions:
+//   state=0 (normal): file → overwrite from pristine; dir → no-op
+//   state=1 (added):  drop the row, leave file on disk
+//   state=2 (deleted): restore from pristine, reset state to 0
+//
+// cleanup: walk the WC (including .svn/pristine), delete every
+// "*.tmp.<digits>" file (aborted atomic-write tmps), plus a stale
+// .svn/wc.db-journal if present.
+
+
+// wc.db lifecycle + helpers.
+
+
+// Pristine store.
+
+// IO helpers.
+
+// ---- revert ---------------------------------------------------------
+
+wc_revert(wc_root: string, rel_path: string) -> int {
+    db = wc_db_open(wc_root)
+    if db == null { return 0 - 2 }
+
+    n = wc_db_get_node(db, rel_path)
+    if n == null {
+        wc_db_close(db)
+        return 0 - 1
+    }
+
+    kind  = wc_node_kind(n)
+    state = wc_node_state(n)
+    brev  = wc_node_base_rev(n)
+    bsha  = wc_node_base_sha1(n)
+    bsha  = string.copy(bsha)
+    wc_node_free(n)
+
+    disk = "${wc_root}/${rel_path}"
+
+    if state == 1 {
+        // Drop the row. Leave the file in place (becomes unversioned).
+        rc = wc_db_delete_node(db, rel_path)
+        wc_db_close(db)
+        if rc == 0 { return 0 }
+        return 0 - 2
+    }
+
+    if kind == 1 {
+        // Dir: nothing content-wise to restore; just clear any
+        // pending-delete state. If state==2, recreate the dir on disk.
+        if state == 2 { util.io_mkdir_p(disk) }
+        wc_db_upsert_node(db, rel_path, 1, brev, "", 0)
+        wc_db_close(db)
+        return 0
+    }
+
+    // File. Restore content from pristine, reset state to normal.
+    psize = wc_pristine_size(wc_root, bsha)
+    data  = wc_pristine_get(wc_root, bsha)
+    if string.length(data) == 0 {
+        wc_db_close(db)
+        return 0 - 2
+    }
+    rc = util.io_write_atomic(disk, data, psize)
+    if rc != 0 {
+        wc_db_close(db)
+        return 0 - 2
+    }
+
+    wc_db_upsert_node(db, rel_path, 0, brev, bsha, 0)
+    wc_db_close(db)
+    return 0
+}
+
+// ---- cleanup --------------------------------------------------------
+
+// Does the basename match "*.tmp.<digits>"? That's the exact pattern
+// our write_file_atomic uses on its tmp staging files.
+is_stale_tmp_(name: string) -> int {
+    n = string.length(name)
+    sentinel = ".tmp."
+    pos = string.index_of(name, sentinel)
+    if pos < 0 { return 0 }
+    digit_start = pos + 5
+    if digit_start >= n { return 0 }
+    i = digit_start
+    while i < n {
+        c = string.char_at(name, i)
+        if c < 48 { return 0 }   // < '0'
+        if c > 57 { return 0 }   // > '9'
+        i = i + 1
+    }
+    return 1
+}
+
+// Walk the directory recursively, deleting every is_stale_tmp_ file.
+// Returns the count of files deleted.
+walk_and_clean_(root: string) -> int {
+    d = util.io_listdir(root)
+    if d == null { return 0 }
+    count = 0
+    n_entries = util.io_listdir_count(d)
+    i = 0
+    while i < n_entries {
+        name = util.io_listdir_name(d, i)
+        name = string.copy(name)
+        full = "${root}/${name}"
+        kind = util.io_stat_kind(full)
+        if kind == 2 {
+            count = count + walk_and_clean_(full)
+        }
+        if kind == 1 {
+            if is_stale_tmp_(name) == 1 {
+                if util.io_unlink(full) == 0 { count = count + 1 }
+            }
+        }
+        i = i + 1
+    }
+    util.io_listdir_free(d)
+    return count
+}
+
+wc_cleanup(wc_root: string) -> int {
+    if string.length(wc_root) == 0 { return 0 - 1 }
+
+    // Verify this is a WC by checking for .svn/wc.db.
+    wc_db = "${wc_root}/.svn/wc.db"
+    if util.io_exists(wc_db) == 0 { return 0 - 1 }
+
+    // is_stale_tmp_ gates what walk_and_clean_ deletes, so we never
+    // accidentally touch real wc.db / format / pristine blob files.
+    count = walk_and_clean_(wc_root)
+
+    // Stale SQLite rollback-journal: .svn/wc.db-journal. Our WC uses
+    // default rollback-journal mode, so the absence of -shm/-wal
+    // files is the normal-operation signal. Conservative cleanup:
+    // just delete if it's a regular file.
+    journal = "${wc_root}/.svn/wc.db-journal"
+    if util.io_is_regular_file(journal) == 1 {
+        if util.io_unlink(journal) == 0 { count = count + 1 }
+    }
+
+    return count
+}
+
+
+// =============================================================================
+// working_copy/sidecar.ae
+// =============================================================================
+
+// WC conflict-sidecar filename classifier.
+//
+// After a conflicting merge, avn drops three sidecar files next to the
+// conflicted working file:
+//   <name>.mine          the user's local version before the merge
+//   <name>.r<rev-a>      common-ancestor
+//   <name>.r<rev-b>      incoming
+//
+// status_shim.c skips them in filesystem walks; resolve_shim.c finds
+// them by pattern-matching the tail. Both share this classifier.
+//
+// Returns 1 if `suffix` (the part after the last '.') is a legitimate
+// sidecar suffix — either "mine" or "r<decimal digits>".
+
+
+is_sidecar_suffix(suffix: string) -> int {
+    n = string.length(suffix)
+    if n == 0 { return 0 }
+    // "mine"
+    if n == 4 {
+        if string.char_at(suffix, 0) == 109 {   // 'm'
+            if string.char_at(suffix, 1) == 105 {   // 'i'
+                if string.char_at(suffix, 2) == 110 {   // 'n'
+                    if string.char_at(suffix, 3) == 101 {   // 'e'
+                        return 1
+                    }
+                }
+            }
+        }
+    }
+    // "r<digit>+"
+    if n >= 2 {
+        if string.char_at(suffix, 0) == 114 {   // 'r'
+            i = 1
+            while i < n {
+                c = string.char_at(suffix, i)
+                if c < 48 { return 0 }   // '0'
+                if c > 57 { return 0 }   // '9'
+                i = i + 1
+            }
+            return 1
+        }
+    }
+    return 0
+}
+
+// Given a full basename (without directory prefix), return 1 iff it
+// looks like a sidecar file — i.e. it has a '.' and the tail after
+// the last '.' is a legitimate sidecar suffix. "README.mine" → 1;
+// "file.rq" → 0; "file.r42" → 1.
+is_sidecar_name(name: string) -> int {
+    n = string.length(name)
+    if n == 0 { return 0 }
+    // Find the last '.'.
+    dot = 0 - 1
+    i = n - 1
+    while i >= 0 {
+        if string.char_at(name, i) == 46 { dot = i; break }
+        i = i - 1
+    }
+    if dot < 0 { return 0 }
+    if dot == n - 1 { return 0 }   // trailing '.'
+    return is_sidecar_suffix(string.substring(name, dot + 1, n))
+}
+
+// If `suffix` is "r<digits>" return the integer rev; else -1.
+// "mine" returns -1 too (it's a sidecar but not a rev-tagged one).
+sidecar_rev(suffix: string) -> int {
+    n = string.length(suffix)
+    if n < 2 { return 0 - 1 }
+    if string.char_at(suffix, 0) != 114 { return 0 - 1 }   // 'r'
+    v = 0
+    i = 1
+    while i < n {
+        c = string.char_at(suffix, i)
+        if c < 48 { return 0 - 1 }
+        if c > 57 { return 0 - 1 }
+        v = v * 10 + (c - 48)
+        i = i + 1
+    }
+    return v
+}
+
+
+// =============================================================================
+// working_copy/status.ae
+// =============================================================================
+
+// avn status — compare on-disk WC against wc.db + pristine to produce
+// a list of (path, code) entries:
+//
+//     ' '  Normal (filtered from output)
+//     'A'  Added                'D'  Deleted
+//     'M'  Modified              '!'  Missing
+//     '?'  Unversioned           'C'  Conflicted
+//
+// Round 68 (Gordian) ports the recursive filesystem walk +
+// hand-rolled strset (was 25 lines of linear-search-set in
+// status_shim.c) to a std.collections HashMap-backed tracked-set
+// for O(1) membership. Storage of the result list (wc_status_*)
+// stays in C — same shape as nodelist and proplist.
+
+
+// Explicit externs for std.collections symbols. Aether's `import`
+// brings the module into scope but doesn't auto-bind names — we
+// redeclare and use the raw externs (auto-linked from
+// aether_collections.c) so we don't need module.ae's Aether
+// wrappers compiled into our binary.
+extern map_new() -> ptr
+extern map_put_raw(map: ptr, key: string, value: ptr) -> int
+extern map_has(map: ptr, key: string) -> int
+extern map_free(map: ptr)
+
+// wc.db lifecycle + nodelist accessors.
+
+// Status code classifier — maps the (conflicted, state, kind, on_disk,
+// sha_read, sha_ok) tuple to a status char. Lives in
+// working_copy/status_code.ae.
+
+// Hash a file via the WC's configured algorithm. Returns 0 on success
+// (with hex written into the C-allocated output buffer); we only need
+// the result strings here, so we wrap with a side-effect-free Aether
+// helper from the pristine module.
+
+// Statuslist handle constructor (status_shim.c). Wraps a Aether-
+// built packed string "<n>\x02<path>\x01<code>\x02..." into the
+// shared packed_handle struct; field accessors live in
+// working_copy/status_packed.ae.
+
+// IO helpers.
+extern path_join_rel(prefix: string, name: string) -> string
+
+// svn:ignore handling.
+
+// SHA-of-file as hex. Returns "" on error.
+sha_of_file_(wc_root: string, path: string) -> string {
+    h = wc_hash_file(wc_root, path)
+    if string.length(h) == 0 { return "" }
+    return string.copy(h)
+}
+
+// Append a "<path>\x01<code>\x02" record onto the running body.
+append_record_(body: string, path: string, code: int) -> string {
+    rec = "${path}\x01${code}\x02"
+    return string.concat(body, rec)
+}
+
+// Insertion-sort the running body (records separated by \x02) by
+// path. Same shape as repos/paths_changed.ae's sort_by_path —
+// O(N²) is fine for the typical WC sizes here.
+sort_body_(body: string) -> string {
+    // Count records.
+    n = 0
+    pos = 0
+    blen = string.length(body)
+    while pos < blen {
+        sep = string.index_of_from(body, "\x02", pos)
+        if sep < 0 { return body }   // malformed; bail
+        n = n + 1
+        pos = sep + 1
+    }
+    if n <= 1 { return body }
+
+    sorted = ""
+    i = 0
+    rpos = 0
+    while i < n {
+        rsep = string.index_of_from(body, "\x02", rpos)
+        this_rec = string.substring(body, rpos, rsep)
+        this_path_end = string.index_of(this_rec, "\x01")
+        this_path = string.substring(this_rec, 0, this_path_end)
+
+        // Walk `sorted` and splice this_rec into the right slot.
+        new_sorted = ""
+        sn = 0
+        spos = 0
+        slen = string.length(sorted)
+        placed = 0
+        while spos < slen {
+            ssep = string.index_of_from(sorted, "\x02", spos)
+            jrec = string.substring(sorted, spos, ssep)
+            jpath_end = string.index_of(jrec, "\x01")
+            jpath = string.substring(jrec, 0, jpath_end)
+            if placed == 0 {
+                if string.compare(this_path, jpath) < 0 {
+                    new_sorted = string.concat(new_sorted, this_rec)
+                    new_sorted = string.concat(new_sorted, "\x02")
+                    placed = 1
+                }
+            }
+            new_sorted = string.concat(new_sorted, jrec)
+            new_sorted = string.concat(new_sorted, "\x02")
+            spos = ssep + 1
+            sn = sn + 1
+        }
+        if placed == 0 {
+            new_sorted = string.concat(new_sorted, this_rec)
+            new_sorted = string.concat(new_sorted, "\x02")
+        }
+        sorted = new_sorted
+        rpos = rsep + 1
+        i = i + 1
+    }
+    return sorted
+}
+
+// Recursive filesystem walk, emitting '?' for any path not in
+// `tracked` (a std.collections.map used as a string set; we don't
+// care about the value — `map.has` is the membership test).
+// Returns a packed body fragment "<path>\x01<code>\x02..." for the
+// caller to fold into its own running accumulator.
+walk_unversioned_(wc_root: string, rel: string, tracked: ptr) -> string {
+    out = ""
+    dir_path_borrowed = path_join_rel(wc_root, rel)
+    dir_path = string.copy(dir_path_borrowed)
+
+    // Fetch svn:ignore for this directory. propget returns "" both on
+    // miss and on set-to-empty; either way no patterns apply.
+    ignore_prop = propget_value(wc_root, rel, "svn:ignore")
+    ignore_prop = string.copy(ignore_prop)
+    have_ignores = 0
+    if string.length(ignore_prop) > 0 { have_ignores = 1 }
+
+    d = util.io_listdir(dir_path)
+    if d == null { return out }
+    n_entries = util.io_listdir_count(d)
+    i = 0
+    while i < n_entries {
+        name = util.io_listdir_name(d, i)
+        name = string.copy(name)
+        skip = 0
+        if string.equals(name, ".svn") == 1 { skip = 1 }
+        // Skip conflict sidecars — .mine and .r<N>. They'll be cleaned
+        // up by `avn resolve`.
+        if skip == 0 {
+            if is_sidecar_name(name) == 1 { skip = 1 }
+        }
+        if skip == 0 {
+            child_rel_borrowed = path_join_rel(rel, name)
+            child_rel = string.copy(child_rel_borrowed)
+            child_fs_borrowed = path_join_rel(wc_root, child_rel)
+            child_fs = string.copy(child_fs_borrowed)
+            kind = util.io_stat_kind(child_fs)   // 1=file 2=dir, 0=missing
+            if kind != 0 {
+                is_tracked = map_has(tracked, child_rel)
+                ignored = 0
+                if is_tracked == 0 {
+                    if have_ignores == 1 {
+                        ignored = ignore_matches(ignore_prop, name)
+                    }
+                }
+                if kind == 2 {
+                    if is_tracked == 0 {
+                        if ignored == 0 { out = append_record_(out, child_rel, 63) }   // '?'
+                    }
+                    if is_tracked == 1 {
+                        sub = walk_unversioned_(wc_root, child_rel, tracked)
+                        out = string.concat(out, sub)
+                    }
+                }
+                if kind == 1 {
+                    if is_tracked == 0 {
+                        if ignored == 0 { out = append_record_(out, child_rel, 63) }
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+    util.io_listdir_free(d)
+    return out
+}
+
+// Public entry point. Returns a statuslist ptr (packed_handle-
+// backed); caller frees via wc_statuslist_free.
+wc_status(wc_root: string) -> ptr {
+    db = wc_db_open(wc_root)
+    if db == null { return null }
+
+    body = ""
+    tracked = map_new()
+
+    // Pass 1: every tracked node.
+    L = wc_db_list_nodes(db)
+    n = wc_nodelist_count(L)
+    i = 0
+    sentinel = "1"
+    while i < n {
+        rel        = wc_nodelist_path(L, i)
+        rel        = string.copy(rel)
+        kind       = wc_nodelist_kind(L, i)
+        state      = wc_nodelist_state(L, i)
+        conflicted = wc_nodelist_conflicted(L, i)
+        base_sha   = wc_nodelist_base_sha1(L, i)
+        base_sha   = string.copy(base_sha)
+
+        map_put_raw(tracked, rel, sentinel)
+
+        disk = "${wc_root}/${rel}"
+        on_disk = util.io_exists(disk)
+
+        // Hash the file only when the classifier needs it: normal-
+        // state file nodes that are on disk and not conflicted.
+        sha_read = 0
+        sha_ok = 0
+        if conflicted == 0 {
+            if state == 0 {
+                if on_disk == 1 {
+                    if kind == 0 {
+                        cur = sha_of_file_(wc_root, disk)
+                        if string.length(cur) > 0 {
+                            sha_read = 1
+                            if string.equals(cur, base_sha) == 1 { sha_ok = 1 }
+                        }
+                    }
+                }
+            }
+        }
+        code = status_code(conflicted, state, kind, on_disk, sha_read, sha_ok)
+        if code != 32 {   // not space
+            body = append_record_(body, rel, code)
+        }
+        i = i + 1
+    }
+    wc_nodelist_free(L)
+
+    // Pass 2: filesystem walk for '?' entries.
+    walk_body = walk_unversioned_(wc_root, "", tracked)
+    body = string.concat(body, walk_body)
+
+    map_free(tracked)
+    wc_db_close(db)
+
+    // Recount across full body (tracked + walker output) — every
+    // record is terminated by \x02.
+    sorted = sort_body_(body)
+    final_n = count_records_(sorted)
+    head = "${final_n}\x02"
+    packed = string.concat(head, sorted)
+    return wc_statuslist_handle(packed)
+}
+
+count_records_(body: string) -> int {
+    n = 0
+    pos = 0
+    blen = string.length(body)
+    while pos < blen {
+        sep = string.index_of_from(body, "\x02", pos)
+        if sep < 0 { return n }
+        n = n + 1
+        pos = sep + 1
+    }
+    return n
+}
+
+
+// =============================================================================
+// working_copy/status_code.ae
+// =============================================================================
+
+// avn status classification — the pure decision table mapping the
+// wc.db node st + on-disk reality to a single-char code.
+//
+// The C side of working_copy/status_shim.c gathers the inputs (is the node
+// tracked? what's its db st? does the file exist on disk? do
+// checksums match?) and calls this classifier to turn them into the
+// traditional svn-style code character.
+//
+// Return codes (ASCII values):
+//   'C' (67) = conflicted  (trumps everything)
+//   'A' (65) = added
+//   'D' (68) = deleted
+//   '!' (33) = missing (tracked but gone from disk, or unreadable)
+//   'M' (77) = modified (content sha differs from base)
+//   ' ' (32) = no change
+//
+// Inputs:
+//   conflicted: 0 or 1
+//   st:      0=normal, 1=added, 2=deleted
+//   kind:       0=file, 1=dir
+//   on_disk:    0 or 1
+//   sha_ok:     0=couldn't hash OR doesn't match base_sha, 1=match
+//   sha_read:   0=file content was not readable (hash call failed),
+//               1=file read cleanly
+//
+// For dirs (kind=1): no content hash is possible, so sha_ok and
+// sha_read are ignored on the 'normal' path — only on_disk drives.
+status_code(conflicted: int, st: int, kind: int,
+                   on_disk: int, sha_read: int, sha_ok: int) -> int {
+    if conflicted == 1 { return 67 }          // 'C'
+    if st == 1      { return 65 }          // 'A'
+    if st == 2      { return 68 }          // 'D'
+    // st == 0 (normal)
+    if on_disk == 0    { return 33 }          // '!'
+    if kind == 1       { return 32 }          // ' ' (dir — no compare)
+    if sha_read == 0   { return 33 }          // '!'
+    if sha_ok == 0     { return 77 }          // 'M'
+    return 32                                  // ' '
+}
+
+
+// =============================================================================
+// working_copy/status_packed.ae
+// =============================================================================
+
+// wc_statuslist packed-record accessors. Same shape as
+// working_copy/db_node_packed.ae — each row is "<path>\x01<code>"; the
+// list packs as "<n>\x02<rec>\x02<rec>\x02...". The C side keeps
+// the {packed, n, pins} struct from subr/packed_handle/ and one-
+// line accessor wrappers using packed_pin_at /
+// packed_int_at.
+
+
+// Find the start offset of the i-th record in a "<n>\x02<rec>\x02..."
+// packed string. Returns -1 if out of range.
+
+
+// Field-extractor for the i-th row of a packed list.
+
+
+// ---- exports ----
+
+statuslist_count(packed: string) -> int {
+    if string.length(packed) == 0 { return 0 }
+    sep = string.index_of(packed, "\x02")
+    if sep < 0 { return 0 }
+    nstr = string.substring(packed, 0, sep)
+    return string.get_int(nstr)
+}
+
+statuslist_path_at(packed: string, i: int) -> string { return list_field_(packed, i, 0) }
+statuslist_code_at(packed: string, i: int) -> int    { return list_field_int_(packed, i, 1) }
+
+
+// =============================================================================
+// working_copy/update.ae
+// =============================================================================
+
+// avn update — pull remote state at target rev into a checked-out
+// WC. Returns target_rev on success, -1 on error.
+//
+//   wc_update(wc_root, target_rev)
+//     target_rev == -1 means "use server's current head".
+//
+// Algorithm (non-incremental):
+//   1. Pull full remote tree listing recursively at target_rev
+//      (working_copy/update_walk.ae fills the remote_tree opaque ptr).
+//   2. Snapshot local nodes from wc.db.
+//   3. Pass A: diff local against remote. Sha-of-disk vs remote-sha
+//      drives modify/conflict; missing-on-remote+state=normal drives
+//      delete; etc. (working_copy/update_apply.ae).
+//   4. Pass B: remote-only entries get fetched-and-installed
+//      (working_copy/update_apply.ae).
+//   5. Bump base_rev in info table.
+//
+// avn switch is the same algorithm with the wc.db url/base_url/repo
+// rows rewritten first; we reuse wc_update for the heavy lift.
+
+
+// wc.db lifecycle + info access.
+
+// Nodelist (tracked WC nodes).
+
+// RA: server's current head.
+extern remote_head_rev(base_url: string, repo_name: string) -> int
+
+// Remote-tree opaque storage primitive (C-side, update_shim.c). The
+// recursive RA walk in working_copy/update_walk.ae populates it via
+// remote_tree_add_dir / remote_tree_add_file.
+
+// Pass A / Pass B of the update apply. wc_root is now passed
+// through to walk_remote (Round 140 retired the C-side TLS
+// pointer); add_file uses it to compute per-file sha1 at
+// add-time.
+
+// Public entry point.
+//
+// target_rev == -1 means "use server head". Returns target_rev on
+// success, -1 on error. Conflicts mark the conflicted flag on
+// affected nodes — callers check status to see what needs resolving.
+wc_update(wc_root: string, target_rev: int) -> int {
+    db = wc_db_open(wc_root)
+    if db == null { return 0 - 1 }
+
+    // get_info returns refcounted AetherString (Round 143).
+    base_url = wc_db_get_info(db, "base_url")
+    repo     = wc_db_get_info(db, "repo")
+    if string.length(base_url) == 0 {
+        wc_db_close(db)
+        return 0 - 1
+    }
+    if string.length(repo) == 0 {
+        wc_db_close(db)
+        return 0 - 1
+    }
+    base_url = string.copy(base_url)
+    repo     = string.copy(repo)
+
+    if target_rev < 0 {
+        target_rev = remote_head_rev(base_url, repo)
+        if target_rev < 0 {
+            wc_db_close(db)
+            return 0 - 1
+        }
+    }
+
+    // 1. Pull full remote tree at target_rev. wc_root is threaded
+    // explicitly so remote_tree_add can compute per-file hashes during the
+    // walk.
+    rt = util.remote_tree_new()
+    if update_walk_remote(wc_root, base_url, repo, target_rev, "", rt) != 0 {
+        util.remote_tree_free(rt)
+        wc_db_close(db)
+        return 0 - 1
+    }
+
+    // 2. Snapshot local nodes.
+    L = wc_db_list_nodes(db)
+
+    // 3. + 4. Two-pass apply (Aether-side).
+    update_apply_pass_a(wc_root, base_url, repo, target_rev, rt, L, db)
+    update_apply_pass_b(wc_root, base_url, repo, target_rev, rt, L, db)
+
+    // 5. Bump base_rev in info.
+    wc_db_set_info(db, "base_rev", "${target_rev}")
+
+    wc_nodelist_free(L)
+    util.remote_tree_free(rt)
+    wc_db_close(db)
+    return target_rev
+}
+
+
+// avn switch: relocate the WC to a different branch (or repo) at
+// target_rev. Rewrite the url/base_url/repo info rows then call
+// wc_update — the update algorithm is exactly what switch
+// needs (fetch remote, diff against local, 3-way merge on overlap).
+wc_switch(wc_root: string,
+                        new_base_url: string, new_repo: string,
+                        target_rev: int) -> int {
+    db = wc_db_open(wc_root)
+    if db == null { return 0 - 1 }
+
+    full_url = "${new_base_url}/${new_repo}"
+    wc_db_set_info(db, "url",      full_url)
+    wc_db_set_info(db, "base_url", new_base_url)
+    wc_db_set_info(db, "repo",     new_repo)
+    wc_db_close(db)
+
+    return wc_update(wc_root, target_rev)
+}
+
+
+// =============================================================================
+// working_copy/update_apply.ae
+// =============================================================================
+
+// Apply-pass of wc_update. Ported from working_copy/update_shim.c's
+// two-pass diff-and-apply loop.
+//
+// The C side owns:
+//   - the remote_tree (walk_remote fetches it via RA)
+//   - the wc.db nodelist (from sqlite)
+//   - ingest_props (prop-set merge against RA)
+//
+// This Aether side owns the decision logic:
+//   pass A: for each local node, diff vs remote, decide {unchanged,
+//           overwrite, merge3, delete, kind-conflict}.
+//   pass B: for each remote node not in local, add it (mkdir or
+//           write+pristine+db).
+
+
+// --- remote_tree accessors (C-side opaque handle) -------------------------
+
+// --- wc.db nodelist accessors ---------------------------------------------
+
+// --- sqlite3 handle mutations ---------------------------------------------
+
+// --- pristine + hash FFI --------------------------------------------------
+
+// --- io helpers + merge3 entry -------------------------------------------
+extern path_join_rel(prefix: string, name: string) -> string
+
+
+
+// --- prop ingest -------------------------------------------------------
+// Implementation lives in working_copy/update_props.ae; call the aether-
+// prefixed symbol directly (no C trampoline).
+
+// --- disk-sha helper ------------------------------------------------------
+// Hash the contents of `path` on disk via the canonical wc_hash_file in
+// pristine.ae. Round 130 dropped the C trampoline (update_sha1_of_file +
+// wc_hash_file) — both were a TLS-scratch detour the .ae caller
+// no longer needs.
+
+// --- stderr helper (lightly-typed println for our "C    foo" trace) ------
+// Round 180: switched to std.io.stderr_write (Aether 0.110).
+update_stderr_(s: string) {
+    io.stderr_write(s, string.length(s))
+    return
+}
+
+// =========================================================================
+// Pass A — for each local node, decide what to do vs remote.
+// Returns the number of conflicts detected. Non-zero just means the
+// caller should treat the update as "partially applied with markers".
+// =========================================================================
+
+update_apply_pass_a(wc_root: string, base_url: string, repo: string,
+                           target_rev: int, rt: ptr, nodelist: ptr,
+                           db: ptr) -> int {
+    had_conflict = 0
+    n_local = wc_nodelist_count(nodelist)
+    i = 0
+    while i < n_local {
+        rel      = wc_nodelist_path(nodelist, i)
+        kind     = wc_nodelist_kind(nodelist, i)
+        st       = wc_nodelist_state(nodelist, i)
+        base_sha = wc_nodelist_base_sha1(nodelist, i)
+
+        // Skip added/deleted — user's in-progress work.
+        skip = 0
+        if st == 1 { skip = 1 }
+        if st == 2 { skip = 1 }
+        if skip == 0 {
+            r_idx = util.remote_tree_find_by_path(rt, rel)
+            if r_idx < 0 {
+                // Remote removed it. Delete locally.
+                disk = path_join_rel(wc_root, rel)
+                if kind == 0 { util.io_unlink(disk) }
+                if kind == 1 { util.io_rmdir(disk) }
+                wc_db_delete_node(db, rel)
+            }
+            if r_idx >= 0 {
+                r_kind = util.remote_tree_kind_at(rt, r_idx)
+                r_sha  = util.remote_tree_sha_at(rt, r_idx)
+                r_data = util.remote_tree_data_at(rt, r_idx)
+                r_len  = util.remote_tree_data_len_at(rt, r_idx)
+
+                if kind != r_kind {
+                    // Kind switched — tree-conflict; we skip and log.
+                    update_stderr_("warning: kind change not handled: ")
+                    update_stderr_(rel)
+                    update_stderr_("\n")
+                }
+                if kind == r_kind {
+                    if kind == 0 {
+                        // File case.
+                        if string.equals(r_sha, base_sha) == 1 {
+                            // Remote == base. Still bump base_rev + props.
+                            wc_db_upsert_node(db, rel, kind, target_rev, base_sha, 0)
+                            ingest_props(base_url, repo, target_rev, wc_root, rel)
+                        }
+                        if string.equals(r_sha, base_sha) == 0 {
+                            // Remote changed. Clean or conflict?
+                            disk = path_join_rel(wc_root, rel)
+                            disk_sha = wc_hash_file(wc_root, disk)
+                            local_clean = 0
+                            if string.length(disk_sha) > 0 {
+                                if string.equals(disk_sha, base_sha) == 1 {
+                                    local_clean = 1
+                                }
+                            }
+                            if local_clean == 1 {
+                                // Straight overwrite.
+                                ok = util.io_write_atomic(disk, r_data, r_len)
+                                if ok == 0 {
+                                    wc_pristine_put(wc_root, r_data, r_len)
+                                    wc_db_upsert_node(db, rel, 0, target_rev, r_sha, 0)
+                                    ingest_props(base_url, repo, target_rev, wc_root, rel)
+                                }
+                            }
+                            if local_clean == 0 {
+                                // 3-way merge.
+                                base_len = wc_pristine_size(wc_root, base_sha)
+                                base_buf = wc_pristine_get(wc_root, base_sha)
+                                if string.length(base_buf) == 0 {
+                                    // Fallback: reject but still advance pointer.
+                                    wc_db_upsert_node(db, rel, kind, target_rev, base_sha, 0)
+                                }
+                                if string.length(base_buf) > 0 {
+                                    local_base_rev = wc_nodelist_base_rev(nodelist, i)
+                                    m3rc = merge3_apply(disk,
+                                                              base_buf, base_len, local_base_rev,
+                                                              r_data, r_len, target_rev)
+                                    if m3rc == 0 {
+                                        wc_pristine_put(wc_root, r_data, r_len)
+                                        wc_db_upsert_node(db, rel, 0, target_rev, r_sha, 0)
+                                        ingest_props(base_url, repo, target_rev, wc_root, rel)
+                                    }
+                                    if m3rc == 1 {
+                                        wc_pristine_put(wc_root, r_data, r_len)
+                                        wc_db_upsert_node(db, rel, 0, target_rev, r_sha, 0)
+                                        wc_db_set_conflicted(db, rel, 1)
+                                        had_conflict = 1
+                                        update_stderr_("C    ")
+                                        update_stderr_(rel)
+                                        update_stderr_("\n")
+                                    }
+                                    if m3rc < 0 {
+                                        update_stderr_("error merging ")
+                                        update_stderr_(rel)
+                                        update_stderr_("; left alone\n")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if kind == 1 {
+                        // Dir: just bump base_rev + ingest props.
+                        wc_db_upsert_node(db, rel, kind, target_rev, base_sha, 0)
+                        ingest_props(base_url, repo, target_rev, wc_root, rel)
+                    }
+                }
+            }
+        }
+
+        i = i + 1
+    }
+    return had_conflict
+}
+
+
+// =========================================================================
+// Pass B — remote paths not in local get added.
+// =========================================================================
+
+update_apply_pass_b(wc_root: string, base_url: string, repo: string,
+                           target_rev: int, rt: ptr, nodelist: ptr,
+                           db: ptr) {
+    nr = util.remote_tree_count(rt)
+    n_local = wc_nodelist_count(nodelist)
+    i = 0
+    while i < nr {
+        rpath = util.remote_tree_path_at(rt, i)
+        // Skip if already present locally (pass A handled it).
+        found = 0
+        j = 0
+        while j < n_local {
+            if string.equals(wc_nodelist_path(nodelist, j), rpath) == 1 {
+                found = 1
+                break
+            }
+            j = j + 1
+        }
+        if found == 0 {
+            r_kind = util.remote_tree_kind_at(rt, i)
+            r_sha  = util.remote_tree_sha_at(rt, i)
+            r_data = util.remote_tree_data_at(rt, i)
+            r_len  = util.remote_tree_data_len_at(rt, i)
+            disk   = path_join_rel(wc_root, rpath)
+
+            ok = 0
+            if r_kind == 1 {
+                if util.io_mkdir_p(disk) == 0 {
+                    wc_db_upsert_node(db, rpath, 1, target_rev, "", 0)
+                    ok = 1
+                }
+            }
+            if r_kind == 0 {
+                if util.io_write_atomic(disk, r_data, r_len) == 0 {
+                    wc_pristine_put(wc_root, r_data, r_len)
+                    wc_db_upsert_node(db, rpath, 0, target_rev, r_sha, 0)
+                    ok = 1
+                }
+            }
+            if ok == 1 {
+                ingest_props(base_url, repo, target_rev, wc_root, rpath)
+            }
+        }
+        i = i + 1
+    }
+}
+
+
+
+// =============================================================================
+// working_copy/update_props.ae
+// =============================================================================
+
+// Reconcile local WC props with a server's view at a given revision.
+// Called once per path that changed during avn update.
+//
+// Strategy:
+//   (a) overwrite / add every remote (key, value) locally.
+//   (b) delete any local key that the remote set doesn't carry.
+//
+// Two handles involved — struct remote_props (server-side) and
+// struct wc_proplist (local-WC side) — both opaque ptrs
+// accessed through their count/name/value accessors.
+
+
+extern remote_get_props(base_url: string, repo: string,
+                           rev: int, path: string) -> ptr
+extern remote_props_count(P: ptr) -> int
+extern remote_props_name(P: ptr, i: int) -> string
+extern remote_props_value(P: ptr, i: int) -> string
+extern remote_props_free(P: ptr)
+
+
+
+ingest_props(base_url: string, repo: string, rev: int,
+                     wc_root: string, rel: string) {
+    P = remote_get_props(base_url, repo, rev, rel)
+    rn = 0
+    if P != null { rn = remote_props_count(P) }
+
+    // (a) Overwrite / add from remote.
+    j = 0
+    while j < rn {
+        pname = remote_props_name(P, j)
+        pname = string.copy(pname)
+        pval = remote_props_value(P, j)
+        pval = string.copy(pval)
+        wc_propset(wc_root, rel, pname, pval)
+        j = j + 1
+    }
+
+    // (b) For each local prop not in remote, delete it.
+    L = wc_proplist(wc_root, rel)
+    if L != null {
+        ln = wc_proplist_count(L)
+        i = 0
+        while i < ln {
+            lname = wc_proplist_name(L, i)
+            lname = string.copy(lname)
+
+            found = 0
+            k = 0
+            while k < rn {
+                rname = remote_props_name(P, k)
+                if string.equals(lname, rname) == 1 {
+                    found = 1
+                    break
+                }
+                k = k + 1
+            }
+            if found == 0 {
+                wc_propdel(wc_root, rel, lname)
+            }
+            i = i + 1
+        }
+        wc_proplist_free(L)
+    }
+
+    if P != null { remote_props_free(P) }
+}
+
+
+
+// =============================================================================
+// working_copy/update_walk.ae
+// =============================================================================
+
+// Recursive remote-tree walker for `avn update` / `avn switch`.
+// Calls the RA list/cat accessors and populates a C-side
+// remote_tree via the remote_tree_add_{dir,file} wrappers.
+//
+// Previously a 28-line recursive C function in working_copy/update_shim.c
+// — lifts cleanly once the RA accessors + path-join helper are
+// callable from Aether (all already are).
+
+
+
+extern remote_list(base_url: string, repo_name: string, rev: int, path: string) -> ptr
+extern remote_list_count(L: ptr) -> int
+extern remote_list_name(L: ptr, i: int) -> string
+extern remote_list_kind(L: ptr, i: int) -> string
+extern remote_list_free(L: ptr)
+extern remote_cat(base_url: string, repo_name: string, rev: int, path: string) -> string
+extern remote_free(p: string)
+
+extern path_join_rel(prefix: string, name: string) -> string
+
+
+// Returns 0 on success, -1 on any list/cat failure. wc_root is
+// passed through so add_file can compute per-file sha1; Round 140
+// retired the C-side TLS pointer that used to thread it through.
+update_walk_remote(wc_root: string,
+                           base_url: string, repo: string, rev: int,
+                           prefix: string, rt: ptr) -> int {
+    L = remote_list(base_url, repo, rev, prefix)
+    if L == null { return -1 }
+
+    n = remote_list_count(L)
+    result = 0
+    i = 0
+    while i < n {
+        if result == 0 {
+            name = remote_list_name(L, i)
+            name = string.copy(name)
+            kind = remote_list_kind(L, i)
+            kind = string.copy(kind)
+            rel = path_join_rel(prefix, name)
+            rel = string.copy(rel)
+
+            if string.equals(kind, "dir") == 1 {
+                util.remote_tree_add_dir(rt, rel)
+                if update_walk_remote(wc_root, base_url, repo, rev, rel, rt) != 0 {
+                    result = -1
+                }
+            }
+            if string.equals(kind, "dir") == 0 {
+                data = remote_cat(base_url, repo, rev, rel)
+                if string.length(data) == 0 {
+                    result = -1
+                }
+                if result == 0 {
+                    sha = ""
+                    if string.length(wc_root) > 0 {
+                        sha = wc_hash_bytes(wc_root, data, string.length(data))
+                    }
+                    util.remote_tree_add_file(rt, rel, data, string.length(data), sha)
+                    remote_free(data)
+                }
+            }
+        }
+        i = i + 1
+    }
+    remote_list_free(L)
+    return result
+}
+
+
+
+// =============================================================================
+// working_copy/wc_accessors.ae
+// =============================================================================
+
+// statuslist + proplist handle accessors — Aether port of
+// working_copy/status_shim.c and working_copy/props_shim.c. Same recipe as the
+// repos / ra / db_accessors ports (Rounds 154–156): handle is the
+// underlying packed AetherString, refcount handles lifetime, no
+// pin_str needed.
+
+
+
+
+// ---- statuslist handle ---------------------------------------
+
+wc_statuslist_handle(packed: string) -> ptr {
+    if string.length(packed) == 0 { return null }
+    return string.copy(packed)
+}
+
+wc_statuslist_count(L: ptr) -> int {
+    if L == null { return 0 }
+    return statuslist_count(L)
+}
+wc_statuslist_path (L: ptr, i: int) -> string {
+    if L == null { return "" }
+    return statuslist_path_at(L, i)
+}
+wc_statuslist_code (L: ptr, i: int) -> int {
+    if L == null { return 0 - 1 }
+    return statuslist_code_at(L, i)
+}
+wc_statuslist_free (L: ptr) { return 0 }
+
+// ---- proplist handle -----------------------------------------
+
+wc_proplist_handle(packed: string) -> ptr {
+    if string.length(packed) == 0 { return null }
+    return string.copy(packed)
+}
+
+wc_proplist_count(L: ptr) -> int {
+    if L == null { return 0 }
+    return proplist_count(L)
+}
+wc_proplist_name (L: ptr, i: int) -> string {
+    if L == null { return "" }
+    return proplist_name_at(L, i)
+}
+wc_proplist_value(L: ptr, i: int) -> string {
+    if L == null { return "" }
+    return proplist_value_at(L, i)
+}
+wc_proplist_free (L: ptr) { return 0 }
+

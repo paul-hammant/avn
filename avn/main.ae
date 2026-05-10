@@ -33,6 +33,7 @@
 import std.string
 import std.io
 import std.os
+import working_copy
 
 extern aether_args_count() -> int
 extern aether_args_get(index: int) -> string
@@ -127,14 +128,10 @@ extern fetch_merge_runs(base: string, repo: string,
 // Round 278 / Phase 2.3a — `avn merged --pending` reads the WC
 // side of the merge pipeline (rows that wc_merge accumulated
 // but haven't been committed yet).
-extern wc_pending_merge_dump(wc_root: string) -> string
 
 // Round 280 — verbose mode reads source-repo URL out of the WC's
 // info table so `avn merged --pending -v` can decorate each pending
 // row with author/date/log via the existing remote_info_rev path.
-extern wc_db_open(wc_root: string) -> ptr
-extern wc_db_get_info(db: ptr, key: string) -> string
-extern wc_db_close(db: ptr)
 
 extern remote_paths_changed(base_url: string, repo_name: string, rev: int) -> ptr
 extern remote_paths_count(P: ptr) -> int
@@ -191,35 +188,9 @@ env_get(name: string) {
 http_get_body(url: string) { return get_200(url) }
 
 // WC operations (Phase 5+).
-extern wc_checkout(base_url: string, repo_name: string, dest: string, rev: int) -> int
-extern wc_add(wc_root: string, rel_path: string) -> int
-extern wc_rm (wc_root: string, rel_path: string) -> int
-extern wc_commit(wc_root: string, author: string, logmsg: string) -> int
-extern wc_update(wc_root: string, target_rev: int) -> int
-extern wc_switch(wc_root: string, new_base_url: string, new_repo: string, target_rev: int) -> int
-extern wc_cleanup(wc_root: string) -> int
-extern wc_revert(wc_root: string, rel_path: string) -> int
-extern wc_diff(wc_root: string, rel_path_or_empty: string) -> int
-extern wc_cp(wc_root: string, src: string, dst: string) -> int
-extern wc_mv(wc_root: string, src: string, dst: string) -> int
 extern remote_server_copy(base_url: string, repo_name: string, base_rev: int, from_path: string, to_path: string, author: string, logmsg: string) -> int
 extern remote_branch_create(base_url: string, repo_name: string, name: string, base: string, includes_joined: string) -> int
-extern wc_merge(wc_root: string, source_path: string, rev_a: int, rev_b: int, target_path: string) -> int
-extern wc_resolve(wc_root: string, rel_path: string, accept: int) -> int
 
-extern wc_propset(wc_root: string, path: string, name: string, value: string) -> int
-extern propget_value(wc_root: string, path: string, name: string) -> string
-extern wc_propdel(wc_root: string, path: string, name: string) -> int
-extern wc_proplist(wc_root: string, path: string) -> ptr
-extern wc_proplist_count(L: ptr) -> int
-extern wc_proplist_name(L: ptr, i: int) -> string
-extern wc_proplist_value(L: ptr, i: int) -> string
-extern wc_proplist_free(L: ptr)
-extern wc_status(wc_root: string) -> ptr
-extern wc_statuslist_count(L: ptr) -> int
-extern wc_statuslist_path(L: ptr, i: int) -> string
-extern wc_statuslist_code(L: ptr, i: int) -> int
-extern wc_statuslist_free(L: ptr)
 
 // --- URL parsing ----------------------------------------------------------
 //
@@ -824,18 +795,18 @@ cmd_merged(argv_start: int) {
             }
             return 1
         }
-        dump = wc_pending_merge_dump(wc_root)
+        dump = working_copy.wc_pending_merge_dump(wc_root)
         // Verbose mode needs the source repo URL to decorate each row;
         // pull it from the WC's info table. Reading these is cheap
         // (one SQLite read) and only happens when the user asks for -v.
         v_base = ""
         v_repo = ""
         if verbose == 1 {
-            db = wc_db_open(wc_root)
+            db = working_copy.wc_db_open(wc_root)
             if db != null {
-                v_base = string.copy(wc_db_get_info(db, "base_url"))
-                v_repo = string.copy(wc_db_get_info(db, "repo"))
-                wc_db_close(db)
+                v_base = string.copy(working_copy.wc_db_get_info(db, "base_url"))
+                v_repo = string.copy(working_copy.wc_db_get_info(db, "repo"))
+                working_copy.wc_db_close(db)
             }
         }
         if json_out == 1 {
@@ -919,15 +890,15 @@ cmd_merged(argv_start: int) {
         } else {
             wc_root_e, _ = find_wc_anchor_()
             if string.length(wc_root_e) > 0 {
-                db_e = wc_db_open(wc_root_e)
+                db_e = working_copy.wc_db_open(wc_root_e)
                 if db_e != null {
-                    bre = wc_db_get_info(db_e, "base_rev")
+                    bre = working_copy.wc_db_get_info(db_e, "base_rev")
                     if string.length(bre) > 0 {
                         if string.try_int(bre) == 1 {
                             as_of = string.get_int(bre)
                         }
                     }
-                    wc_db_close(db_e)
+                    working_copy.wc_db_close(db_e)
                 }
             }
         }
@@ -1630,7 +1601,7 @@ cmd_commit(argv_start: int) {
             println("avn commit: not a working copy (or any of the parent directories)")
             return 1
         }
-        new_rev = wc_commit(wc_root, author, logmsg)
+        new_rev = working_copy.wc_commit(wc_root, author, logmsg)
         if new_rev == -2 {
             println("No changes to commit.")
             return 0
@@ -1768,7 +1739,7 @@ cmd_add(argv_start: int) {
     while i < n {
         p = aether_args_get(i)
         rel = wc_join_(cwd_offset, p)
-        rc = wc_add(wc_root, rel)
+        rc = working_copy.wc_add(wc_root, rel)
         if rc == 0 {
             println("A         ${p}")
         } else {
@@ -1791,7 +1762,7 @@ cmd_rm(argv_start: int) {
     i = argv_start
     while i < n {
         p = aether_args_get(i)
-        rc = wc_rm(".", p)
+        rc = working_copy.wc_rm(".", p)
         if rc == 0 {
             println("D         ${p}")
         } else {
@@ -1834,7 +1805,7 @@ cmd_resolve(argv_start: int) {
                 continue
             }
         }
-        rc = wc_resolve(".", p, accept)
+        rc = working_copy.wc_resolve(".", p, accept)
         if rc != 0 {
             println("avn resolve: '${p}' is not in conflict")
             fails = fails + 1
@@ -1972,7 +1943,7 @@ cmd_merge(argv_start: int) {
     merge_target = wc_join_(cwd_offset, target)
     if string.length(merge_target) == 0 { merge_target = "." }
 
-    rc = wc_merge(wc_root, source, rev_a, rev_b, merge_target)
+    rc = working_copy.wc_merge(wc_root, source, rev_a, rev_b, merge_target)
     if rc == -2 {
         println("avn merge: conflict(s) prevent merge")
         return 1
@@ -1987,7 +1958,7 @@ cmd_merge(argv_start: int) {
         if rev_a > rev_b {
             println("--- Reverse-merging r${rev_a} through r${rev_b + 1} into '.':")
         } else {
-            println("--- No-op merge (empty range).")
+            println("--- No-op working_copy.merge (empty range).")
         }
     }
     return 0
@@ -2010,7 +1981,7 @@ cmd_propset(argv_start: int) {
         println("             server's merge ledger is the source of truth.")
         return 1
     }
-    rc = wc_propset(".", path, name, value)
+    rc = working_copy.wc_propset(".", path, name, value)
     if rc == -2 {
         println("avn propset: ${path} is not tracked")
         return 1
@@ -2043,7 +2014,7 @@ cmd_propget(argv_start: int) {
         return 1
     }
     rel = wc_join_(cwd_offset, path)
-    v = propget_value(wc_root, rel, name)
+    v = working_copy.propget_value(wc_root, rel, name)
     if string.length(v) == 0 {
         return 1
     }
@@ -2058,7 +2029,7 @@ cmd_propdel(argv_start: int) {
     }
     name = aether_args_get(argv_start)
     path = prop_path(aether_args_get(argv_start + 1))
-    rc = wc_propdel(".", path, name)
+    rc = working_copy.wc_propdel(".", path, name)
     if rc != 0 {
         println("avn propdel: failed (rc=${rc})")
         return 1
@@ -2073,26 +2044,26 @@ cmd_proplist(argv_start: int) {
         return 2
     }
     path = prop_path(aether_args_get(argv_start))
-    L = wc_proplist(".", path)
+    L = working_copy.wc_proplist(".", path)
     if L == 0 {
         println("avn proplist: could not read properties")
         return 1
     }
-    n = wc_proplist_count(L)
+    n = working_copy.wc_proplist_count(L)
     if n == 0 {
-        wc_proplist_free(L)
+        working_copy.wc_proplist_free(L)
         return 0
     }
     println("Properties on '${path}':")
     i = 0
     while i < n {
-        name  = wc_proplist_name(L, i)
-        value = wc_proplist_value(L, i)
+        name  = working_copy.wc_proplist_name(L, i)
+        value = working_copy.wc_proplist_value(L, i)
         println("  ${name}")
         println("    ${value}")
         i = i + 1
     }
-    wc_proplist_free(L)
+    working_copy.wc_proplist_free(L)
     return 0
 }
 
@@ -2150,7 +2121,7 @@ cmd_cp(argv_start: int) {
     }
 
     // WC-local mode (original Phase 5.9 behaviour).
-    rc = wc_cp(".", src, dst)
+    rc = working_copy.wc_cp(".", src, dst)
     if rc != 0 {
         println("avn cp: failed (rc=${rc})")
         return 1
@@ -2166,7 +2137,7 @@ cmd_mv(argv_start: int) {
     }
     src = aether_args_get(argv_start)
     dst = aether_args_get(argv_start + 1)
-    rc = wc_mv(".", src, dst)
+    rc = working_copy.wc_mv(".", src, dst)
     if rc != 0 {
         println("avn mv: failed (rc=${rc})")
         return 1
@@ -2190,7 +2161,7 @@ cmd_cleanup(argv_start: int) {
             }
         }
     }
-    rc = wc_cleanup(wc)
+    rc = working_copy.wc_cleanup(wc)
     if rc < 0 {
         println("avn cleanup: ${wc} is not a working copy")
         return 1
@@ -2209,7 +2180,7 @@ cmd_revert(argv_start: int) {
     i = argv_start
     while i < n {
         p = aether_args_get(i)
-        rc = wc_revert(".", p)
+        rc = working_copy.wc_revert(".", p)
         if rc == 0 {
             println("Reverted '${p}'")
         } else {
@@ -2231,7 +2202,7 @@ cmd_diff(argv_start: int) {
             if string.char_at(candidate, 0) != 45 { target = candidate }
         }
     }
-    wc_diff(".", target)
+    working_copy.wc_diff(".", target)
     return 0
 }
 
@@ -2241,7 +2212,7 @@ cmd_update(argv_start: int) {
     if string.length(rev_str) > 0 {
         if string.try_int(rev_str) == 1 { target = string.get_int(rev_str) }
     }
-    rc = wc_update(".", target)
+    rc = working_copy.wc_update(".", target)
     if rc == -2 {
         println("avn update: conflict(s) prevent update. Resolve and retry.")
         return 1
@@ -2280,7 +2251,7 @@ cmd_switch(argv_start: int) {
     if string.length(rev_str) > 0 {
         if string.try_int(rev_str) == 1 { target = string.get_int(rev_str) }
     }
-    rc = wc_switch(".", base, repo, target)
+    rc = working_copy.wc_switch(".", base, repo, target)
     if rc < 0 {
         println("avn switch: failed")
         return 1
@@ -2312,16 +2283,16 @@ cmd_status(argv_start: int) {
         }
     }
 
-    L = wc_status(wc)
+    L = working_copy.wc_status(wc)
     if L == 0 {
         println("avn status: cannot read WC at ${wc}")
         return 1
     }
-    n = wc_statuslist_count(L)
+    n = working_copy.wc_statuslist_count(L)
     i = 0
     while i < n {
-        code = wc_statuslist_code(L, i)
-        path = wc_statuslist_path(L, i)
+        code = working_copy.wc_statuslist_code(L, i)
+        path = working_copy.wc_statuslist_path(L, i)
         // Format: "<code> <spaces> <path>" matching reference avn's layout.
         // We don't fill the inline columns yet — just "<code>       <path>".
         // Build the code char from its int.
@@ -2335,7 +2306,7 @@ cmd_status(argv_start: int) {
         println("${ch}       ${path}")
         i = i + 1
     }
-    wc_statuslist_free(L)
+    working_copy.wc_statuslist_free(L)
     return 0
 }
 
@@ -2567,7 +2538,7 @@ cmd_checkout(argv_start: int) {
         }
     }
 
-    rc = wc_checkout(base, repo, dest, rev)
+    rc = working_copy.wc_checkout(base, repo, dest, rev)
     if rc != 0 {
         println("avn checkout: failed (rc=${rc})")
         return 1
