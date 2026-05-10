@@ -253,6 +253,26 @@ Inspection tells us which is right. **Pick on inspection, not dogma.**
 After untangling, migrate both as Phase 4a (`repos`) and Phase 4b
 (`repo_storage`).
 
+**Phase 4 status: DONE (Rounds 303 + 304).** Picked option D (not in
+the original list): leave cross-references as `extern` forward-decls,
+merge each side into its own `module.ae`. Externs at the link layer
+mean the typer never expands through the cycle direction; it never
+manifests as a typer-time problem. Each module has its own
+declarations of the cross-cycle functions it calls.
+
+- Phase 4a (Round 303): repos/ — 8 source files merged, 27 consumer
+  files updated. 21 redundant externs dropped.
+- Phase 4b (Round 304): repo_storage/ — 16 source files merged
+  (including 3 struct-bearing: dirblob, txn, tree_builder; all
+  unblocked by aetherc 0.141.0). 28 consumers updated. 59 redundant
+  externs dropped. Two type-conflict fixes (dir_iter_free void/int).
+
+Cap-propagation sweep: 37 regen entries needed cap upgrades to satisfy
+the new transitive checks aetherc 0.142.0 enforces through `import
+<mod>` resolution. Hardcoded module-cap table now feeds the sweep
+script: util=fs, client=fs+net, repos=fs+net+os, repo_storage=fs+os,
+working_copy=fs+os.
+
 ### Phase 5 — `working_copy/`
 
 Depends on `client/`, `util/`, and one `repo_storage` reference. By Phase 5
