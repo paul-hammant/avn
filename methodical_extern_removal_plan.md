@@ -223,58 +223,35 @@ single round.
 break cleanly, defer client/ to after the repos/repo_storage tangle is
 sorted in Phase 4.
 
-**Phase 3 status: DEFERRED (Round 297 attempt reverted).** Migration
-attempted but ran into THREE compounding aether/aetherc limitations
-when 12 client source files were merged into a single `client/module.ae`:
+**Phase 3 status: DEFERRED.** Two aetherc/aeb limitations + one
+codegen issue stack on top of each other:
 
-1. **Forward references in merged file fail across import boundary.**
-   `urls.ae`'s `url_rev_info` calls `rev_prefix` which is defined
-   later in the same file. Standalone, aether's typer handles forward
-   refs fine. After merge, when a consumer does `import client`, the
-   typer reports `Undefined function 'rev_prefix'` for the same call.
-   Workaround: reorder the merged file so every definition precedes
-   its callers (~10-line move per such case).
+1. **Forward references in large imported modules.** Standalone
+   `ae check` passes; `import client` from a consumer fails with
+   `Undefined function`. Minimal repro (`caller`/`helper`) works,
+   so it's pattern- or scale-sensitive. Filed in
+   `../aether/import_typer_at_scale.md` Issue A.
 
-2. **Private-helper calls between functions in an imported module
-   fail.** `verify_file` calls `do_get`, `local_hash`, `verify_stderr_`
-   — all defined earlier in the same file (no forward ref). Standalone
-   `ae check client/module.ae` passes. As soon as a consumer imports
-   client, those call sites fail with `Undefined function`. A
-   minimal reproducer (`foo/module.ae` with one helper + one public
-   that calls it; `main.ae` does `import foo`, calls `foo.public_fn`)
-   *does* work, so the bug is sensitive to scale or specific
-   patterns. Adding every internal name to an explicit `exports (...)`
-   list does NOT fix it.
+2. **Selectively-imported names don't propagate across the import
+   boundary.** `client/module.ae`'s `import std.http.client (set_header,
+   ...)` works standalone, but consumer-side `import client` can't
+   resolve `set_header` in the cloned function bodies. Filed in
+   `../aether/import_typer_at_scale.md` Issue B.
 
-3. **Name collision with `std.http.client`.** Our directory is named
-   `client/`, so `import client` exposes a `client.X` namespace. But
-   `std.http.client` *also* exposes a `client.X` namespace (last
-   segment of dotted import). Inside `client/module.ae`, code like
-   `client.set_header(...)` (intending std.http.client) collides with
-   our own module's namespace. Switching to selective import
-   (`import std.http.client (set_header, ...)`) and bare calls makes
-   the standalone module check pass, but the consumer's import
-   expansion then can't resolve `set_header` — the std.http.client
-   selective binding doesn't propagate across the import boundary.
+3. **Name collision with `std.http.client`.** Our `client/` directory
+   collides with std.http.client's namespace alias. Workaroundable by
+   renaming `client/` → `remote/` (~110 path edits) but doesn't
+   address #1 + #2 for any other module.
 
-  Workarounds, in increasing order of intrusiveness:
-  (a) Rename `client/` directory to `remote/` (or similar) — kills
-      the std.http.client namespace collision. ~110 path edits across
-      build files and consumers, but mechanical.
-  (b) Push fixes upstream into aetherc for issues 1 + 2 (private-helper
-      resolution across import expansion + forward-ref handling in
-      merged modules).
-  (c) Inline every private helper in the merged module — eliminates
-      issue 2 but bloats the file and is anti-DRY.
-
-  Combining (a) + (b) is the right path. (a) alone is doable in avn
-  but doesn't unblock the underlying issues; future migrations of any
-  module with private helpers + cap-bearing imports will hit the same
-  blockers without (b).
+4. **std.json codegen issue in aeb pipeline.** During `aeb avnserver`
+   with merged client/module.ae imported through avn/main.ae, gcc
+   chokes on `std.json/module.ae`'s tuple-return shape (`return null,
+   "not an object"`) — only via the aeb pipeline; standalone aetherc
+   handles it. Looks like a 0.141.0 regression; filed separately if
+   needed.
 
 **Action**: deferred until aether/aetherc improvements land. The
-12 client source files stay as separate `extern`-bridged units. Phase
-4 / 5 / 6 may have similar blockers — assess when reached.
+12 client source files stay as separate `extern`-bridged units.
 
 ### Phase 4 — Untangle `repos` ↔ `repo_storage` cycle, then merge each
 
@@ -307,6 +284,22 @@ Consumers to update:
 - `avn/` (30 externs)
 
 **Round size:** medium.
+
+**Phase 5 status: DEFERRED.** Round 301 attempt: 30 source files
+merged into `working_copy/module.ae` (4325 lines, no struct issues,
+type-checks standalone). Once `avn/main.ae` does `import working_copy`,
+14 errors fire of the same shape as Phase 3 Issue A: forward refs +
+recursive self-calls + private helper chains. Specifically
+`walk_unversioned_` (recursive), `sort_body_`, `count_records_`,
+`update_stderr_`, `wc_update`. All defined cleanly in the merged
+module. Reverted; same blocker as Phase 3 (filed in
+`../aether/import_typer_at_scale.md` Issue A).
+
+Add'l finding: my consumer-sweep script over-prefixed `extern`
+declarations as `working_copy.X` even though externs are link-time
+forwards to bare C symbols, not module functions. The two failure
+modes (forward-ref + extern-vs-prefix) are independent; a future
+retry needs to handle both.
 
 ### Phase 6 — Top binaries: `avnserver/`, `avnadmin/`, `avn/`
 
