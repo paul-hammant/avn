@@ -15,7 +15,7 @@ main() {
         // Phase 3 (Rounds 302+305): 13 client/*.ae files merged into
         // module.ae. module.ae imports std.http.client → "net" cap.
         regen_with("../client/module.ae", "fs,os,net")
-        regen("../repo_storage/pathutil.ae")
+        regen_with("../repo_storage/module.ae", "fs,os")
         regen("../ffi/openssl/module.ae")
     }
 }

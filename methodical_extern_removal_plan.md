@@ -359,23 +359,55 @@ Pick order:
 Acceptance: same as previous phases — `aeb avn / avnadmin / avnserver`
 all compile-phase clean.
 
-### Phase 7 — Cleanup
+### Phase 7 — Cleanup (DONE)
 
-- Strip every `regen("../<dir>/<file>.ae")` line from the three `.build.ae`
-  files. Imports trigger automatic regen for module sources.
-- Delete now-orphaned `*_generated.c` files (gitignored anyway, cleared on
-  next clean build).
-- Update `LLM.md` / `README.md` to describe the new module layout.
+Done in R309 (no-Round commit, just cleanup):
+
+- Stale per-file `regen()` entries collapsed to module.ae regen_with
+  in `client/.build.ae` (1 stale: pathutil.ae),
+  `working_copy/.tests-pristine.ae` (16 stale),
+  `working_copy/.tests-db.ae` (5 stale),
+  `repo_storage/.tests-txn.ae` (13 stale),
+  `util/.tests-merge_ledger.ae` (4 stale).
+- `client/commit_builder_generated.c` orphan deleted.
+- `ae/` tree (112 orphan generated.c files from a long-defunct
+  layout pre-rename: `svnadmin/svnserver/wc/fs_fs/...` → current
+  `avnadmin/avnserver/working_copy/repo_storage/...`) deleted.
+- LLM.md "Layout" section updated to describe module.ae per area
+  and the binary-with-main pattern.
 
 **Caveat learned in R293-R304:** the cap-propagation sweep
 (`regen()` → `regen_with(..., "fs[,os][,net]")`) is NOT redundant
 post-Phase 6 — aeb's `_detect_caps` only scans the regen'd file's
 direct `import std.X` lines, so transitively pulling caps through
 project-local `import <mod>` still requires `regen_with` until aeb
-itself learns to follow imports. Phase 7 may *consolidate* the
-regen entries (every binary's regen list collapses to a handful of
-`regen_with("../<dir>/module.ae", "<caps>")` lines) but cannot
+itself learns to follow imports. Phase 7 *consolidated* the regen
+entries (every binary's regen list collapsed to a handful of
+`regen_with("../<dir>/module.ae", "<caps>")` lines) but did not
 eliminate them.
+
+### Bench status (R308 acceptance check)
+
+The plan's third acceptance criterion (5000-commit bench) does
+**not** pass post-R308 — but the failure is **not migration-induced**.
+Root cause: the avn client (`target/avn/bin/avn`) hangs in an
+infinite loop after receiving the HTTP response from avnserver
+(strace shows successful sendto + recvfrom + close, then process
+goes R-state and never exits). Same symptom appears with
+`test_client` running against `avn-seed`'s own pre-seeded repo —
+seed reports "commit 1 failed" because `commit_txn` returns ≠ 1.
+
+This matches the pre-existing aetherc-0.140+ regression flagged in
+the plan's Risks section ("currently-broken bench under aetherc
+0.140.0... bench segfaults at i=1 due to the missing escape-
+through-struct-field analysis"). The symptom shifted from segfault
+to infinite loop in 0.142.0 but the underlying bug class
+(escape/codegen of struct-field writes) appears unfixed.
+
+aeb post-build `free(): invalid pointer` aborts also remain. They
+don't gate type-checking or `--emit=lib` codegen, but they break
+the binary-link step for avnadmin (worked around in R308 with a
+manual `gcc + module_generated.c` link).
 
 ## Acceptance criteria — every phase
 

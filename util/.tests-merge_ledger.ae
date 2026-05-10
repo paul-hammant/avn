@@ -1,6 +1,6 @@
 import build
 import aether
-import aether (source, output, regen, link_flag)
+import aether (source, output, regen, regen_with, link_flag)
 
 main() {
     b = build.start()
@@ -22,9 +22,7 @@ main() {
         // format_merged_field + parse_merged_field) and
         // blobfield.ae (the parser the rest of the port uses)
         // for round-trip assertions.
-        regen("../repo_storage/merge_ledger.ae")
-        regen("../repo_storage/format_line.ae")
-        regen("../repo_storage/txn.ae")
-        regen("../repos/blobfield.ae")
+        regen_with("../repo_storage/module.ae", "fs,os")
+        regen_with("../repos/module.ae", "fs,net,os")
     }
 }

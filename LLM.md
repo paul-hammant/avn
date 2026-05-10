@@ -21,11 +21,23 @@ diverge freely on plumbing where doing so paid off.
 
 ## Layout
 
-- `<area>/*.ae` — first-party Aether source at the repo root (one
-  directory per area: `client/`, `delta/`, `repo_storage/`,
-  `working_copy/`, etc). Compiled to C via `aetherc --emit=lib`,
-  linked into binaries by aeb's `regen(...)` setter. Generated
-  `_generated.c` is gitignored.
+- `<area>/module.ae` — first-party Aether source at the repo root,
+  one directory per area: `client/`, `delta/`, `ffi/openssl/`,
+  `repo_storage/`, `repos/`, `util/`, `working_copy/`. Each area is
+  a single `module.ae` consumed via `import <area>` (R293-R308
+  collapsed ~130 per-file fragments down to one file per area —
+  see `methodical_extern_removal_plan.md`). Compiled to C via
+  `aetherc --emit=lib`, linked into binaries by aeb's
+  `regen_with(...)` setter. Generated `_generated.c` is gitignored.
+- `<binary>/{main.ae,module.ae}` — top-of-graph binaries
+  (`avn/`, `avnadmin/`, `avnserver/`). Binaries need `main()`, which
+  modules can't carry, so each binary keeps its own `main.ae` and a
+  sibling `module.ae` for everything else. `avnadmin/main.ae` does
+  `import avnadmin`. `avnserver/main.ae` keeps link-layer externs
+  to its own `module.ae`'s embed surface (transitive imports of
+  std.* + util/ + repos/ + repo_storage/ + ffi.openssl exceed
+  aetherc's 4096-decl cap when imported via `import avnserver`).
+  `avn/` is just `main.ae` — no helpers to factor out.
 - `aether.toml` — `[build]` section + a handful of legacy `[[bin]]`
   entries for unused Aether-native test programs (test_wc_db,
   test_repos, etc — built but not exercised by anything). The four
