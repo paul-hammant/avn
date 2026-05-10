@@ -30,6 +30,7 @@ import std.fs
 import std.os
 import contrib.sqlite
 import util
+import repos
 
 const SQLITE_DONE = 101
 
@@ -41,11 +42,8 @@ extern rebuild_dir(repo: string, base_dir_sha: string, prefix: string, t: ptr) -
 
 // Repository primitives.
 extern rep_write_blob(repo: string, data: string, len: int) -> string
-extern repos_head_rev(repo: string) -> int
 
 // Aether-side helpers (already exported as aether_* aliases).
-extern repos_rev_field(repo: string, rev: int, key: string) -> string
-extern repos_inherit_rev_field(repo: string, prev: int, key: string, override: string) -> string
 extern rev_blob_body(root: string, branch: string, props: string, acl: string,
                              prev: int, merged: string,
                              author: string, date: string, log: string) -> string
@@ -58,10 +56,6 @@ extern filter_dir(repo: string, src_sha: string, prefix: string,
 // paths_changed handle from repos/shim.c — opaque ptr + count + path
 // accessor. Used to enumerate paths-changed-by-rev for the path_rev
 // secondary index.
-extern repos_paths_changed(repo: string, rev: int) -> ptr
-extern repos_paths_count(P: ptr) -> int
-extern repos_paths_path(P: ptr, i: int) -> string
-extern repos_paths_free(P: ptr)
 
 // txn introspection — needed for the out-of-date check below.
 extern txn_count(t: ptr) -> int
@@ -94,7 +88,7 @@ extern merge_ledger_record(repo: string, rev_sha: string,
 load_rev_root_sha1_(repo: string, rev: int) -> string
     requires rev >= 0
 {
-    v = repos_rev_field(repo, rev, "root")
+    v = repos.repos_rev_field(repo, rev, "root")
     if string.length(v) == 0 { return "" }
     return string.copy(v)
 }
@@ -265,7 +259,7 @@ finalise_on_branch_(repo: string, txn: ptr,
     base_rev = txn_base_rev(txn)
     if base_rev < 0 { return 0 - 1 }
 
-    prev = repos_head_rev(repo)
+    prev = repos.repos_head_rev(repo)
     if prev < 0 { return 0 - 1 }
     next = prev + 1
 
@@ -294,8 +288,8 @@ finalise_on_branch_(repo: string, txn: ptr,
     new_root = string.copy(new_root)
 
     // Inherit props / acl from the previous rev when caller passes "".
-    ps = repos_inherit_rev_field(repo, prev, "props", props_sha1)
-    as_ = repos_inherit_rev_field(repo, prev, "acl", acl_sha1)
+    ps = repos.repos_inherit_rev_field(repo, prev, "props", props_sha1)
+    as_ = repos.repos_inherit_rev_field(repo, prev, "acl", acl_sha1)
     ps = string.copy(ps)
     as_ = string.copy(as_)
 
@@ -401,7 +395,7 @@ export branch_create(repo: string, name: string, base: string,
 
     // Cross-branch rev numbering: rev numbers are per-repo, not
     // per-branch. (See commit message on the original C version.)
-    new_rev = repos_head_rev(repo) + 1
+    new_rev = repos.repos_head_rev(repo) + 1
 
     n_globs = count_globs_(globs_joined)
     logmsg = "create branch ${name} from ${base} with ${n_globs} include(s)"

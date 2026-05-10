@@ -1,0 +1,1446 @@
+// Copyright 2026 Paul Hammant (portions).
+// Portions copyright Apache Subversion project contributors (2001-2026).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+
+// repos — read-side accessors and packed serialisers for stored revs.
+//
+// Phase 4a merge (Round 303). Unblocked by aetherc 0.142.0 — both
+// the selective-import propagation (Issue B) and the 128-decl
+// truncation cap (Issue A) needed to land before this could be
+// merged. Cross-references from repo_storage stay as externs at
+// the link layer (the repos↔repo_storage cycle the plan flagged
+// — both modules will compile and link cleanly with externs as the
+// boundary; phase 4b migrates repo_storage the same way).
+
+import client
+import std.intarr
+import std.string
+import util
+
+
+// =============================================================================
+// repos/accessors.ae
+// =============================================================================
+
+// repos accessor families — Aether port of repos/shim.c's
+// log/list/info/paths/blame handle wrappers. Round 154 retired
+// the C-side struct log/list/etc + their accessor
+// one-liners; this file replaces them.
+//
+// Handle shape: each "handle" (log, list, ...) is just
+// the underlying packed-record string the parser already produces
+// (repos/log.ae, list_packed.ae, etc.). We surface it as `ptr`
+// to keep the existing C-ABI signatures stable across .ae callers.
+//
+// pin_str dropped: the per-call AetherString returned by every
+// parser is refcounted, so the stable-pointer contract is upheld
+// without needing an explicit pin_list. The *_free symbols
+// are now no-ops — Aether's refcount frees the packed buffer when
+// the last reference drops.
+
+
+// Aether-side packed-record producers (defined in repos/{log,
+// list_packed,paths_changed}.ae).
+
+// Accessor parsers (defined in client/packed.ae).
+
+
+
+
+
+// ---- log handle ----------------------------------------------
+
+repos_log(repo: string) -> ptr {
+    p = repos_log_packed(repo)
+    if string.length(p) == 0 { return null }
+    return string.copy(p)
+}
+repos_log_count (lg: ptr) -> int {
+    if lg == null { return 0 }
+    return client.packed_log_count(lg)
+}
+repos_log_rev   (lg: ptr, i: int) -> int {
+    if lg == null { return 0 - 1 }
+    return client.packed_log_rev(lg, i)
+}
+repos_log_author(lg: ptr, i: int) -> string {
+    if lg == null { return "" }
+    return client.packed_log_author(lg, i)
+}
+repos_log_date  (lg: ptr, i: int) -> string {
+    if lg == null { return "" }
+    return client.packed_log_date(lg, i)
+}
+repos_log_msg   (lg: ptr, i: int) -> string {
+    if lg == null { return "" }
+    return client.packed_log_msg(lg, i)
+}
+repos_log_free  (lg: ptr) { return 0 }
+
+// ---- list handle ---------------------------------------------
+
+repos_list(repo: string, rev: int, path: string) -> ptr {
+    p = repos_list_packed(repo, rev, path)
+    if string.length(p) == 0 { return null }
+    return string.copy(p)
+}
+repos_list_count(L: ptr) -> int {
+    if L == null { return 0 }
+    return client.packed_list_count(L)
+}
+repos_list_name (L: ptr, i: int) -> string {
+    if L == null { return "" }
+    return client.packed_list_name(L, i)
+}
+repos_list_kind (L: ptr, i: int) -> string {
+    if L == null { return "" }
+    return client.packed_list_kind(L, i)
+}
+repos_list_free (L: ptr) { return 0 }
+
+// ---- info handle (single-record) -----------------------------
+
+repos_info_rev(repo: string, rev: int) -> ptr {
+    p = repos_info_packed(repo, rev)
+    if string.length(p) == 0 { return null }
+    return string.copy(p)
+}
+repos_info_rev_num(I: ptr) -> int {
+    if I == null { return 0 - 1 }
+    return client.packed_info_rev(I)
+}
+repos_info_author(I: ptr) -> string {
+    if I == null { return "" }
+    return client.packed_info_author(I)
+}
+repos_info_date  (I: ptr) -> string {
+    if I == null { return "" }
+    return client.packed_info_date(I)
+}
+repos_info_msg   (I: ptr) -> string {
+    if I == null { return "" }
+    return client.packed_info_msg(I)
+}
+repos_info_free  (I: ptr) { return 0 }
+
+// ---- paths-changed handle ------------------------------------
+
+repos_paths_changed(repo: string, rev: int) -> ptr {
+    if rev < 0 { return null }
+    p = paths_changed_packed(repo, rev)
+    if string.length(p) == 0 { return null }
+    return string.copy(p)
+}
+repos_paths_count (P: ptr) -> int {
+    if P == null { return 0 }
+    return client.packed_paths_count(P)
+}
+repos_paths_path  (P: ptr, i: int) -> string {
+    if P == null { return "" }
+    return client.packed_paths_path(P, i)
+}
+repos_paths_action(P: ptr, i: int) -> string {
+    if P == null { return "" }
+    return client.packed_paths_action(P, i)
+}
+repos_paths_free  (P: ptr) { return 0 }
+
+// ---- blame handle --------------------------------------------
+
+repos_blame(repo: string, target_rev: int, path: string) -> ptr {
+    p = repos_blame_packed(repo, target_rev, path)
+    if string.length(p) == 0 { return null }
+    return string.copy(p)
+}
+blame_count (B: ptr) -> int {
+    if B == null { return 0 }
+    return client.packed_blame_count(B)
+}
+blame_rev   (B: ptr, i: int) -> int {
+    if B == null { return 0 - 1 }
+    return client.packed_blame_rev(B, i)
+}
+blame_author(B: ptr, i: int) -> string {
+    if B == null { return "" }
+    return client.packed_blame_author(B, i)
+}
+blame_text  (B: ptr, i: int) -> string {
+    if B == null { return "" }
+    return client.packed_blame_text(B, i)
+}
+blame_free  (B: ptr) { return 0 }
+
+
+// =============================================================================
+// repos/blobfield.ae
+// =============================================================================
+
+// "key: value" line extractor for rev-blob bodies — ported from
+// parse_field / rev_blob_field / load_rev_blob_field duplicated across
+// repos/shim.c, repo_storage/commit_shim.c, and avnserver/shim.c.
+//
+// Rev blobs are line-oriented text:
+//   root: <sha>\n
+//   branch: main\n
+//   author: alice\n
+//   date: 2026-04-21T...\n
+//   log: commit message\n
+//
+// This function returns the value of the first line whose key matches
+// exactly (no prefix match — "a" won't match "author:"). Leading
+// spaces/tabs after the colon are skipped, matching the C impl.
+//
+// Returns "" when the key is absent, to keep the FFI signature simple
+// (Aether can't return NULL from a string). Callers distinguish
+// "missing" from "present but empty" by checking for an empty string
+// in contexts where empty is valid; every real caller in the port
+// treats "" as absent.
+
+
+blobfield_get(body: string, key: string) -> string {
+    n = string.length(body)
+    klen = string.length(key)
+    if n == 0 { return "" }
+    if klen == 0 { return "" }
+    i = 0
+    while i < n {
+        // Does body[i..i+klen] == key and body[i+klen] == ':'?
+        if i + klen < n {
+            if string.char_at(body, i + klen) == 58 {   // ':'
+                is_match = 1
+                j = 0
+                while j < klen {
+                    if string.char_at(body, i + j) != string.char_at(key, j) {
+                        is_match = 0
+                        break
+                    }
+                    j = j + 1
+                }
+                if is_match == 1 {
+                    // Skip past colon, then any spaces/tabs.
+                    v = i + klen + 1
+                    while v < n {
+                        c = string.char_at(body, v)
+                        if c != 32 && c != 9 { break }
+                        v = v + 1
+                    }
+                    // Find end of line.
+                    e = v
+                    while e < n {
+                        if string.char_at(body, e) == 10 { break }
+                        e = e + 1
+                    }
+                    return string.substring(body, v, e)
+                }
+            }
+        }
+        // Skip to next line.
+        while i < n {
+            if string.char_at(body, i) == 10 {
+                i = i + 1
+                break
+            }
+            i = i + 1
+        }
+    }
+    return ""
+}
+
+
+// =============================================================================
+// repos/cat.ae
+// =============================================================================
+
+// repos_cat — read file content at (rev, path) from the
+// repository. Round 174 retires the C-side wrapper in
+// repos/shim.c (57 lines) once #297 auto-unwrap and refcounted
+// AetherString returns made the wrap-then-detach dance unnecessary.
+//
+// Round 174 also leans on the resolve helpers being Aether-side
+// (Round 154 family) — there's no longer any C-side rebuild
+// pressure that needed a synchronous plain-char* return.
+
+
+extern rep_read_blob(repo: string, sha1_hex: string) -> string
+
+const KIND_FILE = 102   // 'f'
+
+repos_cat(repo: string, rev: int, path: string) -> string {
+    root = repos_rev_field(repo, rev, "root")
+    if string.length(root) == 0 { return "" }
+
+    // Detach: the resolve helpers may return pointers into a
+    // runtime-reused buffer.
+    root = string.copy(root)
+
+    k = resolve_kind(repo, root, path)
+    if k != KIND_FILE { return "" }
+
+    sha = resolve_sha(repo, root, path)
+    if string.length(sha) == 0 { return "" }
+    return rep_read_blob(repo, sha)
+}
+
+
+// =============================================================================
+// repos/list_packed.ae
+// =============================================================================
+
+// Server-side directory-listing in the same packed-string shape the
+// RA client side produces. Reuses the remote_list_* accessors from
+// client/packed.ae so the repos shim can fold the fifth handle type
+// (list) onto the shared repos_handle struct from round
+// 53. Same record shape as remote_parse_list:
+//
+//   "<N>\x02<name>\x01<kind>\x02<name>\x01<kind>...\x02"
+//
+// where <kind> is the literal text "file" or "dir" (matching what
+// packed_list_kind returns).
+
+
+// Resolve (rev, path) → root sha → walked sha + kind. Reuses the
+// existing resolve.ae helpers.
+
+// Walk a dir blob via the existing per-entry accessors.
+extern rep_read_blob(repo: string, sha: string) -> string
+extern rep_free(body: string)
+extern dir_count_entries(body: string) -> int
+extern dir_entry_kind(body: string, i: int) -> int
+extern dir_entry_name(body: string, i: int) -> string
+
+// Build a packed listing string for the directory at (repo, rev, path),
+// or "" on miss. Empty directories produce "0\x02" (count 0 + sentinel),
+// which the remote_list_* accessors interpret correctly.
+repos_list_packed(repo: string, rev: int, path: string) -> string {
+    root_sha = repos_rev_field(repo, rev, "root")
+    if string.length(root_sha) == 0 { return "" }
+    root_owned = string.copy(root_sha)
+
+    kind = resolve_kind(repo, root_owned, path)
+    if kind != 100 { return "" }   // not a directory
+    sha = resolve_sha(repo, root_owned, path)
+    if string.length(sha) == 0 { return "" }
+    sha_owned = string.copy(sha)
+
+    body = rep_read_blob(repo, sha_owned)
+    if string.length(body) == 0 {
+        // Empty dir-blob is legitimate (empty directory).
+        return "0\x02"
+    }
+    body_owned = string.copy(body)
+    rep_free(body)
+
+    n = dir_count_entries(body_owned)
+    out = "${n}\x02"
+    i = 0
+    while i < n {
+        ki = dir_entry_kind(body_owned, i)
+        kind_s = "f"
+        if ki == 100 { kind_s = "d" }   // 'd'
+        nm = dir_entry_name(body_owned, i)
+        nm_owned = string.copy(nm)
+        // "<name>\x01<kind>\x02"
+        out = string.concat(out, nm_owned)
+        out = string.concat(out, "\x01")
+        out = string.concat(out, kind_s)
+        out = string.concat(out, "\x02")
+        i = i + 1
+    }
+    return out
+}
+
+
+// =============================================================================
+// repos/log.ae
+// =============================================================================
+
+// Server-side log enumeration: read every rev blob from rev 0 to HEAD,
+// pack author/date/msg into the same "<N>\x02<rev>\x01<author>\x01
+// <date>\x01<msg>\x02..." string shape that client/parse.ae::remote_parse_log
+// produces for the client side. The C accessors in repos/shim.c
+// consume it via the `remote_log_*` accessor family in client/packed.ae
+// (the record shapes are identical, so we reuse those rather than
+// duplicate the walkers here).
+
+
+
+// Borrowed from fs_fs/rep_store_shim.c.
+extern rep_read_blob(repo: string, sha1_hex: string) -> string
+extern rep_free(p: string)
+
+// For the blame walker: paths_changed at each rev (to skip untouched
+// revs and detect deletes), resolve_path + rep_read_blob for content,
+// and repos_info_packed for the author attribution. All already
+// ported in sibling modules.
+
+
+repos_log_packed(repo: string) -> string {
+    head = repos_head_rev(repo)
+    if head < 0 { return "" }
+
+    n = head + 1
+    out = ""
+    r = 0
+    while r <= head {
+        sha = repos_rev_blob_sha(repo, r)
+        author = ""
+        date   = ""
+        msg    = ""
+        if string.length(sha) > 0 {
+            body = rep_read_blob(repo, sha)
+            if string.length(body) > 0 {
+                author = string.copy(blobfield_get(body, "author"))
+                date   = string.copy(blobfield_get(body, "date"))
+                msg    = string.copy(blobfield_get(body, "log"))
+                rep_free(body)
+            }
+        }
+
+        packed = string.concat(string.from_int(r), "\x01")
+        packed = string.concat(packed, author)
+        packed = string.concat(packed, "\x01")
+        packed = string.concat(packed, date)
+        packed = string.concat(packed, "\x01")
+        packed = string.concat(packed, msg)
+
+        if r == 0 { out = packed }
+        if r > 0 {
+            out = string.concat(out, "\x02")
+            out = string.concat(out, packed)
+        }
+        r = r + 1
+    }
+
+    // Prepend "N\x02" — same shape as remote_parse_log emits.
+    header = string.concat(string.from_int(n), "\x02")
+    if n == 0 { return header }
+    return string.concat(header, out)
+}
+
+// Single-revision metadata. Returns a "\x01"-separated 4-field record
+// "<rev>\x01<author>\x01<date>\x01<msg>" matching the first four
+// fields of remote_parse_info_rev's output, so the C side can reuse
+// packed_info_rev/author/date/msg accessors from client/packed.ae.
+// Empty string on miss (no rev pointer, or rev blob missing "root").
+
+repos_info_packed(repo: string, rev: int) -> string {
+    sha = repos_rev_blob_sha(repo, rev)
+    if string.length(sha) == 0 { return "" }
+    body = rep_read_blob(repo, sha)
+    if string.length(body) == 0 { return "" }
+
+    // "root" field acts as existence sentinel — every valid rev
+    // blob carries one. Field-absent vs rev-absent matter to the
+    // C caller who returns NULL for both, so treat both as miss.
+    root = blobfield_get(body, "root")
+    if string.length(root) == 0 {
+        rep_free(body)
+        return ""
+    }
+
+    author = string.copy(blobfield_get(body, "author"))
+    date   = string.copy(blobfield_get(body, "date"))
+    msg    = string.copy(blobfield_get(body, "log"))
+    rep_free(body)
+
+    out = string.concat(string.from_int(rev), "\x01")
+    out = string.concat(out, author)
+    out = string.concat(out, "\x01")
+    out = string.concat(out, date)
+    out = string.concat(out, "\x01")
+    out = string.concat(out, msg)
+    return out
+}
+
+// ===========================================================================
+// blame — per-line attribution for (rev, path)
+// ===========================================================================
+//
+// Walks revs 1..target_rev, maintaining a "current" annotation state
+// (as a packed "<rev>\x01<author>\x01<text>\x02..." string — same
+// shape as the final return). For each rev that touched `path`:
+//
+//   - action D (deleted): clear state; if re-added later we start
+//     fresh, matching the C version.
+//   - otherwise: fetch content, split into lines, run line-level
+//     LCS against the prev version, and for each current line:
+//       * if matched to a prev line: carry that prev line's
+//         annotation (rev + author) forward.
+//       * otherwise: attribute to the current rev + author.
+//
+// Returns a packed "N\x02<rev>\x01<author>\x01<text>\x02..." string
+// matching remote_parse_blame's output, so the C side reuses the
+// remote_blame_* accessors from client/packed.ae.
+
+// ----------------------------------------------------------------------------
+// Content fetch: resolve (rev, path) to a file sha, then read its blob.
+// Returns the body (caller *must* rep_free it), or "" on miss /
+// non-file.
+
+cat_rev_path(repo: string, rev: int, path: string) -> string {
+    root = repos_rev_field(repo, rev, "root")
+    if string.length(root) == 0 { return "" }
+    // Snapshot — repos_rev_field returns into TLS.
+    root_copy = string.copy(root)
+    k = resolve_kind(repo, root_copy, path)
+    if k != 102 { return "" }   // 102 = 'f'
+    sha = resolve_sha(repo, root_copy, path)
+    if string.length(sha) == 0 { return "" }
+    sha_copy = string.copy(sha)
+    return rep_read_blob(repo, sha_copy)
+}
+
+// ----------------------------------------------------------------------------
+// Line split: return an intarr where each line occupies two slots
+// [2i] = offset, [2i+1] = length. Trailing '\n' is not part of the
+// line. Out-param count via returning two values in a tuple-like
+// packed string "<n_lines>\x01<ptr-as-int>"... actually tuples work
+// in Aether but cross-function. Simplest: return the intarr; the
+// caller reads size via intarr_size and divides by 2. (Drops an
+// int pair for empty input since intarr can't be zero-length
+// meaningfully — we handle n=0 by returning a 0-slot array.)
+
+split_lines_packed(body: string) -> ptr {
+    n = string.length(body)
+    // Pre-scan to count lines.
+    count = 0
+    i = 0
+    while i < n {
+        count = count + 1
+        while i < n {
+            if string.char_at(body, i) == 10 { break }
+            i = i + 1
+        }
+        if i < n { i = i + 1 }   // skip '\n'
+    }
+    arr, _ = intarr.new(count * 2)
+    if arr == null { return null }
+    pos = 0
+    li = 0
+    while pos < n {
+        start = pos
+        while pos < n {
+            if string.char_at(body, pos) == 10 { break }
+            pos = pos + 1
+        }
+        intarr_set_unchecked(arr, li * 2,     start)
+        intarr_set_unchecked(arr, li * 2 + 1, pos - start)
+        li = li + 1
+        if pos < n { pos = pos + 1 }
+    }
+    return arr
+}
+
+// Byte-by-byte equality of body_a[off_a..off_a+len] vs body_b[...].
+lines_equal(body_a: string, off_a: int, len_a: int,
+            body_b: string, off_b: int, len_b: int) -> int {
+    if len_a != len_b { return 0 }
+    k = 0
+    while k < len_a {
+        if string.char_at(body_a, off_a + k) != string.char_at(body_b, off_b + k) {
+            return 0
+        }
+        k = k + 1
+    }
+    return 1
+}
+
+// Line-level LCS. Returns an intarr of size `na` where entry `i`
+// is the index in B of A[i]'s match_arr, or -1 if unique to A. Standard
+// DP, O(na * nb) time and space.
+//
+// a_lines / b_lines are the split_lines_packed outputs: size == 2*n,
+// slot [2i] = offset, [2i+1] = length.
+lcs_match(a_body: string, a_lines: ptr, na: int,
+          b_body: string, b_lines: ptr, nb: int) -> ptr {
+    // dp[(na+1) * (nb+1)], zero-initialised.
+    dp_cols = nb + 1
+    dp, _ = intarr.new((na + 1) * dp_cols)
+    if dp == null { return null }
+
+    i = 1
+    while i <= na {
+        a_off = intarr_get_unchecked(a_lines, (i - 1) * 2)
+        a_len = intarr_get_unchecked(a_lines, (i - 1) * 2 + 1)
+        j = 1
+        while j <= nb {
+            b_off = intarr_get_unchecked(b_lines, (j - 1) * 2)
+            b_len = intarr_get_unchecked(b_lines, (j - 1) * 2 + 1)
+            if lines_equal(a_body, a_off, a_len, b_body, b_off, b_len) == 1 {
+                up_left = intarr_get_unchecked(dp, (i - 1) * dp_cols + (j - 1))
+                intarr_set_unchecked(dp, i * dp_cols + j, up_left + 1)
+            }
+            if lines_equal(a_body, a_off, a_len, b_body, b_off, b_len) == 0 {
+                up   = intarr_get_unchecked(dp, (i - 1) * dp_cols + j)
+                left = intarr_get_unchecked(dp, i * dp_cols + (j - 1))
+                best = up
+                if left > best { best = left }
+                intarr_set_unchecked(dp, i * dp_cols + j, best)
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+
+    match_arr, _ = intarr.new_filled(na, -1)
+    if match_arr == null { intarr_free(dp); return null }
+
+    i = na
+    j = nb
+    while i > 0 {
+        if j <= 0 { break }
+        a_off = intarr_get_unchecked(a_lines, (i - 1) * 2)
+        a_len = intarr_get_unchecked(a_lines, (i - 1) * 2 + 1)
+        b_off = intarr_get_unchecked(b_lines, (j - 1) * 2)
+        b_len = intarr_get_unchecked(b_lines, (j - 1) * 2 + 1)
+        if lines_equal(a_body, a_off, a_len, b_body, b_off, b_len) == 1 {
+            intarr_set_unchecked(match_arr, i - 1, j - 1)
+            i = i - 1
+            j = j - 1
+        }
+        if lines_equal(a_body, a_off, a_len, b_body, b_off, b_len) == 0 {
+            up   = intarr_get_unchecked(dp, (i - 1) * dp_cols + j)
+            left = intarr_get_unchecked(dp, i * dp_cols + (j - 1))
+            if up >= left { i = i - 1 } else { j = j - 1 }
+        }
+    }
+    intarr_free(dp)
+    return match_arr
+}
+
+// ----------------------------------------------------------------------------
+// Accumulator: the "current state" is a packed
+// "<rev>\x01<author>\x01<text>\x02..." string (no count header — we
+// know line count from context). Helpers walk it record-by-record.
+// Same shape the C side used to carry in struct line_ann[].
+
+// Return the i-th record in a packed (no-count) stream. "" if OOB.
+acc_record_at(packed: string, i: int) -> string {
+    n = string.length(packed)
+    pos = 0
+    k = 0
+    while k < i {
+        if pos >= n { return "" }
+        sep = -1
+        j = pos
+        while j < n {
+            if string.char_at(packed, j) == 2 { sep = j; break }
+            j = j + 1
+        }
+        if sep < 0 { return "" }
+        pos = sep + 1
+        k = k + 1
+    }
+    if pos >= n { return "" }
+    end = n
+    j = pos
+    while j < n {
+        if string.char_at(packed, j) == 2 { end = j; break }
+        j = j + 1
+    }
+    return string.substring(packed, pos, end)
+}
+
+// Field access within one "<rev>\x01<author>\x01<text>" record.
+rec_field(rec: string, field_idx: int) -> string {
+    n = string.length(rec)
+    pos = 0
+    k = 0
+    while k < field_idx {
+        sep = -1
+        j = pos
+        while j < n {
+            if string.char_at(rec, j) == 1 { sep = j; break }
+            j = j + 1
+        }
+        if sep < 0 { return "" }
+        pos = sep + 1
+        k = k + 1
+    }
+    end = n
+    j = pos
+    while j < n {
+        if string.char_at(rec, j) == 1 { end = j; break }
+        j = j + 1
+    }
+    return string.substring(rec, pos, end)
+}
+
+rec_rev(rec: string) -> int {
+    s = rec_field(rec, 0)
+    if string.length(s) == 0 { return 0 }
+    return string.get_int(s)
+}
+rec_author(rec: string) -> string { return rec_field(rec, 1) }
+
+// Build one "<rev>\x01<author>\x01<text>" record.
+make_record(rev: int, author: string, text: string) -> string {
+    out = string.concat(string.from_int(rev), "\x01")
+    out = string.concat(out, author)
+    out = string.concat(out, "\x01")
+    out = string.concat(out, text)
+    return out
+}
+
+// ----------------------------------------------------------------------------
+// Walk one rev: given the prior accumulator (packed records, or "" if
+// we have no prior state), produce the new accumulator for the file
+// content at `body`. `lines` is split_lines_packed(body).
+//
+// If prev_acc is empty ("no prior state"), every line is attributed
+// to `rev` + `author`. Otherwise we LCS-match_arr body against prev_body
+// and carry forward matched-line annotations.
+
+step_rev(rev: int, author: string,
+         body: string, lines: ptr, n_lines: int,
+         prev_body: string, prev_lines: ptr, prev_n: int,
+         prev_acc: string) -> string {
+    out = ""
+    if prev_n == 0 {
+        // First version — every line is this rev's.
+        i = 0
+        while i < n_lines {
+            off = intarr_get_unchecked(lines, i * 2)
+            len = intarr_get_unchecked(lines, i * 2 + 1)
+            text = string.substring(body, off, off + len)
+            rec = make_record(rev, author, text)
+            if i == 0 { out = rec }
+            if i > 0 {
+                out = string.concat(out, "\x02")
+                out = string.concat(out, rec)
+            }
+            i = i + 1
+        }
+        return out
+    }
+
+    // LCS — cur (=A) against prev (=B).
+    match_arr = lcs_match(body, lines, n_lines, prev_body, prev_lines, prev_n)
+
+    i = 0
+    while i < n_lines {
+        off = intarr_get_unchecked(lines, i * 2)
+        len = intarr_get_unchecked(lines, i * 2 + 1)
+        text = string.substring(body, off, off + len)
+        m = -1
+        if match_arr != null { m = intarr_get_unchecked(match_arr, i) }
+        if m >= 0 {
+            if m < prev_n {
+                prev_rec = acc_record_at(prev_acc, m)
+                rec = make_record(rec_rev(prev_rec), rec_author(prev_rec), text)
+                if i == 0 { out = rec }
+                if i > 0 {
+                    out = string.concat(out, "\x02")
+                    out = string.concat(out, rec)
+                }
+                i = i + 1
+                continue
+            }
+        }
+        rec = make_record(rev, author, text)
+        if i == 0 { out = rec }
+        if i > 0 {
+            out = string.concat(out, "\x02")
+            out = string.concat(out, rec)
+        }
+        i = i + 1
+    }
+    if match_arr != null { intarr_free(match_arr) }
+    return out
+}
+
+// ----------------------------------------------------------------------------
+// Public entry point. Returns packed "N\x02<rev>\x01<author>\x01
+// <text>\x02..." matching remote_parse_blame. "" on failure / path
+// doesn't resolve at target_rev.
+
+repos_blame_packed(repo: string, target_rev: int, path: string) -> string {
+    if target_rev < 0 {
+        target_rev = repos_head_rev(repo)
+    }
+    if target_rev < 1 { return "" }
+
+    acc = ""           // accumulator: packed records, no count header
+    acc_n = 0          // record count in acc == line count of prev_body
+    prev_body = ""
+    prev_lines = null
+
+    r = 1
+    while r <= target_rev {
+        // Did this rev touch `path`?
+        touches = 0
+        action = ""
+        paths = paths_changed_packed(repo, r)
+        if string.length(paths) > 0 {
+            pn = client.packed_paths_count(paths)
+            pi = 0
+            while pi < pn {
+                p = client.packed_paths_path(paths, pi)
+                if string.equals(p, path) == 1 {
+                    touches = 1
+                    a = client.packed_paths_action(paths, pi)
+                    action = string.copy(a)
+                    break
+                }
+                pi = pi + 1
+            }
+        }
+
+        if touches == 0 {
+            r = r + 1
+            continue
+        }
+
+        if string.equals(action, "D") == 1 {
+            // Deleted at this rev. Drop state; re-add starts fresh.
+            acc = ""
+            acc_n = 0
+            prev_body = ""
+            if prev_lines != null { intarr_free(prev_lines); prev_lines = null }
+            r = r + 1
+            continue
+        }
+
+        // Fetch content.
+        body_raw = cat_rev_path(repo, r, path)
+        if string.length(body_raw) == 0 {
+            r = r + 1
+            continue
+        }
+        body = string.copy(body_raw)    // detach from rep-blob TLS buf
+        rep_free(body_raw)
+
+        // Author for attribution.
+        info = repos_info_packed(repo, r)
+        author = ""
+        if string.length(info) > 0 {
+            author = rec_author(info)
+        }
+
+        lines = split_lines_packed(body)
+        n_lines = 0
+        if lines != null { n_lines = intarr_size(lines) / 2 }
+
+        new_acc = step_rev(r, author, body, lines, n_lines,
+                            prev_body, prev_lines, acc_n, acc)
+
+        // Swap state.
+        if prev_lines != null { intarr_free(prev_lines) }
+        prev_lines = lines
+        prev_body = body
+        acc = new_acc
+        acc_n = n_lines
+
+        r = r + 1
+    }
+
+    if prev_lines != null { intarr_free(prev_lines) }
+
+    // Wrap with "<N>\x02" header.
+    header = string.concat(string.from_int(acc_n), "\x02")
+    if acc_n == 0 { return header }
+    return string.concat(header, acc)
+}
+
+
+// =============================================================================
+// repos/paths_changed.ae
+// =============================================================================
+
+// Ported from repos_paths_changed and its flatten_tree helper in
+// repos/shim.c. Given (rev) → list of {action, path} where action is
+// 'A', 'M', or 'D'.
+//
+// Algorithm: flatten both the current rev's and previous rev's trees
+// depth-first into sorted-by-path lists, then merge-walk them to
+// produce the A/M/D diff. Dirs are entries too, so a newly-added
+// subdir appears as its own 'A' entry alongside its files.
+//
+// The flat list is encoded as a newline-separated string in the same
+// "K SHA NAME\n" shape the dir-blob reader already parses. The merge
+// emit format: "<action>\n<path>\n" per entry, joined into one string.
+// Two exports on top give callers index-based access.
+
+
+extern rep_read_blob(repo: string, sha: string) -> string
+extern rep_free(body: string)
+extern dir_count_entries(body: string) -> int
+extern dir_entry_kind(body: string, i: int) -> int
+extern dir_entry_sha(body: string, i: int) -> string
+extern dir_entry_name(body: string, i: int) -> string
+extern dir_entry_line(kind: int, sha: string, name: string) -> string
+// R287 — streaming iterator for the hot flatten loop (one linear
+// pass per dir blob; pre-R287 each entry caused a full scan from
+// byte 0 → O(N²) per commit on growing-dir benchmarks).
+extern dir_iter_new(body: string) -> ptr
+extern dir_iter_next(it: ptr) -> int
+extern dir_iter_kind(it: ptr) -> int
+extern dir_iter_sha(it: ptr) -> string
+extern dir_iter_name(it: ptr) -> string
+extern dir_iter_free(it: ptr) -> int
+extern path_join_rel(prefix: string, name: string) -> string
+
+// Depth-first flatten. Each entry is "K SHA PATH\n" with PATH being
+// the *full* path (prefix + name), not just the basename. Returns
+// an unsorted concatenation (callers sort separately).
+flatten_tree(repo: string, dir_sha: string, prefix: string) -> string {
+    body = rep_read_blob(repo, dir_sha)
+    out = ""
+    it = dir_iter_new(body)
+    while dir_iter_next(it) == 1 {
+        kind = dir_iter_kind(it)
+        sha  = string.copy(dir_iter_sha(it))
+        name = string.copy(dir_iter_name(it))
+        full_path = path_join_rel(prefix, name)
+        out = string.concat(out, dir_entry_line(kind, sha, full_path))
+        if kind == 100 {    // 'd'
+            out = string.concat(out, flatten_tree(repo, sha, full_path))
+        }
+    }
+    dir_iter_free(it)
+    rep_free(body)
+    return out
+}
+
+// Insertion sort by path (the "name" field in the K SHA NAME\n
+// format, which here holds the full path). Same O(N^2) helper
+// shape as rebuild_dir's reclist_sort.
+sort_by_path(body: string) -> string {
+    n = dir_count_entries(body)
+    if n <= 1 { return body }
+
+    sorted = ""
+    i = 0
+    while i < n {
+        this_name = dir_entry_name(body, i)
+        this_kind = dir_entry_kind(body, i)
+        this_sha = dir_entry_sha(body, i)
+
+        sn = dir_count_entries(sorted)
+        new_sorted = ""
+        placed = 0
+        j = 0
+        while j < sn {
+            jname = dir_entry_name(sorted, j)
+            if placed == 0 {
+                if string.compare(this_name, jname) < 0 {
+                    new_sorted = string.concat(new_sorted,
+                        dir_entry_line(this_kind, this_sha, this_name))
+                    placed = 1
+                }
+            }
+            new_sorted = string.concat(new_sorted,
+                dir_entry_line(dir_entry_kind(sorted, j),
+                                      dir_entry_sha(sorted, j), jname))
+            j = j + 1
+        }
+        if placed == 0 {
+            new_sorted = string.concat(new_sorted,
+                dir_entry_line(this_kind, this_sha, this_name))
+        }
+        sorted = new_sorted
+        i = i + 1
+    }
+    return sorted
+}
+
+// Compute the paths-changed diff between two rev roots. Returns a
+// string "ACTION\nPATH\nACTION\nPATH\n..." — two lines per entry.
+// Callers split on newlines to iterate.
+//
+// `prev_root_sha` may be "" — meaning "no previous rev", and every
+// path in cur_root becomes an add.
+paths_changed_between(repo: string, prev_root_sha: string,
+                             cur_root_sha: string) -> string {
+    cur_flat = sort_by_path(flatten_tree(repo, cur_root_sha, ""))
+    prev_flat = ""
+    if string.length(prev_root_sha) > 0 {
+        prev_flat = sort_by_path(flatten_tree(repo, prev_root_sha, ""))
+    }
+
+    cn = dir_count_entries(cur_flat)
+    pn = dir_count_entries(prev_flat)
+
+    out = ""
+    i = 0
+    j = 0
+    while i < cn {
+        if j >= pn {
+            // Everything remaining in cur is an add.
+            cur_path = dir_entry_name(cur_flat, i)
+            out = string.concat(out, "A\n")
+            out = string.concat(out, cur_path)
+            out = string.concat(out, "\n")
+            i = i + 1
+        }
+        if j < pn {
+            if i < cn {
+                cur_path = dir_entry_name(cur_flat, i)
+                prev_path = dir_entry_name(prev_flat, j)
+                cmp_val = string.compare(cur_path, prev_path)
+                if cmp_val == 0 {
+                    // Same path on both sides — modified if sha differs.
+                    cur_sha = dir_entry_sha(cur_flat, i)
+                    prev_sha = dir_entry_sha(prev_flat, j)
+                    if string.equals(cur_sha, prev_sha) == 0 {
+                        out = string.concat(out, "M\n")
+                        out = string.concat(out, cur_path)
+                        out = string.concat(out, "\n")
+                    }
+                    i = i + 1
+                    j = j + 1
+                }
+                if cmp_val < 0 {
+                    // cur_path comes first — added.
+                    out = string.concat(out, "A\n")
+                    out = string.concat(out, cur_path)
+                    out = string.concat(out, "\n")
+                    i = i + 1
+                }
+                if cmp_val > 0 {
+                    // prev_path comes first — deleted.
+                    out = string.concat(out, "D\n")
+                    out = string.concat(out, prev_path)
+                    out = string.concat(out, "\n")
+                    j = j + 1
+                }
+            }
+        }
+    }
+    // Anything remaining in prev is a delete.
+    while j < pn {
+        prev_path = dir_entry_name(prev_flat, j)
+        out = string.concat(out, "D\n")
+        out = string.concat(out, prev_path)
+        out = string.concat(out, "\n")
+        j = j + 1
+    }
+    return out
+}
+
+// Higher-level entry that does the two root-sha lookups itself and
+// repacks the "<action>\n<path>\n" output into the "<N>\x02<action>
+// \x01<path>\x02..." shape client/packed.ae exposes accessors for.
+// Lets C callers collapse their handle struct + split loop to the
+// same {packed, n, pin_list} pattern the ra client uses.
+//
+// Returns "" on error (missing cur rev). Returns "0\x02" when rev
+// has no changed paths.
+
+
+paths_changed_packed(repo: string, rev: int) -> string {
+    if rev < 0 { return "" }
+
+    cur_root = string.copy(repos_rev_field(repo, rev, "root"))
+    if string.length(cur_root) == 0 { return "" }
+
+    prev_root = ""
+    if rev > 0 {
+        prev_root = string.copy(repos_rev_field(repo, rev - 1, "root"))
+        if string.length(prev_root) == 0 { return "" }
+    }
+
+    diff = paths_changed_between(repo, prev_root, cur_root)
+    return pack_amd_pairs(diff)
+}
+
+// Convert "<action>\n<path>\n<action>\n<path>\n..." into
+// "<N>\x02<action>\x01<path>\x02...". Count is emitted first so C
+// callers don't pre-scan.
+pack_amd_pairs(diff: string) -> string {
+    n = 0
+    out = ""
+    len = string.length(diff)
+    p = 0
+    while p < len {
+        // One record = one action char, newline, path, newline.
+        if p + 1 >= len { break }
+        if string.char_at(diff, p + 1) != 10 { break }  // 10 = '\n'
+        action = string.substring(diff, p, p + 1)
+        p = p + 2
+        path_start = p
+        while p < len {
+            if string.char_at(diff, p) == 10 { break }
+            p = p + 1
+        }
+        path = string.substring(diff, path_start, p)
+        if p < len { p = p + 1 }  // skip trailing '\n'
+
+        // Emit "<action-char>\x01<path>" into packed record stream.
+        record = string.concat(action, "\x01")
+        record = string.concat(record, path)
+
+        if n == 0 { out = record }
+        if n > 0 {
+            out = string.concat(out, "\x02")
+            out = string.concat(out, record)
+        }
+        n = n + 1
+    }
+
+    header = string.concat(string.from_int(n), "\x02")
+    if n == 0 { return header }
+    return string.concat(header, out)
+}
+
+
+// =============================================================================
+// repos/resolve.ae
+// =============================================================================
+
+// Resolve `path` against the dir tree rooted at `root_sha1`. Walks
+// dir-blob by dir-blob down the path segments. Ported from
+// resolve_path in repos/shim.c.
+//
+// The C side used two out-parameters (kind, sha1). Aether can't do
+// those cleanly across FFI, so we expose two exports instead:
+//
+//   resolve_kind(repo, root_sha, path) -> int
+//     'f'(102), 'd'(100), or 0 on miss. Called first.
+//
+//   resolve_sha(repo, root_sha, path) -> string
+//     the content sha of the resolved node, or "" on miss. Valid
+//     exactly when resolve_kind returned non-zero. Does its own
+//     walk (cheap — small number of dir-blob reads).
+
+
+extern rep_read_blob(repo: string, sha: string) -> string
+extern rep_free(body: string)
+extern dir_find_kind(body: string, name: string) -> int
+extern dir_find_sha(body: string, name: string) -> string
+
+// Walks the path and returns the final (kind, sha) pair via
+// newline-separated encoding: "<kind_byte>\n<sha>\n". On miss
+// returns "". Internal; the two exports below parse its output.
+resolve_pair(repo: string, root_sha: string, path: string) -> string {
+    // Strip leading slashes.
+    p = path
+    n = string.length(p)
+    i = 0
+    while i < n {
+        if string.char_at(p, i) != 47 { break }
+        i = i + 1
+    }
+    if i == n {
+        // Path was "" or all slashes — refers to the root.
+        out = string.concat("100\n", root_sha)           // 'd' (100) + root
+        return string.concat(out, "\n")
+    }
+
+    // Initial current body = the root dir blob.
+    cur_sha = root_sha
+    cur_body = rep_read_blob(repo, cur_sha)
+    if string.length(cur_body) == 0 { return "" }
+
+    // Walk segments.
+    found_kind = 0
+    found_sha = ""
+    while i < n {
+        // Extract segment start..j (up to '/' or end).
+        seg_start = i
+        while i < n {
+            if string.char_at(p, i) == 47 { break }
+            i = i + 1
+        }
+        seg = string.substring(p, seg_start, i)
+        at_end = 0
+        if i == n { at_end = 1 }
+        if i < n { i = i + 1 }   // skip the '/'
+
+        // Lookup seg in cur_body.
+        found_kind = dir_find_kind(cur_body, seg)
+        if found_kind == 0 {
+            rep_free(cur_body)
+            return ""
+        }
+        found_sha = dir_find_sha(cur_body, seg)
+        // Snapshot the sha before the next read_blob clobbers any
+        // shared buffer.
+        found_sha = string.concat(found_sha, "")
+
+        if at_end == 1 {
+            rep_free(cur_body)
+            // Build and return "<kind_int>\n<sha>\n"
+            out = ""
+            if found_kind == 102 { out = "102\n" }
+            if found_kind == 100 { out = "100\n" }
+            out = string.concat(out, found_sha)
+            return string.concat(out, "\n")
+        }
+
+        // Continue walking — must be a dir.
+        if found_kind != 100 {
+            rep_free(cur_body)
+            return ""
+        }
+        rep_free(cur_body)
+        cur_body = rep_read_blob(repo, found_sha)
+        if string.length(cur_body) == 0 { return "" }
+    }
+
+    rep_free(cur_body)
+    return ""
+}
+
+// Parse line 0 as int. Returns 0 if pair is empty.
+parse_kind(pair: string) -> int {
+    if string.length(pair) == 0 { return 0 }
+    n = string.length(pair)
+    v = 0
+    i = 0
+    while i < n {
+        c = string.char_at(pair, i)
+        if c == 10 { return v }             // newline
+        if c < 48 { return 0 }
+        if c > 57 { return 0 }
+        v = v * 10 + (c - 48)
+        i = i + 1
+    }
+    return 0
+}
+
+// Parse line 1 (from first '\n' to second '\n'). Returns "" if pair
+// is empty or malformed.
+parse_sha(pair: string) -> string {
+    if string.length(pair) == 0 { return "" }
+    n = string.length(pair)
+    i = 0
+    while i < n {
+        if string.char_at(pair, i) == 10 { break }
+        i = i + 1
+    }
+    if i >= n { return "" }
+    i = i + 1    // past first '\n'
+    start = i
+    while i < n {
+        if string.char_at(pair, i) == 10 { break }
+        i = i + 1
+    }
+    return string.substring(pair, start, i)
+}
+
+resolve_kind(repo: string, root_sha: string, path: string) -> int {
+    return parse_kind(resolve_pair(repo, root_sha, path))
+}
+
+resolve_sha(repo: string, root_sha: string, path: string) -> string {
+    return parse_sha(resolve_pair(repo, root_sha, path))
+}
+
+// (rev, path) → kind / sha. Convenience for callers that don't already
+// have the rev's root_sha looked up (svnserver handlers, copy_parse,
+// acl_subtree). Round 76 retired the C-side repos_resolve in
+// favour of these two exports — same name, same shape.
+
+resolve_root_for_rev_(repo: string, rev: int) -> string {
+    v = repos_rev_field(repo, rev, "root")
+    if string.length(v) == 0 { return "" }
+    return string.copy(v)
+}
+
+repos_resolve_kind(repo: string, rev: int, path: string) -> int {
+    root = resolve_root_for_rev_(repo, rev)
+    if string.length(root) == 0 { return 0 }
+    return parse_kind(resolve_pair(repo, root, path))
+}
+
+repos_resolve_sha(repo: string, rev: int, path: string) -> string {
+    root = resolve_root_for_rev_(repo, rev)
+    if string.length(root) == 0 { return "" }
+    return parse_sha(resolve_pair(repo, root, path))
+}
+
+
+// =============================================================================
+// repos/rev_io.ae
+// =============================================================================
+
+// Small rev-pointer utilities used by both the repos shim and the
+// svnserver shim. Consolidates:
+//   - $repo/head  → head revision number
+//   - $repo/revs/NNNNNN  → rev blob sha (with trailing ws trimmed)
+//
+// Mirrors the already-existing avnserver/rev_load.ae; a follow-up
+// commit may collapse the two.
+
+
+
+repos_pad6(n: int) -> string {
+    s = string.from_int(n)
+    slen = string.length(s)
+    if slen >= 6 { return s }
+    return string.concat(string.substring("000000", 0, 6 - slen), s)
+}
+
+// Local name avoids colliding with avnserver/rev_load.ae's rtrim_ws.
+repos_rtrim_ws(s: string) -> string {
+    n = string.length(s)
+    keep_going = 1
+    while keep_going == 1 {
+        if n == 0 { keep_going = 0 }
+        if keep_going == 1 {
+            c = string.char_at(s, n - 1)
+            if c == 10 { n = n - 1 }
+            if c != 10 {
+                if c == 13 { n = n - 1 }
+                if c != 13 { keep_going = 0 }
+            }
+        }
+    }
+    return string.substring(s, 0, n)
+}
+
+// $repo/head → N, or -1 on missing / unparsable.
+// Parse is inlined: the tuple-returning helper form tripped a
+// codegen issue in Aether 0.84 when called from an exported
+// function.
+repos_head_rev(repo: string) -> int {
+    path = string.concat(repo, "/head")
+    if util.io_file_size(path) < 0 { return -1 }
+    src = util.io_read_file(path)
+    s = repos_rtrim_ws(src)
+    n = string.length(s)
+    i = 0
+    // Skip leading whitespace.
+    while i < n {
+        c = string.char_at(s, i)
+        if c == 32 { i = i + 1 }
+        if c != 32 {
+            if c == 9 { i = i + 1 }
+            if c != 9 { break }
+        }
+    }
+    start = i
+    while i < n {
+        c = string.char_at(s, i)
+        if c < 48 { break }
+        if c > 57 { break }
+        i = i + 1
+    }
+    if i == start { return -1 }
+    v = 0
+    k = start
+    while k < i {
+        v = v * 10 + (string.char_at(s, k) - 48)
+        k = k + 1
+    }
+    return v
+}
+
+// $repo/revs/NNNNNN → rev blob sha (hex string), or "" on miss.
+repos_rev_blob_sha(repo: string, rev: int) -> string {
+    path = string.concat(string.concat(repo, "/revs/"), repos_pad6(rev))
+    if util.io_file_size(path) < 0 { return "" }
+    src = util.io_read_file(path)
+    return string.copy(repos_rtrim_ws(src))
+}
+
+// Two-hop loader: read the rev's pointer file, load the referenced
+// rep blob, extract the named field. Returns "" on any miss. This
+// is the "repos" version of avnserver/rev_load.ae's identical
+// function; both binaries link; shim.c callers bind to whichever
+// one is in scope via the repos_rev_field name.
+extern rep_read_blob(repo: string, sha: string) -> string
+extern rep_free(body: string)
+
+repos_rev_field(repo: string, rev: int, key: string) -> string {
+    sha = repos_rev_blob_sha(repo, rev)
+    if string.length(sha) == 0 { return "" }
+    body = rep_read_blob(repo, sha)
+    if string.length(body) == 0 { return "" }
+    v = blobfield_get(body, key)
+    v = string.copy(v)
+    rep_free(body)
+    return v
+}
+
+// Convenience for the commit-finalise inheritance rule: "if caller
+// supplied a non-empty override, use it; otherwise inherit the
+// field from rev `prev`." Returns "" when both override is empty
+// and the field is absent on prev — callers that need to
+// distinguish should call load_rev_blob_field directly. Same
+// semantics as the C-side props/acl-inheritance block in
+// repo_storage/commit_shim.c that used to call rev_blob_field in a
+// pair of NULL-or-empty-override branches.
+repos_inherit_rev_field(repo: string, prev: int, key: string,
+                                override: string) -> string {
+    if string.length(override) > 0 { return string.copy(override) }
+    return repos_rev_field(repo, prev, key)
+}
+
+// $repo/format → first-line contents, whitespace-stripped.
+// Returns "" on missing file (or whole-empty line).
+// The format file is always single-line, but legacy readers used
+// fgets' "first line or bust" semantics, so we preserve that by
+// clipping at the first '\n' if one happens to slip in.
+repos_format_line(repo: string) -> string {
+    path = string.concat(repo, "/format")
+    if util.io_file_size(path) < 0 { return "" }
+    src = util.io_read_file(path)
+
+    // Clip at first '\n' if present.
+    n = string.length(src)
+    i = 0
+    while i < n {
+        if string.char_at(src, i) == 10 { break }
+        i = i + 1
+    }
+    line = string.substring(src, 0, i)
+
+    // Trim trailing '\r' and spaces.
+    l = string.length(line)
+    while l > 0 {
+        c = string.char_at(line, l - 1)
+        if c == 13 { l = l - 1 }
+        if c != 13 {
+            if c == 32 { l = l - 1 }
+            if c != 32 { break }
+        }
+    }
+    return string.substring(line, 0, l)
+}
+
+// Primary hash name for this repo, as declared by
+// $repo/format's first line ("svnae-fsfs-1 sha1" / "... sha256" /
+// "... sha1,sha256" etc.). Returns "sha1" as a safe default for
+// missing file, empty line, or any parse trouble.
+extern format_primary_hash(format_line: string) -> string
+extern format_secondary_count(format_line: string) -> int
+extern format_secondary_hash(format_line: string, i: int) -> string
+
+repo_primary_hash(repo: string) -> string {
+    line = repos_format_line(repo)
+    if string.length(line) == 0 { return "sha1" }
+    primary = format_primary_hash(line)
+    if string.length(primary) == 0 { return "sha1" }
+    return string.copy(primary)
+}
+
+// Secondary hash names for this repo as a \n-separated string
+// ("" if none). C side splits into its fixed char[4][32] array.
+// Length limit (32/entry) enforced here so we never return a name
+// the C caller would reject anyway.
+repo_secondary_hashes_joined(repo: string) -> string {
+    line = repos_format_line(repo)
+    if string.length(line) == 0 { return "" }
+    n = format_secondary_count(line)
+    if n > 4 { n = 4 }
+    out = ""
+    i = 0
+    while i < n {
+        s = format_secondary_hash(line, i)
+        slen = string.length(s)
+        if slen == 0 { break }
+        if slen >= 32 { break }
+        if i > 0 { out = string.concat(out, "\n") }
+        out = string.concat(out, s)
+        i = i + 1
+    }
+    return out
+}
+

@@ -8,6 +8,7 @@
 // post-create it's already in place.
 
 import std.string
+import repos
 
 extern os_getpid_raw() -> int
 extern system(cmd: string) -> int
@@ -20,7 +21,6 @@ extern parse_merged_field(value: string) -> (string, string)
 extern rev_blob_body(root: string, branch: string, props: string, acl: string,
                      prev: int, merged: string,
                      author: string, date: string, log: string) -> string
-extern blobfield_get(body: string, key: string) -> string
 
 // Phase 1.3: txn merge metadata.
 extern txn_new(base_rev: int) -> ptr
@@ -205,10 +205,10 @@ main() {
     fails = fails + expect_str("decode empty value → empty revs", e_revs, "")
 
     // rev_blob_body: with merged → field appears in body, retrievable
-    // by blobfield_get (the canonical reader downstream callers use).
+    // by repos.blobfield_get (the canonical reader downstream callers use).
     body_with = rev_blob_body("rsha", "release_a", "", "", 7, enc_three,
                               "alice", "2026-05-07T12:00:00Z", "merge log")
-    got_merged = blobfield_get(body_with, "merged")
+    got_merged = repos.blobfield_get(body_with, "merged")
     fails = fails + expect_str("rev_blob round-trip merged",
         got_merged, enc_three)
 
@@ -216,19 +216,19 @@ main() {
     // rev blobs round-trip exactly the same as before this round.
     body_no_merge = rev_blob_body("rsha", "main", "", "", 6, "",
                                   "bob", "2026-05-07T12:00:00Z", "non-merge log")
-    no_merged = blobfield_get(body_no_merge, "merged")
+    no_merged = repos.blobfield_get(body_no_merge, "merged")
     fails = fails + expect_str("rev_blob_body omits merged: when empty",
         no_merged, "")
 
     // Other fields unaffected by merged: presence.
     fails = fails + expect_str("root unchanged",
-        blobfield_get(body_with, "root"), "rsha")
+        repos.blobfield_get(body_with, "root"), "rsha")
     fails = fails + expect_str("branch unchanged",
-        blobfield_get(body_with, "branch"), "release_a")
+        repos.blobfield_get(body_with, "branch"), "release_a")
     fails = fails + expect_str("author unchanged",
-        blobfield_get(body_with, "author"), "alice")
+        repos.blobfield_get(body_with, "author"), "alice")
     fails = fails + expect_str("log unchanged",
-        blobfield_get(body_with, "log"), "merge log")
+        repos.blobfield_get(body_with, "log"), "merge log")
 
     // ---- Phase 1.3: txn merge metadata round-trip ---------------
 

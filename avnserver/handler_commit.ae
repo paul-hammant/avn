@@ -39,6 +39,7 @@
 
 import std.http
 import std.string
+import repos
 
 extern parse_repo_name_in(path: string) -> string
 extern svnserver_find_repo_path(name: string) -> string
@@ -51,7 +52,6 @@ extern rev_sha_response_json(rev: int, sha: string) -> string
 // Look up the rev_sha for a given rev number — used to compose the
 // commit response (R286 chain CAS: client needs the new rev's SHA so
 // it can pass it as parent_sha on the next commit).
-extern repos_rev_blob_sha(repo: string, rev: int) -> string
 
 extern svnserver_respond_error(res: ptr, code: int, msg: string)
 extern svnserver_respond_json_ok(res: ptr, body: string)
@@ -92,7 +92,7 @@ export handler_commit(req: ptr, res: ptr) {
     // (revs/N is just 41 bytes); same cost as the validation read on
     // entry. If the lookup fails (shouldn't, just succeeded above),
     // fall back to the rev-only response — better than 500.
-    new_sha = repos_rev_blob_sha(repo, new_rev)
+    new_sha = repos.repos_rev_blob_sha(repo, new_rev)
     if string.length(new_sha) > 0 {
         svnserver_respond_json_ok(res, rev_sha_response_json(new_rev, new_sha))
     } else {

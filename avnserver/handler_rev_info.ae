@@ -24,13 +24,8 @@
 // subtree.
 
 import std.string
+import repos
 
-extern repos_info_rev(repo: string, rev: int) -> ptr
-extern repos_info_rev_num(i: ptr) -> int
-extern repos_info_author(i: ptr) -> string
-extern repos_info_date(i: ptr) -> string
-extern repos_info_msg(i: ptr) -> string
-extern repos_info_free(i: ptr)
 extern load_rev_blob_field(repo: string, rev: int, key: string) -> string
 extern redacted_dir_sha(repo: string, rev: int, user: string,
                                dir_sha: string, prefix: string) -> string
@@ -45,7 +40,7 @@ extern svnserver_respond_json_ok(res: ptr, body: string)
 // rev_info_json in avnserver/json.ae (which just builds
 // the inner {rev, author, ...} object from already-known fields).
 rev_info_json_full(repo: string, rev: int, user: string, is_super: int) -> string {
-    info = repos_info_rev(repo, rev)
+    info = repos.repos_info_rev(repo, rev)
     if info == null { return "" }
 
     root_sha = load_rev_blob_field(repo, rev, "root")
@@ -59,12 +54,12 @@ rev_info_json_full(repo: string, rev: int, user: string, is_super: int) -> strin
         }
     }
 
-    body = rev_info_json(repos_info_rev_num(info),
-                                repos_info_author(info),
-                                repos_info_date(info),
-                                repos_info_msg(info),
+    body = rev_info_json(repos.repos_info_rev_num(info),
+                                repos.repos_info_author(info),
+                                repos.repos_info_date(info),
+                                repos.repos_info_msg(info),
                                 reported_root)
-    repos_info_free(info)
+    repos.repos_info_free(info)
     return body
 }
 

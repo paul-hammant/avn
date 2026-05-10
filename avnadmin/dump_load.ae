@@ -27,9 +27,9 @@
 import std.string
 import std.io
 import util
+import repos
 
 // Repo metadata.
-extern repos_head_rev(repo: string) -> int
 extern avnadmin_create_bare(repo: string, algos_spec: string) -> int
 
 // Dump-format builders (avnadmin/dump.ae).
@@ -49,7 +49,6 @@ extern admin_reps_sha_at(packed: string, i: int) -> string
 extern admin_reps_size_at(packed: string, i: int) -> int
 
 // Rev pointer reader (repos/rev_io.ae).
-extern repos_rev_blob_sha(repo: string, rev: int) -> string
 
 // Atomic file write (util/io.ae).
 
@@ -98,7 +97,7 @@ const TAG_SENTINEL = 0 - 2147483647
 // ---- dump -----------------------------------------------------------
 
 export avnadmin_dump(repo: string, out_fd: int) -> int {
-    head = repos_head_rev(repo)
+    head = repos.repos_head_rev(repo)
     if head < 0 { return 0 - 1 }
 
     reps_packed = admin_reps_packed(repo)
@@ -126,7 +125,7 @@ export avnadmin_dump(repo: string, out_fd: int) -> int {
     // Rev pointers.
     r = 0
     while r <= head {
-        sha = repos_rev_blob_sha(repo, r)
+        sha = repos.repos_rev_blob_sha(repo, r)
         if string.length(sha) == 0 { return 0 - 1 }
         sha = string.copy(sha)
         block = rev_pointer_block(r, sha)

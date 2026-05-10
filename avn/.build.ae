@@ -24,13 +24,13 @@ main() {
         regen("../util/module.ae")
         regen_with("../working_copy/module.ae", "fs,os")
         regen("../repo_storage/pathutil.ae")
+        regen("../repo_storage/dirblob.ae")
         regen_with("../repo_storage/rep_store.ae", "fs,os")
         regen("../repo_storage/rep_store_sec.ae")
         regen("../repo_storage/reppath.ae")
         regen_with("../repo_storage/count_reps.ae", "fs")
         regen("../repo_storage/format_line.ae")
-        regen_with("../repos/rev_io.ae", "fs")
-        regen("../repos/blobfield.ae")
+        regen_with("../repos/module.ae", "fs,os")
         regen("../ffi/openssl/module.ae")
     }
 }

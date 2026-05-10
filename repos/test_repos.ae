@@ -43,34 +43,15 @@ extern dir_exists(path: string) -> int
 
 import contrib.sqlite
 import util
+import repos
 
 // --- repos shim externs ----------------------------------------------------
 
-extern repos_head_rev(repo: string) -> int
 
-extern repos_log(repo: string) -> ptr
-extern repos_log_count(lg: ptr) -> int
-extern repos_log_rev(lg: ptr, i: int) -> int
-extern repos_log_author(lg: ptr, i: int) -> string
-extern repos_log_date(lg: ptr, i: int) -> string
-extern repos_log_msg(lg: ptr, i: int) -> string
-extern repos_log_free(lg: ptr)
 
-extern repos_cat(repo: string, rev: int, path: string) -> string
 // (returned buffer is freed via rep_free — rep_store_shim owns it)
 
-extern repos_list(repo: string, rev: int, path: string) -> ptr
-extern repos_list_count(L: ptr) -> int
-extern repos_list_name(L: ptr, i: int) -> string
-extern repos_list_kind(L: ptr, i: int) -> string
-extern repos_list_free(L: ptr)
 
-extern repos_info_rev(repo: string, rev: int) -> ptr
-extern repos_info_rev_num(I: ptr) -> int
-extern repos_info_author(I: ptr) -> string
-extern repos_info_date(I: ptr) -> string
-extern repos_info_msg(I: ptr) -> string
-extern repos_info_free(I: ptr)
 
 // --- repo init (same as Phase 3.3) ---------------------------------------
 
@@ -232,41 +213,41 @@ main() {
     fails = fails + expect_int("commit 3 rev", r3, 3)
 
     // --- head_rev ---
-    fails = fails + expect_int("head rev", repos_head_rev(repo), 3)
+    fails = fails + expect_int("head rev", repos.repos_head_rev(repo), 3)
 
     // --- log ---
-    lg = repos_log(repo)
-    fails = fails + expect_int("log count", repos_log_count(lg), 4)  // 0..3
-    fails = fails + expect_int("log[0] rev", repos_log_rev(lg, 0), 0)
-    fails = fails + expect_str("log[0] author", repos_log_author(lg, 0), "(init)")
-    fails = fails + expect_str("log[1] author", repos_log_author(lg, 1), "alice")
-    fails = fails + expect_str("log[1] msg",    repos_log_msg(lg, 1),    "first commit")
-    fails = fails + expect_str("log[2] author", repos_log_author(lg, 2), "bob")
-    fails = fails + expect_str("log[2] msg",    repos_log_msg(lg, 2),    "answer to everything")
-    fails = fails + expect_str("log[3] author", repos_log_author(lg, 3), "alice")
-    fails = fails + expect_str("log[3] msg",    repos_log_msg(lg, 3),    "drop license")
-    repos_log_free(lg)
+    lg = repos.repos_log(repo)
+    fails = fails + expect_int("log count", repos.repos_log_count(lg), 4)  // 0..3
+    fails = fails + expect_int("log[0] rev", repos.repos_log_rev(lg, 0), 0)
+    fails = fails + expect_str("log[0] author", repos.repos_log_author(lg, 0), "(init)")
+    fails = fails + expect_str("log[1] author", repos.repos_log_author(lg, 1), "alice")
+    fails = fails + expect_str("log[1] msg",    repos.repos_log_msg(lg, 1),    "first commit")
+    fails = fails + expect_str("log[2] author", repos.repos_log_author(lg, 2), "bob")
+    fails = fails + expect_str("log[2] msg",    repos.repos_log_msg(lg, 2),    "answer to everything")
+    fails = fails + expect_str("log[3] author", repos.repos_log_author(lg, 3), "alice")
+    fails = fails + expect_str("log[3] msg",    repos.repos_log_msg(lg, 3),    "drop license")
+    repos.repos_log_free(lg)
 
     // --- cat ---
-    c = repos_cat(repo, 1, "README")
+    c = repos.repos_cat(repo, 1, "README")
     fails = fails + expect_str("cat r1 README", c, "Hello\n")
     rep_free(c)
 
-    c = repos_cat(repo, 1, "src/main.c")
+    c = repos.repos_cat(repo, 1, "src/main.c")
     fails = fails + expect_str("cat r1 src/main.c", c, "int main() { return 0; }\n")
     rep_free(c)
 
-    c = repos_cat(repo, 2, "src/main.c")
+    c = repos.repos_cat(repo, 2, "src/main.c")
     fails = fails + expect_str("cat r2 src/main.c", c, "int main() { return 42; }\n")
     rep_free(c)
 
     // r1 still has the old content (immutability).
-    c = repos_cat(repo, 1, "src/main.c")
+    c = repos.repos_cat(repo, 1, "src/main.c")
     fails = fails + expect_str("cat r1 src/main.c (still old)", c, "int main() { return 0; }\n")
     rep_free(c)
 
     // r3 has no LICENSE.
-    c = repos_cat(repo, 3, "LICENSE")
+    c = repos.repos_cat(repo, 3, "LICENSE")
     if c != 0 {
         fails = fails + 1
         println("FAIL cat r3 LICENSE: expected null/missing, got something")
@@ -276,7 +257,7 @@ main() {
     }
 
     // Unknown file.
-    c = repos_cat(repo, 3, "nope")
+    c = repos.repos_cat(repo, 3, "nope")
     if c != 0 {
         fails = fails + 1
         println("FAIL cat r3 nope: expected null")
@@ -287,57 +268,57 @@ main() {
 
     // --- list ---
     // Root at r1: README, src, LICENSE (sorted: LICENSE, README, src).
-    L = repos_list(repo, 1, "/")
-    fails = fails + expect_int("list r1 / count", repos_list_count(L), 3)
-    fails = fails + expect_str("list r1 /[0] name", repos_list_name(L, 0), "LICENSE")
-    fails = fails + expect_str("list r1 /[0] kind", repos_list_kind(L, 0), "file")
-    fails = fails + expect_str("list r1 /[1] name", repos_list_name(L, 1), "README")
-    fails = fails + expect_str("list r1 /[2] name", repos_list_name(L, 2), "src")
-    fails = fails + expect_str("list r1 /[2] kind", repos_list_kind(L, 2), "dir")
-    repos_list_free(L)
+    L = repos.repos_list(repo, 1, "/")
+    fails = fails + expect_int("list r1 / count", repos.repos_list_count(L), 3)
+    fails = fails + expect_str("list r1 /[0] name", repos.repos_list_name(L, 0), "LICENSE")
+    fails = fails + expect_str("list r1 /[0] kind", repos.repos_list_kind(L, 0), "file")
+    fails = fails + expect_str("list r1 /[1] name", repos.repos_list_name(L, 1), "README")
+    fails = fails + expect_str("list r1 /[2] name", repos.repos_list_name(L, 2), "src")
+    fails = fails + expect_str("list r1 /[2] kind", repos.repos_list_kind(L, 2), "dir")
+    repos.repos_list_free(L)
 
     // Root at r3: LICENSE removed → README, src. Cover both kinds so a
     // dir/file mis-encoding in list_packed.ae trips two assertions, not
     // just the one at r1 — caught a "dir"/"d" mismatch in round 60.
-    L = repos_list(repo, 3, "/")
-    fails = fails + expect_int("list r3 / count", repos_list_count(L), 2)
-    fails = fails + expect_str("list r3 /[0] name", repos_list_name(L, 0), "README")
-    fails = fails + expect_str("list r3 /[0] kind", repos_list_kind(L, 0), "file")
-    fails = fails + expect_str("list r3 /[1] name", repos_list_name(L, 1), "src")
-    fails = fails + expect_str("list r3 /[1] kind", repos_list_kind(L, 1), "dir")
-    repos_list_free(L)
+    L = repos.repos_list(repo, 3, "/")
+    fails = fails + expect_int("list r3 / count", repos.repos_list_count(L), 2)
+    fails = fails + expect_str("list r3 /[0] name", repos.repos_list_name(L, 0), "README")
+    fails = fails + expect_str("list r3 /[0] kind", repos.repos_list_kind(L, 0), "file")
+    fails = fails + expect_str("list r3 /[1] name", repos.repos_list_name(L, 1), "src")
+    fails = fails + expect_str("list r3 /[1] kind", repos.repos_list_kind(L, 1), "dir")
+    repos.repos_list_free(L)
 
     // Subdir listing.
-    L = repos_list(repo, 2, "src")
-    fails = fails + expect_int("list r2 src count", repos_list_count(L), 1)
-    fails = fails + expect_str("list r2 src[0] name", repos_list_name(L, 0), "main.c")
-    fails = fails + expect_str("list r2 src[0] kind", repos_list_kind(L, 0), "file")
-    repos_list_free(L)
+    L = repos.repos_list(repo, 2, "src")
+    fails = fails + expect_int("list r2 src count", repos.repos_list_count(L), 1)
+    fails = fails + expect_str("list r2 src[0] name", repos.repos_list_name(L, 0), "main.c")
+    fails = fails + expect_str("list r2 src[0] kind", repos.repos_list_kind(L, 0), "file")
+    repos.repos_list_free(L)
 
     // list on a file -> null.
-    L = repos_list(repo, 1, "README")
+    L = repos.repos_list(repo, 1, "README")
     if L != 0 {
         fails = fails + 1
         println("FAIL list on a file: expected null")
-        repos_list_free(L)
+        repos.repos_list_free(L)
     } else {
         println("ok   list on a file is null")
     }
 
     // --- info ---
-    I = repos_info_rev(repo, 2)
-    fails = fails + expect_int("info r2 rev",    repos_info_rev_num(I), 2)
-    fails = fails + expect_str("info r2 author", repos_info_author(I),  "bob")
-    fails = fails + expect_str("info r2 msg",    repos_info_msg(I),     "answer to everything")
+    I = repos.repos_info_rev(repo, 2)
+    fails = fails + expect_int("info r2 rev",    repos.repos_info_rev_num(I), 2)
+    fails = fails + expect_str("info r2 author", repos.repos_info_author(I),  "bob")
+    fails = fails + expect_str("info r2 msg",    repos.repos_info_msg(I),     "answer to everything")
     // Date should be a non-empty ISO-8601 timestamp; we don't pin the value.
-    dt = repos_info_date(I)
+    dt = repos.repos_info_date(I)
     if string.length(dt) < 10 {
         fails = fails + 1
         println("FAIL info r2 date: too short: [${dt}]")
     } else {
         println("ok   info r2 date: ${dt}")
     }
-    repos_info_free(I)
+    repos.repos_info_free(I)
 
     rmtree(repo)
 

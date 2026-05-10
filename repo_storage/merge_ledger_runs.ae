@@ -10,8 +10,8 @@
 //   client/fetch.ae → avnserver/handler_merge.ae → here
 
 import std.string
+import repos
 
-extern repos_rev_blob_sha(repo: string, rev: int) -> string
 extern merge_ledger_is_integrated_as_of(repo: string,
                                         target_branch: string,
                                         source_branch: string,
@@ -51,7 +51,7 @@ export merge_ledger_eligible_runs_for_range(repo: string,
     run_hi = 0
     cur = lo + 1
     while cur <= hi {
-        rev_sha = repos_rev_blob_sha(repo, cur)
+        rev_sha = repos.repos_rev_blob_sha(repo, cur)
         is_eligible = 0
         if string.length(rev_sha) == 0 {
             // Unknown rev — treat as eligible (the merge engine
@@ -110,7 +110,7 @@ export merge_ledger_reverse_eligible_runs(repo: string,
     run_hi = 0
     cur = lo + 1
     while cur <= hi {
-        rev_sha = repos_rev_blob_sha(repo, cur)
+        rev_sha = repos.repos_rev_blob_sha(repo, cur)
         skip = 0
         if string.length(rev_sha) > 0 {
             already_reversed = merge_ledger_was_last_reverse_as_of(repo,

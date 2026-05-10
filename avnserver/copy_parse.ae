@@ -42,6 +42,7 @@
 import std.string
 import std.json
 import std.http
+import repos
 
 // KIND_* constants — these MUST stay in lock-step with the source-of-
 // truth declarations in avnserver/commit_parse.ae. handler_copy.ae
@@ -66,8 +67,6 @@ extern acl_subtree_rw(repo: string, rev: int,
 extern acl_allows_mode(repo: string, rev: int, user: string, target_path: string, want_write: int) -> int
 extern svnserver_spec_allows(repo: string, branch: string,
                               path: string, is_super: int) -> int
-extern repos_resolve_kind(repo: string, rev: int, path: string) -> int
-extern repos_resolve_sha(repo: string, rev: int, path: string) -> string
 
 extern auto_follow_copy_acl(repo: string, base_rev: int,
                              from_path: string, to_path: string) -> string
@@ -152,9 +151,9 @@ export copy_from_body(req: ptr, repo: string) -> (int, int, string) {
         return -1, KIND_FORBIDDEN, "to_path outside branch spec"
     }
 
-    rkind = repos_resolve_kind(repo, base_rev, from_path)
+    rkind = repos.repos_resolve_kind(repo, base_rev, from_path)
     if rkind == 0 { return -1, KIND_NOT_FOUND, "from_path not found at base_rev" }
-    from_sha = repos_resolve_sha(repo, base_rev, from_path)
+    from_sha = repos.repos_resolve_sha(repo, base_rev, from_path)
     from_sha = string.copy(from_sha)
     from_kind_int = 0
     if rkind == 100 { from_kind_int = 1 }   // 'd'

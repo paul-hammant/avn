@@ -50,6 +50,7 @@ extern rep_rel_path(sha: string) -> string
 
 // sqlite — for rep-cache.db index access. Goes through contrib.sqlite v2.
 import contrib.sqlite
+import repos
 const SQLITE_ROW  = 100
 const SQLITE_DONE = 101
 
@@ -262,8 +263,6 @@ export rep_cache_insert(repo: string, sha: string, rel_path: string,
 const STORAGE_RAW  = 1
 const STORAGE_ZLIB = 2
 
-extern repo_primary_hash(repo: string) -> string
-extern repo_secondary_hashes_joined(repo: string) -> string
 extern rep_cache_sec_ensure(repo: string) -> string
 extern rep_cache_sec_insert(repo: string, primary: string,
                                     algo: string, secondary: string) -> string
@@ -301,7 +300,7 @@ write_secondary_hashes_(repo: string, primary_sha: string,
 // cache insert). Idempotent: if the primary hash is already in the
 // cache we short-circuit without writing or re-inserting.
 export rep_write_blob(repo: string, data: string, length: int) -> string {
-    primary = repo_primary_hash(repo)
+    primary = repos.repo_primary_hash(repo)
     sha = openssl.crypto_hash_hex(primary, data, length)
     if string.length(sha) == 0 { return "" }
 
@@ -326,7 +325,7 @@ export rep_write_blob(repo: string, data: string, length: int) -> string {
         return ""
     }
 
-    joined = repo_secondary_hashes_joined(repo)
+    joined = repos.repo_secondary_hashes_joined(repo)
     write_secondary_hashes_(repo, sha_owned, data, length, joined)
 
     return sha_owned

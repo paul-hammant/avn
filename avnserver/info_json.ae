@@ -31,6 +31,7 @@
 
 import std.string
 import util
+import repos
 
 extern info_prelude_json(head: int, head_sha: string,
                          name: string, hash_algo: string) -> string
@@ -39,14 +40,13 @@ extern json_escape_string(s: string) -> string
 
 // R286 — clients need HEAD's rev_sha so they can parent_sha-chain
 // their next commit. Empty repo (head=0) → empty sha string.
-extern repos_rev_blob_sha(repo: string, rev: int) -> string
 
 extern path_join_rel(prefix: string, name: string) -> string
 
 export info_json(repo: string, name: string, head: int, hash_algo: string) -> string {
     branches_dir = path_join_rel(repo, "branches")
     head_sha = ""
-    if head > 0 { head_sha = repos_rev_blob_sha(repo, head) }
+    if head > 0 { head_sha = repos.repos_rev_blob_sha(repo, head) }
     out = info_prelude_json(head, head_sha, name, hash_algo)
 
     // --- branches array -------------------------------------------------

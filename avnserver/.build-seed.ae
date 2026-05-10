@@ -23,8 +23,7 @@ main() {
         regen("../repo_storage/reppath.ae")
         regen("../repo_storage/dirblob.ae")
         regen("../repo_storage/format_line.ae")
-        regen_with("../repos/rev_io.ae", "fs")
-        regen("../repos/blobfield.ae")
+        regen_with("../repos/module.ae", "fs,os")
         regen("../ffi/openssl/module.ae")
     }
 }
