@@ -943,26 +943,15 @@ post_json(url: string, body: string, body_len: int) -> ptr {
     return send_with_auth(req)
 }
 
-// Typed accessors over a response handle. The C side uses these
-// instead of slicing a packed string — keeps the response_body call
-// cleanly isolated, which fixed an AetherString length-shadowing
-// issue we hit in the first draft.
-
-response_status(resp: ptr) -> int {
-    return response_status(resp)
-}
-
-response_body(resp: ptr) -> string {
-    return response_body(resp)
-}
-
-response_header(resp: ptr, name: string) -> string {
-    return response_header(resp, name)
-}
-
-response_free(resp: ptr) {
-    response_free(resp)
-}
+// R309 — the four `response_status` / `response_body` / `response_header`
+// / `response_free` wrappers that used to live here were silently
+// self-recursive after R302's switch from `import std.http.client`
+// (namespace) to `import std.http.client (...)` (selective). The
+// wrappers' bodies dropped their `client.` qualifier and the typer
+// quietly resolved the bare names back to the wrappers themselves —
+// infinite tail-recursion, no diagnostic. See aether/symbol_namespace.md.
+// Fix: drop the wrappers entirely; the selectively-imported names are
+// already callable directly at every site below.
 
 // One-shot GET helper: fetch URL, return body iff status==200, "" on
 // any failure (transport, non-200). Frees the response handle. The
