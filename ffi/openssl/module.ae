@@ -81,9 +81,15 @@ crypto_b64_encode(data: string, length: int) -> string {
 // `n` through a static int slot via crypto_b64_decode_set_len
 // + _len; for_porter_claude.md confirmed `-> (T1, T2, T3)`
 // has worked since #285 in 0.99 and we'd been mis-diagnosing it.
+// String-return positions inlined as `string.concat(...)` so the
+// AND-fold across both return statements yields *heap* at position
+// 0 and 2 — matches the stdlib json wrapper refactor in aetherc
+// 0.144.0's `further-bug-fix4.md` 2026-05-11 fix. Without this,
+// callers' `raw, n, err = crypto_b64_decode(...)` destructure gets
+// `_heap_raw = 0` and avn's commit hot-path leaks ~100 KB/commit.
 crypto_b64_decode(b64: string) -> (string, int, string) {
     out, n, err = cryptography.base64_decode(b64)
-    if string.length(err) > 0 { return "", 0, err }
-    return out, n, ""
+    if string.length(err) > 0 { return string.concat("", ""), 0, string.concat(err, "") }
+    return string.concat(out, ""), n, string.concat("", "")
 }
 

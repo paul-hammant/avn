@@ -35,41 +35,47 @@ the CPU cost wouldn't move much. **Keep compression on.**
 | final avnserver RSS                 |          3.36 GB |             3.70 GB |      +10% |
 | per-commit retention (RSS / count)  |       0.67 MB/c |          0.74 MB/c |    +0.07× |
 
-## Migration + leak-fix delta (R287 → R310)
+## Migration + leak-fix delta (R287 → R312)
 
-| metric             | R287 nocomp | R309 nocomp | R310 nocomp | R287 comp | R309 comp | R310 comp |
-|--------------------|------------:|------------:|------------:|----------:|----------:|----------:|
-| wall time          |       385 s |       405 s |       389 s |     393 s |     422 s |     414 s |
-| per-commit         |     77.1 ms |     80.5 ms |     77.8 ms |   78.6 ms |   83.7 ms |   82.8 ms |
-| repo size on disk  |      493 MB |      494 MB |      494 MB |    375 MB |    375 MB |    375 MB |
-| final avnserver RSS|     3.30 GB |     3.36 GB | **2.76 GB** |   3.60 GB |   3.70 GB | **2.73 GB**|
-| MB-per-commit      |        0.66 |        0.67 |    **0.57** |      0.72 |      0.74 |   **0.56** |
+| metric             | R287 nocomp | R309 nocomp | R310 nocomp | R312 nocomp | R287 comp | R309 comp | R310 comp | R312 comp |
+|--------------------|------------:|------------:|------------:|------------:|----------:|----------:|----------:|----------:|
+| wall time          |       385 s |       405 s |       389 s |       407 s |     393 s |     422 s |     414 s |     439 s |
+| per-commit         |     77.1 ms |     80.5 ms |     77.8 ms |     81.4 ms |   78.6 ms |   83.7 ms |   82.8 ms |   87.8 ms |
+| repo on disk       |      493 MB |      494 MB |      494 MB |      494 MB |    375 MB |    375 MB |    375 MB |    375 MB |
+| final RSS          |     3.30 GB |     3.36 GB |     2.76 GB | **2.58 GB** |   3.60 GB |   3.70 GB |   2.73 GB | **2.57 GB**|
+| MB-per-commit      |        0.66 |        0.67 |        0.57 |   **0.528** |      0.72 |      0.74 |      0.56 |   **0.525**|
 
-**R287 → R309**: migration alone is performance-neutral within ~5%
-(throughput drift; disk identical; RSS within noise).
+**R287 → R309**: migration alone is performance-neutral within ~5%.
 
-**R309 → R310**: explicit `string_free` calls on three tuple-
-destructured / non-tracked AetherStrings in the commit-handling
-hot path (`avnserver/module.ae`'s `txn_add_b64_` → `raw, err`,
-`commit_from_body` → `body, b64, berr`). Workaround for the
-[`further-bug-fix4.md`](../../aether/further-bug-fix4.md) tuple-
-destructure heap-tracker gap that survives 0.143.0.
+**R309 → R310** (manual workaround): explicit `string_free(raw/b64/body/berr)`
+in the commit-handling hot path. Worked but ugly and only
+plugged what we could spot by eye.
 
-- **−18% RSS no-compress** (3.36 → 2.76 GB), **−26% RSS compress**
-  (3.70 → 2.73 GB). Per-commit retention drops to ~0.57 MB on
-  both modes (was diverging — compress used to retain more because
-  zlib allocations stacked on top of the leaked payload buffers).
-- **+4% wall-time win** on the no-compress side (less malloc
-  pressure, fewer page faults late in run); compress essentially
-  flat (zlib already dominates the steady-state cost).
-- The remaining ~0.57 MB/commit retention is from allocations
-  outside this hot path (json AST nodes that `json.free` doesn't
-  fully reclaim, intermediate strings in handlers other than
-  commit, txn-internal buffers, etc.). A continuing ratchet.
+**R310 → R312** (aetherc 0.144.0 + small avn refactor): manual
+frees removed. The 0.144.0 classifier fix
+([`aether/further-bug-fix4.md`](../../aether/further-bug-fix4.md)
+2026-05-11) catches cross-module callees and stdlib json wrappers
+were refactored to uniform-heap return shapes. avn-side change:
+mirror the same refactor in `ffi/openssl/crypto_b64_decode` so its
+`(string, int, string)` return positions fold to heap, letting the
+classifier tag `raw, n, err` at the call site.
 
-Total trip from migration start: comparable wall time, **17–25%
-RSS reduction**, identical on-disk format. The migration shipped
-with a perf bonus.
+- **Both modes now retain 0.525-0.528 MB-per-commit** — the two
+  modes converged, confirming the residual leak is no longer in
+  the content path.
+- **vs R287 baseline: −22% RSS no-compress, −29% RSS compress.**
+- Wall time +2-6% from the extra defer-free calls the classifier
+  now emits (negligible; allocator's worst case).
+- Disk on-disk format unchanged.
+
+The compress-mode improvement is largest because zlib's per-call
+allocations were amplifying retention atop the leaked payloads;
+with the payloads now freed eagerly the amplification vanishes.
+
+Remaining ~0.53 MB/commit is in shared infrastructure (json AST
+not fully reclaimed by json.free, txn buffers, sqlite query
+strings). The next ratchet would chase those — they're scattered
+across handlers rather than concentrated like the content path was.
 
 Per-commit time is constant across all batches in both runs (no
 algorithmic growth — verified after the heap-tracker codegen fix
